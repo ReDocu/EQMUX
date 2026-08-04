@@ -16,15 +16,15 @@
         <span class="badge" id="mode">확인 중</span>
       </header>
 
-      <section class="body">
-        <h2>S1-1 · 골격</h2>
-        <p class="note">
-          제품 코드 골격이다. 터미널은 아직 없다 — PTY는 S1-2, 렌더러는 S1-3.
-        </p>
+      <!-- 터미널. S2에서 이 자리를 레이아웃 트리가 가져간다. -->
+      <div class="term" id="term"></div>
 
-        <table id="info"></table>
-        <p class="rt" id="roundtrip">왕복 확인 중…</p>
-      </section>
+      <!-- 렌더 경로를 항상 보이게 둔다. 조용한 DOM 폴백이 제일 위험하다. -->
+      <footer class="status">
+        <span class="rend" id="renderer">렌더러 확인 중…</span>
+        <span class="gpu" id="gpu"></span>
+        <span class="lat" id="latency" hidden></span>
+      </footer>
     </main>
   </body>
 </html>

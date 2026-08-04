@@ -14,10 +14,12 @@
 mod commands;
 mod config;
 mod error;
+mod probe;
 
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
 use config::Paths;
+use probe::ProbeConfig;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -25,11 +27,23 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::system::app_info,
             commands::system::echo,
+            commands::system::report_renderer,
+            commands::system::log_front,
+            commands::probe::probe_append,
+            commands::probe::probe_finish,
         ])
         .setup(|app| {
             // 경로를 먼저 확정한다. 창보다 앞이어야 WebView2 데이터 폴더를 갈아끼울 수 있다.
             let paths = Paths::resolve(app.handle())?;
             paths.ensure_dirs()?;
+
+            let probe_cfg = ProbeConfig::from_args(&paths);
+            if probe_cfg.enabled {
+                eprintln!("[eqmux] 계측 모드 — out = {}", probe_cfg.out_path.display());
+                if let Some(n) = probe_cfg.auto_samples {
+                    eprintln!("[eqmux]   자동 입력 {n}회 후 종료한다");
+                }
+            }
 
             if paths.isolated {
                 // 격리 인스턴스라는 사실은 반드시 보이게 남긴다.
@@ -54,8 +68,9 @@ pub fn run() {
 
             win.build()?;
 
-            // 명령에서 State<Paths>로 꺼내 쓴다.
+            // 명령에서 State<_>로 꺼내 쓴다.
             app.manage(paths);
+            app.manage(probe_cfg);
             Ok(())
         })
         .run(tauri::generate_context!())

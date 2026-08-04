@@ -51,6 +51,13 @@ cargo tauri build          # 릴리스 exe + msi + nsis
 cargo tauri dev            # 개발 모드로 실행
 ```
 
+> ⚠️ **`cargo build --release`를 직접 쓰지 말 것.**
+> 프런트 번들은 `tauri::generate_context!`가 **컴파일 시점에 실행 파일 안으로 심는다.**
+> 그런데 `dist/`만 바뀌고 Rust 소스가 그대로면 cargo는 다시 빌드할 이유가 없다고 판단한다.
+> 결과: **옛 프런트가 박힌 바이너리가 조용히 그대로 남는다.**
+> 실제로 여기서 한 시간을 잃었다 — 고친 코드가 실행되지 않는데 빌드는 성공한다.
+> `cargo tauri build`는 `npm run build`를 먼저 돌리고 이 관계를 처리한다.
+
 **필요한 것**: Rust(stable-msvc) · MSVC 빌드도구 · Windows SDK · Node · WebView2 런타임.
 설치·검증 절차는 [docs/SPIKE-S0-4.md](docs/SPIKE-S0-4.md) §6에 있다.
 
@@ -68,6 +75,29 @@ $env:EQMUX_DATA_DIR       = "$env:TEMP\eqmux-probe\webview"   # Electron --user-
 
 셋 중 하나라도 설정되면 창 오른쪽 위 배지가 **격리 인스턴스**로 바뀌고 stderr에 경로가 찍힌다.
 격리인 줄 알고 잰 값이 사실 라이브였으면 측정이 통째로 무의미해지므로, 눈으로 확인되게 해 뒀다.
+
+### 키 입력 지연 계측 (관문 A-3)
+
+```powershell
+# 무인 측정 — 200회 자동 입력 후 결과를 쓰고 종료한다
+.\src-tauri\target\release\eqmux.exe --latency-probe-run=200 `
+  --latency-probe-out="$env:TEMP\eqmux-latency.jsonl"
+
+# 손으로 쳐 보면서 실시간으로 보기
+.\src-tauri\target\release\eqmux.exe --latency-probe
+```
+
+3점을 잰다 — `keydown → 파싱 완료 → 렌더 완료`. JSONL 표본마다 `parse_ms / render_ms / total_ms`,
+마지막 줄에 `p50 / p95 / p99 / max` 요약이 붙는다.
+
+> **측정 범위를 그대로 옮겨 적는다.**
+> 포함: keydown 핸들러 → 파싱 → 렌더 프레임.
+> **미포함: OS 키보드 입력 → 브라우저 keydown 디스패치.** 앱 밖이라 잴 수 없다.
+> `--latency-probe-run`은 합성 `KeyboardEvent`를 쓰므로 이 구간이 빠진다 — 결과 JSON의
+> `note` 필드에도 같은 문장이 들어간다.
+
+**아직 PTY가 없다(S1-2).** 지금 재는 것은 *입력 → 로컬 에코 → 렌더*다.
+S1-4에서 PTY 왕복이 이 경로에 들어가면 값이 올라간다. **두 시점의 숫자를 섞어 쓰면 안 된다.**
 
 ---
 

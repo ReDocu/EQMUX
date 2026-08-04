@@ -5,4 +5,5 @@
 //!
 //! 예정: `pty`(S1-2) · `layout`(S2-1) · `config`(S3-5)
 
+pub mod probe;
 pub mod system;

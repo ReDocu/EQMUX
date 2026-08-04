@@ -1,6 +1,8 @@
-/* S1-1 골격 스타일.
+/* S1-3 골격 스타일.
    design.pen 이관(S0-5 / S2-8)은 이안이 설계한다 — 여기선 방향만 맞춰 둔다:
    각진 모서리 · 헤어라인 경계 · 짙은 남색 표면 · 데이터는 모노. */
+
+@import "@xterm/xterm/css/xterm.css";
 
 :root {
   --bg: #0d1220;
@@ -44,6 +46,7 @@ body {
   background: var(--surface);
   border-bottom: 1px solid var(--line);
   user-select: none;
+  flex: 0 0 auto;
 }
 
 .brand {
@@ -70,64 +73,60 @@ body {
   border-color: var(--warn);
 }
 
-.badge.normal {
-  color: var(--dim);
+/* 터미널 영역 */
+.term {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 8px 10px;
+  overflow: hidden;
 }
 
-.body {
-  flex: 1;
-  padding: 20px 24px;
-  overflow: auto;
+.term .xterm {
+  height: 100%;
 }
 
-h2 {
-  margin: 0 0 4px;
-  font-size: 15px;
-  font-weight: 600;
-}
-
-.note {
-  margin: 0 0 18px;
-  color: var(--dim);
-}
-
-table {
-  border-collapse: collapse;
-  width: 100%;
+/* 상태 줄 — 렌더 경로를 숨기지 않는다 */
+.status {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 5px 14px;
+  background: var(--surface);
+  border-top: 1px solid var(--line);
   font-family: "Cascadia Mono", Consolas, monospace;
-  font-size: 13px;
-}
-
-th,
-td {
-  border-bottom: 1px solid var(--line);
-  padding: 6px 8px;
-  text-align: left;
-  vertical-align: top;
-}
-
-th {
-  width: 180px;
+  font-size: 12px;
   color: var(--dim);
-  font-weight: 400;
+  user-select: none;
+  flex: 0 0 auto;
   white-space: nowrap;
+  overflow: hidden;
 }
 
-td {
-  word-break: break-all;
-}
-
-.rt {
-  margin-top: 16px;
-  font-family: "Cascadia Mono", Consolas, monospace;
-  font-size: 13px;
-  color: var(--dim);
-}
-
-.rt.ok {
+.rend.ok {
   color: var(--ok);
 }
 
-.rt.bad {
+.rend.warn {
+  color: var(--warn);
+}
+
+.rend.bad {
+  color: var(--bad);
+}
+
+.gpu {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lat {
+  margin-left: auto;
+}
+
+.lat.ok {
+  color: var(--ok);
+}
+
+.lat.bad {
   color: var(--bad);
 }
