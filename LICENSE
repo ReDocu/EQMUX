@@ -1,0 +1,13 @@
+라이선스 미정 (placeholder)
+
+EQMUX는 아직 라이선스를 확정하지 않았다.
+확정 시점은 5차(공개 배포)이며, 그때까지 이 파일은 자리만 잡아 둔다.
+  → OBJECTIVES.md §4 "5차 — 공개 배포"
+
+그 전까지의 취급:
+  - 저장소는 비공개로 다룬다
+  - 외부 배포·재배포를 하지 않는다
+  - 제3자 코드를 넣을 때는 그 라이선스를 THIRD-PARTY-NOTICES 에 먼저 기록한다
+
+Copyright (c) 2026 ReDocu
+All rights reserved. (라이선스 확정 시 이 파일을 대체한다)

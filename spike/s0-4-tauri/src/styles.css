@@ -1,0 +1,80 @@
+/* S0-4 스파이크 — 최소 스타일. design.pen 이관(S0-5)은 별건이라 여기선 흉내만 낸다. */
+
+:root {
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 14px;
+  color: #d7dceb;
+  background-color: #0d1220; /* 짙은 남색 표면 */
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  margin: 0;
+}
+
+.container {
+  padding: 24px 28px;
+}
+
+h1 {
+  font-size: 18px;
+  margin: 0 0 2px;
+}
+
+.sub {
+  margin: 0 0 16px;
+  color: #7b87a8;
+}
+
+/* 데이터는 모노 */
+table,
+.cjk {
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 13px;
+}
+
+.cjk {
+  border: 1px solid #26314e; /* 헤어라인 경계 */
+  padding: 10px 12px;
+  margin: 0 0 16px;
+  color: #9fb0d8;
+  line-height: 1.25;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+th,
+td {
+  border-bottom: 1px solid #1b2440;
+  padding: 5px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  color: #7b87a8;
+  font-weight: 400;
+  white-space: nowrap;
+  width: 200px;
+}
+
+td {
+  word-break: break-all;
+}
+
+tr.bad th,
+tr.bad td {
+  color: #ff7a7a;
+}
+
+.saved {
+  margin-top: 14px;
+  color: #6fd08c;
+}
+
+.saved.bad {
+  color: #ff7a7a;
+}

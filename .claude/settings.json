@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "permissions": {
+    "allow": [
+      "Read",
+      "Glob",
+      "Grep",
+
+      "PowerShell(cargo *)",
+      "PowerShell(rustc *)",
+      "PowerShell(rustup show*)",
+      "PowerShell(npm *)",
+      "PowerShell(npx *)",
+      "PowerShell(node *)",
+      "Bash(cargo *)",
+      "Bash(rustc *)",
+      "Bash(rustup show*)",
+      "Bash(npm *)",
+      "Bash(npx *)",
+      "Bash(node *)",
+
+      "PowerShell(git status*)",
+      "PowerShell(git log*)",
+      "PowerShell(git diff*)",
+      "PowerShell(git show*)",
+      "PowerShell(git branch)",
+      "PowerShell(git ls-files*)",
+      "PowerShell(git remote -v)",
+      "Bash(git status*)",
+      "Bash(git log*)",
+      "Bash(git diff*)",
+      "Bash(git show*)",
+      "Bash(git branch)",
+      "Bash(git ls-files*)",
+      "Bash(git remote -v)",
+
+      "PowerShell(Get-ChildItem *)",
+      "PowerShell(Get-Item *)",
+      "PowerShell(Get-Content *)",
+      "PowerShell(Test-Path *)",
+      "PowerShell(Get-Process*)",
+      "PowerShell(Get-CimInstance Win32_Process*)",
+      "PowerShell(Measure-Object *)"
+    ],
+    "deny": [
+      "PowerShell(git push --force*)",
+      "Bash(git push --force*)",
+      "PowerShell(git reset --hard*)",
+      "Bash(git reset --hard*)",
+      "PowerShell(Remove-Item -Recurse -Force *)",
+      "Bash(rm -rf *)"
+    ]
+  }
+}

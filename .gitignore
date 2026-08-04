@@ -1,0 +1,47 @@
+# ─────────────────────────────────────────────────────────────
+# EQMUX — S0-6
+# 크기 확인은 SPIKE-S0-4.md 3절. target/ 이 5.7GB다. 반드시 막는다.
+# ─────────────────────────────────────────────────────────────
+
+# Rust / Cargo
+target/
+**/target/
+*.pdb
+
+# Node
+node_modules/
+.npm/
+npm-debug.log*
+yarn-error.log*
+
+# 프런트 빌드 산출물
+dist/
+**/dist/
+.vite/
+
+# Tauri 번들 (target/ 하위지만 명시해 둔다)
+**/src-tauri/target/
+**/src-tauri/gen/
+
+# 스파이크 실행 산출물
+probe-result.json
+spike-window.png
+
+# 에디터 / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# 로컬 환경
+.env
+.env.local
+*.local
+
+# AgentCommender가 생성하는 로컬 관제 메타데이터 — 프로젝트 소스가 아니다
+project.json
+
+# Claude Code 로컬 설정 (개인별). settings.json 은 팀 공유이므로 추적한다
+.claude/settings.local.json
