@@ -1,0 +1,133 @@
+/* S1-1 골격 스타일.
+   design.pen 이관(S0-5 / S2-8)은 이안이 설계한다 — 여기선 방향만 맞춰 둔다:
+   각진 모서리 · 헤어라인 경계 · 짙은 남색 표면 · 데이터는 모노. */
+
+:root {
+  --bg: #0d1220;
+  --surface: #121a2e;
+  --line: #26314e;
+  --text: #d7dceb;
+  --dim: #7b87a8;
+  --ok: #6fd08c;
+  --bad: #ff7a7a;
+  --warn: #e8b84b;
+
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+/* 상단 바 — S2-5에서 탭바가 들어설 자리 */
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+  user-select: none;
+}
+
+.brand {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.ver {
+  color: var(--dim);
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+}
+
+.badge {
+  margin-left: auto;
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--dim);
+}
+
+.badge.isolated {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+
+.badge.normal {
+  color: var(--dim);
+}
+
+.body {
+  flex: 1;
+  padding: 20px 24px;
+  overflow: auto;
+}
+
+h2 {
+  margin: 0 0 4px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.note {
+  margin: 0 0 18px;
+  color: var(--dim);
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 13px;
+}
+
+th,
+td {
+  border-bottom: 1px solid var(--line);
+  padding: 6px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  width: 180px;
+  color: var(--dim);
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+td {
+  word-break: break-all;
+}
+
+.rt {
+  margin-top: 16px;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 13px;
+  color: var(--dim);
+}
+
+.rt.ok {
+  color: var(--ok);
+}
+
+.rt.bad {
+  color: var(--bad);
+}

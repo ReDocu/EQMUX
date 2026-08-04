@@ -26,32 +26,48 @@ AgentCommender의 후속작. **Tauri 2 + WebView2 + Rust**로 재작성한 터�
 
 ```
 EQMUX/
+├── src/             프런트 (TypeScript + Vite)
+├── src-tauri/       백엔드 (Rust)
+│   ├── src/
+│   │   ├── lib.rs       빌더 구성 · 창 생성
+│   │   ├── config.rs    경로 해석 · 측정용 격리 스위치
+│   │   ├── error.rs     공통 에러 타입
+│   │   └── commands/    Tauri 명령 (도메인별)
+│   └── capabilities/    창 권한 — 필요한 것만 연다
 ├── docs/            사양·계획·측정 기록 (아래 표)
 ├── spike/           검증용 실험 코드. 제품 코드가 아니다
-│   └── s0-4-tauri/  S0-4 — Tauri/WebView2 동작 확인 + WebGL 프로브
+│   └── s0-4-tauri/  S0-4 — WebGL 프로브. 다른 기계 확인용으로 남겨 둔다
 ├── .claude/         Claude Code 프로젝트 설정 (권한 allowlist)
-├── LICENSE          미정 — 5차에 확정
-└── README.md
+└── LICENSE          미정 — 5차에 확정
 ```
-
-**제품 코드 자리는 아직 없다.** `S1-1`(Tauri 골격 + Rust 백엔드 구조)에서 만든다.
-그때 `spike/s0-4-tauri`를 승격할지 새로 잡을지 정한다.
 
 ---
 
 ## 빌드
 
-현재 빌드 가능한 것은 S0-4 스파이크뿐이다.
-
 ```powershell
-cd spike\s0-4-tauri
-npm install
+npm install                # 최초 1회
 cargo tauri build          # 릴리스 exe + msi + nsis
-cargo tauri dev            # 창 띄우고 확인
+cargo tauri dev            # 개발 모드로 실행
 ```
 
 **필요한 것**: Rust(stable-msvc) · MSVC 빌드도구 · Windows SDK · Node · WebView2 런타임.
 설치·검증 절차는 [docs/SPIKE-S0-4.md](docs/SPIKE-S0-4.md) §6에 있다.
+
+### 측정용 격리 실행
+
+도그푸딩 중에 성능을 재려면 라이브 인스턴스와 상태를 분리해야 한다.
+분리하지 않고 앱을 새로 띄우면 살아 있는 세션이 죽는다 ([docs/BASELINE.md](docs/BASELINE.md) §1).
+
+```powershell
+$env:EQMUX_STATE_PATH     = "$env:TEMP\eqmux-probe\state.json"
+$env:EQMUX_WORKSPACE_ROOT = "$env:TEMP\eqmux-probe\ws"
+$env:EQMUX_DATA_DIR       = "$env:TEMP\eqmux-probe\webview"   # Electron --user-data-dir 대응
+.\src-tauri\target\release\EQMUX.exe
+```
+
+셋 중 하나라도 설정되면 창 오른쪽 위 배지가 **격리 인스턴스**로 바뀌고 stderr에 경로가 찍힌다.
+격리인 줄 알고 잰 값이 사실 라이브였으면 측정이 통째로 무의미해지므로, 눈으로 확인되게 해 뒀다.
 
 ---
 

@@ -1,0 +1,30 @@
+[package]
+name = "eqmux"
+version = "0.1.0"
+description = "EQMUX — 터미널 멀티플렉서 (AgentCommender 후속작)"
+authors = ["ReDocu"]
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+# `_lib` 접미사는 Windows에서 bin 이름과 충돌하지 않게 하려는 것이다.
+# https://github.com/rust-lang/cargo/issues/8519
+name = "eqmux_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+[profile.release]
+# 배포물 크기가 KR 지표(≤40MB)에 걸린다. 스파이크에서 8.55MB였고 여기서 더 줄인다.
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

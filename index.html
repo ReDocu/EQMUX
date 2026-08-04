@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <title>EQMUX</title>
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+
+  <body>
+    <main class="shell">
+      <header class="bar">
+        <span class="brand">EQMUX</span>
+        <span class="ver" id="ver">—</span>
+        <span class="badge" id="mode">확인 중</span>
+      </header>
+
+      <section class="body">
+        <h2>S1-1 · 골격</h2>
+        <p class="note">
+          제품 코드 골격이다. 터미널은 아직 없다 — PTY는 S1-2, 렌더러는 S1-3.
+        </p>
+
+        <table id="info"></table>
+        <p class="rt" id="roundtrip">왕복 확인 중…</p>
+      </section>
+    </main>
+  </body>
+</html>
