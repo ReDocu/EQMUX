@@ -6,9 +6,10 @@
 use serde::Serialize;
 use tauri::State;
 
+use crate::appdata::{self, AppDataReport, AppDataWatch};
 use crate::config::Paths;
 use crate::error::Result;
-use crate::probe::ProbeConfig;
+use crate::probe::{FontProbeConfig, ProbeConfig, PtyProbeConfig};
 
 #[derive(Debug, Serialize)]
 pub struct AppInfo {
@@ -16,16 +17,41 @@ pub struct AppInfo {
     pub version: &'static str,
     pub paths: Paths,
     pub probe: ProbeConfig,
+    pub pty_probe: PtyProbeConfig,
+    pub font_probe: FontProbeConfig,
+    /// 자동 감지된 셸. 화면 없이도 무엇이 뜰지 알 수 있어야 한다.
+    pub shell: String,
 }
 
 #[tauri::command]
-pub fn app_info(paths: State<'_, Paths>, probe: State<'_, ProbeConfig>) -> Result<AppInfo> {
+pub fn app_info(
+    paths: State<'_, Paths>,
+    probe: State<'_, ProbeConfig>,
+    pty_probe: State<'_, PtyProbeConfig>,
+    font_probe: State<'_, FontProbeConfig>,
+) -> Result<AppInfo> {
     Ok(AppInfo {
         name: "EQMUX",
         version: env!("CARGO_PKG_VERSION"),
         paths: paths.inner().clone(),
         probe: probe.inner().clone(),
+        pty_probe: pty_probe.inner().clone(),
+        font_probe: font_probe.inner().clone(),
+        shell: crate::pty::detect_shell(),
     })
+}
+
+/// 앱 데이터 폴더 크기 (`S2-1b` · [`docs/issue.md`] #7).
+///
+/// **`async`인 이유** — 동기 명령은 메인 스레드에서 돈다. 지금은 폴더가 14 MB라 몇십 ms지만
+/// 캐시는 자라라고 있는 물건이고(wmux 497.6 MB), 그때 이 훑기가 입력을 막으면
+/// 용량을 보려다 지연을 만든다. 상태줄 하나 때문에 A-3을 깎을 이유가 없다.
+#[tauri::command(async)]
+pub fn app_data_report(paths: State<'_, Paths>, watch: State<'_, AppDataWatch>) -> AppDataReport {
+    let report = appdata::scan(paths.inner());
+    // 화면을 안 봐도 증가가 로그에 남아야 한다. 많이 움직였을 때만 찍는다.
+    appdata::log_if_grown(&report, watch.inner());
+    report
 }
 
 /// 렌더 경로를 stdout으로 남긴다.

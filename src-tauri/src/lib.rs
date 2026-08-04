@@ -9,33 +9,60 @@
 //! commands/     Tauri 명령 (도메인별)
 //! ```
 //!
-//! S1-2에서 `pty/`가 붙고, 그 스트림을 S1-4에서 프런트로 잇는다.
+//! `pty.rs`가 ConPTY를 잡고(S1-2), 그 스트림을 프런트로 잇는다(S1-4).
 
+mod appdata;
 mod commands;
 mod config;
 mod error;
 mod probe;
+mod pty;
 
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
+use appdata::AppDataWatch;
 use config::Paths;
-use probe::ProbeConfig;
+use probe::{FontProbeConfig, ProbeConfig, PtyProbeConfig};
+use pty::PtyManager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             commands::system::app_info,
+            commands::system::app_data_report,
             commands::system::echo,
             commands::system::report_renderer,
             commands::system::log_front,
             commands::probe::probe_append,
             commands::probe::probe_finish,
+            commands::pty::pty_spawn,
+            commands::pty::pty_write,
+            commands::pty::pty_resize,
+            commands::pty::pty_kill,
+            commands::pty::pty_list,
+            commands::pty::pty_probe_finish,
+            commands::probe::font_probe_finish,
         ])
         .setup(|app| {
             // 경로를 먼저 확정한다. 창보다 앞이어야 WebView2 데이터 폴더를 갈아끼울 수 있다.
             let paths = Paths::resolve(app.handle())?;
             paths.ensure_dirs()?;
+
+            // `--appdata-report` — 창을 안 열고 크기만 재고 끝낸다 (`docs/issue.md` #7 ②).
+            // 해원의 3회 측정이 우리와 **같은 규칙**으로 나와야 한다. 창을 띄우면 그 측정 자체가
+            // 캐시를 키운다 — 그래서 웹뷰를 만들기 전에 여기서 끊는다.
+            let report_run = appdata::ReportRun::from_args();
+            if report_run.enabled {
+                let report = appdata::scan(&paths);
+                appdata::log_report(&report, "무인");
+                if let Some(out) = &report_run.out_path {
+                    appdata::write_json(&report, out)?;
+                    eprintln!("[eqmux][appdata] out = {}", out.display());
+                }
+                // setup 안이라 이벤트 루프가 아직 없다 — `app.exit()`은 여기서 안 먹는다.
+                std::process::exit(0);
+            }
 
             let probe_cfg = ProbeConfig::from_args(&paths);
             if probe_cfg.enabled {
@@ -43,6 +70,45 @@ pub fn run() {
                 if let Some(n) = probe_cfg.auto_samples {
                     eprintln!("[eqmux]   자동 입력 {n}회 후 종료한다");
                 }
+                // 자가 검증 조건은 반드시 stderr에 남긴다.
+                // 어떤 조건으로 잰 값인지 모르는 숫자는 나중에 못 쓴다.
+                eprintln!(
+                    "[eqmux]   inject={}ms · frame_hold={} · gap={}ms",
+                    probe_cfg.inject_ms, probe_cfg.frame_hold, probe_cfg.gap_ms
+                );
+            }
+
+            let pty_probe_cfg = PtyProbeConfig::from_args(&paths);
+            if pty_probe_cfg.enabled {
+                eprintln!(
+                    "[eqmux] PTY 무인 검증 — cmd={:?} wait={}ms out={}",
+                    pty_probe_cfg.command,
+                    pty_probe_cfg.wait_ms,
+                    pty_probe_cfg.out_path.display()
+                );
+            }
+
+            let font_cfg = FontProbeConfig::from_args(&paths);
+            if font_cfg.enabled {
+                eprintln!(
+                    "[eqmux] A-2 폭 계측 — out = {}",
+                    font_cfg.out_path.display()
+                );
+            }
+            // 스택 강제는 계측과 무관하게도 먹는다. 먹었으면 반드시 보이게 남긴다 —
+            // "강제했다고 믿는 것"과 실제로 그 스택이 뜬 것은 다른 이야기다.
+            if let Some(s) = &font_cfg.stack {
+                eprintln!("[eqmux] 폰트 스택 강제 — {s}");
+            }
+
+            // 계측 모드는 로컬 에코로 렌더러만 재므로 PTY를 붙이지 않는다.
+            // 두 경로가 같이 돌면 셸 에코와 로컬 에코가 겹쳐 숫자가 오염된다.
+            if probe_cfg.enabled && pty_probe_cfg.enabled {
+                eprintln!("[eqmux] ⚠️ --latency-probe와 --pty-probe는 같이 못 쓴다 — PTY 검증만 돈다");
+            }
+            // 폭 계측은 재고 바로 끝난다. 지연 계측과 겹치면 둘 다 못 쓴다.
+            if font_cfg.enabled && probe_cfg.enabled {
+                eprintln!("[eqmux] ⚠️ --font-probe와 --latency-probe는 같이 못 쓴다 — 폭 계측만 돈다");
             }
 
             if paths.isolated {
@@ -68,9 +134,28 @@ pub fn run() {
 
             win.build()?;
 
+            let font_probe_running = font_cfg.enabled;
+
+            // 기동 시점 크기를 stderr에 남긴다 (`S2-1b`).
+            //
+            // 별도 스레드인 이유: 디스크를 도는 동안 창이 안 뜨면 콜드 스타트(KR3)가 그만큼 늘어난다.
+            // 계측 모드에서는 아예 돌리지 않는다 — 500표본을 재는 4초 동안 옆에서 디스크를 긁으면
+            // 그 잡음이 A-3 숫자에 얹힌다. 용량을 보려다 지연을 오염시키면 둘 다 잃는다.
+            // 폭 계측도 마찬가지다 — 재고 바로 종료하는 실행에 디스크 훑기를 얹을 이유가 없다.
+            if !probe_cfg.enabled && !font_probe_running {
+                let snapshot = paths.clone();
+                std::thread::spawn(move || {
+                    appdata::log_report(&appdata::scan(&snapshot), "기동");
+                });
+            }
+
             // 명령에서 State<_>로 꺼내 쓴다.
             app.manage(paths);
+            app.manage(AppDataWatch::default());
             app.manage(probe_cfg);
+            app.manage(pty_probe_cfg);
+            app.manage(font_cfg);
+            app.manage(PtyManager::default());
             Ok(())
         })
         .run(tauri::generate_context!())

@@ -22,7 +22,11 @@
       <!-- 렌더 경로를 항상 보이게 둔다. 조용한 DOM 폴백이 제일 위험하다. -->
       <footer class="status">
         <span class="rend" id="renderer">렌더러 확인 중…</span>
+        <!-- 어떤 셸이 실제로 떴는지. "pwsh를 띄웠다고 믿는 것"과 구분한다. -->
+        <span class="sh" id="shell">셸 연결 중…</span>
         <span class="gpu" id="gpu"></span>
+        <!-- 앱 데이터 크기(S2-1b). 배포물 3.14MB 옆에 사용자가 실제로 지불하는 용량을 같이 둔다. -->
+        <span class="data" id="appdata" hidden></span>
         <span class="lat" id="latency" hidden></span>
       </footer>
     </main>

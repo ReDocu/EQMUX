@@ -36,6 +36,11 @@ pub struct Paths {
     pub workspace_root: PathBuf,
     /// WebView2 사용자 데이터 폴더. `None`이면 Tauri 기본값을 쓴다.
     pub webview_data_dir: Option<PathBuf>,
+    /// WebView2가 **실제로** 쓰는 폴더 — 덮었으면 그 값, 아니면 Tauri 기본값.
+    ///
+    /// `webview_data_dir`이 `None`이어도 캐시는 어딘가에 쌓인다.
+    /// 그 "어딘가"를 모르면 `S2-1b`가 잴 대상을 못 찾는다 — 그래서 따로 확정해 둔다.
+    pub webview_effective: PathBuf,
     /// 셋 중 하나라도 환경변수로 덮였는가.
     ///
     /// 측정 인스턴스인지 라이브 인스턴스인지 눈으로 구분하려고 노출한다.
@@ -55,6 +60,17 @@ impl Paths {
             env_path("EQMUX_WORKSPACE_ROOT").unwrap_or_else(|| base.join("workspace"));
         let webview_data_dir = env_path("EQMUX_DATA_DIR");
 
+        // Tauri는 Windows/Linux에서 `data_directory`를 안 주면 `LocalData/<identifier>`로 강제한다
+        // (tauri 2.11 `manager/webview.rs`). 그 자리에 WebView2가 `EBWebView/`를 만든다.
+        // 여기 적힌 경로가 틀리면 `S2-1b`는 빈 폴더를 재고 "0 MB"라고 보고한다.
+        let webview_effective = match &webview_data_dir {
+            Some(d) => d.clone(),
+            None => app
+                .path()
+                .app_local_data_dir()
+                .map_err(|e| Error::Path(format!("app_local_data_dir: {e}")))?,
+        };
+
         let isolated = std::env::var_os("EQMUX_STATE_PATH").is_some()
             || std::env::var_os("EQMUX_WORKSPACE_ROOT").is_some()
             || webview_data_dir.is_some();
@@ -63,6 +79,7 @@ impl Paths {
             state_file,
             workspace_root,
             webview_data_dir,
+            webview_effective,
             isolated,
         })
     }

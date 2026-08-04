@@ -14,6 +14,11 @@ pub enum Error {
     #[error("입출력 실패: {0}")]
     Io(#[from] std::io::Error),
 
+    /// PTY 계열 실패. `portable-pty`는 `anyhow::Error`를 돌려주므로 문자열로 눌러 담는다.
+    /// 원인 문자열을 버리면 "셸이 안 뜬다"만 남고 왜인지는 영영 모른다.
+    #[error("PTY 실패: {0}")]
+    Pty(String),
+
     #[error(transparent)]
     Tauri(#[from] tauri::Error),
 }

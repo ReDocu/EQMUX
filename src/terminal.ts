@@ -3,7 +3,8 @@
 // 이 파일이 R1(프로젝트 최대 리스크)의 답이다.
 // WebGL 애드온이 안 붙으면 터미널 렌더러를 직접 짜야 하고, 그건 다른 프로젝트다.
 //
-// PTY는 아직 없다(S1-2). 여기서는 로컬 에코와 합성 출력만 쓴다.
+// PTY 연결은 `pty.ts`(S1-2·S1-4)가 맡는다. 이 파일은 렌더러만 본다.
+// 아래 `echoOf`는 계측 모드(--latency-probe)에서만 쓰인다 — 셸 없이 렌더 경로만 재는 자리다.
 
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -42,11 +43,28 @@ const THEME = {
   white: "#d7dceb",
 };
 
-// 한글 글리프를 가진 고정폭 폰트를 우선한다.
-// Cascadia Mono에는 한글이 없어 폴백이 일어나고, 폴백 폰트의 advance width가
-// 모노 폭의 정확히 2배가 아니면 A-2(CJK 폭)에서 줄이 밀린다.
-// 굴림체/돋움체는 Windows 기본 제공이면서 ASCII 1칸 : 한글 2칸이 지켜지는 몇 안 되는 폰트다.
-export const FONT_STACK = '"D2Coding", "Cascadia Mono", "굴림체", "돋움체", Consolas, monospace';
+// A-2(CJK 폭)의 답. **순서를 바꾸기 전에 `docs/FONT-A2.md`를 읽을 것.**
+//
+// 규칙 한 줄: CJK는 거의 모든 폰트에서 **1.0em**이다. 그래서 비율이 2가 되려면
+// **ASCII advance가 정확히 0.5em이어야 한다.** 그것뿐이다.
+//
+//   D2Coding ligature  0.5em   → 가 2.00 ✅  → · ■ 1.00 ✅
+//   굴림체 · 돋움체     0.5em   → 가 2.00 ✅  → · ■ 2.00 ❌ (표 그리기가 옆 칸 침범)
+//   Cascadia Mono      0.586em → 가 1.71 ❌
+//   Consolas           0.550em → 가 1.82 ❌
+//
+// **앞의 두 항목이 `styles.css`의 @font-face로 동봉돼 있다** — 기계에 뭐가 깔렸든 여기서 잡힌다.
+// 뒤쪽은 @font-face가 어떤 이유로든 안 붙었을 때의 그물이고, 그때는 A-2가 미달이다.
+// 미달이 조용히 지나가지 않게 `--font-probe`로 언제든 숫자를 확인할 수 있다.
+//
+// ⚠️ `"D2Coding ligature"`를 같이 적어 둔다 — 사용자가 직접 설치한 경우의 **실제 패밀리 이름**이
+// 그것이다. 옛 스택은 `"D2Coding"` 하나만 적어 두고 그게 잡힌다고 믿었고, 그래서
+// 관문 A-2가 하루 동안 잘못된 전제 위에 서 있었다 (`docs/GATE-A.md` §1).
+export const FONT_STACK =
+  '"D2Coding", "D2Coding ligature", "Cascadia Mono", "굴림체", "돋움체", Consolas, monospace';
+
+/** 터미널 글자 크기. A-2 폭 계측이 **같은 크기로** 재야 하므로 상수로 뺀다. */
+export const FONT_SIZE = 14;
 
 export interface TerminalHandle {
   term: Terminal;
@@ -54,10 +72,15 @@ export interface TerminalHandle {
   status: RendererStatus;
 }
 
-export function createTerminal(container: HTMLElement): TerminalHandle {
+/**
+ * @param stack 폰트 스택 강제(`--font-stack` / `EQMUX_FONT_STACK`). `null`이면 `FONT_STACK`.
+ *   **A-2 계측의 핵심이다** — 스택에서 D2Coding만 빼면 이 기계가 곧 사용자 기계 조건이 된다
+ *   ([docs/GATE-A.md](../docs/GATE-A.md) §1이 A-2를 "잠정"으로 둔 이유가 그것이다).
+ */
+export function createTerminal(container: HTMLElement, stack: string | null = null): TerminalHandle {
   const term = new Terminal({
-    fontFamily: FONT_STACK,
-    fontSize: 14,
+    fontFamily: stack ?? FONT_STACK,
+    fontSize: FONT_SIZE,
     lineHeight: 1.2,
     letterSpacing: 0,
     cursorBlink: true,
@@ -129,10 +152,10 @@ function attachWebgl(term: Terminal): RendererStatus {
 }
 
 /**
- * PTY가 붙기 전(S1-2)까지 쓰는 로컬 에코 변환.
+ * 계측 모드 전용 로컬 에코 변환.
  *
- * 실제 터미널이면 셸이 해 주는 일이다. 여기서는 렌더러만 보고 있으므로
- * 입력이 화면에 나타나는 최소 경로만 만든다.
+ * 실제 터미널이면 셸이 해 주는 일이다. `--latency-probe`는 **렌더 경로만** 재야 하므로
+ * PTY 왕복을 일부러 뺀다 — 두 시점의 숫자를 섞으면 안 된다(`docs/issue.md` #10).
  */
 export function echoOf(data: string): string {
   if (data === "\r") return "\r\n$ ";
@@ -186,7 +209,12 @@ export function verdictOf(s: RendererStatus): { text: string; sgr: string } {
  * 렌더러 판정을 여기에도 찍는다. 하단 상태줄이나 IPC가 죽어도
  * **터미널 자체는 그려지므로**, 판정을 읽을 경로가 최소 하나는 남는다.
  */
-export function writeDemo(term: Terminal, status: RendererStatus): void {
+export function writeDemo(
+  term: Terminal,
+  status: RendererStatus,
+  note: string,
+  fakePrompt: boolean,
+): void {
   const v = verdictOf(status);
   const L = [
     "\x1b[1;36mEQMUX\x1b[0m S1-3 — xterm.js + WebGL @ WebView2",
@@ -204,8 +232,10 @@ export function writeDemo(term: Terminal, status: RendererStatus): void {
     "\x1b[31m■red\x1b[0m \x1b[32m■green\x1b[0m \x1b[33m■yellow\x1b[0m \x1b[34m■blue\x1b[0m \x1b[35m■magenta\x1b[0m \x1b[36m■cyan\x1b[0m",
     "\x1b[1m굵게\x1b[0m \x1b[3m기울임\x1b[0m \x1b[4m밑줄\x1b[0m \x1b[7m반전\x1b[0m",
     "",
-    "\x1b[90mPTY는 아직 없다(S1-2). 아래 입력은 로컬 에코다.\x1b[0m",
+    `\x1b[90m${note}\x1b[0m`,
     "",
   ];
-  term.write(L.join("\r\n") + "\r\n$ ");
+  // 가짜 프롬프트는 로컬 에코 모드에서만 그린다.
+  // PTY가 붙은 상태에서 그리면 진짜 프롬프트와 겹쳐 두 줄이 된다.
+  term.write(L.join("\r\n") + "\r\n" + (fakePrompt ? "$ " : ""));
 }

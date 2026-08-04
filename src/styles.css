@@ -4,6 +4,26 @@
 
 @import "@xterm/xterm/css/xterm.css";
 
+/* D2Coding 동봉 (issue.md #8 · docs/FONT-A2.md).
+   ⚠️ 이 @font-face가 A-2의 답이다 — 설명을 지우지 말 것.
+
+   ① **이름을 우리가 정한다.** 설치본의 실제 패밀리 이름은 `D2Coding ligature`이고,
+      스택에 적혀 있던 `"D2Coding"`은 그 이름과 달라 **한 번도 매칭된 적이 없었다.**
+      @font-face로 실으면 우리가 선언한 이름이 곧 패밀리 이름이라 그 함정이 사라진다.
+   ② **기계에 폰트가 깔려 있는지와 무관해진다.** 사용자 기계에 D2Coding이 없어도
+      ASCII가 0.5em으로 고정되고, 그래야 CJK(1.0em)가 정확히 2배가 된다.
+   ③ CSP는 `default-src 'self'`뿐이라 **같은 오리진의 파일**이어야 한다.
+      data: URI로 인라인하면 `font-src ... data:`를 열어야 하므로 파일로 둔다. */
+@font-face {
+  font-family: "D2Coding";
+  src: url("./assets/fonts/D2Coding-ligature-v1.3.2.ttf") format("truetype");
+  font-weight: normal;
+  font-style: normal;
+  /* 폰트를 받기 전에 폴백으로 그렸다가 바뀌면 첫 프레임의 셀 폭이 흔들린다.
+     로컬 파일이라 지연이 없으므로 교체를 기다린다. */
+  font-display: block;
+}
+
 :root {
   --bg: #0d1220;
   --surface: #121a2e;
@@ -114,9 +134,30 @@ body {
   color: var(--bad);
 }
 
+.sh.ok {
+  color: var(--ok);
+}
+
+.sh.bad {
+  color: var(--bad);
+}
+
 .gpu {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* 앱 데이터 크기 — 계측 모드에서는 숨고, 그 자리를 .lat이 쓴다. 둘이 같이 뜨지 않는다. */
+.data {
+  margin-left: auto;
+}
+
+.data.ok {
+  color: var(--dim);
+}
+
+.data.warn {
+  color: var(--warn);
 }
 
 .lat {
