@@ -386,22 +386,32 @@ mod tests {
         for _ in 1..n {
             last = st.split(&last, Direction::Row).unwrap();
         }
-        let ids = st.root.leaf_ids();
-        for (i, id) in ids.iter().enumerate() {
-            st.attach_pty(id, Some(format!("pty-{i}"))).unwrap();
+        // PTY는 **탭에** 붙는다 (`S2-5`). 갓 만든 잎은 탭이 하나뿐이라 그 첫 탭이다.
+        let tabs: Vec<String> = st
+            .root
+            .leaf_ids()
+            .iter()
+            .map(|id| st.tabs_of(id)[0].id.clone())
+            .collect();
+        for (i, tab) in tabs.iter().enumerate() {
+            st.attach_pty(tab, Some(format!("pty-{i}"))).unwrap();
         }
         // split이 preset을 지운다 — 프리셋 없는 상태에서 시작한다.
         assert_eq!(st.preset, None);
         st
     }
 
-    /// 잎 id → pty_id 표. 신원 보존을 이걸로 대조한다.
-    fn identities(st: &LayoutState) -> Vec<(String, Option<String>)> {
+    /// 잎 id → 탭별 pty_id 표. 신원 보존을 이걸로 대조한다.
+    ///
+    /// `S2-5` 이후 잎 하나가 셸을 여럿 들 수 있다 — 탭까지 같이 봐야 "세션이 안 죽었다"가 된다.
+    fn identities(st: &LayoutState) -> Vec<(String, Vec<Option<String>>)> {
         let mut out = Vec::new();
         collect(&st.root, &mut out);
-        fn collect(n: &Node, out: &mut Vec<(String, Option<String>)>) {
+        fn collect(n: &Node, out: &mut Vec<(String, Vec<Option<String>>)>) {
             match n {
-                Node::Leaf { id, pty_id, .. } => out.push((id.clone(), pty_id.clone())),
+                Node::Leaf { id, tabs, .. } => {
+                    out.push((id.clone(), tabs.iter().map(|t| t.pty_id.clone()).collect()))
+                }
                 Node::Split { children, .. } => {
                     for c in children {
                         collect(&c.node, out);

@@ -33,9 +33,22 @@
 //! |---|---|
 //! | 파일 없음 | 기본 레이아웃(터미널 1개). 에러가 아니다 |
 //! | `version` == 현재 | 읽는다. 검증 실패 시 아래 "깨짐"과 같게 처리 |
-//! | `version` < 현재 | **이관(migrate)**. v1이 최초라 아직 해당 없음 |
+//! | `version` < 현재 | **이관(migrate)** + 원본 복사본 보존. 지금은 v1 → v2 하나 |
 //! | `version` > 현재 | **백업 후 초기화** + stderr 한 줄 |
 //! | 깨짐·상한 초과 | **백업 후 초기화** + stderr 한 줄 |
+//!
+//! # 탭 (`S2-5`) — 왜 v2인가
+//!
+//! **잎은 자리(패널)가 되고 내용물은 탭이 됐다.** v1에서 잎에 직접 붙어 있던
+//! `kind`·`pty_id`·`title`·`cwd`가 `Tab`으로 옮겨 갔다 — 필드가 는 게 아니라 **뜻이 옮겨 간**
+//! 변경이라 버전을 올린다(§버전 정책이 "뜻이 바뀌면 올린다"고 못 박은 자리가 여기다).
+//!
+//! v1 파일은 **이관한다.** 미래 버전(백업 후 초기화)과 달리 과거 버전은 우리가 뜻을 안다 —
+//! 여기서 조용히 기본값으로 떨어뜨리면 그날 사용자 세션이 통째로 날아간다.
+//!
+//! 프리셋(`S2-11`)이 배치하는 단위는 **패널(잎)이지 탭이 아니다** — `presets.rs`가 잎을
+//! 그대로 옮겨 담으므로 탭은 자기 패널을 따라간다. 프리셋이 탭을 배치하려 들면 사용자가
+//! 묶어 둔 탭을 패널로 흩어야 하고, 그건 `rearrange`가 지키는 "잎 신원 보존"과 정반대다.
 //!
 //! 왜 "읽을 수 있는 만큼만"(②)이 아닌가 — 미래 버전은 **필드가 늘어난 것만이 아니라
 //! 뜻이 바뀐 것**일 수 있다. `weight`의 의미가 바뀌었는데 이름이 같으면, 읽히긴 하고
@@ -53,7 +66,9 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Error, Result};
 
 /// 현재 스키마 버전. **필드의 뜻이 바뀌면 올린다.** 필드가 늘기만 하면 안 올려도 된다.
-pub const SCHEMA_VERSION: u32 = 1;
+///
+/// v2 = 탭(`S2-5`). 잎의 내용물이 `Tab`으로 내려갔다 — §탭 참조.
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// 상태 파일 상한. 레이아웃 트리는 KB 단위여야 한다.
 ///
@@ -64,8 +79,14 @@ pub const MAX_STATE_BYTES: u64 = 1024 * 1024;
 /// 노드 수 상한. 깊이·개수가 폭주한 트리를 파일로 굳히지 않는다.
 pub const MAX_NODES: usize = 512;
 
-/// 지금 있는 유일한 잎 종류. `BACKLOG` B1이 붙으면 여기에 하나 더 생긴다.
+/// 지금 있는 유일한 탭 종류. `BACKLOG` B1이 붙으면 여기에 하나 더 생긴다.
 pub const KIND_TERMINAL: &str = "terminal";
+
+/// 패널 하나가 들 수 있는 탭 수 상한 (`S2-5`).
+///
+/// 탭 막대가 읽을 수 있는 한계이자, 패널 하나가 셸을 몇 개까지 물 수 있는지의 한계다.
+/// `MAX_NODES`와 별개인 이유: 탭은 노드가 아니라 잎 **안**에서 는다.
+pub const MAX_TABS_PER_PANEL: usize = 16;
 
 /// 분할 방향.
 ///
@@ -78,29 +99,54 @@ pub enum Direction {
     Column,
 }
 
+/// 패널 하나 안의 **탭** (`S2-5`). v1에서는 이 필드들이 잎에 직접 붙어 있었다.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Tab {
+    pub id: String,
+    /// 이 탭이 무엇을 담는가. 지금은 `"terminal"` 뿐이다.
+    ///
+    /// **열거형이 아니라 문자열인 이유**: 모르는 값을 만나도 **버리지 않고 그대로 들고 있다가
+    /// 그대로 다시 쓴다.** 열거형이면 파싱에서 죽거나 값이 증발한다.
+    pub kind: String,
+    /// 이 탭에 붙은 PTY의 id. **소유가 아니라 참조다**(§소유권).
+    ///
+    /// 재기동하면 그 프로세스는 없다(`FEATURES` D8 — 원리적으로 복구 불가).
+    /// 그래서 **불러올 때 전부 `None`으로 지운다.** 안 지우면 죽은 id를 가리키는 탭이 남는다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pty_id: Option<String>,
+    /// 사용자가 붙인 이름 (`FEATURES` D3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// 복구용 작업 디렉터리 (`FEATURES` D5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+}
+
+impl Tab {
+    pub fn terminal() -> Self {
+        Self {
+            id: next_id("tab"),
+            kind: KIND_TERMINAL.to_string(),
+            pty_id: None,
+            title: None,
+            cwd: None,
+        }
+    }
+}
+
 /// 트리 노드. `type` 태그로 갈린다 — JSON에서 사람이 읽을 수 있어야 한다.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Node {
     Leaf {
         id: String,
-        /// 이 잎이 무엇을 담는가. 지금은 `"terminal"` 뿐이다.
+        /// 이 패널이 든 탭들. **절대 비지 않는다** — 마지막 탭을 닫으면 패널이 닫힌다.
+        tabs: Vec<Tab>,
+        /// 지금 보이는 탭의 id.
         ///
-        /// **열거형이 아니라 문자열인 이유**: 모르는 값을 만나도 **버리지 않고 그대로 들고 있다가
-        /// 그대로 다시 쓴다.** 열거형이면 파싱에서 죽거나 값이 증발한다.
-        kind: String,
-        /// 이 잎에 붙은 PTY의 id. **소유가 아니라 참조다**(§소유권).
-        ///
-        /// 재기동하면 그 프로세스는 없다(`FEATURES` D8 — 원리적으로 복구 불가).
-        /// 그래서 **불러올 때 전부 `None`으로 지운다.** 안 지우면 죽은 id를 가리키는 잎이 남는다.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pty_id: Option<String>,
-        /// 사용자가 붙인 이름 (`FEATURES` D3).
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        title: Option<String>,
-        /// 복구용 작업 디렉터리 (`FEATURES` D5).
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        cwd: Option<String>,
+        /// **색인이 아니라 id인 이유**: 탭이 빠지면 색인은 조용히 다른 탭을 가리킨다.
+        /// 트리에 없는 id는 불러올 때 `validate`가 잡고, 조작 중에는 각 연산이 직접 고친다.
+        active: String,
     },
     Split {
         id: String,
@@ -139,6 +185,17 @@ pub struct LayoutState {
     pub preset: Option<String>,
 }
 
+/// `tab_close`의 결과 (`S2-5`).
+#[derive(Debug, Clone, Serialize)]
+pub struct TabClosed {
+    /// 죽여야 할 PTY id들. 죽이는 것은 호출자 몫이다(§소유권).
+    pub killed: Vec<String>,
+    /// 같이 닫힌 패널의 잎 id. **탭만 닫혔으면 `None`** — 프런트가 이 값으로 갈래를 나눈다.
+    pub closed_leaf: Option<String>,
+    /// 닫은 뒤 그 패널의 활성 탭. 패널째 닫혔으면 `None`.
+    pub active: Option<String>,
+}
+
 // ── id 발급 ──────────────────────────────────────────────────────────────────
 //
 // uuid 의존성을 새로 들이지 않는다. 이 id는 **한 프로세스 안에서만 유일하면 된다** —
@@ -151,12 +208,20 @@ fn next_id(prefix: &str) -> String {
 }
 
 /// 불러온 트리가 쓰던 번호보다 위에서 다시 시작하게 만든다.
+///
+/// **탭 id도 같은 카운터를 쓴다** — 여기서 탭을 빼먹으면 `tab-9`가 살아 있는 파일을 불러온 뒤
+/// 새 탭이 `tab-9`로 나온다. 겹친 id는 `validate`가 잡지만, 그때는 이미 세션이 하나 사라진 뒤다.
 fn bump_counter_past(node: &Node) {
     let mut max = 0u64;
-    walk(node, &mut |n| {
-        let id = n.id();
+    let mut bump = |id: &str| {
         if let Some(num) = id.rsplit('-').next().and_then(|s| s.parse::<u64>().ok()) {
             max = max.max(num);
+        }
+    };
+    walk(node, &mut |n| {
+        bump(n.id());
+        for t in n.tabs() {
+            bump(&t.id);
         }
     });
     NEXT_ID.fetch_max(max + 1, Ordering::Relaxed);
@@ -193,13 +258,29 @@ impl Node {
         matches!(self, Node::Leaf { .. })
     }
 
+    /// 이 노드의 탭들. 분할이면 빈 슬라이스다 — 호출자가 매번 갈래를 안 나누게 한다.
+    pub fn tabs(&self) -> &[Tab] {
+        match self {
+            Node::Leaf { tabs, .. } => tabs,
+            Node::Split { .. } => &[],
+        }
+    }
+
+    /// 지금 보이는 탭. 잎이 아니면 `None`.
+    pub fn active_tab(&self) -> Option<&Tab> {
+        match self {
+            Node::Leaf { tabs, active, .. } => tabs.iter().find(|t| &t.id == active),
+            Node::Split { .. } => None,
+        }
+    }
+
+    /// 터미널 탭 하나를 든 패널.
     pub fn terminal_leaf() -> Self {
+        let tab = Tab::terminal();
         Node::Leaf {
             id: next_id("leaf"),
-            kind: KIND_TERMINAL.to_string(),
-            pty_id: None,
-            title: None,
-            cwd: None,
+            active: tab.id.clone(),
+            tabs: vec![tab],
         }
     }
 
@@ -347,22 +428,120 @@ impl LayoutState {
         }
     }
 
-    /// 잎에 PTY id를 붙이거나 뗀다. **소유가 아니라 참조다.**
-    pub fn attach_pty(&mut self, leaf_id: &str, pty: Option<String>) -> Result<()> {
+    /// **탭에** PTY id를 붙이거나 뗀다. 소유가 아니라 참조다.
+    ///
+    /// `S2-5` 전에는 잎이 대상이었다. 한 패널에 셸이 여럿 생겼으므로 대상도 탭으로 내려왔다 —
+    /// 탭 id는 트리 전체에서 유일해서(`validate`) 잎 id를 같이 받을 이유가 없다.
+    pub fn attach_pty(&mut self, tab_id: &str, pty: Option<String>) -> Result<()> {
         let mut done = false;
         walk_mut(&mut self.root, &mut |n| {
-            if let Node::Leaf { id, pty_id, .. } = n {
-                if id == leaf_id {
-                    *pty_id = pty.clone();
-                    done = true;
+            if let Node::Leaf { tabs, .. } = n {
+                for t in tabs.iter_mut() {
+                    if t.id == tab_id {
+                        t.pty_id = pty.clone();
+                        done = true;
+                    }
                 }
             }
         });
         if done {
             Ok(())
         } else {
-            Err(Error::Path(format!("잎을 찾지 못했다: {leaf_id}")))
+            Err(Error::Path(format!("탭을 찾지 못했다: {tab_id}")))
         }
+    }
+
+    // ── 탭 (`S2-5`) ──────────────────────────────────────────────────────────
+    //
+    // 잎 = 자리(패널) · 탭 = 그 자리에 담긴 것. 분할·닫기가 **자리**를 다루고,
+    // 아래 셋은 **담긴 것**을 다룬다. 그래서 탭 전환은 트리 모양을 안 건드리고,
+    // 트리 모양을 안 건드리므로 프런트가 패널을 파괴하지 않는다 — 세션이 사는 이유가 그것이다.
+
+    /// 패널에 탭을 하나 더 연다. 새 탭이 곧바로 활성이 되고 포커스도 그 패널로 온다.
+    pub fn tab_new(&mut self, leaf_id: &str) -> Result<String> {
+        let leaf = leaf_mut(&mut self.root, leaf_id)
+            .ok_or_else(|| Error::Path(format!("잎을 찾지 못했다: {leaf_id}")))?;
+        let Node::Leaf { tabs, active, .. } = leaf else {
+            return Err(Error::Path(format!("잎이 아니다: {leaf_id}")));
+        };
+        if tabs.len() >= MAX_TABS_PER_PANEL {
+            return Err(Error::Path(format!(
+                "패널당 탭 상한 {MAX_TABS_PER_PANEL}을 넘는다"
+            )));
+        }
+        let tab = Tab::terminal();
+        let id = tab.id.clone();
+        tabs.push(tab);
+        *active = id.clone();
+        self.focus = Some(leaf_id.to_string());
+        Ok(id)
+    }
+
+    /// 탭을 고른다. **그 탭이 든 패널로 포커스도 옮긴다** — 사용자가 그 칸을 지목한 것이다.
+    ///
+    /// 트리 모양은 그대로다. 프리셋 이름도 안 떨어진다 — 배치가 바뀐 게 아니다.
+    pub fn tab_select(&mut self, tab_id: &str) -> Result<()> {
+        let leaf = leaf_of_tab_mut(&mut self.root, tab_id)
+            .ok_or_else(|| Error::Path(format!("탭을 찾지 못했다: {tab_id}")))?;
+        let leaf_id = leaf.id().to_string();
+        if let Node::Leaf { active, .. } = leaf {
+            *active = tab_id.to_string();
+        }
+        self.focus = Some(leaf_id);
+        Ok(())
+    }
+
+    /// 탭을 닫는다. **마지막 탭을 닫으면 패널째 닫힌다** — 빈 패널을 남기지 않는다.
+    ///
+    /// 죽여야 할 PTY id를 돌려준다. 죽이는 것은 호출자 몫이다(§소유권).
+    /// 마지막 패널의 마지막 탭이면 `close`가 거부한다 — 빈 트리를 만들지 않는다.
+    pub fn tab_close(&mut self, tab_id: &str) -> Result<TabClosed> {
+        // 패널째 닫는 갈래가 `&mut self`를 다시 잡아야 해서, 조회는 먼저 끝내고 빌림을 놓는다.
+        let (leaf_id, count) = {
+            let leaf = leaf_of_tab(&self.root, tab_id)
+                .ok_or_else(|| Error::Path(format!("탭을 찾지 못했다: {tab_id}")))?;
+            (leaf.id().to_string(), leaf.tabs().len())
+        };
+
+        if count <= 1 {
+            let killed = self.close(&leaf_id)?;
+            return Ok(TabClosed {
+                killed,
+                closed_leaf: Some(leaf_id),
+                active: None,
+            });
+        }
+
+        let leaf = leaf_mut(&mut self.root, &leaf_id).expect("방금 찾은 잎이다");
+        let Node::Leaf { tabs, active, .. } = leaf else {
+            return Err(Error::Path(format!("잎이 아니다: {leaf_id}")));
+        };
+        let i = tabs
+            .iter()
+            .position(|t| t.id == tab_id)
+            .expect("방금 찾은 탭이다");
+        let gone = tabs.remove(i);
+        // 활성 탭을 닫았으면 **오른쪽 이웃**으로, 없으면 왼쪽으로. 편집기·브라우저와 같은 규칙이다.
+        if active == tab_id {
+            *active = tabs[i.min(tabs.len() - 1)].id.clone();
+        }
+        Ok(TabClosed {
+            killed: gone.pty_id.into_iter().collect(),
+            closed_leaf: None,
+            active: Some(active.clone()),
+        })
+    }
+
+    /// 잎 하나의 탭들 — 왼쪽부터. 없는 잎이면 빈 슬라이스다.
+    pub fn tabs_of(&self, leaf_id: &str) -> &[Tab] {
+        find_leaf(&self.root, leaf_id).map(|l| l.tabs()).unwrap_or(&[])
+    }
+
+    /// 트리 전체의 탭 수. 패널 수(`leaf_ids().len()`)와 다른 값이다 (`S2-5`).
+    pub fn tab_count(&self) -> usize {
+        let mut n = 0;
+        walk(&self.root, &mut |x| n += x.tabs().len());
+        n
     }
 
     /// 비율 합을 1.0으로 맞추고, 자식이 하나뿐인 분할을 걷어낸다.
@@ -432,9 +611,39 @@ impl LayoutState {
             seen.push(id.to_string());
 
             match n {
-                Node::Leaf { kind, .. } => {
-                    if kind.is_empty() {
-                        problem = Some(format!("잎 {id}의 kind가 비어 있다"));
+                Node::Leaf { tabs, active, .. } => {
+                    // 빈 패널을 허용하면 "탭이 하나도 없는 칸"이 화면에 남고,
+                    // 그 칸은 닫을 탭도 고를 탭도 없어 사용자가 손댈 방법이 없어진다.
+                    if tabs.is_empty() {
+                        problem = Some(format!("패널 {id}에 탭이 없다"));
+                        return;
+                    }
+                    if tabs.len() > MAX_TABS_PER_PANEL {
+                        problem = Some(format!(
+                            "패널 {id}의 탭이 너무 많다: {} > {MAX_TABS_PER_PANEL}",
+                            tabs.len()
+                        ));
+                        return;
+                    }
+                    for t in tabs {
+                        if t.id.is_empty() {
+                            problem = Some(format!("패널 {id}에 id 없는 탭이 있다"));
+                            return;
+                        }
+                        // 탭 id는 **잎·분할 id와 같은 이름 공간**이다. 여기서 같이 세지 않으면
+                        // `attach_pty`·`tab_select`가 엉뚱한 탭을 잡는다.
+                        if seen.iter().any(|s| s == &t.id) {
+                            problem = Some(format!("id가 겹친다: {}", t.id));
+                            return;
+                        }
+                        seen.push(t.id.clone());
+                        if t.kind.is_empty() {
+                            problem = Some(format!("탭 {}의 kind가 비어 있다", t.id));
+                            return;
+                        }
+                    }
+                    if !tabs.iter().any(|t| &t.id == active) {
+                        problem = Some(format!("패널 {id}의 활성 탭이 목록에 없다: {active}"));
                     }
                 }
                 Node::Split { children, .. } => {
@@ -463,11 +672,66 @@ impl LayoutState {
 fn placeholder() -> Node {
     Node::Leaf {
         id: String::new(),
-        kind: String::new(),
-        pty_id: None,
-        title: None,
-        cwd: None,
+        tabs: Vec::new(),
+        active: String::new(),
     }
+}
+
+// ── 트리 탐색 (`S2-5`) ───────────────────────────────────────────────────────
+//
+// `walk_mut`은 `FnMut(&mut Node)`이라 **노드를 밖으로 돌려주지 못한다.** 탭 조작은 잎 하나를
+// 잡고 여러 필드를 같이 고쳐야 해서 빌림을 돌려주는 탐색이 따로 필요하다.
+
+fn find_leaf<'a>(node: &'a Node, leaf_id: &str) -> Option<&'a Node> {
+    match node {
+        Node::Leaf { id, .. } => (id == leaf_id).then_some(node),
+        Node::Split { children, .. } => children.iter().find_map(|c| find_leaf(&c.node, leaf_id)),
+    }
+}
+
+fn leaf_mut<'a>(node: &'a mut Node, leaf_id: &str) -> Option<&'a mut Node> {
+    // 먼저 읽기로 판정하고 그다음 통째로 돌려준다 — 안에서 갈래를 나누면 빌림이 겹친다.
+    if node.is_leaf() {
+        return (node.id() == leaf_id).then_some(node);
+    }
+    if let Node::Split { children, .. } = node {
+        for c in children.iter_mut() {
+            if let Some(found) = leaf_mut(&mut c.node, leaf_id) {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
+
+fn has_tab(node: &Node, tab_id: &str) -> bool {
+    node.tabs().iter().any(|t| t.id == tab_id)
+}
+
+fn leaf_of_tab<'a>(node: &'a Node, tab_id: &str) -> Option<&'a Node> {
+    if has_tab(node, tab_id) {
+        return Some(node);
+    }
+    match node {
+        Node::Leaf { .. } => None,
+        Node::Split { children, .. } => children
+            .iter()
+            .find_map(|c| leaf_of_tab(&c.node, tab_id)),
+    }
+}
+
+fn leaf_of_tab_mut<'a>(node: &'a mut Node, tab_id: &str) -> Option<&'a mut Node> {
+    if has_tab(node, tab_id) {
+        return Some(node);
+    }
+    if let Node::Split { children, .. } = node {
+        for c in children.iter_mut() {
+            if let Some(found) = leaf_of_tab_mut(&mut c.node, tab_id) {
+                return Some(found);
+            }
+        }
+    }
+    None
 }
 
 /// 트리를 해체해 잎만 **왼쪽부터 차례로** 꺼낸다. 노드를 복사하지 않고 옮긴다(`rearrange`).
@@ -546,19 +810,16 @@ fn split_rec(
     }
 }
 
-/// 잎을 지우고, 지운 잎이 들고 있던 PTY id를 모은다.
+/// 잎을 지우고, 지운 잎의 **모든 탭이** 들고 있던 PTY id를 모은다.
+///
+/// 탭 하나만 세면 나머지 셸이 고아로 남는다 — 패널을 닫는 것은 그 안의 세션 전부를 닫는 것이다.
 fn close_rec(node: &mut Node, target: &str, killed: &mut Vec<String>) {
     if let Node::Split { children, .. } = node {
         if let Some(i) = children
             .iter()
             .position(|c| c.node.is_leaf() && c.node.id() == target)
         {
-            if let Node::Leaf {
-                pty_id: Some(p), ..
-            } = &children[i].node
-            {
-                killed.push(p.clone());
-            }
+            killed.extend(children[i].node.tabs().iter().filter_map(|t| t.pty_id.clone()));
             children.remove(i);
             return;
         }
@@ -606,6 +867,8 @@ pub enum LoadKind {
     New,
     /// 그대로 읽었다.
     Loaded,
+    /// 과거 버전을 **이관했다**. 원본은 `backup`에 복사해 뒀다(옮긴 게 아니다).
+    Migrated { from: u32, backup: Option<PathBuf> },
     /// 미래 버전이라 백업하고 초기화했다.
     ResetFuture { found: u32, backup: PathBuf },
     /// 깨졌거나 상한을 넘어 백업하고 초기화했다.
@@ -645,6 +908,10 @@ pub fn load(path: &Path) -> Loaded {
         .ok()
         .and_then(|v| v.get("version").and_then(|n| n.as_u64()));
 
+    // 과거 버전은 **이관한다** — 미래 버전과 달리 우리가 뜻을 아는 파일이다(§버전 정책·§탭).
+    let mut raw = raw;
+    let mut migrated: Option<(u32, Option<PathBuf>)> = None;
+
     match version {
         Some(v) if v as u32 > SCHEMA_VERSION => {
             let backup = backup_file(path, &format!("v{v}"));
@@ -657,11 +924,21 @@ pub fn load(path: &Path) -> Loaded {
             };
         }
         Some(v) if (v as u32) < SCHEMA_VERSION => {
-            // v1이 최초라 지금은 도달할 수 없다. 이관을 넣을 자리를 비워 둔다 —
-            // 여기서 조용히 기본값으로 떨어뜨리면 그날 사용자 세션이 통째로 날아간다.
-            let reason = format!("이관 경로가 없다: v{v} → v{SCHEMA_VERSION}");
-            let backup = backup_file(path, &format!("v{v}"));
-            return fresh(LoadKind::ResetBroken { reason, backup });
+            let from = v as u32;
+            match migrate(&raw, from) {
+                Some(next) => {
+                    // 원본은 **복사해** 남긴다. 옮기면(rename) 이관 결과가 틀렸을 때 돌아갈 게 없다.
+                    let backup = backup_copy(path, &format!("v{from}"));
+                    migrated = Some((from, backup));
+                    raw = next;
+                }
+                None => {
+                    // 뜻을 모르는 과거 버전이다. 조용히 기본값으로 떨어뜨리지 않고 남긴다.
+                    let reason = format!("이관 경로가 없다: v{from} → v{SCHEMA_VERSION}");
+                    let backup = backup_file(path, &format!("v{from}"));
+                    return fresh(LoadKind::ResetBroken { reason, backup });
+                }
+            }
         }
         None => {
             let backup = backup_file(path, "noversion");
@@ -695,11 +972,7 @@ pub fn load(path: &Path) -> Loaded {
 
     // 지난 실행의 PTY는 살아 있지 않다(`FEATURES` D8). 죽은 id를 들고 있으면
     // `S2-2`가 "붙어 있다"고 착각하고 새 셸을 안 띄운다.
-    walk_mut(&mut state.root, &mut |n| {
-        if let Node::Leaf { pty_id, .. } = n {
-            *pty_id = None;
-        }
-    });
+    clear_pty_ids(&mut state.root);
 
     // 배치 프리셋 이름은 **모양이 맞을 때만** 믿는다 (`S2-11` · `presets::still_matches`).
     // 손으로 고친 파일·다른 버전이 쓴 파일이 이름만 남기고 모양이 다를 수 있다.
@@ -713,8 +986,22 @@ pub fn load(path: &Path) -> Loaded {
     bump_counter_past(&state.root);
     Loaded {
         state,
-        kind: LoadKind::Loaded,
+        kind: match migrated {
+            Some((from, backup)) => LoadKind::Migrated { from, backup },
+            None => LoadKind::Loaded,
+        },
     }
+}
+
+/// 모든 탭의 PTY 참조를 지운다. 불러오기와 왕복 검증이 같은 규칙을 쓰게 한 곳에 둔다.
+fn clear_pty_ids(root: &mut Node) {
+    walk_mut(root, &mut |n| {
+        if let Node::Leaf { tabs, .. } = n {
+            for t in tabs.iter_mut() {
+                t.pty_id = None;
+            }
+        }
+    });
 }
 
 fn fresh(kind: LoadKind) -> Loaded {
@@ -724,8 +1011,81 @@ fn fresh(kind: LoadKind) -> Loaded {
     }
 }
 
+// ── 이관 (`S2-5`) ────────────────────────────────────────────────────────────
+//
+// **타입으로 파싱하지 않고 JSON 값으로 만진다.** 지금 타입은 옛 모양을 못 읽고, 옛 타입을
+// 코드에 남기면 버전이 늘 때마다 죽은 구조체가 하나씩 쌓인다. 값으로 옮기면 이관 코드가
+// 그 버전의 모양을 스스로 설명하는 한 덩어리로 남는다.
+
+/// 과거 버전 파일을 지금 스키마로 옮긴다. 뜻을 모르면 `None` — 조용히 기본값으로 안 떨어뜨린다.
+fn migrate(raw: &str, from: u32) -> Option<String> {
+    if from != 1 {
+        return None;
+    }
+    let mut v: serde_json::Value = serde_json::from_str(raw).ok()?;
+    migrate_v1_to_v2(v.get_mut("root")?)?;
+    v.as_object_mut()?
+        .insert("version".into(), serde_json::json!(SCHEMA_VERSION));
+    serde_json::to_string(&v).ok()
+}
+
+/// v1 → v2 — 잎에 직접 붙어 있던 내용물을 **탭 하나**로 감싼다 (§탭).
+///
+/// 모르는 `kind`도 그대로 옮긴다 — v1이 "버리지 않고 왕복시킨다"고 정한 성질이라
+/// 이관에서 떨어뜨리면 그 약속이 여기서 깨진다.
+fn migrate_v1_to_v2(node: &mut serde_json::Value) -> Option<()> {
+    let obj = node.as_object_mut()?;
+    let ty = obj.get("type").and_then(|t| t.as_str())?.to_string();
+    match ty.as_str() {
+        "leaf" => {
+            let tab_id = next_id("tab");
+            let mut tab = serde_json::Map::new();
+            tab.insert("id".into(), serde_json::json!(tab_id));
+            tab.insert(
+                "kind".into(),
+                obj.remove("kind")
+                    .unwrap_or_else(|| serde_json::json!(KIND_TERMINAL)),
+            );
+            for key in ["pty_id", "title", "cwd"] {
+                if let Some(val) = obj.remove(key) {
+                    if !val.is_null() {
+                        tab.insert(key.into(), val);
+                    }
+                }
+            }
+            obj.insert(
+                "tabs".into(),
+                serde_json::Value::Array(vec![serde_json::Value::Object(tab)]),
+            );
+            obj.insert("active".into(), serde_json::json!(tab_id));
+            Some(())
+        }
+        "split" => {
+            for child in obj.get_mut("children")?.as_array_mut()? {
+                migrate_v1_to_v2(child.as_object_mut()?.get_mut("node")?)?;
+            }
+            Some(())
+        }
+        _ => None,
+    }
+}
+
 /// 못 쓰는 파일을 옆으로 치운다. **지우지 않는다** — 되돌릴 여지를 남긴다.
 fn backup_file(path: &Path, tag: &str) -> Option<PathBuf> {
+    let dest = backup_path(path, tag)?;
+    std::fs::rename(path, &dest).ok()?;
+    Some(dest)
+}
+
+/// 원본을 **복사해** 남긴다. 이관은 원본 자리를 그대로 써야 하고,
+/// 이관 결과가 틀렸을 때 돌아갈 파일도 있어야 한다.
+fn backup_copy(path: &Path, tag: &str) -> Option<PathBuf> {
+    let dest = backup_path(path, tag)?;
+    std::fs::copy(path, &dest).ok()?;
+    Some(dest)
+}
+
+fn backup_path(path: &Path, tag: &str) -> Option<PathBuf> {
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis())
@@ -734,9 +1094,7 @@ fn backup_file(path: &Path, tag: &str) -> Option<PathBuf> {
         "{}.bak-{tag}-{millis}",
         path.file_name()?.to_string_lossy()
     );
-    let dest = path.with_file_name(name);
-    std::fs::rename(path, &dest).ok()?;
-    Some(dest)
+    Some(path.with_file_name(name))
 }
 
 /// 상태를 파일로 쓴다. **임시 파일에 쓰고 갈아끼운다** — 쓰다가 죽어도 옛 파일이 남는다.
@@ -772,10 +1130,20 @@ pub fn log_load(loaded: &Loaded, path: &Path) {
             path.display()
         ),
         LoadKind::Loaded => eprintln!(
-            "[eqmux][layout] 복원 — 잎 {}개 · v{} ({})",
+            "[eqmux][layout] 복원 — 잎 {}개 · 탭 {}개 · v{} ({})",
             loaded.state.root.leaf_ids().len(),
+            loaded.state.tab_count(),
             loaded.state.version,
             path.display()
+        ),
+        LoadKind::Migrated { from, backup } => eprintln!(
+            "[eqmux][layout] 이관 v{from} → v{SCHEMA_VERSION} — 잎 {}개 · 탭 {}개{}",
+            loaded.state.root.leaf_ids().len(),
+            loaded.state.tab_count(),
+            backup
+                .as_ref()
+                .map(|b| format!(" · 원본 복사 {}", b.display()))
+                .unwrap_or_else(|| " · ⚠️ 원본 복사 실패".into())
         ),
         LoadKind::ResetFuture { found, backup } => eprintln!(
             "[eqmux][layout] ⚠️ 미래 버전 v{found} (현재 v{SCHEMA_VERSION}) — 백업 후 초기화: {}",
@@ -861,6 +1229,8 @@ impl LayoutProbe {
 pub fn run_probe(path: &Path, out: Option<&Path>) -> i32 {
     let mut st = LayoutState::single_terminal();
     let first = st.root.leaf_ids()[0].clone();
+    // 뿌리가 아직 잎이라 여기서 첫 탭 id를 잡아 둔다 — 나눈 뒤에는 뿌리가 분할이다.
+    let first_tab = st.root.tabs()[0].id.clone();
 
     // 4분할: 좌우로 한 번, 각 칸을 상하로 한 번씩.
     let right = match st.split(&first, Direction::Row) {
@@ -877,7 +1247,18 @@ pub fn run_probe(path: &Path, out: Option<&Path>) -> i32 {
         }
     }
     st.set_focus(&first).ok();
-    let _ = st.attach_pty(&first, Some("pty-probe".into()));
+    // 탭 왕복도 같이 본다 (`S2-5`) — 패널 하나에 탭을 하나 더 얹고 PTY는 그 탭에 붙인다.
+    let extra_tab = match st.tab_new(&first) {
+        Ok(id) => id,
+        Err(e) => {
+            eprintln!("[eqmux][layout-probe] 미달 — 탭 생성 실패: {e}");
+            return 1;
+        }
+    };
+    let _ = st.attach_pty(&extra_tab, Some("pty-probe".into()));
+    // 활성 탭을 첫 탭으로 되돌린다 — 활성 선택이 파일을 왕복하는지도 같이 증명된다.
+    let _ = st.tab_select(&first_tab);
+    st.set_focus(&first).ok();
 
     let before = match serde_json::to_string(&st) {
         Ok(s) => s,
@@ -887,6 +1268,7 @@ pub fn run_probe(path: &Path, out: Option<&Path>) -> i32 {
         }
     };
     let leaves_before = st.root.leaf_ids().len();
+    let tabs_before = st.tab_count();
 
     if let Err(e) = save(path, &st) {
         eprintln!("[eqmux][layout-probe] 미달 — 저장 실패: {e}");
@@ -897,22 +1279,28 @@ pub fn run_probe(path: &Path, out: Option<&Path>) -> i32 {
 
     // 불러오면 `pty_id`는 의도적으로 지워진다(죽은 프로세스). 그 한 자리만 맞춰 놓고 비교한다.
     let mut expect = st.clone();
-    walk_mut(&mut expect.root, &mut |n| {
-        if let Node::Leaf { pty_id, .. } = n {
-            *pty_id = None;
-        }
-    });
+    clear_pty_ids(&mut expect.root);
     let after = serde_json::to_string(&loaded.state).unwrap_or_default();
     let expect_json = serde_json::to_string(&expect).unwrap_or_default();
 
     let same = after == expect_json;
     let pty_cleared = !after.contains("pty-probe");
     let leaves_after = loaded.state.root.leaf_ids().len();
-    let pass = same && pty_cleared && leaves_after == leaves_before;
+    let tabs_after = loaded.state.tab_count();
+    // 탭이 왕복하는가 (`S2-5`) — 수만 맞으면 활성 선택이 바뀌어도 통과가 나온다. 활성까지 본다.
+    let active_kept = leaf_of_tab(&loaded.state.root, &first_tab)
+        .and_then(|l| l.active_tab())
+        .is_some_and(|t| t.id == first_tab);
+    let pass = same
+        && pty_cleared
+        && leaves_after == leaves_before
+        && tabs_after == tabs_before
+        && active_kept;
 
     eprintln!(
-        "[eqmux][layout-probe] {} — 잎 {leaves_before}→{leaves_after} · 왕복 동일 {} · pty 정리 {} · {} B · {}",
+        "[eqmux][layout-probe] {} — 잎 {leaves_before}→{leaves_after} · 탭 {tabs_before}→{tabs_after} · 활성 탭 유지 {} · 왕복 동일 {} · pty 정리 {} · {} B · {}",
         if pass { "통과" } else { "미달" },
+        if active_kept { "예" } else { "아니오" },
         if same { "예" } else { "아니오" },
         if pty_cleared { "예" } else { "아니오" },
         before.len(),
@@ -926,6 +1314,9 @@ pub fn run_probe(path: &Path, out: Option<&Path>) -> i32 {
             "pty_cleared": pty_cleared,
             "leaves_before": leaves_before,
             "leaves_after": leaves_after,
+            "tabs_before": tabs_before,
+            "tabs_after": tabs_after,
+            "active_tab_kept": active_kept,
             "bytes": before.len(),
             "state_file": path.display().to_string(),
             "version": SCHEMA_VERSION,
@@ -1007,12 +1398,18 @@ mod tests {
         assert_eq!(back.root.leaf_ids().len(), 4);
     }
 
+    /// 갓 만든 잎은 탭이 하나뿐이다 — 그 탭 id.
+    fn tab0(st: &LayoutState, leaf: &str) -> String {
+        st.tabs_of(leaf)[0].id.clone()
+    }
+
     #[test]
     fn 닫으면_pty를_돌려주고_외자식_분할은_걷힌다() {
         let mut st = LayoutState::single_terminal();
         let a = st.root.leaf_ids()[0].clone();
         let b = st.split(&a, Direction::Row).unwrap();
-        st.attach_pty(&b, Some("pty-9".into())).unwrap();
+        let tb = tab0(&st, &b);
+        st.attach_pty(&tb, Some("pty-9".into())).unwrap();
 
         let killed = st.close(&b).unwrap();
         assert_eq!(killed, vec!["pty-9".to_string()]);
@@ -1050,12 +1447,14 @@ mod tests {
     #[test]
     fn 모르는_kind는_버리지_않고_그대로_왕복한다() {
         let json = r#"{
-            "version": 1,
+            "version": 2,
             "root": {
               "type": "split", "id": "split-1", "direction": "row",
               "children": [
-                {"weight": 0.5, "node": {"type":"leaf","id":"leaf-1","kind":"terminal"}},
-                {"weight": 0.5, "node": {"type":"leaf","id":"leaf-2","kind":"file_explorer"}}
+                {"weight": 0.5, "node": {"type":"leaf","id":"leaf-1","active":"t1",
+                  "tabs":[{"id":"t1","kind":"terminal"}]}},
+                {"weight": 0.5, "node": {"type":"leaf","id":"leaf-2","active":"t2",
+                  "tabs":[{"id":"t2","kind":"file_explorer"}]}}
               ]
             },
             "focus": "leaf-1"
@@ -1067,16 +1466,137 @@ mod tests {
 
     #[test]
     fn 검증은_겹치는_id와_한칸짜리_분할을_잡는다() {
-        let dup = r#"{"version":1,"root":{"type":"split","id":"s","direction":"row","children":[
-            {"weight":0.5,"node":{"type":"leaf","id":"same","kind":"terminal"}},
-            {"weight":0.5,"node":{"type":"leaf","id":"same","kind":"terminal"}}]}}"#;
+        let dup = r#"{"version":2,"root":{"type":"split","id":"s","direction":"row","children":[
+            {"weight":0.5,"node":{"type":"leaf","id":"same","active":"a","tabs":[{"id":"a","kind":"terminal"}]}},
+            {"weight":0.5,"node":{"type":"leaf","id":"same","active":"b","tabs":[{"id":"b","kind":"terminal"}]}}]}}"#;
         let st: LayoutState = serde_json::from_str(dup).unwrap();
         assert!(st.validate().is_err());
 
-        let one = r#"{"version":1,"root":{"type":"split","id":"s","direction":"row","children":[
-            {"weight":1.0,"node":{"type":"leaf","id":"a","kind":"terminal"}}]}}"#;
+        let one = r#"{"version":2,"root":{"type":"split","id":"s","direction":"row","children":[
+            {"weight":1.0,"node":{"type":"leaf","id":"a","active":"t","tabs":[{"id":"t","kind":"terminal"}]}}]}}"#;
         let st: LayoutState = serde_json::from_str(one).unwrap();
         assert!(st.validate().is_err());
+    }
+
+    /// 탭 id는 잎·분할과 **같은 이름 공간**이다. 여기서 안 잡으면 조작이 엉뚱한 탭을 집는다.
+    #[test]
+    fn 검증은_탭_불변식을_잡는다() {
+        let base = |tabs: &str, active: &str| {
+            format!(
+                r#"{{"version":2,"root":{{"type":"leaf","id":"leaf-1","active":"{active}","tabs":{tabs}}}}}"#
+            )
+        };
+
+        // 빈 패널 — 닫을 탭도 고를 탭도 없는 칸이 생긴다.
+        let st: LayoutState = serde_json::from_str(&base("[]", "x")).unwrap();
+        assert!(st.validate().is_err(), "빈 패널을 통과시켰다");
+
+        // 활성 탭이 목록에 없다.
+        let st: LayoutState =
+            serde_json::from_str(&base(r#"[{"id":"t1","kind":"terminal"}]"#, "없는탭")).unwrap();
+        assert!(st.validate().is_err(), "허공을 가리키는 활성 탭을 통과시켰다");
+
+        // 잎 id와 탭 id가 겹친다.
+        let st: LayoutState =
+            serde_json::from_str(&base(r#"[{"id":"leaf-1","kind":"terminal"}]"#, "leaf-1")).unwrap();
+        assert!(st.validate().is_err(), "잎과 겹치는 탭 id를 통과시켰다");
+
+        // 정상.
+        let st: LayoutState =
+            serde_json::from_str(&base(r#"[{"id":"t1","kind":"terminal"}]"#, "t1")).unwrap();
+        st.validate().unwrap();
+    }
+
+    #[test]
+    fn 탭은_열리고_전환되고_닫힌다() {
+        let mut st = LayoutState::single_terminal();
+        let leaf = st.root.leaf_ids()[0].clone();
+        let t1 = tab0(&st, &leaf);
+
+        let t2 = st.tab_new(&leaf).unwrap();
+        assert_eq!(st.tab_count(), 2);
+        assert_eq!(st.root.active_tab().unwrap().id, t2, "새 탭이 곧바로 활성이다");
+        assert_eq!(st.root.leaf_ids().len(), 1, "탭은 패널을 늘리지 않는다");
+        st.validate().unwrap();
+
+        st.tab_select(&t1).unwrap();
+        assert_eq!(st.root.active_tab().unwrap().id, t1);
+        assert_eq!(st.focus.as_deref(), Some(leaf.as_str()), "탭을 고르면 그 패널로 포커스가 온다");
+
+        // 활성 탭을 닫으면 오른쪽 이웃으로 간다.
+        st.attach_pty(&t1, Some("pty-1".into())).unwrap();
+        let closed = st.tab_close(&t1).unwrap();
+        assert_eq!(closed.killed, vec!["pty-1".to_string()]);
+        assert_eq!(closed.closed_leaf, None, "탭만 닫혔는데 패널이 닫혔다");
+        assert_eq!(closed.active.as_deref(), Some(t2.as_str()));
+        st.validate().unwrap();
+
+        // 마지막 탭이자 마지막 패널 — 빈 트리를 만들지 않는다.
+        assert!(st.tab_close(&t2).is_err());
+    }
+
+    #[test]
+    fn 마지막_탭을_닫으면_패널째_닫힌다() {
+        let mut st = LayoutState::single_terminal();
+        let a = st.root.leaf_ids()[0].clone();
+        let b = st.split(&a, Direction::Row).unwrap();
+        let tb = tab0(&st, &b);
+        st.attach_pty(&tb, Some("pty-9".into())).unwrap();
+
+        let closed = st.tab_close(&tb).unwrap();
+        assert_eq!(closed.closed_leaf.as_deref(), Some(b.as_str()));
+        assert_eq!(closed.killed, vec!["pty-9".to_string()]);
+        assert!(st.root.is_leaf(), "외자식 분할이 안 걷혔다");
+        st.validate().unwrap();
+    }
+
+    /// 패널을 닫는 것은 그 안의 세션 **전부**를 닫는 것이다. 하나만 세면 나머지가 고아로 남는다.
+    #[test]
+    fn 패널을_닫으면_모든_탭의_pty가_따라_죽는다() {
+        let mut st = LayoutState::single_terminal();
+        let a = st.root.leaf_ids()[0].clone();
+        let b = st.split(&a, Direction::Row).unwrap();
+        let t1 = tab0(&st, &b);
+        let t2 = st.tab_new(&b).unwrap();
+        st.attach_pty(&t1, Some("pty-1".into())).unwrap();
+        st.attach_pty(&t2, Some("pty-2".into())).unwrap();
+
+        let mut killed = st.close(&b).unwrap();
+        killed.sort();
+        assert_eq!(killed, vec!["pty-1".to_string(), "pty-2".to_string()]);
+    }
+
+    #[test]
+    fn 탭_상한을_넘기지_않는다() {
+        let mut st = LayoutState::single_terminal();
+        let leaf = st.root.leaf_ids()[0].clone();
+        for _ in 1..MAX_TABS_PER_PANEL {
+            st.tab_new(&leaf).unwrap();
+        }
+        assert_eq!(st.tabs_of(&leaf).len(), MAX_TABS_PER_PANEL);
+        assert!(st.tab_new(&leaf).is_err(), "상한을 넘겨 열었다");
+    }
+
+    /// 프리셋이 배치하는 단위는 **패널이지 탭이 아니다**(§탭). 재배열에 탭이 따라와야 한다.
+    #[test]
+    fn 재배열은_탭을_통째로_데려간다() {
+        let mut st = LayoutState::single_terminal();
+        let a = st.root.leaf_ids()[0].clone();
+        let b = st.split(&a, Direction::Row).unwrap();
+        st.split(&b, Direction::Column).unwrap();
+        let extra = st.tab_new(&a).unwrap();
+        st.attach_pty(&extra, Some("pty-7".into())).unwrap();
+        let before = st.tab_count();
+
+        crate::presets::apply(&mut st, "grid-1x8").unwrap();
+
+        assert_eq!(st.tab_count(), before, "재배열에서 탭이 사라졌다");
+        assert_eq!(st.tabs_of(&a).len(), 2, "탭이 자기 패널을 안 따라갔다");
+        assert!(st
+            .tabs_of(&a)
+            .iter()
+            .any(|t| t.pty_id.as_deref() == Some("pty-7")));
+        st.validate().unwrap();
     }
 
     #[test]
@@ -1096,12 +1616,14 @@ mod tests {
 
         let mut st = four_way();
         let leaf = st.root.leaf_ids()[0].clone();
-        st.attach_pty(&leaf, Some("pty-1".into())).unwrap();
+        let tab = tab0(&st, &leaf);
+        st.attach_pty(&tab, Some("pty-1".into())).unwrap();
         save(&path, &st).unwrap();
 
         let loaded = load(&path);
         assert_eq!(loaded.kind, LoadKind::Loaded);
         assert_eq!(loaded.state.root.leaf_ids(), st.root.leaf_ids());
+        assert_eq!(loaded.state.tab_count(), st.tab_count());
         // 지난 실행의 PTY는 살아 있지 않다 — 참조를 남기지 않는다.
         let json = serde_json::to_string(&loaded.state).unwrap();
         assert!(!json.contains("pty-1"));
@@ -1129,6 +1651,79 @@ mod tests {
         st.preset = Some("grid-8x1".into());
         save(&path, &st).unwrap();
         assert_eq!(load(&path).state.preset, None);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// v1 파일 하나가 사용자 세션 전부다. **초기화가 아니라 이관이다**(§버전 정책).
+    #[test]
+    fn v1_파일은_탭_하나로_이관된다() {
+        let dir = std::env::temp_dir().join(format!("eqmux-layout-{}", next_id("t")));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("state.json");
+        std::fs::write(
+            &path,
+            r#"{"version":1,"root":{"type":"split","id":"split-1","direction":"row","children":[
+                {"weight":0.5,"node":{"type":"leaf","id":"leaf-1","kind":"terminal",
+                  "pty_id":"pty-9","title":"빌드","cwd":"D:\\work"}},
+                {"weight":0.5,"node":{"type":"leaf","id":"leaf-2","kind":"file_explorer"}}
+            ]},"focus":"leaf-2","preset":"grid-8x1"}"#,
+        )
+        .unwrap();
+
+        let loaded = load(&path);
+        match &loaded.kind {
+            LoadKind::Migrated { from, backup } => {
+                assert_eq!(*from, 1);
+                // 원본은 **복사**다 — 이관 결과가 틀렸을 때 돌아갈 파일이 있어야 한다.
+                let backup = backup.as_ref().expect("원본 복사가 없다");
+                assert!(backup.exists());
+                assert!(std::fs::read_to_string(backup).unwrap().contains("\"version\":1"));
+                assert!(path.exists(), "원본 자리가 사라졌다 — 옮긴 게 아니라 복사여야 한다");
+            }
+            other => panic!("이관이 안 됐다: {other:?}"),
+        }
+
+        let st = &loaded.state;
+        st.validate().unwrap();
+        assert_eq!(st.version, SCHEMA_VERSION);
+        assert_eq!(st.root.leaf_ids(), vec!["leaf-1", "leaf-2"], "잎 id가 안 지켜졌다");
+        assert_eq!(st.tab_count(), 2, "잎마다 탭 하나로 감싸야 한다");
+
+        let t = &st.tabs_of("leaf-1")[0];
+        assert_eq!(t.kind, "terminal");
+        assert_eq!(t.title.as_deref(), Some("빌드"), "이름이 증발했다");
+        assert_eq!(t.cwd.as_deref(), Some("D:\\work"), "복구용 cwd가 증발했다");
+        // 지난 실행의 PTY는 살아 있지 않다 — 이관해도 그 규칙은 같다.
+        assert_eq!(t.pty_id, None);
+        // v1이 "모르는 kind는 버리지 않는다"고 정했다. 이관에서 떨어뜨리면 그 약속이 깨진다.
+        assert_eq!(st.tabs_of("leaf-2")[0].kind, "file_explorer");
+        assert_eq!(st.focus.as_deref(), Some("leaf-2"));
+
+        // 이관 뒤 저장하면 v2로 남고, 다시 읽으면 이관이 아니라 그냥 복원이다.
+        save(&path, st).unwrap();
+        assert_eq!(load(&path).kind, LoadKind::Loaded);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 이관이 새로 만든 탭 id가 다음 발급과 겹치면 안 된다 — `bump_counter_past`가 탭도 세는 이유.
+    #[test]
+    fn 이관한_탭_id는_다음_발급과_안_겹친다() {
+        let dir = std::env::temp_dir().join(format!("eqmux-layout-{}", next_id("t")));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("state.json");
+        std::fs::write(
+            &path,
+            r#"{"version":1,"root":{"type":"leaf","id":"leaf-1","kind":"terminal"}}"#,
+        )
+        .unwrap();
+
+        let mut st = load(&path).state;
+        let existing = st.tabs_of("leaf-1")[0].id.clone();
+        let fresh = st.tab_new("leaf-1").unwrap();
+        assert_ne!(existing, fresh, "새 탭이 이관된 탭 id를 다시 냈다");
+        st.validate().unwrap();
 
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -1172,7 +1767,8 @@ mod tests {
     fn 상한을_넘는_저장은_거부한다() {
         let mut st = LayoutState::single_terminal();
         let leaf = st.root.leaf_ids()[0].clone();
-        st.attach_pty(&leaf, Some("x".repeat(MAX_STATE_BYTES as usize + 16)))
+        let tab = tab0(&st, &leaf);
+        st.attach_pty(&tab, Some("x".repeat(MAX_STATE_BYTES as usize + 16)))
             .unwrap();
         let dir = std::env::temp_dir().join(format!("eqmux-layout-{}", next_id("t")));
         std::fs::create_dir_all(&dir).unwrap();

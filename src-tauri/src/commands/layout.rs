@@ -11,7 +11,7 @@
 use tauri::State;
 
 use crate::error::Result;
-use crate::layout::{Direction, LayoutState, LayoutStore};
+use crate::layout::{Direction, LayoutState, LayoutStore, TabClosed};
 use crate::presets::{self, PresetInfo};
 use crate::pty::PtyManager;
 
@@ -66,14 +66,53 @@ pub fn layout_focus(store: State<'_, LayoutStore>, leaf_id: String) -> Result<()
     store.update(|st| st.set_focus(&leaf_id))
 }
 
-/// 잎에 PTY id를 붙이거나(`Some`) 뗀다(`None`). 소유가 아니라 참조다.
+/// **탭에** PTY id를 붙이거나(`Some`) 뗀다(`None`). 소유가 아니라 참조다.
+///
+/// `S2-5` 전에는 잎이 대상이었다. 한 패널에 셸이 여럿 생겼으므로 대상도 탭으로 내려왔다.
 #[tauri::command]
 pub fn layout_attach_pty(
     store: State<'_, LayoutStore>,
-    leaf_id: String,
+    tab_id: String,
     pty_id: Option<String>,
 ) -> Result<()> {
-    store.update(|st| st.attach_pty(&leaf_id, pty_id))
+    store.update(|st| st.attach_pty(&tab_id, pty_id))
+}
+
+// ── 탭 (`S2-5`) ──────────────────────────────────────────────────────────────
+//
+// 경계는 `layout_close`와 같다 — **트리에서 빼는 것과 프로세스를 죽이는 것이 한 명령 안에서**
+// 끝나야 한다. 둘로 나누면 그 사이에 죽는 경로가 생기고, 그때 PTY만 남는다.
+//
+// 프런트는 `panels.ts`의 newTab/selectTab/closeTab으로만 접근한다 — 이 명령을 직접 부르면
+// 트리만 바뀌고 화면(터미널 요소·포커스)이 안 따라온다(`layout_apply_preset`과 같은 이유).
+
+/// 패널에 탭을 하나 더 연다. 새 탭의 id를 돌려준다 — 호출자는 그 탭에 붙일 셸을 띄우면 된다.
+#[tauri::command]
+pub fn layout_tab_new(store: State<'_, LayoutStore>, leaf_id: String) -> Result<String> {
+    store.update(|st| st.tab_new(&leaf_id))
+}
+
+/// 탭을 고른다. **트리 모양을 안 건드린다** — 그래서 세션이 죽지 않는다.
+#[tauri::command]
+pub fn layout_tab_select(store: State<'_, LayoutStore>, tab_id: String) -> Result<()> {
+    store.update(|st| st.tab_select(&tab_id))
+}
+
+/// 탭을 닫고 **그 탭이 참조하던 PTY를 죽인다.** 마지막 탭이면 패널째 닫힌다.
+#[tauri::command]
+pub fn layout_tab_close(
+    store: State<'_, LayoutStore>,
+    pty: State<'_, PtyManager>,
+    tab_id: String,
+) -> Result<TabClosed> {
+    let closed = store.update(|st| st.tab_close(&tab_id))?;
+    for id in &closed.killed {
+        // 이미 죽은 PTY를 다시 죽이는 것은 실패가 아니다 — 트리에서는 이미 뺐다.
+        if let Err(e) = pty.kill(id) {
+            eprintln!("[eqmux][layout] PTY {id} 정리 실패(무시): {e}");
+        }
+    }
+    Ok(closed)
 }
 
 // ── 배치 프리셋 (`S2-11`) ────────────────────────────────────────────────────

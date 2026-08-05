@@ -20,13 +20,27 @@ import { logError, logInfo } from "./log";
 
 export type SplitDirection = "row" | "column";
 
-export type LeafNode = {
-  type: "leaf";
+/**
+ * `S2-5` — 패널 하나 안의 탭. 정본은 백엔드 `layout.rs::Tab`이다.
+ *
+ * v1에서는 이 필드들이 잎에 직접 붙어 있었다. **잎은 자리(패널)가 되고 내용물은 탭이 됐다** —
+ * 그래서 스키마가 v2다.
+ */
+export type TabNode = {
   id: string;
   kind: string;
   pty_id?: string | null;
   title?: string | null;
   cwd?: string | null;
+};
+
+export type LeafNode = {
+  type: "leaf";
+  id: string;
+  /** 이 패널이 든 탭들. **비지 않는다** — 마지막 탭을 닫으면 패널이 닫힌다. */
+  tabs: TabNode[];
+  /** 지금 보이는 탭의 id. */
+  active: string;
 };
 
 export type SplitNode = {
@@ -67,10 +81,14 @@ export interface PresetInfo {
   current: boolean;
 }
 
-/** `S2-13` — 패널 하나에 붙은 PTY. `PanelManager.ptyReport()`가 준다. */
+/** `S2-13` — 탭 하나에 붙은 PTY. `PanelManager.ptyReport()`가 준다. */
 export interface PtyReport {
   /** 잎 id — 어느 패널의 셸인지. `pty_list`에는 없는 값이다. */
   leaf: string;
+  /** 탭 id (`S2-5`). 한 패널에 셸이 여럿일 수 있다 — 잎만으로는 못 가린다. */
+  tab: string;
+  /** 지금 그 패널에서 보이는 탭인가. */
+  visible: boolean;
   id: string;
   /** 실제로 뜬 실행 파일 경로. 이름만 쓰려면 호출자가 자른다. */
   shell: string;
@@ -81,16 +99,94 @@ export interface PtyReport {
   alive: boolean;
 }
 
-/** 화면에 살아 있는 패널 하나. `handle`은 요소가 DOM에 붙어 크기를 가진 뒤에 생긴다. */
-export interface Panel {
-  leafId: string;
-  el: HTMLElement;
+/**
+ * 패널 안의 탭 하나 (`S2-5`) — **자기 터미널과 자기 셸을 든다.**
+ *
+ * 전환에 세션이 안 죽는 이유가 이것이다: 숨긴 탭도 xterm 인스턴스와 PtyLink를 그대로 들고
+ * 있고, 화면에서 빠지는 것은 `body`의 표시 여부뿐이다. 파괴는 탭을 **닫을 때만** 일어난다.
+ */
+export interface PanelTab {
+  tabId: string;
+  /** 터미널이 사는 칸. 활성이 아니면 `hidden`이다. */
   body: HTMLElement;
-  bar: HTMLElement;
-  title: HTMLElement;
-  rend: HTMLElement;
+  /** 탭 막대의 칩. */
+  chip: HTMLButtonElement;
+  label: HTMLElement;
   handle: TerminalHandle | null;
   link: PtyLink | null;
+}
+
+/**
+ * 화면에 살아 있는 패널 하나.
+ *
+ * `handle`·`link`·`body`는 **활성 탭의 것**이다 — `S2-5` 전과 같은 뜻이라 밖(`main.ts` 등)은
+ * 그대로 쓴다. 탭 단위로 봐야 하면 `tabs`를 돌거나 `ptyReport()`를 쓴다.
+ */
+export class Panel {
+  readonly leafId: string;
+  readonly el: HTMLElement;
+  readonly bar: HTMLElement;
+  readonly title: HTMLElement;
+  readonly rend: HTMLElement;
+  /** 탭 막대. 탭이 하나뿐이면 숨는다 — 단일 탭 화면의 기하를 `S2-5` 전과 같게 유지한다. */
+  readonly strip: HTMLElement;
+  /** 탭 본문들이 겹쳐 사는 칸. */
+  readonly stack: HTMLElement;
+  /** 탭 막대 끝의 `+`. 매 렌더 새로 만들지 않는다 — 누르는 도중에 요소가 바뀌면 안 된다. */
+  readonly addBtn: HTMLButtonElement;
+  /** 탭 id → 탭. 트리 순서를 따르려면 `tabOrder`를 본다. */
+  readonly tabs = new Map<string, PanelTab>();
+  /** 트리가 준 탭 순서 — Map은 삽입 순이라 재정렬을 못 따라간다. */
+  tabOrder: string[] = [];
+  /** 지금 보이는 탭 id. */
+  active: string | null = null;
+
+  constructor(parts: {
+    leafId: string;
+    el: HTMLElement;
+    bar: HTMLElement;
+    title: HTMLElement;
+    rend: HTMLElement;
+    strip: HTMLElement;
+    stack: HTMLElement;
+    addBtn: HTMLButtonElement;
+  }) {
+    this.leafId = parts.leafId;
+    this.el = parts.el;
+    this.bar = parts.bar;
+    this.title = parts.title;
+    this.rend = parts.rend;
+    this.strip = parts.strip;
+    this.stack = parts.stack;
+    this.addBtn = parts.addBtn;
+  }
+
+  /** 활성 탭. 없으면 `null`. */
+  get activeTab(): PanelTab | null {
+    return (this.active && this.tabs.get(this.active)) || null;
+  }
+
+  get handle(): TerminalHandle | null {
+    return this.activeTab?.handle ?? null;
+  }
+
+  get link(): PtyLink | null {
+    return this.activeTab?.link ?? null;
+  }
+
+  get body(): HTMLElement | null {
+    return this.activeTab?.body ?? null;
+  }
+
+  /** 트리 순서의 탭들. */
+  orderedTabs(): PanelTab[] {
+    const out: PanelTab[] = [];
+    for (const id of this.tabOrder) {
+      const t = this.tabs.get(id);
+      if (t) out.push(t);
+    }
+    return out;
+  }
 }
 
 export interface PanelManagerOptions {
@@ -159,8 +255,11 @@ export class PanelManager {
     await this.refreshPresets();
     await this.reconcile();
     // 새로고침이면 이전 페이지의 PTY가 죽지 않고 남는다 — 여기서 반드시 정리한다.
+    // **숨은 탭의 셸도 살아 있다** (`S2-5`) — 보이는 것만 정리하면 나머지가 고아로 남는다.
     window.addEventListener("beforeunload", () => {
-      for (const p of this.panels.values()) void p.link?.dispose();
+      for (const p of this.panels.values()) {
+        for (const t of p.tabs.values()) void t.link?.dispose();
+      }
     });
   }
 
@@ -342,36 +441,137 @@ export class PanelManager {
   // 왕복이라 주기적 호출에 IPC가 실린다. 여기 값은 전부 프런트가 이미 들고 있는 상태다.
 
   /**
-   * 패널에 붙은 PTY들 — **트리 순서**(왼쪽부터).
+   * 붙어 있는 PTY들 — **트리 순서**(패널 왼쪽부터, 패널 안에서는 탭 왼쪽부터).
    *
-   * 셸이 아직/영영 안 붙은 패널은 **빠진다**(계측 모드, spawn 실패). 그래서
-   * `ptyReport().length !== size`가 정상이고, 그 차이가 곧 "셸 없는 패널 수"다.
-   * 살아 있는 수는 `alive`로 센다 — 셸이 끝난 패널도 목록에는 남는다.
+   * `S2-5` 이후 **한 패널에 여럿일 수 있다** — 숨은 탭의 셸도 살아 있고, 그 출력도 흐른다.
+   * 그래서 잎이 아니라 탭 단위다. 셸이 아직/영영 안 붙은 탭은 **빠진다**(계측 모드, spawn 실패).
+   * 살아 있는 수는 `alive`로 센다 — 셸이 끝난 탭도 닫기 전까지는 목록에 남는다.
    */
   ptyReport(): PtyReport[] {
     const out: PtyReport[] = [];
     for (const leaf of this.leafIds()) {
-      const link = this.panels.get(leaf)?.link;
-      if (!link?.id) continue;
-      out.push({
-        leaf,
-        id: link.id,
-        shell: link.shell ?? "",
-        pid: link.pid,
-        cwd: link.cwd ?? "",
-        alive: link.alive,
-      });
+      const panel = this.panels.get(leaf);
+      if (!panel) continue;
+      for (const t of panel.orderedTabs()) {
+        const link = t.link;
+        if (!link?.id) continue;
+        out.push({
+          leaf,
+          tab: t.tabId,
+          visible: t.tabId === panel.active,
+          id: link.id,
+          shell: link.shell ?? "",
+          pid: link.pid,
+          cwd: link.cwd ?? "",
+          alive: link.alive,
+        });
+      }
     }
     return out;
   }
 
-  /** 무인 검증용 — 패널별 렌더 판정. */
-  rendererReport(): { leaf: string; verdict: string; alive: boolean }[] {
-    return [...this.panels.values()].map((p) => ({
-      leaf: p.leafId,
-      verdict: p.handle ? verdictOf(p.handle.status).text : "터미널 없음",
-      alive: !!p.handle && p.handle.status.canvasPresent && !p.handle.status.contextLost,
-    }));
+  /** 무인 검증용 — 탭별 렌더 판정. 잎 하나에 여러 줄이 나올 수 있다 (`S2-5`). */
+  rendererReport(): { leaf: string; tab: string; verdict: string; alive: boolean }[] {
+    const out: { leaf: string; tab: string; verdict: string; alive: boolean }[] = [];
+    for (const p of this.panels.values()) {
+      for (const t of p.orderedTabs()) {
+        out.push({
+          leaf: p.leafId,
+          tab: t.tabId,
+          verdict: t.handle ? verdictOf(t.handle.status).text : "터미널 없음",
+          alive: !!t.handle && t.handle.status.canvasPresent && !t.handle.status.contextLost,
+        });
+      }
+    }
+    return out;
+  }
+
+  // ── `S2-5` 경계 API — 탭(서피스) ─────────────────────────────────────────────
+  //
+  // 잎 = 자리(패널) · 탭 = 그 자리에 담긴 것. 분할·닫기가 자리를 다루고 이 셋이 담긴 것을 다룬다.
+  //
+  //   tabsOf(leafId)   — 그 패널의 탭 id들 (왼쪽부터)
+  //   activeTab(leafId)— 지금 보이는 탭 id
+  //   newTab(leafId)   — 탭을 열고 셸을 붙인다. 새 탭 id를 준다
+  //   selectTab(tabId) — 전환. **세션은 안 죽는다** — 트리 모양을 안 건드리기 때문이다
+  //   closeTab(tabId)  — 닫는다. 마지막 탭이면 패널째 닫힌다(백엔드가 정한다)
+  //
+  // `layout_tab_*`을 직접 부르지 말 것. 트리만 바꾸면 화면(터미널 요소·포커스·격자)이
+  // 안 따라온다 — 그 둘을 맞추는 것이 이 클래스의 일이다(`applyPreset`과 같은 이유).
+
+  /** 그 패널의 탭 id들 — 왼쪽부터. */
+  tabsOf(leafId: string): string[] {
+    return this.panels.get(leafId)?.tabOrder.slice() ?? [];
+  }
+
+  /** 그 패널에서 지금 보이는 탭 id. */
+  activeTab(leafId: string): string | null {
+    return this.panels.get(leafId)?.active ?? null;
+  }
+
+  /** 탭 하나가 들어 있는 패널의 잎 id. 모르는 탭이면 `null`. */
+  leafOfTab(tabId: string): string | null {
+    for (const [leaf, p] of this.panels) {
+      if (p.tabs.has(tabId)) return leaf;
+    }
+    return null;
+  }
+
+  /** 패널에 탭을 하나 더 연다. 새 탭이 곧바로 활성이 되고 셸이 붙는다. */
+  newTab(leafId: string): Promise<string | null> {
+    return this.serialize(async () => {
+      let id: string;
+      try {
+        id = await invoke<string>("layout_tab_new", { leafId });
+      } catch (e) {
+        // 상한·없는 잎은 거부다. 화면·stderr에 남기고 삼킨다 — 앱이 죽을 이유가 없다.
+        logInfo(`탭 열기 거부 — ${e}`);
+        return null;
+      }
+      await this.refreshState();
+      await this.reconcile();
+      return id;
+    });
+  }
+
+  /**
+   * 탭을 바꾼다. **트리 모양을 안 건드린다** — 그래서 잎이 그대로고, 잎이 그대로라
+   * `reconcile`이 패널을 파괴하지 않는다. 세션이 사는 자리가 정확히 여기다.
+   */
+  selectTab(tabId: string): Promise<void> {
+    return this.serialize(async () => {
+      try {
+        await invoke("layout_tab_select", { tabId });
+      } catch (e) {
+        logError(`탭 전환 실패 — ${tabId}`, e);
+        return;
+      }
+      await this.refreshState();
+      await this.reconcile();
+    });
+  }
+
+  /** 탭을 닫는다. 마지막 탭이면 **패널째** 닫힌다 — 그 판단은 백엔드가 한다. */
+  closeTab(tabId: string): Promise<void> {
+    return this.serialize(async () => {
+      try {
+        const r = await invoke<{ killed: string[]; closed_leaf: string | null }>(
+          "layout_tab_close",
+          { tabId },
+        );
+        if (r.killed.length) {
+          logInfo(
+            `탭 ${tabId} 닫힘${r.closed_leaf ? ` (패널 ${r.closed_leaf}째)` : ""} — PTY 정리: ${r.killed.join(", ")}`,
+          );
+        }
+      } catch (e) {
+        // 마지막 패널의 마지막 탭은 백엔드가 거부한다 — 빈 트리를 만들지 않는다.
+        logInfo(`탭 닫기 거부 — ${e}`);
+        return;
+      }
+      await this.refreshState();
+      await this.reconcile();
+    });
   }
 
   /** 잎 하나를 나눈다. 비율은 균등으로 고정한다 — 드래그는 `S2-3`이다. */
@@ -445,7 +645,12 @@ export class PanelManager {
     this.state = await invoke<LayoutStateDto>("layout_get");
   }
 
-  /** 트리와 화면을 맞춘다. 순서가 곧 §2-1이다 — 사라진 것부터 정리한다. */
+  /**
+   * 트리와 화면을 맞춘다. 순서가 곧 §2-1이다 — 사라진 것부터 정리한다.
+   *
+   * `S2-5`부터 층이 둘이다: **패널(잎)**과 **탭**. 둘 다 같은 규칙을 쓴다 —
+   * 트리에 없으면 파괴하고, 트리에 새로 있으면 만들고, 살아남은 것은 **옮길 뿐 안 건드린다.**
+   */
   private async reconcile(): Promise<void> {
     const st = this.state!;
     const leaves = leavesOf(st.root);
@@ -460,13 +665,15 @@ export class PanelManager {
     }
 
     // ② 새 잎 → 빈 껍데기부터. 터미널은 요소가 DOM에 붙어 크기를 가진 뒤에 연다.
-    const created: Panel[] = [];
+    //    살아남은 잎은 탭만 맞춘다 — 패널 요소도 그 안의 다른 탭도 그대로 산다.
+    const created: { panel: Panel; tab: PanelTab }[] = [];
     for (const leaf of leaves) {
-      if (!this.panels.has(leaf.id)) {
-        const panel = this.createShell(leaf);
+      let panel = this.panels.get(leaf.id);
+      if (!panel) {
+        panel = this.createShell(leaf);
         this.panels.set(leaf.id, panel);
-        created.push(panel);
       }
+      for (const tab of await this.reconcileTabs(panel, leaf)) created.push({ panel, tab });
     }
 
     // ③ 트리 모양대로 편다. 살아 있는 패널 요소는 새 위치로 옮겨질 뿐이다.
@@ -478,14 +685,20 @@ export class PanelManager {
     }
     this.applyZoom();
 
+    // ③-c 어느 탭이 보이는가. **터미널을 열기 전에** 정해야 새 탭이 크기 0에서 열리지 않는다.
+    for (const leaf of leaves) {
+      const panel = this.panels.get(leaf.id);
+      if (panel) this.applyActiveTab(panel, leaf.active);
+    }
+
     // ④ 크기가 확정됐다 — 이제 터미널을 연다.
-    for (const panel of created) {
-      const handle = createTerminal(panel.body, this.opts.fontStack, () => {
+    for (const { panel, tab } of created) {
+      const handle = createTerminal(tab.body, this.opts.fontStack, () => {
         // 유실은 나중에 온다 — 그 순간 표시등이 뒤집혀야 조용한 폴백이 안 생긴다.
         this.paintVerdict(panel);
-        logError(`패널 ${panel.leafId} WebGL 컨텍스트 유실 — DOM 폴백`);
+        logError(`탭 ${tab.tabId} WebGL 컨텍스트 유실 — DOM 폴백`);
       });
-      panel.handle = handle;
+      tab.handle = handle;
       this.paintVerdict(panel);
       if (!this.firstDone) {
         this.firstDone = true;
@@ -499,11 +712,51 @@ export class PanelManager {
 
     // ⑥ 셸은 맨 끝이다. 크기가 맞은 뒤 붙어야 첫 프롬프트부터 제 폭으로 그려진다.
     if (this.opts.usePty) {
-      for (const p of created) await this.attachPty(p);
+      for (const { panel, tab } of created) await this.attachPty(panel, tab);
     }
 
     this.applyFocus();
     this.notifyLayoutChanged();
+  }
+
+  /**
+   * 한 패널의 탭 목록을 트리에 맞춘다. 새로 만든 탭들을 돌려준다.
+   *
+   * **살아남은 탭은 손대지 않는다** — 칩과 본문 요소가 그대로라 xterm 버퍼도 PTY도 산다.
+   * 순서만 트리 순서로 다시 꽂는다(칩 재정렬은 요소 이동이지 재생성이 아니다).
+   */
+  private async reconcileTabs(panel: Panel, leaf: LeafNode): Promise<PanelTab[]> {
+    const alive = new Set(leaf.tabs.map((t) => t.id));
+
+    for (const [id, tab] of [...panel.tabs]) {
+      if (!alive.has(id)) {
+        panel.tabs.delete(id);
+        await this.disposeTab(tab);
+      }
+    }
+
+    const created: PanelTab[] = [];
+    for (const t of leaf.tabs) {
+      if (!panel.tabs.has(t.id)) {
+        const tab = this.createTabShell(panel, t);
+        panel.tabs.set(t.id, tab);
+        created.push(tab);
+      }
+    }
+
+    panel.tabOrder = leaf.tabs.map((t) => t.id);
+    // 칩은 트리 순서대로 다시 꽂는다 — `appendChild`는 **옮기는** 것이라 요소가 안 죽는다.
+    for (const tab of panel.orderedTabs()) panel.strip.appendChild(tab.chip);
+    panel.strip.appendChild(panel.addBtn); // `+`는 항상 끝
+    // 탭이 하나뿐이면 막대를 숨긴다 — 단일 탭 화면의 기하를 `S2-5` 전과 같게 유지한다.
+    // (A-2·A-3 표본과 `--panes-probe`의 rows/cols가 그 기하 위에서 재였다)
+    panel.strip.hidden = leaf.tabs.length < 2;
+
+    for (const t of leaf.tabs) {
+      const view = panel.tabs.get(t.id);
+      if (view) setTabLabel(view, t, view.link);
+    }
+    return created;
   }
 
   private render(): void {
@@ -624,39 +877,121 @@ export class PanelManager {
 
     const title = document.createElement("span");
     title.className = "panel-title";
-    title.textContent = leaf.title ?? leaf.id;
+    title.textContent = leaf.id;
 
     bar.append(
       rend,
       title,
+      // ⚠️ `panel-newtab`을 같이 다는 이유: 헤더의 임시 버튼(`◫ ⬓ ×`)은 `styles.css`가
+      //    `.panel-bar .panel-btn { display: none }`으로 감추고 `⋯` 메뉴가 대신한다.
+      //    새 탭까지 같이 감기면 **탭이 하나일 때 탭을 열 방법이 없어진다**(막대도 그때는 숨는다).
+      //    헤더를 디자인대로 다시 짤 때 이 조작은 `⋯` 메뉴로 옮기면 된다.
+      this.button("＋", "새 탭", () => void this.newTab(leaf.id), "panel-newtab"),
       this.button("◫", "좌우 분할", () => void this.split(leaf.id, "row")),
       this.button("⬓", "상하 분할", () => void this.split(leaf.id, "column")),
       this.button("×", "닫기", () => void this.close(leaf.id)),
     );
 
-    const body = document.createElement("div");
-    body.className = "panel-body";
-    body.dataset.leaf = leaf.id;
+    // 탭 막대. 탭이 하나뿐이면 `reconcileTabs`가 숨긴다 — 그때 화면 기하는 `S2-5` 전과 같다.
+    const strip = document.createElement("div");
+    strip.className = "panel-tabs";
+    strip.hidden = true;
+    strip.setAttribute("role", "tablist");
 
-    el.append(bar, body);
+    const addBtn = document.createElement("button");
+    addBtn.className = "panel-tab-add";
+    addBtn.type = "button";
+    addBtn.textContent = "＋";
+    addBtn.title = "새 탭";
+    addBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      void this.newTab(leaf.id);
+    });
+
+    // 탭 본문들이 겹쳐 사는 칸. 여기가 `S2-5` 전의 `.panel-body` 자리를 대신한다.
+    const stack = document.createElement("div");
+    stack.className = "panel-stack";
+
+    el.append(bar, strip, stack);
     // mousedown — 클릭이 터미널 안이든 막대든, 포커스가 먼저 온다.
     el.addEventListener("mousedown", () => void this.focus(leaf.id));
+
+    return new Panel({ leafId: leaf.id, el, bar, title, rend, strip, stack, addBtn });
+  }
+
+  /** 탭 하나의 껍데기 — 칩과 본문. 터미널은 크기가 확정된 뒤(`reconcile` ④)에 연다. */
+  private createTabShell(panel: Panel, t: TabNode): PanelTab {
+    const body = document.createElement("div");
+    body.className = "panel-body";
+    body.dataset.leaf = panel.leafId;
+    body.dataset.tab = t.id;
+    panel.stack.appendChild(body);
     this.ro.observe(body);
+
+    const chip = document.createElement("button");
+    chip.className = "panel-tab";
+    chip.type = "button";
+    chip.dataset.tab = t.id;
+    chip.setAttribute("role", "tab");
+
+    const label = document.createElement("span");
+    label.className = "panel-tab-label";
+    label.textContent = t.title ?? t.id;
+
+    const x = document.createElement("span");
+    x.className = "panel-tab-close";
+    x.textContent = "×";
+    x.title = "탭 닫기";
+    // mousedown에서 끊는다 — 칩 클릭(전환)이 먼저 먹으면 닫기 전에 한 번 전환된다.
+    x.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      void this.closeTab(t.id);
+    });
+
+    chip.append(label, x);
+    chip.addEventListener("mousedown", (e) => {
+      e.stopPropagation();
+      void this.selectTab(t.id);
+    });
+
+    const tab: PanelTab = { tabId: t.id, body, chip, label, handle: null, link: null };
 
     // 이전 페이지(새로고침)가 남긴 참조다. 그 프로세스는 beforeunload에서 죽었어야 하지만,
     // 크래시였다면 살아 있다 — 어느 쪽이든 여기서 확실히 끊는다. 새 셸은 ⑥에서 붙는다.
-    if (this.opts.usePty && leaf.pty_id) {
-      const stale = leaf.pty_id;
+    if (this.opts.usePty && t.pty_id) {
+      const stale = t.pty_id;
       void invoke("pty_kill", { id: stale }).catch(() => undefined);
-      void invoke("layout_attach_pty", { leafId: leaf.id, ptyId: null }).catch(() => undefined);
+      void invoke("layout_attach_pty", { tabId: t.id, ptyId: null }).catch(() => undefined);
     }
 
-    return { leafId: leaf.id, el, body, bar, title, rend, handle: null, link: null };
+    return tab;
   }
 
-  private button(label: string, tip: string, onClick: () => void): HTMLButtonElement {
+  /**
+   * 어느 탭이 보이는가. **숨기는 것뿐이다** — 인스턴스는 그대로 산다.
+   *
+   * 보이게 된 탭은 숨어 있는 동안 크기 0이었으므로 여기서 다시 잰다. 안 재면 전환 직후
+   * 격자가 옛 크기로 남아 화면이 어긋난다.
+   */
+  private applyActiveTab(panel: Panel, active: string): void {
+    panel.active = panel.tabs.has(active) ? active : (panel.tabOrder[0] ?? null);
+    for (const tab of panel.tabs.values()) {
+      const on = tab.tabId === panel.active;
+      tab.body.hidden = !on;
+      tab.chip.classList.toggle("active", on);
+      tab.chip.setAttribute("aria-selected", on ? "true" : "false");
+    }
+  }
+
+  private button(
+    label: string,
+    tip: string,
+    onClick: () => void,
+    extra = "",
+  ): HTMLButtonElement {
     const b = document.createElement("button");
-    b.className = "panel-btn";
+    b.className = extra ? `panel-btn ${extra}` : "panel-btn";
     b.textContent = label;
     b.title = tip;
     b.addEventListener("click", (e) => {
@@ -666,51 +1001,72 @@ export class PanelManager {
     return b;
   }
 
+  /** 렌더 판정 표시등은 **활성 탭 기준**이다 — 지금 보고 있는 화면이 무엇으로 그려졌는지다. */
   private paintVerdict(panel: Panel): void {
-    if (!panel.handle) return;
-    const v = verdictOf(panel.handle.status);
+    const handle = panel.handle;
+    if (!handle) return;
+    const v = verdictOf(handle.status);
     panel.rend.title = v.text;
     panel.rend.classList.remove("ok", "warn", "bad");
     panel.rend.classList.add(v.sgr === "32" ? "ok" : v.sgr === "33" ? "warn" : "bad");
   }
 
-  private async attachPty(panel: Panel): Promise<void> {
-    if (!panel.handle) return;
-    const link = new PtyLink(panel.handle.term, panel.handle.fit);
+  private async attachPty(panel: Panel, tab: PanelTab): Promise<void> {
+    if (!tab.handle) return;
+    const link = new PtyLink(tab.handle.term, tab.handle.fit);
     try {
       const info = await link.start();
-      panel.link = link;
-      await invoke("layout_attach_pty", { leafId: panel.leafId, ptyId: info.id });
-      panel.title.textContent = `${baseName(info.shell)} · ${panel.leafId}`;
+      tab.link = link;
+      await invoke("layout_attach_pty", { tabId: tab.tabId, ptyId: info.id });
+      setTabLabel(tab, null, link);
+      if (tab.tabId === panel.active) {
+        panel.title.textContent = `${baseName(info.shell)} · ${panel.leafId}`;
+      }
     } catch (e) {
-      // 실패해도 패널은 살려 둔다 — 검은 칸만 남기면 사용자는 원인을 모른다.
-      logError(`셸 실행 실패 — 패널 ${panel.leafId}`, e);
-      panel.title.textContent = `셸 실패 · ${panel.leafId}`;
-      panel.handle.term.write(`\r\n\x1b[31m[셸 실행 실패 — ${e}]\x1b[0m\r\n`);
+      // 실패해도 탭은 살려 둔다 — 검은 칸만 남기면 사용자는 원인을 모른다.
+      logError(`셸 실행 실패 — 탭 ${tab.tabId} (패널 ${panel.leafId})`, e);
+      tab.label.textContent = "셸 실패";
+      if (tab.tabId === panel.active) panel.title.textContent = `셸 실패 · ${panel.leafId}`;
+      tab.handle.term.write(`\r\n\x1b[31m[셸 실행 실패 — ${e}]\x1b[0m\r\n`);
     }
   }
 
   private async disposePanel(panel: Panel): Promise<void> {
-    this.ro.unobserve(panel.body);
-    try {
-      // PTY는 이미 백엔드가 죽였다 — 여기서는 이벤트 구독 해제가 목적이다.
-      // (kill을 한 번 더 시도하지만 죽은 id는 조용히 무시된다)
-      await panel.link?.dispose();
-    } catch {
-      /* 이미 죽은 PTY */
-    }
-    panel.link = null;
-    panel.handle?.dispose();
-    panel.handle = null;
+    for (const tab of panel.tabs.values()) await this.disposeTab(tab);
+    panel.tabs.clear();
+    panel.tabOrder = [];
     panel.el.remove();
   }
 
+  /** 탭 하나를 놓는다. **여기가 유일한 파괴 지점이다** — 전환은 여기를 지나지 않는다. */
+  private async disposeTab(tab: PanelTab): Promise<void> {
+    this.ro.unobserve(tab.body);
+    try {
+      // PTY는 이미 백엔드가 죽였다 — 여기서는 이벤트 구독 해제가 목적이다.
+      // (kill을 한 번 더 시도하지만 죽은 id는 조용히 무시된다)
+      await tab.link?.dispose();
+    } catch {
+      /* 이미 죽은 PTY */
+    }
+    tab.link = null;
+    tab.handle?.dispose();
+    tab.handle = null;
+    tab.chip.remove();
+    tab.body.remove();
+  }
+
+  /**
+   * 격자를 다시 잰다 — **보이는 탭만.**
+   *
+   * 숨은 탭은 크기가 0이라 재면 격자가 무너지고, 그 뒤 `pty_resize`가 1×1을 셸에 통보한다.
+   * 숨은 탭의 격자는 다시 보이는 순간(`applyActiveTab` 뒤 이 함수)에 맞춘다.
+   */
   private fitPanel(panel: Panel): void {
     // 드래그 중에는 격자를 다시 재지 않는다 — fit이 돌면 xterm onResize → pty_resize가
     // 매 프레임 나간다(제약 ①). 화면 상자는 CSS가 따라가고, 격자는 놓는 순간 맞춘다.
     if (this.dragging) return;
     try {
-      panel.handle?.fit.fit();
+      panel.activeTab?.handle?.fit.fit();
     } catch {
       /* 최소화되면 크기가 0이 된다 — 무시한다 */
     }
@@ -729,6 +1085,17 @@ export class PanelManager {
   }
 }
 
+/**
+ * 탭 칩의 이름. 트리가 준 이름 > 붙은 셸 이름 > 탭 id 순이다.
+ *
+ * 사용자가 붙인 이름(`FEATURES` D3)이 있으면 그게 이긴다 — 셸을 바꿔 달아도 이름은 사용자 것이다.
+ */
+function setTabLabel(tab: PanelTab, node: TabNode | null, link: PtyLink | null): void {
+  const name = node?.title ?? (link?.shell ? baseName(link.shell) : null) ?? tab.tabId;
+  if (tab.label.textContent !== name) tab.label.textContent = name;
+  tab.chip.title = name;
+}
+
 // ── 기동 분할 (`--panes=N`) ────────────────────────────────────────────────────
 
 /**
@@ -742,7 +1109,13 @@ export async function ensurePanes(manager: PanelManager, target: number): Promis
     let widestDir: SplitDirection = "row";
     let area = -1;
     for (const id of manager.leafIds()) {
-      const body = document.querySelector<HTMLElement>(`.panel-body[data-leaf="${id}"]`);
+      // **본문**(막대 제외) 기준이다 — 패널 상자로 재면 30px 막대가 세로에 얹혀 분할 순서가
+      // 달라지고, 그러면 `--panes=4`가 만드는 화면이 예전과 미세하게 달라진다.
+      // 그 화면 위에서 A-2·A-4를 쟀다. **재현 조건을 바꾸지 않는다.**
+      // `:not([hidden])` — `S2-5` 이후 한 잎에 본문이 여럿이고 숨은 것은 크기 0이다.
+      const body = document.querySelector<HTMLElement>(
+        `.panel-body[data-leaf="${id}"]:not([hidden])`,
+      );
       if (!body) continue;
       const a = body.clientWidth * body.clientHeight;
       if (a > area) {

@@ -36,10 +36,9 @@
 //   `setPaneStatus`로 밖에서 덮어쓸 수 있다 — 3·4차 개념(임무 상태)이 붙을 자리다.
 //   **임무칩은 그리지 않는다** (브리프 ①).
 
-import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
-import { leavesOf, type LayoutStateDto, type SplitDirection } from "./panels";
+import { type SplitDirection } from "./panels";
 import { logError } from "./log";
 
 export type PaneStatus = "attention" | "active" | "running" | "waiting";
@@ -54,6 +53,8 @@ export interface PaneHeaderHost {
   split(leafId: string, direction: SplitDirection): Promise<void>;
   close(leafId: string): Promise<string[]>;
   onLayoutChanged(cb: () => void): () => void;
+  /** `S2-13` 요청 1 — 잎별 PTY. 세아가 열어 줬다(`panels.ts`). */
+  ptyReport(): { leaf: string; id: string; alive: boolean }[];
 }
 
 export interface PaneHeaders {
@@ -95,7 +96,8 @@ export function installPaneHeaders(host: PaneHeaderHost): PaneHeaders {
   const clusters = new Map<string, Cluster>();
   /** 마지막 출력 시각 — **키는 PTY id다.** hot path에서 잎을 되찾는 조회를 없앤다. */
   const lastOutput = new Map<string, number>();
-  const ptyOfLeaf = new Map<string, string>();
+  /** 잎 → 그 패널의 PTY들. `S2-5` 이후 **탭마다 셸이라 여럿이다.** */
+  const ptysOfLeaf = new Map<string, string[]>();
   const leafOfPty = new Map<string, string>();
   /** 셸이 끝난 페인 → 사유. 사용자가 그 페인을 보면(포커스) 지운다. */
   const attention = new Map<string, string>();
@@ -124,18 +126,18 @@ export function installPaneHeaders(host: PaneHeaderHost): PaneHeaders {
   /**
    * 잎 ↔ PTY 지도를 다시 만든다.
    *
-   * `layout_get`은 **읽기**다 — 트리를 바꾸는 명령이 아니라 화면이 어긋날 여지가 없다.
-   * 구조가 바뀔 때만 부른다(분할·닫기·프리셋). 출력 경로에서는 절대 안 부른다.
+   * `ptyReport()`(세아 · `S2-13` 요청 1)를 쓴다 — 예전에는 `layout_get`을 직접 읽어 만들었다.
+   * **왕복이 없고 잎이 이미 붙어 있다.** 구조가 바뀔 때만 부른다(분할·닫기·프리셋·탭).
    */
-  const refreshPtyMap = async (): Promise<void> => {
+  const refreshPtyMap = (): void => {
     try {
-      const st = await invoke<LayoutStateDto>("layout_get");
-      ptyOfLeaf.clear();
+      ptysOfLeaf.clear();
       leafOfPty.clear();
-      for (const leaf of leavesOf(st.root)) {
-        if (!leaf.pty_id) continue;
-        ptyOfLeaf.set(leaf.id, leaf.pty_id);
-        leafOfPty.set(leaf.pty_id, leaf.id);
+      for (const p of host.ptyReport()) {
+        const list = ptysOfLeaf.get(p.leaf);
+        if (list) list.push(p.id);
+        else ptysOfLeaf.set(p.leaf, [p.id]);
+        leafOfPty.set(p.id, p.leaf);
       }
       refresh();
     } catch (e) {
@@ -153,8 +155,9 @@ export function installPaneHeaders(host: PaneHeaderHost): PaneHeaders {
       return "active";
     }
     if (attention.has(leafId)) return "attention";
-    const pty = ptyOfLeaf.get(leafId);
-    if (pty && now - (lastOutput.get(pty) ?? 0) < RUNNING_IDLE_MS) return "running";
+    // 탭 중 **하나라도** 최근 출력이 있으면 그 페인은 도는 중이다 — 숨은 탭의 셸도 돈다.
+    const ptys = ptysOfLeaf.get(leafId);
+    if (ptys?.some((p) => now - (lastOutput.get(p) ?? 0) < RUNNING_IDLE_MS)) return "running";
     return "waiting";
   }
 
@@ -196,10 +199,10 @@ export function installPaneHeaders(host: PaneHeaderHost): PaneHeaders {
 
   const offLayout = host.onLayoutChanged(() => {
     menu.close();
-    void refreshPtyMap();
+    refreshPtyMap();
   });
 
-  void refreshPtyMap();
+  refreshPtyMap();
   refresh();
   const timer = window.setInterval(refresh, REFRESH_MS);
 
@@ -428,9 +431,9 @@ function setAttr(el: HTMLElement, name: string, value: string): void {
 //      · 지금은 `panels.ts`가 만든 막대에 이 파일이 오른쪽 묶음을 **덧붙이고**,
 //        임시 분할·닫기 버튼(`◫ ⬓ ×`)은 styles.css에서 감추고 있다.
 //        오른쪽 자리만 열어 주면 `ensureCluster`의 덧붙이기와 그 감추기 규칙이 같이 사라진다.
-//   2. 잎별 PTY 정보 — `ptyReport(): { leaf, id, alive }[]`
-//      · 지금은 `layout_get`을 직접 읽어 잎↔PTY 지도를 만든다(읽기라 안전하지만 우회다).
-//        `statusbar.ts` 요청 1과 같은 API 하나면 둘 다 여기서 끝난다.
+//   2. ~~잎별 PTY 정보 — `ptyReport()`~~ ✅ **들어왔다** — `layout_get` 우회를 걷어냈다.
+//      · `S2-5`(탭)부터 **한 페인에 셸이 여럿이다.** running 판정은 그중 하나라도 최근 출력이
+//        있으면 참으로 본다 — 숨은 탭의 셸도 돌고, 그게 이 상태가 알려 줄 사실이다.
 //   3. 터미널 테마를 `S2-8` 토큰에 맞추기 — `terminal.ts` THEME
 //      · 본문 배경은 디자인이 `--deep`(#080c11) · 전경이 `--term-fg`(#c1cdd9)인데
 //        지금 xterm은 `#0d1220` / `#d7dceb`이다. 캔버스 색은 그 파일이 정본이라

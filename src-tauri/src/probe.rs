@@ -414,6 +414,71 @@ impl PresetProbeConfig {
     }
 }
 
+/// `S2-5` 탭 무인 확인 (`--tab-probe`).
+///
+/// # 왜 있나
+///
+/// 이 작업의 완료 기준은 *"탭 전환에 세션이 죽지 않는다"* 인데, `--preset-probe`가 그랬듯
+/// **화면으로는 구분이 안 된다.** 전환할 때마다 셸을 새로 띄우는 구현과 살려 둔 구현은
+/// 똑같이 생겼다 — 스크롤백을 눈으로 뒤져야 갈린다. 그래서 탭을 열고 · 오가고 · 닫으며
+/// PTY id와 **캔버스 요소 동일성**을 대조해 파일과 종료 코드로 남긴다.
+///
+/// | 플래그 | 뜻 |
+/// |---|---|
+/// | `--tab-probe` | 탭을 `TAB_PROBE_TABS`개까지 열고 왕복·닫기까지 확인 후 종료 |
+/// | `--tab-probe=N` | 열 탭 수 |
+/// | `--tab-probe-out=PATH` | 결과 JSON 경로 |
+#[derive(Debug, Clone, Serialize)]
+pub struct TabProbeConfig {
+    pub enabled: bool,
+    /// 한 패널에 열 탭 수(원래 탭 포함).
+    pub tabs: usize,
+    pub out_path: PathBuf,
+}
+
+/// `--tab-probe`가 수를 안 받았을 때 열 탭 수. 셋이면 "가운데 탭을 닫는" 경우가 생긴다.
+pub const TAB_PROBE_TABS: usize = 3;
+
+impl TabProbeConfig {
+    pub fn from_args(paths: &Paths) -> Self {
+        let mut enabled = false;
+        let mut tabs = TAB_PROBE_TABS;
+        let mut out_path = None;
+
+        for a in std::env::args() {
+            if a == "--tab-probe" {
+                enabled = true;
+            } else if let Some(v) = a.strip_prefix("--tab-probe-out=") {
+                enabled = true;
+                out_path = Some(PathBuf::from(v));
+            } else if let Some(v) = a.strip_prefix("--tab-probe=") {
+                enabled = true;
+                match v.parse::<usize>() {
+                    Ok(n) if (2..=crate::layout::MAX_TABS_PER_PANEL).contains(&n) => tabs = n,
+                    _ => eprintln!(
+                        "[eqmux] --tab-probe 값이 잘못됐다: {v:?} (2~{}) — {TAB_PROBE_TABS}으로 간다",
+                        crate::layout::MAX_TABS_PER_PANEL
+                    ),
+                }
+            }
+        }
+
+        let out_path = out_path.unwrap_or_else(|| {
+            paths
+                .state_file
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .join("tab-probe.json")
+        });
+
+        Self {
+            enabled,
+            tabs,
+            out_path,
+        }
+    }
+}
+
 /// JSONL 한 덩어리를 이어 쓴다.
 ///
 /// 표본마다 왕복하면 계측 자체가 측정을 흔든다. 프런트가 모아서 한 번에 보낸다.

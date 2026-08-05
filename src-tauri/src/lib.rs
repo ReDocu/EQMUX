@@ -26,7 +26,7 @@ use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 use appdata::AppDataWatch;
 use config::Paths;
 use probe::{
-    FontProbeConfig, PanesConfig, PresetProbeConfig, ProbeConfig, PtyProbeConfig,
+    FontProbeConfig, PanesConfig, PresetProbeConfig, ProbeConfig, PtyProbeConfig, TabProbeConfig,
     PRESET_PROBE_PANES,
 };
 use pty::PtyManager;
@@ -52,6 +52,7 @@ pub fn run() {
             commands::probe::font_probe_finish,
             commands::probe::panes_probe_finish,
             commands::probe::preset_probe_finish,
+            commands::probe::tab_probe_finish,
             commands::layout::layout_get,
             commands::layout::layout_apply_preset,
             commands::layout::layout_presets,
@@ -60,6 +61,9 @@ pub fn run() {
             commands::layout::layout_set_weights,
             commands::layout::layout_focus,
             commands::layout::layout_attach_pty,
+            commands::layout::layout_tab_new,
+            commands::layout::layout_tab_select,
+            commands::layout::layout_tab_close,
             commands::layout::layout_save,
         ])
         .setup(|app| {
@@ -154,6 +158,17 @@ pub fn run() {
                 );
             }
 
+            // `S2-5` — 탭 무인 확인. 일반 화면 위에서 돈다. 패널은 하나면 충분하다 —
+            // 탭은 패널 **안**의 일이라 여러 칸이 있어도 증명되는 것이 늘지 않는다.
+            let tab_probe_cfg = TabProbeConfig::from_args(&paths);
+            if tab_probe_cfg.enabled {
+                eprintln!(
+                    "[eqmux] 탭 무인 확인 — 탭 {}개 · out = {}",
+                    tab_probe_cfg.tabs,
+                    tab_probe_cfg.out_path.display()
+                );
+            }
+
             if panes_cfg.probe {
                 eprintln!(
                     "[eqmux] 패널 무인 검증 — 목표 {}개 · out = {}",
@@ -198,6 +213,20 @@ pub fn run() {
                 }
                 if pty_probe_cfg.enabled {
                     eprintln!("[eqmux] ⚠️ --pty-probe와 --preset-probe는 같이 못 쓴다 — 프리셋 확인만 돈다");
+                }
+            }
+            // 탭 확인은 프리셋 확인 바로 뒤다 — 프런트 분기 순서와 같은 말이어야 한다.
+            if tab_probe_cfg.enabled {
+                for (flag, on) in [
+                    ("--font-probe", font_cfg.enabled),
+                    ("--latency-probe", probe_cfg.enabled),
+                    ("--panes-probe", panes_cfg.probe),
+                    ("--preset-probe", preset_probe_cfg.enabled),
+                    ("--pty-probe", pty_probe_cfg.enabled),
+                ] {
+                    if on {
+                        eprintln!("[eqmux] ⚠️ {flag}와 --tab-probe는 같이 못 쓴다 — {flag} 쪽만 돈다");
+                    }
                 }
             }
 
@@ -280,6 +309,7 @@ pub fn run() {
             app.manage(font_cfg);
             app.manage(panes_cfg);
             app.manage(preset_probe_cfg);
+            app.manage(tab_probe_cfg);
             app.manage(PtyManager::default());
             Ok(())
         })

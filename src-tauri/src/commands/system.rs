@@ -9,7 +9,9 @@ use tauri::State;
 use crate::appdata::{self, AppDataReport, AppDataWatch};
 use crate::config::Paths;
 use crate::error::Result;
-use crate::probe::{FontProbeConfig, PanesConfig, PresetProbeConfig, ProbeConfig, PtyProbeConfig};
+use crate::probe::{
+    FontProbeConfig, PanesConfig, PresetProbeConfig, ProbeConfig, PtyProbeConfig, TabProbeConfig,
+};
 
 #[derive(Debug, Serialize)]
 pub struct AppInfo {
@@ -23,6 +25,8 @@ pub struct AppInfo {
     pub panes: PanesConfig,
     /// `S2-11` — 배치 프리셋 무인 확인(`--preset-probe`).
     pub preset_probe: PresetProbeConfig,
+    /// `S2-5` — 탭 무인 확인(`--tab-probe`).
+    pub tab_probe: TabProbeConfig,
     /// 자동 감지된 셸. 화면 없이도 무엇이 뜰지 알 수 있어야 한다.
     pub shell: String,
 }
@@ -35,6 +39,7 @@ pub fn app_info(
     font_probe: State<'_, FontProbeConfig>,
     panes: State<'_, PanesConfig>,
     preset_probe: State<'_, PresetProbeConfig>,
+    tab_probe: State<'_, TabProbeConfig>,
 ) -> Result<AppInfo> {
     Ok(AppInfo {
         name: "EQMUX",
@@ -45,6 +50,7 @@ pub fn app_info(
         font_probe: font_probe.inner().clone(),
         panes: panes.inner().clone(),
         preset_probe: preset_probe.inner().clone(),
+        tab_probe: tab_probe.inner().clone(),
         shell: crate::pty::detect_shell(),
     })
 }

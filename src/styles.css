@@ -508,3 +508,126 @@ body {
 .lat.bad {
   color: var(--bad);
 }
+
+/* ── S2-5 탭(서피스) — 패널 하나 안의 탭 막대 ─────────────────────────────────
+   막대는 **탭이 2개 이상일 때만** 뜬다(panels.ts `reconcileTabs`). 탭이 하나면 화면 기하가
+   S2-5 전과 1px도 다르지 않다 — A-2·A-3 표본과 `--panes-probe`의 rows/cols가 그 기하 위에서
+   재였고, 탭 하나 붙이자고 이미 통과한 관문을 다시 열지 않는다.
+
+   ⚠️ `.panel-body`가 `.panel-stack` 안으로 한 층 내려갔다(탭마다 하나씩 겹쳐 산다).
+   그래서 위 `.panel[data-leaf] > .panel-body` 규칙은 더 이상 안 맞는다 — 그 칠을 여기서
+   `.panel-stack`이 대신 받는다. 계측 화면(renderStaticGrid)에는 스택이 없어 영향이 없다. */
+
+/* 스택은 **자리만** 잡고, 본문은 그 자리를 정확히 채운다(absolute · inset 0).
+   flex 안에 flex를 겹치면 본문의 flex-basis(auto)가 xterm의 현재 행 수에 얽혀 한 칸씩 밀린다 —
+   실제로 rows 15 · cols 76이 14 · 75로 줄었다. 그 기하 위에서 A-2·A-4를 쟀다. */
+.panel-stack {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.panel-stack > .panel-body {
+  position: absolute;
+  inset: 0;
+}
+
+.panel[data-leaf] > .panel-stack {
+  background: var(--deep);
+  color: var(--term-fg);
+}
+
+/* 숨은 탭은 화면에서만 빠진다 — 인스턴스는 그대로 산다(전환에 세션이 안 죽는 자리). */
+.panel-body[hidden] {
+  display: none;
+}
+
+/* 헤더의 임시 버튼(`◫ ⬓ ×`)은 위에서 감춰 두고 `⋯` 메뉴가 대신한다(pane-header.ts).
+   **새 탭만 예외다** — 탭이 하나면 탭 막대도 숨으므로, 이걸 같이 감추면 탭을 열 방법이 없어진다.
+   헤더를 디자인대로 다시 짜면서 이 조작이 `⋯` 메뉴로 들어가면 이 규칙은 같이 사라진다. */
+.panel-bar .panel-newtab {
+  display: inline-flex;
+}
+
+.panel-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 1px;
+  min-height: 0;
+  padding: 0 4px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--line-soft);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.panel-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.panel-tabs[hidden] {
+  display: none;
+}
+
+.panel-tab,
+.panel-tab-add {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  max-width: 160px;
+  padding: 0 8px;
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 11px;
+  color: var(--dim);
+  cursor: pointer;
+}
+
+.panel-tab:hover,
+.panel-tab-add:hover {
+  background: var(--hover);
+  color: var(--text-soft);
+}
+
+/* 활성 탭은 아래 밑줄 하나로만 말한다 — 강조는 하나일 때만 강조다(pane-header.ts와 같은 규칙).
+   페인 자체의 포커스 강조(테두리·헤더 배경)와 겹쳐 울리면 어느 쪽이 활성인지 되레 흐려진다. */
+.panel-tab.active {
+  color: var(--text);
+  border-bottom-color: var(--blue);
+}
+
+.panel-tab-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.panel-tab-close {
+  flex: 0 0 auto;
+  width: 12px;
+  text-align: center;
+  color: var(--dim);
+  opacity: 0;
+}
+
+/* 닫기는 그 탭에 손이 갔을 때만 보인다 — 막대가 × 로 뒤덮이면 이름을 못 읽는다.
+   활성 탭은 항상 보인다: 지금 닫을 수 있는 것이 무엇인지가 늘 드러나야 한다. */
+.panel-tab:hover .panel-tab-close,
+.panel-tab.active .panel-tab-close {
+  opacity: 1;
+}
+
+.panel-tab-close:hover {
+  color: var(--red);
+}
+
+.panel-tab-add {
+  color: var(--muted);
+}

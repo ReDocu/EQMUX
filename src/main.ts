@@ -87,6 +87,13 @@ interface PresetProbeConfig {
   out_path: string;
 }
 
+/** S2-5 — 탭 무인 확인(`--tab-probe`). `tabs`는 한 패널에 열 탭 수(원래 탭 포함). */
+interface TabProbeConfig {
+  enabled: boolean;
+  tabs: number;
+  out_path: string;
+}
+
 interface AppInfo {
   name: string;
   version: string;
@@ -96,6 +103,7 @@ interface AppInfo {
   font_probe: FontProbeConfig;
   panes: PanesConfig;
   preset_probe: PresetProbeConfig;
+  tab_probe: TabProbeConfig;
   shell: string;
 }
 
@@ -230,9 +238,30 @@ function reportRenderer(
         status: h(".status"),
         rows: first.term.rows,
         cols: first.term.cols,
+        // 격자가 밀리면 rows/cols만으로는 어디서 밀렸는지 모른다 — 상자를 같이 남긴다.
+        // (`S2-5`에서 탭 스택을 끼우며 실제로 한 칸씩 밀렸고, 이 값이 없어서 못 짚었다)
+        boxes: boxesOf(first),
       },
     }),
   });
+}
+
+/** 첫 터미널이 앉은 상자들 — 패널 · 본문 · xterm 화면. 격자가 밀린 자리를 짚는 데 쓴다. */
+function boxesOf(first: TerminalHandle): Record<string, { w: number; h: number } | null> {
+  const box = (el: Element | null | undefined): { w: number; h: number } | null => {
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return { w: Math.round(r.width * 10) / 10, h: Math.round(r.height * 10) / 10 };
+  };
+  const xterm = first.term.element ?? null;
+  return {
+    panel: box(xterm?.closest(".panel")),
+    bar: box(xterm?.closest(".panel")?.querySelector(":scope > .panel-bar")),
+    tabs: box(xterm?.closest(".panel")?.querySelector(":scope > .panel-tabs")),
+    body: box(xterm?.parentElement),
+    xterm: box(xterm),
+    screen: box(xterm?.querySelector(".xterm-screen")),
+  };
 }
 
 /**
@@ -392,6 +421,12 @@ async function runApp(info: AppInfo, layoutEl: HTMLElement, stack: string | null
     return;
   }
 
+  // S2-5 — 탭 무인 확인. 같은 이유로 여기다. 분기 순서는 lib.rs의 충돌 경고와 같은 말이다.
+  if (info.tab_probe.enabled) {
+    await runTabProbe(manager, info);
+    return;
+  }
+
   // 계측·검증이 아닐 때만 건다 — 표본 구간에 디스크 훑기를 얹지 않는다.
   installAppDataReport();
 
@@ -436,7 +471,8 @@ async function runPanesProbe(manager: PanelManager, info: AppInfo): Promise<void
     const peakLeaves = manager.leafIds();
     const peakPtys = await invoke<PtyInfo[]>("pty_list");
     const peakCanvases = canvasCount();
-    const peakRenderers = manager.rendererReport();
+    // `S2-5` 이후 **탭 단위**다 — 패널 하나가 여러 줄을 낼 수 있다.
+    const peakTabs = manager.rendererReport();
 
     const killed: string[] = [];
     while (manager.leafIds().length > 1) {
@@ -448,21 +484,25 @@ async function runPanesProbe(manager: PanelManager, info: AppInfo): Promise<void
     const afterLeaves = manager.leafIds();
     const afterPtys = await invoke<PtyInfo[]>("pty_list");
     const afterCanvases = canvasCount();
+    const afterTabs = manager.rendererReport().length;
 
-    // xterm은 패널당 캔버스를 여러 장 쓴다(M2 실측 2장 — WebGL 컨텍스트는 그중 1개다).
+    // xterm은 **탭당** 캔버스를 여러 장 쓴다(M2 실측 2장 — WebGL 컨텍스트는 그중 1개다).
     // 장수를 박아 두면 xterm 판올림마다 검증이 거짓 미달을 낸다 — 비례로 잰다:
-    // 패널당 장수가 일정하고, 닫은 뒤에는 남은 패널 몫만 남아야 한다.
-    const perPanel = peakLeaves.length > 0 ? peakCanvases / peakLeaves.length : NaN;
+    // 탭당 장수가 일정하고, 닫은 뒤에는 남은 탭 몫만 남아야 한다.
+    //
+    // `S2-5` 전에는 패널당 탭이 하나뿐이라 "패널당"과 같은 말이었다. 이제는 탭으로 센다 —
+    // 숨은 탭의 xterm도 살아 있고 캔버스도 DOM에 남는다. 그게 "전환에 세션이 안 죽는다"의 실물이다.
+    const perTab = peakTabs.length > 0 ? peakCanvases / peakTabs.length : NaN;
 
     const checks = {
       opened_to_target: peakLeaves.length === target,
-      pty_per_panel: peakPtys.length === peakLeaves.length,
-      canvas_per_panel_uniform: Number.isInteger(perPanel) && perPanel >= 1,
-      renderers_alive: peakRenderers.every((r) => r.alive),
+      pty_per_tab: peakPtys.length === peakTabs.length,
+      canvas_per_tab_uniform: Number.isInteger(perTab) && perTab >= 1,
+      renderers_alive: peakTabs.every((r) => r.alive),
       closed_to_one: afterLeaves.length === 1,
-      pty_list_matches_survivor: afterPtys.length === 1,
+      pty_list_matches_survivor: afterPtys.length === afterTabs,
       killed_ptys_gone: killed.every((k) => !afterPtys.some((p) => p.id === k)),
-      canvas_disposed: afterCanvases === perPanel * afterLeaves.length,
+      canvas_disposed: afterCanvases === perTab * afterTabs,
     };
     const pass = Object.values(checks).every(Boolean);
     const failed = Object.entries(checks)
@@ -470,26 +510,28 @@ async function runPanesProbe(manager: PanelManager, info: AppInfo): Promise<void
       .map(([k]) => k);
 
     const verdict =
-      `${pass ? "통과" : "미달"} — 패널 ${peakLeaves.length}/${target}` +
-      ` · PTY ${peakPtys.length}→${afterPtys.length} (기대 ${target}→1)` +
-      ` · 캔버스 ${peakCanvases}→${afterCanvases} (패널당 ${perPanel}장 기준 ${perPanel * afterLeaves.length}장 기대)` +
+      `${pass ? "통과" : "미달"} — 패널 ${peakLeaves.length}/${target} · 탭 ${peakTabs.length}→${afterTabs}` +
+      ` · PTY ${peakPtys.length}→${afterPtys.length} (기대 ${peakTabs.length}→${afterTabs})` +
+      ` · 캔버스 ${peakCanvases}→${afterCanvases} (탭당 ${perTab}장 기준 ${perTab * afterTabs}장 기대)` +
       ` · 죽인 PTY ${killed.length}개 ${checks.killed_ptys_gone ? "모두 정리" : "누수"}` +
-      ` · 렌더러 생존 ${peakRenderers.filter((r) => r.alive).length}/${peakRenderers.length}` +
+      ` · 렌더러 생존 ${peakTabs.filter((r) => r.alive).length}/${peakTabs.length}` +
       (pass ? "" : ` · 실패: ${failed.join(", ")}`);
 
     await finish(pass, verdict, {
       pass,
       checks,
       target,
-      canvases_per_panel: perPanel,
+      canvases_per_tab: perTab,
       peak: {
         leaves: peakLeaves,
+        tabs: peakTabs.map((r) => r.tab),
         ptys: peakPtys.map((p) => p.id),
         canvases: peakCanvases,
-        renderers: peakRenderers,
+        renderers: peakTabs,
       },
       after: {
         leaves: afterLeaves,
+        tabs: afterTabs,
         ptys: afterPtys.map((p) => p.id),
         canvases: afterCanvases,
       },
@@ -626,6 +668,134 @@ async function runPresetProbe(manager: PanelManager, info: AppInfo): Promise<voi
     });
   } catch (e) {
     logError("프리셋 무인 확인 중 예외", e);
+    await finish(false, `미달 — 확인 중 예외: ${e}`, { pass: false, error: String(e) });
+  }
+}
+
+/**
+ * `S2-5` 무인 확인 (`--tab-probe`) — **"전환에 세션이 죽지 않는다"를 기계가 판정한다.**
+ *
+ * `--preset-probe`와 같은 이유로 있다: 이건 화면으로 구분이 안 되는 성질이다. 전환할 때마다
+ * 셸을 새로 띄우는 구현과 살려 둔 구현은 똑같이 생겼다. 그래서 신원을 대조한다.
+ *
+ *   ① **PTY id** — 전환 왕복 뒤에도 같은 프로세스인가 (`pty_list`는 살아 있는 것만 준다)
+ *   ② **캔버스 요소 동일성** — xterm이 파괴·재생성되지 않았는가.
+ *      수만 세면 새로 만든 것도 같은 수다. **요소가 같아야** 버퍼·WebGL 컨텍스트가 산 것이다.
+ *   ③ **패널 수 불변** — 탭은 잎을 늘리지 않는다. 늘었다면 그건 분할이지 탭이 아니다.
+ *   ④ 닫으면 그 탭의 PTY만 죽고 **나머지는 산다.**
+ *   ⑤ 마지막 탭을 닫으면 패널째 닫힌다. 마지막 패널이면 백엔드가 거부한다.
+ */
+async function runTabProbe(manager: PanelManager, info: AppInfo): Promise<void> {
+  const finish = async (pass: boolean, verdict: string, detail: object): Promise<void> => {
+    await invoke("tab_probe_finish", {
+      json: JSON.stringify(detail, null, 2),
+      verdict,
+      pass,
+    }).catch((e) => logError("tab_probe_finish 실패", e));
+  };
+
+  try {
+    // 프롬프트가 그려질 시간. 셸 자체는 boot에서 이미 떴다.
+    await sleep(2000);
+
+    const leaf = manager.leafIds()[0];
+    const baseLeaves = manager.leafIds().length;
+    const firstTab = manager.activeTab(leaf);
+    if (!leaf || !firstTab) {
+      await finish(false, "미달 — 패널이나 탭이 없다", { pass: false });
+      return;
+    }
+
+    // ── 열기. 새 탭이 곧바로 활성이 되고 셸이 붙어야 한다.
+    const opened: string[] = [];
+    for (let i = 1; i < info.tab_probe.tabs; i++) {
+      const id = await manager.newTab(leaf);
+      if (id) opened.push(id);
+      await sleep(800); // 셸 기동 + 첫 프롬프트
+    }
+    const tabs = manager.tabsOf(leaf);
+    const afterOpenLeaves = manager.leafIds().length;
+    const openedPtys = manager
+      .ptyReport()
+      .filter((p) => p.leaf === leaf)
+      .map((p) => p.id)
+      .sort();
+    const openedCanvases = canvasList();
+
+    // ── 왕복. 첫 탭 → 마지막 탭 → 첫 탭. 여기서 죽는 구현이면 아래 대조가 갈린다.
+    await manager.selectTab(firstTab);
+    await sleep(200);
+    const midActive = manager.activeTab(leaf);
+    await manager.selectTab(tabs[tabs.length - 1]);
+    await sleep(200);
+    await manager.selectTab(firstTab);
+    await sleep(300);
+
+    const roundPtys = manager
+      .ptyReport()
+      .filter((p) => p.leaf === leaf)
+      .map((p) => p.id)
+      .sort();
+    const roundCanvases = canvasList();
+
+    // ── 닫기. 연 탭 하나만 닫는다 — 그 PTY만 죽고 나머지는 살아 있어야 한다.
+    const victim = opened[0];
+    const victimPty = manager.ptyReport().find((p) => p.tab === victim)?.id ?? null;
+    await manager.closeTab(victim);
+    await sleep(500);
+
+    const afterClose = manager.tabsOf(leaf);
+    const livePtys = (await invoke<PtyInfo[]>("pty_list")).map((p) => p.id);
+    const survivors = roundPtys.filter((p) => p !== victimPty);
+
+    const checks = {
+      opened_to_target: tabs.length === info.tab_probe.tabs,
+      // 탭은 잎을 늘리지 않는다. 늘었다면 그건 분할이지 탭이 아니다.
+      leaves_unchanged: afterOpenLeaves === baseLeaves,
+      pty_per_tab: openedPtys.length === tabs.length,
+      // 전환은 **활성 표시만** 바꾼다.
+      select_switches_active: midActive === firstTab,
+      active_after_round: manager.activeTab(leaf) === firstTab,
+      // 🔴 핵심 둘 — 전환 왕복에 프로세스도 xterm 인스턴스도 그대로여야 한다.
+      ptys_identical_after_switch: sameList(roundPtys, openedPtys),
+      canvas_identity_preserved: sameElements(roundCanvases, openedCanvases),
+      renderers_alive: manager.rendererReport().every((r) => r.alive),
+      // 닫기는 그 탭만 데려간다.
+      closed_tab_gone: !afterClose.includes(victim),
+      tab_count_down_by_one: afterClose.length === tabs.length - 1,
+      closed_pty_dead: !!victimPty && !livePtys.includes(victimPty),
+      siblings_alive: survivors.every((p) => livePtys.includes(p)),
+      leaves_still_unchanged: manager.leafIds().length === baseLeaves,
+    };
+    const failed = Object.entries(checks)
+      .filter(([, ok]) => !ok)
+      .map(([k]) => k);
+    const pass = failed.length === 0;
+
+    const verdict =
+      `${pass ? "통과" : "미달"} — 탭 ${tabs.length}/${info.tab_probe.tabs}` +
+      ` · 패널 ${baseLeaves}→${manager.leafIds().length} (불변 기대)` +
+      ` · PTY ${openedPtys.length}→${roundPtys.length}→${afterClose.length} (전환 왕복 동일 ${
+        checks.ptys_identical_after_switch ? "예" : "아니오"
+      })` +
+      ` · 캔버스 요소 보존 ${checks.canvas_identity_preserved ? "예" : "아니오"}` +
+      ` · 닫은 탭 PTY ${victimPty ?? "?"} ${checks.closed_pty_dead ? "정리" : "누수"}` +
+      ` · 형제 셸 생존 ${survivors.filter((p) => livePtys.includes(p)).length}/${survivors.length}` +
+      (pass ? "" : ` · 실패: ${failed.join(", ")}`);
+
+    await finish(pass, verdict, {
+      pass,
+      checks,
+      target_tabs: info.tab_probe.tabs,
+      leaf,
+      tabs,
+      opened,
+      ptys: { opened: openedPtys, after_round: roundPtys, live_after_close: livePtys },
+      canvases: { opened: openedCanvases.length, after_round: roundCanvases.length },
+      closed: { tab: victim, pty: victimPty, remaining: afterClose },
+    });
+  } catch (e) {
+    logError("탭 무인 확인 중 예외", e);
     await finish(false, `미달 — 확인 중 예외: ${e}`, { pass: false, error: String(e) });
   }
 }
