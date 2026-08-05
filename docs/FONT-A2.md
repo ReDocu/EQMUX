@@ -16,7 +16,7 @@
 | 싣는 법 | `src/styles.css`의 `@font-face { font-family: "D2Coding" }` |
 | 스택 | `"D2Coding", "D2Coding ligature", "Cascadia Mono", "굴림체", "돋움체", Consolas, monospace` |
 | 배포물 | `eqmux.exe` 3.21 → **4.93 MB** (+1.72 · TTF 4.2MB가 실행 파일 안에서 압축된다) |
-| 라이선스 | SIL OFL 1.1 · `src/assets/fonts/NOTICE-D2Coding.md` · ⚠️ **전문 파일 미비 — §8** |
+| 라이선스 | SIL OFL 1.1 · 고지 `NOTICE-D2Coding.md` · 전문 `LICENSE-OFL-1.1.txt` ✅ · ⚠️ **배포물 배선 남음 — §8** |
 
 ### 측정 결과 — **전 항목 오차 0.000 px**
 
@@ -239,16 +239,32 @@ $env:EQMUX_FONT_STACK = '"D2Coding ligature", monospace'
 
 ---
 
-## 8. ⚠️ 배포 전에 반드시 채울 것 — **OFL 1.1 전문 파일**
+## 8. OFL 1.1 전문 파일 — ✅ **저장소 반영** · ⚠️ **배포물 배선은 남음**
 
-SIL OFL 1.1은 재배포 시 **저작권 고지와 라이선스 전문을 함께 싣도록** 요구한다.
-지금 저장소에는 **폰트에서 추출한 고지만 있고 전문 파일이 없다**
-(`src/assets/fonts/NOTICE-D2Coding.md`).
+**[2026-08-05 갱신 · 세아]** 어제 적은 *"받아 주시면 넣겠습니다"* 는 닫혔다.
+SIL 정본 `https://openfontlicense.org/documents/OFL.txt`를 받아
+**`src/assets/fonts/LICENSE-OFL-1.1.txt`** 로 넣었다.
 
-- **전문을 기억으로 옮겨 적지 않았다.** 법적 문서를 근사치로 적으면 고지가 아니라 위험이다.
-- 폰트에 박힌 라이선스 URL(ID 14)은 `dev.naver.com` 위키라 **현재 접근되지 않는다.**
-  **SIL 정본**에서 받아야 한다.
-- 이 세션에서는 `wmux` CLI가 PATH에 없어 브라우저를 못 썼다. **받아 주시면 넣겠습니다.**
+| | |
+|---|---|
+| 원본 | 4,599 B · `text/plain` · sha256 `1d361a8f…f6b57e` |
+| 우리 파일 | 4,395 B · LF · sha256 `719f4b92…c565c98` |
+| 차이 | **첫 5줄뿐.** 정본의 `Copyright (c) <dates>, <Copyright Holder>…` **빈칸 양식**을 폰트 `name` ID 0 실측 문자열로 대체 |
+| 본문 | **정본 6행 이후와 `diff` 0바이트** — 검증 명령은 `NOTICE-D2Coding.md`에 |
 
-`issue.md` #8이 *"동봉하게 되면 OFL 고지를 5차 라이선스 정리에 함께 넣는다"* 로 이미 예정해 뒀다.
-**지금은 개발 빌드라 유예된 것이지 면제된 것이 아니다.**
+전문을 **기억으로 옮겨 적지 않았다.** 받아서 넣었고, 바꾼 자리와 되돌려 볼 명령을 남겼다.
+폰트에 박힌 ID 14 URL(`dev.naver.com` 위키)은 여전히 죽어 있어 정본 출처로 대체한 것이다.
+
+### 남은 것 — 전문 파일이 사용자에게 안 간다
+
+`dist/`에 실리는 건 `.ttf` 하나뿐이라 **exe·설치본 어디에도 이 `.txt`가 없다.**
+OFL 조건 2("each copy contains … this license")를 저장소가 아니라 **배포물이** 만족해야 한다.
+
+| 방법 | 커버 범위 | 비용 |
+|---|---|---|
+| **`public/LICENSE-OFL-1.1.txt`** (권장) | Vite가 `dist/`로 복사 → **exe 안에 박힌다.** 포터블까지 | 재빌드 1회 |
+| `tauri.conf.json` `bundle.resources` | 설치본 exe **옆에** 놓임. 포터블 exe는 미커버 | 재빌드 1회 |
+
+**지금 안 넣은 이유는 하나다 — 재빌드가 `A-2 육안 판정용 exe(4.93 MB)`를 갈아치운다.**
+판정이 끝나면 권장안으로 넣는다. `issue.md` #8(5차 라이선스 정리)과 `README.md`의
+`LICENSE 미정`이 같은 자리다. **지금은 유예지 면제가 아니다.**
