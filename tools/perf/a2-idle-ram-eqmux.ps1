@@ -20,9 +20,8 @@ $SAMPLES  = 10
 $FIRST_AT = 30    # 초 — 첫 표본 시각 (T0 기준 · #6 안정화 30초)
 $INTERVAL = 30    # 초
 
-# 빌드 식별자 — #7 ② 5항의 습관. 캐시·상태가 아니라 "무엇을 쟀는지"를 남긴다
-$commit = try { (git -C $root rev-parse --short HEAD 2>$null) } catch { '?' }
-$exeInfo = Get-Item -LiteralPath $exe
+# 빌드 신원 — 트리가 더러우면 여기서 멈춘다 (이안 ③ · 2026-08-05 세 번 잡힌 함정)
+$build = Assert-CleanBuildForVerdict -ExePath $exe
 
 # 라이브 eqmux가 있으면 중단 — 도그푸딩 전이라 없어야 정상. 있다면 산 세션을 죽일 수 있다
 $liveEq = @(Get-Process eqmux -ErrorAction SilentlyContinue)
@@ -58,7 +57,6 @@ function Get-Descendants([int]$rootPid) {
 
 # ---- 기동 — 2×2 셸 4개 자동 ----
 "기계: $(Get-MachineLine)"
-"빌드: 커밋 $commit · exe $([math]::Round($exeInfo.Length/1MB,2)) MB · 수정 $($exeInfo.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss'))"
 $p = Start-Process -FilePath $exe -ArgumentList '--panes=4' -PassThru `
        -RedirectStandardError $errLog -RedirectStandardOutput $outLog
 Start-Sleep -Milliseconds 60

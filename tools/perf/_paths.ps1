@@ -152,6 +152,43 @@ function Get-MemoryPressure {
   }
 }
 
+function Get-BuildIdentity {
+  <#
+    검증·측정에 쓸 빌드의 신원 — 커밋 해시 · 트리 상태 · exe 크기/시각.
+    2026-08-05 하루에 같은 함정이 세 번 잡혔다: **공유 트리에서는 빌드도 조작이다** —
+    미커밋 변경을 품은 exe가 조용히 만들어진다. 측정 전에 이걸 찍고 대조한다 (이안 지시 ③).
+  #>
+  param([string]$ExePath)
+  $root  = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+  $hash  = (git -C $root rev-parse --short HEAD 2>$null)
+  $dirty = @(git -C $root status --porcelain 2>$null)
+  $exe   = Get-Item -LiteralPath $ExePath
+  [pscustomobject]@{
+    commit   = $hash
+    dirty    = ($dirty.Count -gt 0)
+    dirty_n  = $dirty.Count
+    exe_mb   = [math]::Round($exe.Length / 1MB, 2)
+    exe_time = $exe.LastWriteTime
+  }
+}
+
+function Assert-CleanBuildForVerdict {
+  <#
+    판정에 인용할 측정은 "무엇을 쟀는지"가 커밋 해시 하나로 말해져야 한다.
+    트리가 더러우면 지금 exe가 무엇을 품었는지 아무도 모른다 — 멈춘다.
+    ⚠️ 한계: exe가 깨끗한 트리에서 나왔는지까지는 이 검사가 못 본다 —
+    그래서 절차가 "재빌드 직후 크기·시각 대조 후 실행"이다. 이 함수는 그 절차의 하한선이다.
+  #>
+  param([string]$ExePath)
+  $b = Get-BuildIdentity -ExePath $ExePath
+  "빌드: 커밋 $($b.commit) · exe $($b.exe_mb) MB · $($b.exe_time.ToString('yyyy-MM-dd HH:mm:ss')) · 트리 $(if ($b.dirty) { "더러움($($b.dirty_n)파일)" } else { '깨끗' })"
+  if ($b.dirty) {
+    throw ("작업트리에 미커밋 변경 $($b.dirty_n)개 — 이 상태의 exe는 검증 대상이 아니다. 멈춘다.`n" +
+           "  작업자 커밋 대기 → 재빌드 → 크기·시각 대조 → 다시 실행. (2026-08-05 세 번 잡힌 함정 · 이안 ③)")
+  }
+  return $b
+}
+
 function Assert-MemoryHeadroom {
   <#
     A-4 착수 조건 — 여유가 부족하면 재는 것이 앱이 아니라 메모리 압력이 된다.
