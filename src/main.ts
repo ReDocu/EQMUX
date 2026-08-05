@@ -23,6 +23,7 @@ import { runFontProbe, ensureFontsLoaded, type FontProbeResult } from "./font";
 import { LatencyProbe, installFrameHold, type Progress } from "./latency";
 import { bufferText, type PtyLink, type PtyInfo } from "./pty";
 import { PanelManager, ensurePanes, renderStaticGrid } from "./panels";
+import { installFocusKeys, connectFocus } from "./focus";
 import { installGlobalHandlers, logError, logInfo } from "./log";
 import { verifyBundledLicense } from "./license";
 
@@ -119,6 +120,10 @@ async function main(): Promise<void> {
   if (info.probe.enabled && info.probe.frame_hold > 1) {
     installFrameHold(info.probe.frame_hold);
   }
+
+  // S2-4 — 앱 층 키(포커스 이동·줌) 리스너. 계측 모드 포함 전 경로에 건다 —
+  // 실사용 키 입력은 항상 이 리스너를 지나므로, A-3도 같은 조건에서 재야 회귀를 잡는다.
+  installFocusKeys();
 
   // 동봉 폰트의 라이선스 전문이 이 바이너리 안에 있는지 확인한다(OFL 1.1 조건 2).
   // 지연 계측 중에는 돌리지 않는다 — 4KB라도 표본 구간에 얹힌 일은 A-3 숫자에 섞인다.
@@ -323,6 +328,7 @@ async function runApp(info: AppInfo, layoutEl: HTMLElement, stack: string | null
   });
 
   await manager.boot();
+  connectFocus(manager); // S2-4 — 이때부터 Ctrl+Alt+화살표·Ctrl+Shift+Z가 동작한다.
 
   // `--panes=N` — 같은 화면을 매번 같은 방법으로 만든다. A2 측정의 재현 조건이다.
   if (info.panes.count > manager.size) {
