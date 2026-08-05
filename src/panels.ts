@@ -67,6 +67,20 @@ export interface PresetInfo {
   current: boolean;
 }
 
+/** `S2-13` — 패널 하나에 붙은 PTY. `PanelManager.ptyReport()`가 준다. */
+export interface PtyReport {
+  /** 잎 id — 어느 패널의 셸인지. `pty_list`에는 없는 값이다. */
+  leaf: string;
+  id: string;
+  /** 실제로 뜬 실행 파일 경로. 이름만 쓰려면 호출자가 자른다. */
+  shell: string;
+  pid: number | null;
+  /** 셸을 **띄운** 폴더. `cd`로 옮긴 현재 위치가 아니다 — `PtyInfo.cwd` 참조. */
+  cwd: string;
+  /** 셸이 아직 도는가. 끝난 셸도 패널이 남아 있으면 목록에는 있다. */
+  alive: boolean;
+}
+
 /** 화면에 살아 있는 패널 하나. `handle`은 요소가 DOM에 붙어 크기를 가진 뒤에 생긴다. */
 export interface Panel {
   leafId: string;
@@ -317,6 +331,38 @@ export class PanelManager {
       logError("프리셋 목록 조회 실패", e);
       this.presetMeta = [];
     }
+  }
+
+  // ── `S2-13` 경계 API — PTY 보고 (#18 규칙 3) ──────────────────────────────
+  //
+  // 상태바(이안)가 디자인의 `PTY N ONLINE`과 **패널별 cwd**를 그리는 자리다.
+  // 패널 수를 PTY 수인 척 쓰지 않게 하려고 연다 — 둘은 다른 값이다(셸이 죽은 패널이 있다).
+  //
+  // `pty_list`를 직접 부르지 말 것. 그건 **잎을 모른다** — 어느 패널의 셸인지 못 붙이고,
+  // 왕복이라 주기적 호출에 IPC가 실린다. 여기 값은 전부 프런트가 이미 들고 있는 상태다.
+
+  /**
+   * 패널에 붙은 PTY들 — **트리 순서**(왼쪽부터).
+   *
+   * 셸이 아직/영영 안 붙은 패널은 **빠진다**(계측 모드, spawn 실패). 그래서
+   * `ptyReport().length !== size`가 정상이고, 그 차이가 곧 "셸 없는 패널 수"다.
+   * 살아 있는 수는 `alive`로 센다 — 셸이 끝난 패널도 목록에는 남는다.
+   */
+  ptyReport(): PtyReport[] {
+    const out: PtyReport[] = [];
+    for (const leaf of this.leafIds()) {
+      const link = this.panels.get(leaf)?.link;
+      if (!link?.id) continue;
+      out.push({
+        leaf,
+        id: link.id,
+        shell: link.shell ?? "",
+        pid: link.pid,
+        cwd: link.cwd ?? "",
+        alive: link.alive,
+      });
+    }
+    return out;
   }
 
   /** 무인 검증용 — 패널별 렌더 판정. */

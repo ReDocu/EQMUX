@@ -23,12 +23,18 @@
 //! **③ UTF-8 조립은 여기서 한다.** ConPTY가 주는 바이트는 **글자 경계에서 끊기지 않는다.**
 //! `가`(3바이트)의 두 바이트만 먼저 오는 일이 실제로 일어나고, 그대로 문자열로 만들면
 //! 한글이 깨진다. **관문 A-1·A-2가 걸린 자리라 프런트에 떠넘기지 않았다.**
+//!
+//! **④ 출력량도 여기서 센다** (`S2-13` ②). ③과 같은 이유다 — 디코드하고 나면 원래 바이트 수는
+//! 사라지고, 프런트는 그걸 되감아야 한다. 세는 것은 읽기 스레드가, 올리는 것은 미터 스레드가
+//! 나눠 맡는다(§미터). 이 파일에서 프런트로 나가는 것은 이벤트 셋뿐이다:
+//! `pty://data` · `pty://exit` · `pty://bytes`.
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::Duration;
 
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use serde::Serialize;
@@ -40,6 +46,11 @@ use crate::error::{Error, Result};
 pub const EVENT_DATA: &str = "pty://data";
 /// 셸이 끝났다. 프런트가 상태를 바꾸고 재기동 여부를 정한다.
 pub const EVENT_EXIT: &str = "pty://exit";
+/// 출력 누적 바이트. **주기적으로**(`METER_TICK_MS`) 값이 변했을 때만 나간다 — 아래 §미터.
+pub const EVENT_BYTES: &str = "pty://bytes";
+
+/// 미터 보고 주기(ms). 사람이 읽을 수 있는 상한이 이 언저리고, 그 위는 전부 비용이다.
+const METER_TICK_MS: u64 = 500;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PtyInfo {
@@ -47,6 +58,9 @@ pub struct PtyInfo {
     /// 실제로 띄운 실행 파일 경로. "pwsh를 띄웠다고 믿는 것"과 구분한다.
     pub shell: String,
     pub pid: Option<u32>,
+    /// 셸을 **띄운** 폴더. 절대 경로다(`display_path`).
+    ///
+    /// ⚠️ 셸이 `cd`로 옮겨 간 현재 위치가 아니다 — 그건 셸 통합(OSC 7)이 필요한 별개 기능이다.
     pub cwd: String,
 }
 
@@ -62,6 +76,19 @@ struct ExitEvent<'a> {
     code: Option<u32>,
 }
 
+#[derive(Clone, Serialize)]
+struct BytesEvent {
+    /// 앱 기동 이후 누적. 세션이 죽어도 줄지 않는다 — 계량기지 잔량이 아니다.
+    total: u64,
+    sessions: Vec<SessionBytes>,
+}
+
+#[derive(Clone, Serialize)]
+struct SessionBytes {
+    id: String,
+    bytes: u64,
+}
+
 struct Session {
     info: PtyInfo,
     master: Box<dyn MasterPty + Send>,
@@ -69,10 +96,113 @@ struct Session {
     child: Box<dyn Child + Send + Sync>,
 }
 
+// ── 미터 — 출력 누적 바이트 (`S2-13` ②) ──────────────────────────────────────
+//
+// **원래 바이트 수를 아는 유일한 지점이 읽기 스레드다.** 프런트가 받는 것은 이미 디코드된
+// String이라 다시 세려면 UTF-8로 되감아야 하고, 그 되감기가 출력 폭주 경로에 통째로 얹힌다
+// (`statusbar.ts::installOutputMeter`가 그 임시 구현이었다).
+//
+// 지키는 것 둘:
+//   ① **읽기 스레드는 더하기만 한다.** 청크마다 이벤트를 올리면 그게 곧 A-3가 지나가는 자리다.
+//   ② **유휴에는 깨지 않는다.** 폴링 타이머를 두면 A-4(유휴 RAM) 측정 중에도 500ms마다 스레드가
+//      깬다. 그래서 `Pulse`로 재운다 — 출력이 없으면 미터 스레드는 완전히 파킹된다.
+
+/// "출력이 있었다"를 미터 스레드에 알리는 문. 유휴에는 대기자를 깨우지 않는다.
+#[derive(Default)]
+struct Pulse {
+    dirty: AtomicBool,
+    lock: Mutex<()>,
+    cv: Condvar,
+}
+
+impl Pulse {
+    /// 출력 경로에서 부른다. **이미 dirty면 원자 연산 하나로 끝난다** — 잠금까지 안 간다.
+    fn mark(&self) {
+        if !self.dirty.swap(true, Ordering::Release) {
+            let _g = self.lock.lock().unwrap();
+            self.cv.notify_one();
+        }
+    }
+
+    /// 출력이 생길 때까지 잔다. 깨어나면 dirty를 내리고 돌아간다.
+    fn wait(&self) {
+        let mut g = self.lock.lock().unwrap();
+        // mark는 잠금을 잡아야 notify하므로, 여기서 파킹되기 전에는 신호가 유실되지 않는다.
+        while !self.dirty.swap(false, Ordering::Acquire) {
+            g = self.cv.wait(g).unwrap();
+        }
+    }
+}
+
+#[derive(Default)]
+struct ByteMeter {
+    total: Arc<AtomicU64>,
+    per: Mutex<HashMap<String, Arc<AtomicU64>>>,
+    pulse: Arc<Pulse>,
+    started: AtomicBool,
+}
+
+/// 읽기 스레드가 들고 가는 미터 손잡이. 맵을 다시 뒤지지 않는다.
+struct MeterHandle {
+    session: Arc<AtomicU64>,
+    total: Arc<AtomicU64>,
+    pulse: Arc<Pulse>,
+}
+
+impl MeterHandle {
+    fn add(&self, n: usize) {
+        let n = n as u64;
+        self.session.fetch_add(n, Ordering::Relaxed);
+        self.total.fetch_add(n, Ordering::Relaxed);
+        self.pulse.mark();
+    }
+}
+
+impl ByteMeter {
+    fn register(&self, id: &str) -> MeterHandle {
+        let session = Arc::new(AtomicU64::new(0));
+        self.per
+            .lock()
+            .unwrap()
+            .insert(id.to_string(), session.clone());
+        MeterHandle {
+            session,
+            total: self.total.clone(),
+            pulse: self.pulse.clone(),
+        }
+    }
+
+    /// 세션이 사라졌다. 누적 total은 그대로 두고 목록에서만 뺀다.
+    fn unregister(&self, id: &str) {
+        self.per.lock().unwrap().remove(id);
+        // 목록이 줄어든 것도 보고할 값이다 — 안 깨우면 상태바에 죽은 세션이 남는다.
+        self.pulse.mark();
+    }
+
+    fn snapshot(&self) -> BytesEvent {
+        let mut sessions: Vec<SessionBytes> = self
+            .per
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(id, b)| SessionBytes {
+                id: id.clone(),
+                bytes: b.load(Ordering::Relaxed),
+            })
+            .collect();
+        sessions.sort_by(|a, b| a.id.cmp(&b.id));
+        BytesEvent {
+            total: self.total.load(Ordering::Relaxed),
+            sessions,
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct PtyManager {
     sessions: Mutex<HashMap<String, Session>>,
     seq: AtomicU64,
+    meter: ByteMeter,
 }
 
 impl PtyManager {
@@ -133,7 +263,8 @@ impl PtyManager {
             id: id.clone(),
             shell: shell.clone(),
             pid: child.process_id(),
-            cwd: cwd.clone(),
+            // 화면에 그대로 나가는 값이라 여기서 절대 경로로 확정한다 — `.`을 상태바에 띄우지 않는다.
+            cwd: display_path(&cwd),
         };
 
         self.sessions.lock().unwrap().insert(
@@ -146,7 +277,13 @@ impl PtyManager {
             },
         );
 
-        spawn_reader(app.clone(), id, reader);
+        let meter = self.meter.register(&id);
+        // 미터 스레드는 **첫 세션에서만** 뜬다. 계측 모드(`--latency-probe`)는 PTY를 안 띄우므로
+        // A-3를 재는 실행에는 이 스레드가 존재하지 않는다.
+        if !self.meter.started.swap(true, Ordering::Relaxed) {
+            spawn_meter(app.clone());
+        }
+        spawn_reader(app.clone(), id, reader, meter);
         Ok(info)
     }
 
@@ -185,6 +322,7 @@ impl PtyManager {
             .unwrap()
             .remove(id)
             .ok_or_else(|| not_found(id))?;
+        self.meter.unregister(id);
         let r = s.child.kill().map_err(Error::from);
         // drop(s)가 master를 닫으며 ConPTY를 정리하는데, **이 닫기가 conhost 상태에 따라
         // 블로킹된다**(S2-3에서 실측 — 메모리 압박 하에서 layout_close가 메인 스레드째
@@ -211,6 +349,7 @@ impl PtyManager {
     ///
     /// `kill`이 먼저 걷어낸 세션이면 `None`이다 — 종료 코드는 못 주지만 누수는 아니다.
     fn reap(&self, id: &str) -> Option<u32> {
+        self.meter.unregister(id);
         let mut s = self.sessions.lock().unwrap().remove(id)?;
         s.child.wait().ok().map(|st| st.exit_code())
     }
@@ -221,7 +360,7 @@ fn not_found(id: &str) -> Error {
 }
 
 /// 읽기 전용 스레드. 블로킹 `read`를 쓰므로 async로 만들지 않았다.
-fn spawn_reader(app: AppHandle, id: String, mut reader: Box<dyn Read + Send>) {
+fn spawn_reader(app: AppHandle, id: String, mut reader: Box<dyn Read + Send>, meter: MeterHandle) {
     std::thread::Builder::new()
         .name(format!("eqmux-pty-{id}"))
         .spawn(move || {
@@ -233,6 +372,9 @@ fn spawn_reader(app: AppHandle, id: String, mut reader: Box<dyn Read + Send>) {
                 match reader.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
+                        // **여기가 원래 바이트 수를 아는 자리다.** 디코드 전에 센다 —
+                        // 글자 경계에서 끊긴 바이트도 셸이 실제로 뱉은 출력이다.
+                        meter.add(n);
                         pending.extend_from_slice(&buf[..n]);
                         let text = take_utf8(&mut pending);
                         if text.is_empty() {
@@ -263,6 +405,53 @@ fn spawn_reader(app: AppHandle, id: String, mut reader: Box<dyn Read + Send>) {
             let _ = app.emit(EVENT_EXIT, ExitEvent { id: &id, code });
         })
         .expect("PTY 읽기 스레드 생성 실패");
+}
+
+/// 미터 스레드. **출력이 있을 때만 깨어나** 최대 `METER_TICK_MS`에 한 번 보고한다.
+///
+/// 순서가 중요하다 — `wait()`로 첫 출력을 기다린 뒤 `sleep`으로 그 뒤 500ms의 출력을 모은다.
+/// 반대로 하면(자고 나서 확인) 유휴 상태에서도 계속 깬다.
+fn spawn_meter(app: AppHandle) {
+    std::thread::Builder::new()
+        .name("eqmux-pty-meter".into())
+        .spawn(move || {
+            let mut last: Option<(u64, usize)> = None;
+            loop {
+                let Some(mgr) = app.try_state::<PtyManager>() else {
+                    break; // 앱이 내려갔다
+                };
+                mgr.meter.pulse.wait();
+                std::thread::sleep(Duration::from_millis(METER_TICK_MS));
+
+                let ev = mgr.meter.snapshot();
+                let now = (ev.total, ev.sessions.len());
+                if last == Some(now) {
+                    continue;
+                }
+                last = Some(now);
+                if app.emit(EVENT_BYTES, ev).is_err() {
+                    break; // 창이 닫혔다 — 여기서 멈추지 않으면 스레드가 남는다
+                }
+            }
+        })
+        .expect("PTY 미터 스레드 생성 실패");
+}
+
+/// 표시용 절대 경로.
+///
+/// 상대 경로(`.`)를 그대로 두면 상태바에 점 하나가 뜬다. Windows `canonicalize`는
+/// `\\?\` 접두사를 붙이는데 **그건 사용자에게 보여 줄 값이 아니다** — 걷어낸다.
+fn display_path(p: &str) -> String {
+    let raw = Path::new(p);
+    let abs: PathBuf = std::fs::canonicalize(raw)
+        .or_else(|_| std::env::current_dir().map(|d| d.join(raw)))
+        .unwrap_or_else(|_| raw.to_path_buf());
+    let s = abs.to_string_lossy();
+    // 네트워크 경로는 접두사를 통째로 벗기면 `UNC\server\share`가 되어 못 쓴다.
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{rest}");
+    }
+    s.strip_prefix(r"\\?\").unwrap_or(&s).to_string()
 }
 
 /// 완성된 글자까지만 잘라 내고, 덜 온 바이트는 `pending`에 남긴다.
@@ -337,7 +526,57 @@ fn which(name: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::take_utf8;
+    use super::{display_path, take_utf8, ByteMeter, Pulse};
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+
+    #[test]
+    fn 상대_경로는_절대_경로로_확정된다() {
+        let p = display_path(".");
+        assert!(!p.starts_with(r"\\?\"), "UNC 접두사가 남았다: {p}");
+        assert!(std::path::Path::new(&p).is_absolute(), "상대 경로다: {p}");
+    }
+
+    #[test]
+    fn 미터는_세션별과_합계를_같이_센다() {
+        let meter = ByteMeter::default();
+        let a = meter.register("pty-1");
+        let b = meter.register("pty-2");
+        a.add(100);
+        b.add(23);
+        a.add(1);
+
+        let snap = meter.snapshot();
+        assert_eq!(snap.total, 124);
+        assert_eq!(snap.sessions.len(), 2);
+        assert_eq!(snap.sessions[0].bytes, 101); // id 순 — pty-1
+        assert_eq!(snap.sessions[1].bytes, 23);
+
+        // 세션이 죽으면 목록에서는 빠지지만 누적 합계는 계량기라 안 줄어든다.
+        meter.unregister("pty-1");
+        let snap = meter.snapshot();
+        assert_eq!(snap.total, 124);
+        assert_eq!(snap.sessions.len(), 1);
+    }
+
+    #[test]
+    fn 펄스는_출력_전에_켜져_있어도_신호를_잃지_않는다() {
+        // mark가 wait보다 먼저 와도 대기자는 즉시 돌아온다 — 그러지 않으면 첫 출력이 유실된다.
+        let p = Pulse::default();
+        p.mark();
+        p.wait();
+        assert!(!p.dirty.load(Ordering::Relaxed));
+
+        // 파킹된 대기자를 다른 스레드의 mark가 깨운다.
+        let p = Arc::new(Pulse::default());
+        let waiter = {
+            let p = p.clone();
+            std::thread::spawn(move || p.wait())
+        };
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        p.mark();
+        waiter.join().expect("mark가 대기자를 못 깨웠다");
+    }
 
     #[test]
     fn 글자_중간에서_끊긴_바이트는_남겨_둔다() {

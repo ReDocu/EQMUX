@@ -20,6 +20,12 @@ export interface PtyInfo {
   id: string;
   shell: string;
   pid: number | null;
+  /**
+   * 셸을 **띄운** 폴더 (절대 경로).
+   *
+   * ⚠️ 셸이 `cd`로 옮겨 간 현재 위치가 아니다 — 실시간 추적은 셸 통합(OSC 7)이 필요한
+   * 별개 기능이다. 표시할 때 이 한계를 같이 적을 것.
+   */
   cwd: string;
 }
 
@@ -62,6 +68,21 @@ export class PtyLink {
 
   get pid(): number | null {
     return this.info?.pid ?? null;
+  }
+
+  /** 셸을 띄운 폴더. 아직 안 떴으면 `null` — `PtyInfo.cwd`의 경고를 그대로 물려받는다. */
+  get cwd(): string | null {
+    return this.info?.cwd ?? null;
+  }
+
+  /**
+   * 셸이 살아 있는가. `pty://exit`을 받은 뒤로 거짓이다.
+   *
+   * 왕복(`pty_list`)이 아니라 **여기 들고 있는 상태**를 읽는다 — 상태바가 주기적으로 부르는
+   * 값이라 IPC를 끼우면 그 주기가 그대로 비용이 된다.
+   */
+  get alive(): boolean {
+    return !!this.info && !this.closed;
   }
 
   async start(opts: PtyLinkOptions = {}): Promise<PtyInfo> {
@@ -132,6 +153,29 @@ export class PtyLink {
       await invoke("pty_kill", { id: this.info.id }).catch(() => undefined);
     }
   }
+}
+
+// ── 출력량 미터 (`S2-13` ②) ──────────────────────────────────────────────────
+
+/** `pty://bytes` 한 틱. 세는 것도 주기를 정하는 것도 `pty.rs`다 — 여기는 받기만 한다. */
+export interface PtyBytesEvent {
+  /** 앱 기동 이후 누적. 세션이 죽어도 줄지 않는다 — 계량기지 잔량이 아니다. */
+  total: number;
+  /** 살아 있는 세션별 누적. id 순. */
+  sessions: { id: string; bytes: number }[];
+}
+
+/**
+ * 출력 누적 바이트를 구독한다. **최대 초당 2회**, 값이 변했을 때만 온다.
+ *
+ * 프런트에서 다시 세지 말 것 — 받는 것은 이미 디코드된 String이라 `encodeInto`로 되감아야
+ * 하고, 그 되감기가 출력 폭주 경로에 통째로 얹힌다. 원래 바이트 수를 아는 자리는
+ * `pty.rs`의 읽기 스레드 하나뿐이다.
+ *
+ * 출력이 없으면 백엔드 미터 스레드는 파킹된다 — 유휴에 이벤트가 안 오는 게 정상이다.
+ */
+export function onPtyBytes(cb: (ev: PtyBytesEvent) => void): Promise<UnlistenFn> {
+  return listen<PtyBytesEvent>("pty://bytes", (ev) => cb(ev.payload));
 }
 
 /**
