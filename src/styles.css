@@ -24,15 +24,42 @@
   font-display: block;
 }
 
+/* S2-8 — design.pen 토큰 정본 ([DESIGN-S2-8.md](../docs/DESIGN-S2-8.md) §1).
+   pen 변수 15개 + styles.css 실측에서 계승한 파생 톤.
+   ⚠️ 색은 여기서만 고친다. 컴포넌트 안에 리터럴을 박으면 다음 이관 때 또 전수로 뒤져야 한다. */
 :root {
-  --bg: #0d1220;
-  --surface: #121a2e;
-  --line: #26314e;
-  --text: #d7dceb;
-  --dim: #7b87a8;
-  --ok: #6fd08c;
-  --bad: #ff7a7a;
-  --warn: #e8b84b;
+  /* 표면 */
+  --bg: #0c1118;
+  --panel: #141b24;
+  --panel-2: #0f151d;
+  --deep: #080c11; /* 터미널 본문 바탕 — 추정이었는데 pen 실물로 확정됐다 */
+
+  /* 선 — ⚠️ AgentCommender와 강/약 명명이 반대다. **pen 명명을 따른다** */
+  --line: #2a3645;
+  --line-soft: #202b38;
+
+  /* 글자 */
+  --text: #e7edf4;
+  --muted: #78879a;
+  --text-soft: #b5c0cd;
+  --dim: #5f6e80;
+  --hover: #17202b;
+  --term-fg: #c1cdd9; /* 터미널 전경 — pen 리터럴에서 새로 나온 토큰 */
+
+  /* 계열색 6종 + 활성 헤더 배경 */
+  --blue: #5797f2;
+  --green: #62c174;
+  --cyan: #4cc9c0;
+  --amber: #d6a344;
+  --purple: #b58ae8;
+  --red: #ee6a70;
+  --blue-bg-soft: #17283c;
+
+  /* 옛 이름 — 기존 규칙이 그대로 돌게 남긴다. **새 규칙에는 쓰지 말 것.** */
+  --surface: var(--panel);
+  --ok: var(--green);
+  --bad: var(--red);
+  --warn: var(--amber);
 
   font-family: "Segoe UI", system-ui, sans-serif;
   font-size: 14px;
@@ -191,13 +218,34 @@ body {
   background: var(--bg);
 }
 
+/* ── ① 페인 헤더 — design.pen `yfkfh` UI Container / Terminal Pane ──────────
+   헤더 30px · 활성이면 배경 --blue-bg-soft · 아래 헤어라인 --line-soft · 좌우 pad 8
+   좌: 상태점(6px) → 이름(mono · --text) gap 6  /  우: 상태 라벨 → 줌 → 더보기 gap 8
+   페인 테두리: 활성 --blue · 그 외 --line
+
+   ⚠️ 셀렉터를 `[data-leaf]`로 좁힌 이유: 계측 화면(renderStaticGrid)의 `.panel`에는
+   그 속성이 없다. **A-3를 재는 화면의 기하를 1px도 바꾸지 않는다.**
+   상태 4단계는 `data-pane-status`가 정본이고 pane-header.ts가 적는다. */
+
+.panel[data-leaf] {
+  border: 1px solid var(--line);
+}
+
+/* 🔴 강조는 하나일 때만 강조다 — 테두리·배경까지 먹는 건 포커스와 attention 둘뿐이고,
+   attention은 "셸이 끝났다"라 화면에 동시에 여럿 뜨는 상태가 아니다. */
+.panel[data-leaf].focused,
+.panel[data-leaf][data-pane-status="attention"] {
+  border-color: var(--blue);
+}
+
 .panel-bar {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 2px 8px;
-  background: var(--surface);
-  border-bottom: 1px solid var(--line);
+  height: 30px;
+  padding: 0 8px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line-soft);
   font-family: "Cascadia Mono", Consolas, monospace;
   font-size: 11px;
   color: var(--dim);
@@ -205,49 +253,174 @@ body {
   flex: 0 0 auto;
 }
 
-/* 포커스 표시도 헤어라인으로 — 두꺼운 테두리는 셀 폭 검증 화면을 흔든다 */
-.panel.focused .panel-bar {
-  border-bottom-color: var(--ok);
-  color: var(--text);
+.panel.focused > .panel-bar,
+.panel[data-pane-status="attention"] > .panel-bar {
+  background: var(--blue-bg-soft);
 }
 
+/* 이름 — 헤더가 30px로 커진 만큼 11px 모노는 바닥에 깔린다. 디자인 실물의 무게에 맞춘다. */
 .panel-title {
   flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* 상태점 — 6px 원. `●` 글자는 감추고 상자로 그린다: 크기를 폰트 메트릭에 맡기면
+   기계마다 달라지고, 디자인이 말한 건 6px이다. */
 .panel-rend {
-  font-size: 8px;
-  color: var(--dim);
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  font-size: 0;
+  background: var(--muted);
 }
 
-.panel-rend.ok {
-  color: var(--ok);
+.panel[data-pane-status="active"] .panel-rend {
+  background: var(--green);
 }
 
-.panel-rend.warn {
-  color: var(--warn);
+.panel[data-pane-status="running"] .panel-rend {
+  background: var(--amber);
 }
 
-.panel-rend.bad {
-  color: var(--bad);
+.panel[data-pane-status="attention"] .panel-rend {
+  background: var(--blue);
 }
 
-.panel-btn {
+/* 렌더 판정(panels.ts paintVerdict)이 상태색을 이긴다 — WebGL이 빠진 채로 도는 것은
+   세션이 무슨 상태든 먼저 보여야 할 사실이다(main.ts 머리말). `.ok`는 덮지 않는다.
+   ⚠️ 위 상태 규칙과 특정도를 맞추려고 `[data-leaf]`를 한 겹 더 쓴다 — 순서에 안 기댄다. */
+.panel[data-leaf] .panel-rend.warn {
+  background: var(--warn);
+}
+
+.panel[data-leaf] .panel-rend.bad {
+  background: var(--bad);
+}
+
+/* S1 시절 임시 막대의 분할·닫기 버튼. 디자인 헤더에는 없다 — `⋯` 메뉴가 같은 일을 한다.
+   `panels.ts`는 세아 소유라 DOM은 그대로 두고 여기서 감춘다 (pane-header.ts §요청 1). */
+.panel-bar .panel-btn {
+  display: none;
+}
+
+/* 헤더 오른쪽 묶음 (pane-header.ts) — 상태 라벨 → 줌 → 더보기 */
+.pane-right {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pane-state {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.panel[data-pane-status="active"] .pane-state {
+  color: var(--green);
+}
+
+.panel[data-pane-status="running"] .pane-state {
+  color: var(--amber);
+}
+
+.panel[data-pane-status="attention"] .pane-state {
+  color: var(--blue);
+}
+
+/* 줌·더보기 — 글리프(⤢ ⋯)가 모노 스택에 없을 수 있어 기호 폰트를 앞에 둔다.
+   없는 글리프는 대체 폰트로 떨어지며 줄 높이가 흔들린다(30px 헤더에서 바로 보인다). */
+.pane-act {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
   background: none;
   border: 1px solid transparent;
   color: var(--dim);
-  font: inherit;
-  padding: 0 4px;
+  font-family: "Segoe UI Symbol", "Segoe UI", system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 1;
   cursor: pointer;
 }
 
-.panel-btn:hover {
+.pane-act:hover {
   color: var(--text);
   border-color: var(--line);
-  background: var(--bg);
+  background: var(--hover);
+}
+
+.pane-act:focus-visible {
+  outline: 1px solid var(--blue);
+  outline-offset: -2px;
+}
+
+/* 줌은 디자인에서 파랑이다 — 다만 그 파랑은 **포커스된 페인의 것**이다.
+   전부 파랗게 두면 헤더마다 파란 점이 하나씩 늘어 강조가 사라진다. */
+.panel.focused .pane-zoom,
+.pane-zoom.on {
+  color: var(--blue);
+}
+
+/* ⋯ 메뉴 — `document.body`에 붙는다(페인이 overflow: hidden이라 안에서 열면 잘린다).
+   피커(z-index 100)보다 아래다. 둘이 동시에 열리는 경로는 없다. */
+.pane-menu {
+  position: fixed;
+  z-index: 90;
+  min-width: 132px;
+  display: flex;
+  flex-direction: column;
+  padding: 4px 0;
+  background: var(--panel);
+  border: 1px solid var(--line);
+}
+
+.pane-menu[hidden] {
+  display: none;
+}
+
+.pane-menu-item {
+  background: none;
+  border: 0;
+  color: var(--text-soft);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.pane-menu-item:hover,
+.pane-menu-item:focus-visible {
+  background: var(--hover);
+  color: var(--text);
+  outline: none;
+}
+
+.pane-menu-item.danger:hover,
+.pane-menu-item.danger:focus-visible {
+  color: var(--red);
+}
+
+.pane-menu-item:disabled {
+  color: var(--dim);
+  cursor: default;
+}
+
+.pane-menu-item:disabled:hover {
+  background: none;
+  color: var(--dim);
 }
 
 .panel-body {
@@ -255,6 +428,14 @@ body {
   min-height: 0;
   padding: 4px 6px;
   overflow: hidden;
+}
+
+/* 본문 — 배경 --deep · 전경 --term-fg. 계측 화면은 건드리지 않는다(`[data-leaf]`).
+   ⚠️ xterm 캔버스 색의 정본은 `terminal.ts` THEME(세아 소유)라 여기서 맞추는 건
+   **여백뿐**이다. 두 값이 갈려 있다 — pane-header.ts §요청 3. */
+.panel[data-leaf] > .panel-body {
+  background: var(--deep);
+  color: var(--term-fg);
 }
 
 .panel-body .xterm {

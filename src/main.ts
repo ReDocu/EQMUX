@@ -32,6 +32,7 @@ import {
   type SplitDirection,
 } from "./panels";
 import { installFocusKeys, connectFocus } from "./focus";
+import { installPaneHeaders } from "./pane-header";
 import { installGlobalHandlers, logError, logInfo } from "./log";
 import { verifyBundledLicense } from "./license";
 
@@ -393,6 +394,10 @@ async function runApp(info: AppInfo, layoutEl: HTMLElement, stack: string | null
 
   // 계측·검증이 아닐 때만 건다 — 표본 구간에 디스크 훑기를 얹지 않는다.
   installAppDataReport();
+
+  // ① 페인 헤더(design.pen `yfkfh`) — 상태점·이름·상태 라벨·줌·더보기.
+  // 여기 두는 이유도 위 두 줄과 같다: 계측 표본 구간에 표시 코드를 얹지 않는다.
+  installPaneHeaders(manager);
 
   if (info.pty_probe.enabled) {
     const p = manager.focused();
