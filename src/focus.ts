@@ -1,9 +1,10 @@
 // S2-4 — 방향 포커스 이동(Ctrl+Alt+화살표) + 패널 줌(Ctrl+Shift+Z). (해원)
 //
-// 경계 (BRIEF-2026-08-05-S2-4 §1 · LAYOUT-S2-3 §3):
-//   panels.ts의 공개 API만 쓴다 — leafIds · activeLeaf · panelRect(s) · focus · onLayoutChanged.
-//   내부(DOM 구조·Panel 필드)에 기대지 않는다. 줌에 필요한 요소 접근자(panelElement)는
-//   세아에게 요청해 뒀고, 열리기 전까지 줌은 "보류" 로그만 남긴다 — 조용히 실패하지 않는다.
+// 경계 (BRIEF-2026-08-05-S2-4 §1 · LAYOUT-S2-3 §3 · d3d9e80):
+//   panels.ts의 공개 API만 쓴다 — leafIds · activeLeaf · panelRect · focus ·
+//   setZoom/zoomedLeaf · onLayoutChanged. 내부(DOM 구조·Panel 필드)에 기대지 않는다.
+//   줌의 정본 상태와 그리기는 panels.ts가 소유한다(요소 접근자를 안 여는 이유가 그 파일에 있다) —
+//   여기는 **언제 걸고 언제 풀지**만 정한다.
 //
 // 키 규칙 (KEYMAP-S2-7 §1-①):
 //   가로채는 것은 앱 층 키 둘뿐이다 — Ctrl+Alt+화살표 · Ctrl+Shift+Z.
@@ -16,7 +17,6 @@
 //   그 방향에 잎이 없으면 아무 일도 안 한다 — 감아 돌지 않는다(wrap 없음. 예측 가능성이 먼저다).
 
 import type { PanelRect } from "./panels";
-import { logError, logInfo } from "./log";
 
 /** panels.ts 공개 API 중 이 파일이 쓰는 부분 — 구조적 타입이라 PanelManager를 import하지 않는다. */
 export interface FocusHost {
@@ -24,12 +24,9 @@ export interface FocusHost {
   activeLeaf(): string | null;
   panelRect(leafId: string): PanelRect | null;
   focus(leafId: string): Promise<void>;
+  setZoom(leafId: string | null): void;
+  zoomedLeaf(): string | null;
   onLayoutChanged(cb: () => void): () => void;
-}
-
-/** 요소 접근자 — 세아에게 개방 요청한 API (2026-08-05). 열리면 줌이 그대로 동작한다. */
-interface MaybeElementHost {
-  panelElement?(leafId: string): HTMLElement | null;
 }
 
 type Direction = "left" | "right" | "up" | "down";
@@ -37,7 +34,6 @@ type Action = { kind: "move"; dir: Direction } | { kind: "zoom" };
 
 let installed = false;
 let host: FocusHost | null = null;
-let zoomedId: string | null = null;
 let unsubscribeLayout: (() => void) | null = null;
 
 /**
@@ -49,17 +45,26 @@ export function installFocusKeys(): void {
   if (installed) return;
   installed = true;
   window.addEventListener("keydown", onKeydown, { capture: true });
-  injectZoomCss();
 }
 
 /** 일반 기동에서 PanelManager가 준비된 뒤 연결한다. 이때부터 키가 실제로 동작한다. */
 export function connectFocus(h: FocusHost): void {
   host = h;
-  // 구조가 바뀌면(분할·닫기·드래그 확정) 줌을 푼다 — 숨은 패널 위에서 구조를 바꾸면
-  // 풀었을 때 화면이 다른 모양이 되어 있다. "줌 중 조작은 줌을 풀고 수행"이 그 결정이다.
   unsubscribeLayout?.();
+
+  // 줌 중 구조 변경(분할·닫기) → 줌을 풀고 보여준다. panels.ts는 새 잎을 숨은 채 만들고
+  // 그대로 두는 쪽을 택했고("언제 걸지는 호출자 몫"), 여기가 그 호출자다 — 숨은 채 생긴
+  // 패널을 사용자가 볼 방법이 없으면 "분할 키가 죽었다"로 읽힌다.
+  //
+  // ⚠️ setZoom 자체도 onLayoutChanged를 울린다 — 알림마다 무조건 풀면 줌이 걸리는 즉시
+  // 풀린다. 그래서 **잎 집합이 실제로 바뀌었을 때만** 푼다. (줌된 잎이 닫히는 경우는
+  // panels.ts reconcile이 스스로 푼다 — 여기서 할 일이 없다.)
+  let lastLeaves = h.leafIds().join(",");
   unsubscribeLayout = h.onLayoutChanged(() => {
-    if (zoomedId) unzoom();
+    const now = h.leafIds().join(",");
+    const changed = now !== lastLeaves;
+    lastLeaves = now;
+    if (changed && h.zoomedLeaf()) h.setZoom(null);
   });
 }
 
@@ -71,7 +76,7 @@ function onKeydown(e: KeyboardEvent): void {
   if (!action || !host) return; // 앱 층 키가 아니거나 미연결(계측 모드) — 전부 통과.
   e.preventDefault();
   e.stopPropagation(); // 캡처 단계라 xterm 핸들러까지 내려가지 않는다 — 터미널 키 누수 차단.
-  run(action);
+  run(host, action);
 }
 
 function match(e: KeyboardEvent): Action | null {
@@ -94,28 +99,29 @@ function match(e: KeyboardEvent): Action | null {
   return null;
 }
 
-function run(action: Action): void {
+function run(h: FocusHost, action: Action): void {
   if (action.kind === "zoom") {
-    toggleZoom();
+    // 토글 — panels.ts 머리말이 권하는 그 한 줄이다. 패널 하나면 이미 전체 화면이다.
+    if (h.zoomedLeaf() === null && h.leafIds().length < 2) return;
+    h.setZoom(h.zoomedLeaf() ? null : h.activeLeaf());
     return;
   }
   // 줌 상태에서의 방향 이동 — 줌을 풀고 이동한다. 숨은 패널로 포커스만 옮기면
   // "입력은 가는데 안 보이는" 상태가 된다. 확대는 일시적 상태고 이동이 이긴다.
-  if (zoomedId) unzoom();
-  const target = pickDirectional(action.dir);
-  if (target) void host!.focus(target);
+  if (h.zoomedLeaf()) h.setZoom(null);
+  const target = pickDirectional(h, action.dir);
+  if (target) void h.focus(target);
 }
 
 // ── 방향 탐색 — 화면 기하 ────────────────────────────────────────────────────
 
-function pickDirectional(dir: Direction): string | null {
-  const h = host!;
+function pickDirectional(h: FocusHost, dir: Direction): string | null {
   const activeId = h.activeLeaf();
   if (!activeId) return null;
   const from = h.panelRect(activeId);
   if (!from) return null;
 
-  // 분할선(잡는 폭 5px·선 1px)과 반올림을 흡수하는 허용치.
+  // 경계 반올림 흡수용 허용치. 분할선 폭과는 무관하다 — 이웃 판정은 rect 경계로 한다.
   const TOL = 2;
   const horizontal = dir === "left" || dir === "right";
 
@@ -163,72 +169,4 @@ function pickDirectional(dir: Direction): string | null {
     return gap(a) - gap(b); // ② 겹침이 같으면(전부 0 포함) 가장 가까운 잎
   });
   return candidates[0].leafId;
-}
-
-// ── 줌 ──────────────────────────────────────────────────────────────────────
-//
-// AgentCommender 방식 계승(브리프 §2 · FEATURE-DIFF B6): 다른 패널은 `visibility: hidden` —
-// DOM을 떼지 않으므로 세션이 안 죽고, 레이아웃이 유지되므로 숨은 패널에 크기 변화가 없다
-// (fit → pty_resize 폭주 없음). 확대 패널만 absolute로 컨테이너 전체를 덮는다 —
-// 크기가 바뀐 것은 이 패널 하나뿐이라 panels.ts의 ResizeObserver가 fit을 정확히 1회 돌린다.
-
-function toggleZoom(): void {
-  if (zoomedId) {
-    unzoom();
-    return;
-  }
-  const h = host!;
-  if (h.leafIds().length < 2) return; // 패널 하나는 이미 전체 화면이다.
-  const activeId = h.activeLeaf();
-  if (!activeId) return;
-
-  const elOf = (h as unknown as MaybeElementHost).panelElement?.bind(h);
-  if (!elOf) {
-    // API가 아직 없다 — 조용히 무시하면 "키가 죽었다"로 읽힌다. 이유를 남긴다.
-    logInfo("줌 보류 — panels.ts panelElement API 대기 중 (세아에게 요청함, 2026-08-05)");
-    return;
-  }
-  const target = elOf(activeId);
-  if (!target) {
-    logError("줌 실패 — 활성 잎의 요소를 찾을 수 없다", activeId);
-    return;
-  }
-  for (const id of h.leafIds()) {
-    if (id === activeId) continue;
-    elOf(id)?.classList.add("eq-zoom-hidden");
-  }
-  target.classList.add("eq-zoomed");
-  zoomedId = activeId;
-}
-
-function unzoom(): void {
-  zoomedId = null;
-  // 기억해 둔 id가 아니라 **지금 화면의 전 잎**을 훑는다 — 줌 중에 잎이 죽었어도(닫기)
-  // 남은 요소의 클래스를 전부 걷어야 숨은 패널이 남지 않는다.
-  const h = host;
-  const elOf = h && (h as unknown as MaybeElementHost).panelElement?.bind(h);
-  if (h && elOf) {
-    for (const id of h.leafIds()) {
-      elOf(id)?.classList.remove("eq-zoomed", "eq-zoom-hidden");
-    }
-  }
-  // 요소를 못 얻는 경로가 남아 있는 동안의 안전망 — 클래스가 남으면 패널이 안 보인다.
-  for (const el of document.querySelectorAll(".eq-zoomed, .eq-zoom-hidden")) {
-    el.classList.remove("eq-zoomed", "eq-zoom-hidden");
-  }
-}
-
-/**
- * 줌 CSS — focus.ts가 자기 스타일을 자기 파일에서 주입한다(styles.css는 세아 영역과 섞이지 않게).
- * `#layout`에 `position: relative`가 필요하다 — absolute 확대의 기준 상자다.
- * 기존 styles.css는 #layout에 position을 주지 않으므로 추가이지 변경이 아니다.
- */
-function injectZoomCss(): void {
-  const style = document.createElement("style");
-  style.textContent = [
-    "#layout { position: relative; }",
-    ".panel.eq-zoomed { position: absolute; inset: 0; z-index: 10; }",
-    ".panel.eq-zoom-hidden { visibility: hidden; }",
-  ].join("\n");
-  document.head.appendChild(style);
 }
