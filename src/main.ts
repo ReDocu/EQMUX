@@ -7,6 +7,7 @@
 // 분기 순서는 lib.rs의 충돌 경고와 같은 말이어야 한다: 폭 > 지연 > 패널 검증 > 프리셋 확인 > 일반.
 
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { Terminal } from "@xterm/xterm";
 
 import {
@@ -32,7 +33,11 @@ import {
   type SplitDirection,
 } from "./panels";
 import { installFocusKeys, connectFocus } from "./focus";
-import { installPaneHeaders } from "./pane-header";
+import { installPickerKeys, connectPicker, openPickerNow } from "./layout-picker";
+import { installWorkspaceStatus } from "./statusbar";
+import { installPaneHeaders, type PaneHeaders } from "./pane-header";
+import { installDash } from "./dash";
+import { icon } from "./icons";
 import { installGlobalHandlers, logError, logInfo } from "./log";
 import { verifyBundledLicense } from "./license";
 
@@ -151,6 +156,9 @@ async function main(): Promise<void> {
   // S2-4 — 앱 층 키(포커스 이동·줌) 리스너. 계측 모드 포함 전 경로에 건다 —
   // 실사용 키 입력은 항상 이 리스너를 지나므로, A-3도 같은 조건에서 재야 회귀를 잡는다.
   installFocusKeys();
+  // S2-12 — 배치 피커(Ctrl+Shift+L). 같은 이유로 계측 모드에도 건다: 리스너가 하나 더
+  // 얹혔다는 사실이 A-3 표본에 들어가야 회귀를 잡는다.
+  installPickerKeys();
 
   // 동봉 폰트의 라이선스 전문이 이 바이너리 안에 있는지 확인한다(OFL 1.1 조건 2).
   // 지연 계측 중에는 돌리지 않는다 — 4KB라도 표본 구간에 얹힌 일은 A-3 숫자에 섞인다.
@@ -375,8 +383,16 @@ async function runApp(info: AppInfo, layoutEl: HTMLElement, stack: string | null
     onFirstTerminal: async (handle) => {
       firstHandle = handle;
       cellWidths = await measureCells(handle.term);
-      // 판정을 터미널에 먼저 찍는다. 상태줄이나 IPC가 죽어도 이건 남는다.
-      writeDemo(handle.term, handle.status, `셸 연결 중 — ${info.shell}` + stackNote(info), false);
+      // 데모 배너(writeDemo)는 안 찍는다 — 팀장님 최소화 지시(2026-08-06): 셸만 바로 뜬다.
+      // 렌더 판정은 상태바(#renderer)와 IPC(reportRenderer)가 이미 들고 있다.
+      // 단 **폴백은 예외다** — WebGL이 빠진 채 도는 것은 조용히 넘길 사실이 아니다(S1-3 규칙).
+      const v = verdictOf(handle.status);
+      if (v.sgr !== "32") {
+        handle.term.write(`\x1b[${v.sgr}m⚠ 렌더 경로 — ${v.text}\x1b[0m\r\n`);
+      }
+      if (info.font_probe.stack) {
+        handle.term.write(stackNote(info).trimStart() + "\r\n");
+      }
     },
     onFocus: (panel) => {
       const shellEl = el("#shell");
@@ -396,6 +412,7 @@ async function runApp(info: AppInfo, layoutEl: HTMLElement, stack: string | null
 
   await manager.boot();
   connectFocus(manager); // S2-4 — 이때부터 Ctrl+Alt+화살표·Ctrl+Shift+Z가 동작한다.
+  connectPicker(manager); // S2-12 — 이때부터 Ctrl+Shift+L이 동작한다.
 
   // `--panes=N` — 같은 화면을 매번 같은 방법으로 만든다. A2 측정의 재현 조건이다.
   if (info.panes.count > manager.size) {
@@ -430,9 +447,21 @@ async function runApp(info: AppInfo, layoutEl: HTMLElement, stack: string | null
   // 계측·검증이 아닐 때만 건다 — 표본 구간에 디스크 훑기를 얹지 않는다.
   installAppDataReport();
 
+  // S2-13 — 워크스페이스 상태바·컨텍스트 바. 여기 두는 이유는 위 줄과 같다:
+  // 계측 표본 구간에 표시 코드를 얹으면 재는 조건이 달라진다 (브리프 §2).
+  installWorkspaceStatus({
+    manager,
+    workspaceRoot: info.paths.workspace_root,
+    shell: info.shell,
+  });
+
   // ① 페인 헤더(design.pen `yfkfh`) — 상태점·이름·상태 라벨·줌·더보기.
   // 여기 두는 이유도 위 두 줄과 같다: 계측 표본 구간에 표시 코드를 얹지 않는다.
-  installPaneHeaders(manager);
+  const paneHeaders = installPaneHeaders(manager);
+
+  // D0~D4 — 관제 화면. **페인 헤더 뒤**에 둔다: 카드의 상태점·라벨이 그 판정을 읽어 온다
+  // (`dash.ts` §경계 — 같은 사실을 두 곳에서 세지 않는다).
+  installDashboard(manager, paneHeaders, info);
 
   if (info.pty_probe.enabled) {
     const p = manager.focused();
@@ -895,6 +924,134 @@ function fontVerdictLines(r: FontProbeResult): string[] {
     }
   }
   return lines;
+}
+
+/** 화면 두 개. 터미널과 관제는 **자리를 나눠 쓴다** — 같이 보이는 경우가 없다(D0). */
+type View = "terminal" | "dash";
+
+/**
+ * `D0`~`D4` — 관제 화면을 걸고 상단 바에 전환 탭을 만든다.
+ *
+ * **`hidden`으로 바꿔 끼운다** — 관제를 터미널 위에 겹치지 않는다. 겹치려면 레이아웃을
+ * 감싸는 상자가 하나 더 필요한데, flex 안에 flex를 겹쳐서 xterm의 행 수가 한 칸 밀린
+ * 전례가 있다(`styles.css` `.panel-stack` 절 — rows 15가 14로 줄었다).
+ * 그 기하 위에서 A-2·A-3·A-4를 쟀다. 화면 하나 붙이자고 그걸 다시 열지 않는다.
+ *
+ * 숨은 동안 터미널이 찌그러질 걱정은 없다: `display:none`이면 부모의 계산 폭·높이가
+ * `auto`라 FitAddon이 NaN 치수를 만들고 스스로 되돌아 나간다 — `pty_resize`가 안 나간다.
+ * 돌아올 때 ResizeObserver가 다시 울려 격자가 맞춰진다(`panels.ts` fitPanel).
+ */
+function installDashboard(manager: PanelManager, paneHeaders: PaneHeaders, info: AppInfo): void {
+  const layoutEl = el<HTMLElement>("#layout");
+  const dashEl = el<HTMLElement>("#dash");
+  const tabsEl = el<HTMLElement>("#viewTabs");
+  const tabs = new Map<View, HTMLButtonElement>();
+
+  function show(view: View): void {
+    const onDash = view === "dash";
+    dash.setVisible(onDash);
+    layoutEl.hidden = onDash;
+    for (const [v, b] of tabs) {
+      b.classList.toggle("active", v === view);
+      b.setAttribute("aria-selected", v === view ? "true" : "false");
+    }
+    // 터미널로 돌아오면 입력이 터미널로 가야 한다 — 포커스를 명시적으로 돌려준다.
+    // 안 돌려주면 마지막으로 누른 탭 버튼이 포커스를 들고 있어 키가 터미널에 안 닿는다.
+    if (!onDash) {
+      const leaf = manager.activeLeaf();
+      if (leaf) void manager.focus(leaf);
+    }
+  }
+
+  const dash = installDash(dashEl, {
+    host: manager,
+    status: paneHeaders,
+    shell: info.shell,
+    workspaceRoot: info.paths.workspace_root,
+    // "그냥 하나 더" — 제일 넓은 패널을 긴 축으로 자른다. 그 계산은 이미 코어에 있다
+    // (`panels.ts` ensurePanes — `--panes=N`이 쓰는 그 함수다).
+    onAddSession: () => {
+      void ensurePanes(manager, manager.size + 1).catch((e) => logError("세션 추가 실패", e));
+    },
+    // 배치 버튼 — `Ctrl+Shift+L`과 같은 피커다. 두 번째 구현을 만들지 않는다.
+    onOpenPicker: () => openPickerNow(),
+    // 전체 종료 — 창을 닫는다. PTY는 백엔드가 프로세스와 함께 정리한다(pty.rs).
+    onCloseAll: () => {
+      void getCurrentWindow()
+        .close()
+        .catch((e) => logError("전체 종료 실패", e));
+    },
+    // 카드를 누르면 그 세션으로 간다(D4). 포커스는 `dash.ts`가 이미 옮겼다 — 여기는 화면만 바꾼다.
+    onGoToTerminal: () => show("terminal"),
+  });
+
+  // 탭 아이콘·순서는 팀장님이 준 내비 시안 그대로: [관제] [터미널] (2026-08-06).
+  // 순서는 표시일 뿐 기동 화면과 무관하다 — 기동은 여전히 터미널이다(아래).
+  const LABELS: [View, string, Parameters<typeof icon>[0]][] = [
+    ["dash", "관제", "layout-dashboard"],
+    ["terminal", "터미널", "square-terminal"],
+  ];
+  for (const [view, label, glyph] of LABELS) {
+    const b = document.createElement("button");
+    b.className = "view-tab";
+    b.type = "button";
+    b.append(icon(glyph), document.createTextNode(label));
+    b.setAttribute("role", "tab");
+    b.addEventListener("click", () => show(view));
+    tabs.set(view, b);
+    tabsEl.appendChild(b);
+  }
+  tabsEl.setAttribute("role", "tablist");
+  tabsEl.hidden = false;
+
+  // 패널 내비(시안 우측) — 배치만 동작하고, 사이드 패널 다섯(P0~P5 세아)은 생길 때까지
+  // 비활성으로 자리만 잡는다. 시안이 자리를 스펙으로 정했으므로 감추지 않고 흐리게 둔다.
+  const navEl = el<HTMLElement>("#panelNav");
+  const NAV: [string, Parameters<typeof icon>[0], (() => void) | null][] = [
+    ["배치", "layout-grid", () => openPickerNow()],
+    ["임무", "briefcase-business", null],
+    ["git", "git-branch", null],
+    ["포트", "radio", null],
+    ["로그", "file-text", null],
+    ["브라우저", "globe", null],
+  ];
+  for (const [label, glyph, run] of NAV) {
+    const b = document.createElement("button");
+    b.className = "panel-nav-item";
+    b.type = "button";
+    b.append(icon(glyph), document.createTextNode(label));
+    if (run) {
+      b.title = label === "배치" ? "페인 배치 (Ctrl+Shift+L)" : label;
+      b.addEventListener("click", run);
+    } else {
+      b.disabled = true;
+      b.title = `${label} 패널 — 준비 중`;
+    }
+    navEl.appendChild(b);
+  }
+
+  // 일반 인스턴스 배지는 정보가 0이라 시안대로 감춘다. 격리는 경고라 남긴다.
+  // 계측 모드는 이 함수에 안 들어오므로 그 화면의 막대 높이는 그대로다.
+  if (!info.paths.isolated) el("#mode").hidden = true;
+
+  // D0 화면 전환 단축키 — Ctrl+Shift+D (T9). 피커(Ctrl+Shift+L)와 같은 캡처 방식:
+  // 터미널로 키가 내려가기 전에 가로챈다. 계측 모드에는 이 함수가 안 불려 리스너도 없다.
+  window.addEventListener(
+    "keydown",
+    (e) => {
+      if (!e.ctrlKey || !e.shiftKey || e.altKey || e.metaKey) return;
+      // e.code 우선(한글 자판에서도 물리 D — 피커와 같은 판단), e.key는 합성 입력 폴백:
+      // SendInput류 도구가 스캔코드 없이 키를 넣으면 code가 빈 값으로 온다(실측).
+      if (e.code !== "KeyD" && e.key.toLowerCase() !== "d") return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (!e.repeat) show(dash.visible() ? "terminal" : "dash");
+    },
+    { capture: true },
+  );
+
+  // 기동은 터미널이다. 관제를 먼저 보여주면 셸이 뜨는 화면을 사용자가 못 본다.
+  show("terminal");
 }
 
 /**

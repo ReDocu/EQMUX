@@ -13,11 +13,30 @@
       <header class="bar">
         <span class="brand">EQMUX</span>
         <span class="ver" id="ver">—</span>
+
+        <!-- D0 화면 전환 (design.pen `Team Tabs` 자리). pen은 팀 탭 4개를 두지만
+             팀 개념이 제품에 없어 화면 둘로만 쓴다. 계측 모드에서는 dash.ts가 안 붙어
+             이 막대도 숨는다 — 그 화면의 기하를 1px도 바꾸지 않는다. -->
+        <span class="view-tabs" id="viewTabs" hidden></span>
+
+        <!-- 격리 인스턴스 경고. 일반 인스턴스에서는 main.ts(installDashboard)가 숨긴다 —
+             계측 모드에서는 그대로 보여서 그 화면의 막대 높이가 안 바뀐다. -->
         <span class="badge" id="mode">확인 중</span>
+
+        <span class="ctx-gap"></span>
+
+        <!-- 패널 내비 (design.pen `Panel Navigation`). 항목은 main.ts가 채운다 —
+             배치만 동작하고, 사이드 패널(P트랙) 다섯은 생길 때까지 비활성이다. -->
+        <nav class="panel-nav" id="panelNav"></nav>
       </header>
 
       <!-- 레이아웃 트리(S2-2)가 그려지는 자리. 계측 1패널 모드는 .single로 곧장 마운트한다. -->
       <div class="layout" id="layout"></div>
+
+      <!-- D0~D4 관제 화면 (design.pen `Q2sqrD`). 터미널과 **자리를 나눠 쓴다** —
+           둘이 같이 보이는 경우가 없다. 숨어 있는 동안 dash.ts는 갱신을 멈춘다(A-3).
+           비어 있는 채로 두는 이유: 안 열면 DOM이 0이다(유휴 RAM · 피커와 같은 판단). -->
+      <div class="dash" id="dash" hidden></div>
 
       <!-- 렌더 경로를 항상 보이게 둔다. 조용한 DOM 폴백이 제일 위험하다. -->
       <footer class="status">
@@ -25,9 +44,22 @@
         <!-- 어떤 셸이 실제로 떴는지. "pwsh를 띄웠다고 믿는 것"과 구분한다. -->
         <span class="sh" id="shell">셸 연결 중…</span>
         <span class="gpu" id="gpu"></span>
+        <!-- S2-13 워크스페이스 상태바 좌측 (design.pen `n3r5tO`). 값이 없으면 스스로 숨는다. -->
+        <span class="ws" id="wsPanes" hidden></span>
+        <span class="ws" id="wsLayout" hidden></span>
+        <span class="ws" id="wsOutput" hidden></span>
+        <!-- 폰트 크기 — 상단 바가 패널 내비로 바뀌면서 여기로 내려왔다(2026-08-06). -->
+        <span class="ws" id="ctxFont" hidden></span>
+
+        <!-- 여백을 span 하나가 전부 먹는다. .data/.lat의 margin-left:auto에 기대면
+             둘 다 숨은 계측 모드에서 오른쪽 정렬이 풀린다. -->
+        <span class="ws-gap"></span>
+
         <!-- 앱 데이터 크기(S2-1b). 배포물 3.14MB 옆에 사용자가 실제로 지불하는 용량을 같이 둔다. -->
         <span class="data" id="appdata" hidden></span>
         <span class="lat" id="latency" hidden></span>
+        <!-- 작업 경로는 오른쪽 끝 (design.pen `RBrCx`). -->
+        <span class="ws cwd" id="wsCwd" hidden></span>
       </footer>
     </main>
   </body>

@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "메인 창 권한. 필요한 것만 연다 — 기본값을 통째로 열지 않는다.",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "core:window:allow-close"]
 }

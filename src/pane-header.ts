@@ -8,9 +8,9 @@
 //
 //     **남이 만든 요소는 지우지도 옮기지도 않는다.**
 //
-//   임시 분할·닫기 버튼(`◫ ⬓ ×`)도 지우지 않는다 — `styles.css`에서 감추고 `⋯` 메뉴가
-//   같은 일(분할·닫기)을 대신한다. 세아가 헤더 DOM을 디자인대로 다시 짜면 이 파일의
-//   `ensureCluster`만 사라지면 된다 (→ §"세아에게 요청한 것" 1).
+//   임시 버튼(`＋ ◫ ⬓ ×`)도 지우지 않는다 — `styles.css`에서 감춘다.
+//   ⚠️ `⋯` 메뉴(새 탭·분할)는 팀장님 지시로 **제거됐다**(2026-08-06). 헤더 조작은
+//   [상태 · 줌 · ×] 셋이 전부다. 분할은 관제의 새 세션·배치 피커가, 탭은 `T10`이 받는다.
 //
 // 조작은 전부 공개 API로만 한다 — split · close · setZoom/zoomedLeaf · focus ·
 // leafIds · activeLeaf · onLayoutChanged. `layout_*` 명령을 직접 부르는 곳은 아래
@@ -21,9 +21,11 @@
 //   `pty://data`는 출력 한 청크마다 오는 hot path다. 여기 콜백은 **Map에 시각 하나 적는 것**이
 //   전부다. DOM은 주기(500ms)에만, 그것도 값이 변했을 때만 만진다.
 //
-// 상태 4단계 (브리프 ①):
-//   attention = --blue · active = --green · running = --amber · waiting = --muted
-//   🔴 **강조는 하나일 때만 강조다.** `attention`만 배경과 테두리까지 먹고(styles.css),
+// 상태 4단계 (브리프 ① · 색은 팀장님 결과 시안 2026-08-06):
+//   attention = --red · active = --green · running = --blue · waiting = --muted
+//   (running이 amber였다가 시안대로 blue가 됐다 — 통계 `진행`의 pen 원색과도 이제 일치한다.
+//    비운 amber는 어디에도 재배정하지 않았다. attention은 "셸이 끝났다"라 red가 맞다.)
+//   🔴 **강조는 하나일 때만 강조다.** `attention`만 테두리까지 먹고(styles.css),
 //   나머지는 점과 라벨 색만 바꾼다.
 //
 //   어디서 오는 값인가 — 지어내지 않는다:
@@ -38,7 +40,7 @@
 
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
-import { type SplitDirection } from "./panels";
+import { icon, setIcon, type IconName } from "./icons";
 import { logError } from "./log";
 
 export type PaneStatus = "attention" | "active" | "running" | "waiting";
@@ -50,7 +52,6 @@ export interface PaneHeaderHost {
   focus(leafId: string): Promise<void>;
   setZoom(leafId: string | null): void;
   zoomedLeaf(): string | null;
-  split(leafId: string, direction: SplitDirection): Promise<void>;
   close(leafId: string): Promise<string[]>;
   onLayoutChanged(cb: () => void): () => void;
   /** `S2-13` 요청 1 — 잎별 PTY. 세아가 열어 줬다(`panels.ts`). */
@@ -62,6 +63,14 @@ export interface PaneHeaders {
   refresh(): void;
   /** 상태를 밖에서 고정한다. `null`이면 자동 판정으로 되돌린다. */
   setPaneStatus(leafId: string, status: PaneStatus | null): void;
+  /**
+   * 지금 그 페인의 상태 — `D1`·`D3` 관제 카드가 읽는다 (`dash.ts`).
+   *
+   * **왜 읽기 창구를 여는가**: `running` 판정은 `pty://data`(출력 한 청크마다 오는 hot path)를
+   * 듣고 있어야 나온다. 관제가 자기 리스너를 하나 더 걸면 그 비용이 A-3에 그대로 얹히고,
+   * 같은 사실을 두 곳에서 세니 값도 갈린다. 여기 있는 값을 넘겨주는 편이 싸고 정확하다.
+   */
+  statusOf(leafId: string): PaneStatus;
   dispose(): void;
 }
 
@@ -71,12 +80,13 @@ const REFRESH_MS = 500;
 /** 이 시간 안에 출력이 있었으면 `running`. 짧으면 깜빡이고, 길면 끝난 뒤에도 도는 척한다. */
 const RUNNING_IDLE_MS = 1200;
 
-/** 디자인이 쓰는 대문자 토큰 그대로다(`yfkfh`의 `ACTIVE`). 설명은 툴팁에 한국어로 둔다. */
+/** 디자인이 쓰는 대문자 토큰 그대로다(`ACTIVE` · 대기는 시안 실물이 `IDLE`이다, 2026-08-06).
+    설명은 툴팁에 한국어로 둔다. */
 const LABEL: Record<PaneStatus, string> = {
   attention: "ATTENTION",
   active: "ACTIVE",
   running: "RUNNING",
-  waiting: "WAITING",
+  waiting: "IDLE",
 };
 
 const TIP: Record<PaneStatus, string> = {
@@ -105,7 +115,6 @@ export function installPaneHeaders(host: PaneHeaderHost): PaneHeaders {
   const forced = new Map<string, PaneStatus>();
 
   const unlisten: UnlistenFn[] = [];
-  const menu = createMenu(host);
 
   // hot path — Map에 시각 하나. 여기서 DOM을 만지면 그게 곧 A-3에 얹힌다.
   void listen<{ id: string }>("pty://data", (ev) => {
@@ -179,7 +188,7 @@ export function installPaneHeaders(host: PaneHeaderHost): PaneHeaders {
     for (const leafId of leaves) {
       const panel = panelElement(leafId);
       if (!panel) continue;
-      const cluster = ensureCluster(clusters, panel, leafId, host, menu);
+      const cluster = ensureCluster(clusters, panel, leafId, host);
       if (!cluster) continue;
 
       const status = statusOf(leafId, active, now);
@@ -190,15 +199,21 @@ export function installPaneHeaders(host: PaneHeaderHost): PaneHeaders {
       setAttr(cluster.state, "title", attention.get(leafId) ?? TIP[status]);
 
       const on = zoomed === leafId;
-      setText(cluster.zoom, on ? "⤡" : "⤢");
+      // 디자인 글리프: 줌 = maximize-2, 해제 = minimize-2 (yfkfh `Terminal Zoom`).
+      setIcon(cluster.zoom, on ? "minimize-2" : "maximize-2");
       cluster.zoom.classList.toggle("on", on);
       setAttr(cluster.zoom, "title", on ? "줌 해제 (Ctrl+Shift+Z)" : "이 페인만 크게 (Ctrl+Shift+Z)");
       setAttr(cluster.zoom, "aria-pressed", on ? "true" : "false");
+
+      // × — 마지막 페인은 백엔드가 안 닫아 준다(layout.rs). 눌러서 아무 일도 안 나는
+      // 버튼을 두지 않는다 — 메뉴의 닫기 항목과 같은 규칙으로 잠근다.
+      const lastOne = leaves.length < 2;
+      if (cluster.close.disabled !== lastOne) cluster.close.disabled = lastOne;
+      setAttr(cluster.close, "title", lastOne ? "마지막 페인은 닫을 수 없습니다" : "페인 닫기");
     }
   }
 
   const offLayout = host.onLayoutChanged(() => {
-    menu.close();
     refreshPtyMap();
   });
 
@@ -213,12 +228,14 @@ export function installPaneHeaders(host: PaneHeaderHost): PaneHeaders {
       else forced.delete(leafId);
       refresh();
     },
+    // 판정을 여기서 다시 하지 않는다 — 위 `statusOf`를 그대로 부른다.
+    // 두 번째 구현을 두면 페인 헤더와 관제 카드가 다른 색을 보여주는 날이 온다.
+    statusOf: (leafId) => statusOf(leafId, host.activeLeaf(), performance.now()),
     dispose: () => {
       window.clearInterval(timer);
       offLayout();
       for (const un of unlisten) un();
       unlisten.length = 0;
-      menu.dispose();
       clusters.clear();
     },
   };
@@ -226,7 +243,7 @@ export function installPaneHeaders(host: PaneHeaderHost): PaneHeaders {
 
 // ── 헤더 오른쪽 묶음 ─────────────────────────────────────────────────────────
 //
-// 디자인 `yfkfh`의 헤더 오른쪽은 셋이다: 상태 라벨 → 줌 → 더보기 (gap 8).
+// 팀장님 결과 시안(2026-08-06): 상태 라벨 → 줌 → ×. 이게 전부다 — `⋯` 메뉴는 제거됐다.
 // 왼쪽(상태점 · 이름)은 이미 `panels.ts`가 만들어 두었으므로 **다시 만들지 않는다** —
 // 모양만 styles.css에서 디자인에 맞춘다.
 
@@ -234,7 +251,7 @@ interface Cluster {
   root: HTMLElement;
   state: HTMLElement;
   zoom: HTMLButtonElement;
-  more: HTMLButtonElement;
+  close: HTMLButtonElement;
 }
 
 function ensureCluster(
@@ -242,7 +259,6 @@ function ensureCluster(
   panel: HTMLElement,
   leafId: string,
   host: PaneHeaderHost,
-  menu: PaneMenu,
 ): Cluster | null {
   const cached = cache.get(leafId);
   // isConnected 확인: 캐시가 죽은 요소를 들고 있으면 화면은 안 바뀌는데 코드는 도는 상태가 된다.
@@ -257,7 +273,7 @@ function ensureCluster(
   const state = document.createElement("span");
   state.className = "pane-state";
 
-  const zoom = actionButton("⤢");
+  const zoom = actionButton("maximize-2");
   zoom.classList.add("pane-zoom");
   zoom.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -265,148 +281,28 @@ function ensureCluster(
     host.setZoom(host.zoomedLeaf() === leafId ? null : leafId);
   });
 
-  const more = actionButton("⋯");
-  more.classList.add("pane-more");
-  more.title = "더보기";
-  more.setAttribute("aria-haspopup", "menu");
-  // click이 아니라 mousedown이다 — 메뉴 바깥 닫기도 mousedown이라, click으로 열면
-  // "바깥 닫기 → 다시 열기"가 되어 버튼으로는 영영 안 닫힌다. 여기서 전파를 끊고
-  // 포커스는 직접 준다(panels.ts가 mousedown으로 포커스를 잡기 때문이다).
-  more.addEventListener("mousedown", (e) => {
-    e.preventDefault();
+  const close = actionButton("x");
+  close.classList.add("pane-close");
+  close.addEventListener("click", (e) => {
     e.stopPropagation();
-    void host.focus(leafId);
-    menu.toggle(leafId, more);
+    void host.close(leafId).catch((err) => logError(`페인 닫기 실패 ${leafId}`, err));
   });
 
-  root.append(state, zoom, more);
+  root.append(state, zoom, close);
   bar.appendChild(root);
 
-  const cluster: Cluster = { root, state, zoom, more };
+  const cluster: Cluster = { root, state, zoom, close };
   cache.set(leafId, cluster);
   return cluster;
 }
 
-function actionButton(glyph: string): HTMLButtonElement {
+function actionButton(name: IconName): HTMLButtonElement {
   const b = document.createElement("button");
   b.className = "pane-act";
   b.type = "button";
-  b.textContent = glyph;
+  b.dataset.icon = name;
+  b.appendChild(icon(name));
   return b;
-}
-
-// ── ⋯ 메뉴 ───────────────────────────────────────────────────────────────────
-//
-// 디자인 헤더에는 분할·닫기 버튼이 없다. 그 조작이 없어진 게 아니라 여기로 들어왔다 —
-// 임시 막대의 `◫ ⬓ ×`는 styles.css에서 감추고 같은 일을 이 메뉴가 한다.
-// 메뉴는 `document.body`에 붙인다: 페인은 `overflow: hidden`이라 안에서 열면 잘린다.
-
-interface PaneMenu {
-  toggle(leafId: string, anchor: HTMLElement): void;
-  close(): void;
-  dispose(): void;
-}
-
-function createMenu(host: PaneHeaderHost): PaneMenu {
-  let el: HTMLElement | null = null;
-  let items: HTMLButtonElement[] = [];
-  let openLeaf: string | null = null;
-
-  const close = (): void => {
-    if (!openLeaf) return;
-    openLeaf = null;
-    el?.setAttribute("hidden", "");
-    document.removeEventListener("mousedown", onOutside);
-    window.removeEventListener("keydown", onKey, true);
-    window.removeEventListener("resize", close);
-  };
-
-  const onOutside = (e: MouseEvent): void => {
-    if (el && e.target instanceof Node && el.contains(e.target)) return;
-    close();
-  };
-
-  const onKey = (e: KeyboardEvent): void => {
-    if (e.key !== "Escape") return;
-    e.preventDefault();
-    e.stopPropagation(); // 터미널로 안 내려간다 — 열려 있는 동안은 이쪽이 먼저다.
-    close();
-  };
-
-  const build = (): HTMLElement => {
-    if (el) return el;
-    el = document.createElement("div");
-    el.className = "pane-menu";
-    el.setAttribute("role", "menu");
-    el.setAttribute("hidden", "");
-
-    const item = (label: string, extra: string, run: (leafId: string) => void): HTMLButtonElement => {
-      const b = document.createElement("button");
-      b.className = `pane-menu-item${extra ? ` ${extra}` : ""}`;
-      b.type = "button";
-      b.textContent = label;
-      b.setAttribute("role", "menuitem");
-      b.addEventListener("click", () => {
-        const leafId = openLeaf;
-        close();
-        if (leafId) run(leafId);
-      });
-      return b;
-    };
-
-    items = [
-      item("좌우 분할", "", (id) => void host.split(id, "row")),
-      item("상하 분할", "", (id) => void host.split(id, "column")),
-      item("페인 닫기", "danger", (id) => void host.close(id)),
-    ];
-    el.append(...items);
-    document.body.appendChild(el);
-    return el;
-  };
-
-  const open = (leafId: string, anchor: HTMLElement): void => {
-    const box = build();
-    openLeaf = leafId;
-    box.removeAttribute("hidden");
-
-    // 마지막 잎은 백엔드가 안 닫아 준다(`layout.rs`) — 눌러 놓고 아무 일도 안 일어나는
-    // 항목을 두지 않는다. 상한(분할)은 panels.ts가 판단하므로 여기서 수를 박지 않는다.
-    const last = items[items.length - 1];
-    last.disabled = host.leafIds().length < 2;
-    last.title = last.disabled ? "마지막 페인은 닫을 수 없습니다" : "";
-
-    // 자리 잡기 — 버튼 오른쪽 끝에 맞추고, 화면 밖으로 나가면 안쪽으로 접는다.
-    const r = anchor.getBoundingClientRect();
-    const w = box.offsetWidth;
-    const h = box.offsetHeight;
-    const left = Math.max(4, Math.min(r.right - w, window.innerWidth - w - 4));
-    const below = r.bottom + 2;
-    const top = below + h > window.innerHeight - 4 ? Math.max(4, r.top - h - 2) : below;
-    box.style.left = `${left}px`;
-    box.style.top = `${top}px`;
-
-    document.addEventListener("mousedown", onOutside);
-    window.addEventListener("keydown", onKey, true);
-    window.addEventListener("resize", close);
-    items.find((b) => !b.disabled)?.focus();
-  };
-
-  return {
-    toggle: (leafId, anchor) => {
-      if (openLeaf === leafId) close();
-      else {
-        close();
-        open(leafId, anchor);
-      }
-    },
-    close,
-    dispose: () => {
-      close();
-      el?.remove();
-      el = null;
-      items = [];
-    },
-  };
 }
 
 // ── 잔손 ─────────────────────────────────────────────────────────────────────
