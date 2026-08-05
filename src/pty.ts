@@ -60,6 +60,10 @@ export class PtyLink {
     return this.info?.shell ?? null;
   }
 
+  get pid(): number | null {
+    return this.info?.pid ?? null;
+  }
+
   async start(opts: PtyLinkOptions = {}): Promise<PtyInfo> {
     // 이벤트를 먼저 건다. 셸은 뜨자마자 프롬프트를 뱉으므로,
     // spawn 뒤에 걸면 첫 출력을 놓친다 — 화면이 빈 채로 시작한다.

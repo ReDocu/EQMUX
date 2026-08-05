@@ -251,6 +251,78 @@ impl FontProbeConfig {
     }
 }
 
+/// `S2-2` 패널 분할 (`--panes` · `--panes-probe`).
+///
+/// # 왜 플래그로 여는가
+///
+/// **관문 A2의 조건이 "터미널 4개"다**(`issue.md` #11). 손으로 세 번 분할해서 만든 상태는
+/// 재현되지 않는다 — 누가 언제 어떤 순서로 눌렀는지가 값에 섞인다.
+/// `--panes=4`는 **같은 화면을 매번 같은 방법으로** 만든다. 해원이 재기 전에 손을 안 대도 된다.
+///
+/// | 플래그 | 뜻 |
+/// |---|---|
+/// | `--panes=N` | 기동 직후 패널이 N개가 되게 나눈다. 창은 그대로 열려 있는다 |
+/// | `--panes-probe` | N개로 나눈 뒤 **전부 정상인지 확인하고 종료**한다 |
+/// | `--panes-probe-out=PATH` | 결과 JSON 경로 |
+///
+/// 나누는 방법은 프런트가 정한다 — **제일 넓은 패널을 긴 축으로** 자른다.
+/// 그래야 4개일 때 2×2가 나오고, 개수가 달라져도 한쪽으로 길쭉해지지 않는다.
+#[derive(Debug, Clone, Serialize)]
+pub struct PanesConfig {
+    /// 무인 검증 모드인가.
+    pub probe: bool,
+    /// 목표 패널 수. 1이면 아무것도 안 나눈다.
+    pub count: usize,
+    pub out_path: PathBuf,
+}
+
+/// 패널 상한. WebGL 컨텍스트와 셸이 패널마다 하나씩 생긴다 —
+/// 실수로 `--panes=400`을 치면 기계가 아니라 사람이 먼저 곤란해진다.
+const MAX_PANES: usize = 16;
+
+impl PanesConfig {
+    pub fn from_args(paths: &Paths) -> Self {
+        let mut probe = false;
+        let mut count = 1usize;
+        let mut out_path = None;
+
+        for a in std::env::args() {
+            if a == "--panes-probe" {
+                probe = true;
+            } else if let Some(v) = a.strip_prefix("--panes-probe-out=") {
+                probe = true;
+                out_path = Some(PathBuf::from(v));
+            } else if let Some(v) = a.strip_prefix("--panes=") {
+                match v.parse::<usize>() {
+                    Ok(n) if (1..=MAX_PANES).contains(&n) => count = n,
+                    _ => eprintln!(
+                        "[eqmux] --panes 값이 잘못됐다: {v:?} (1~{MAX_PANES}) — 무시하고 1로 간다"
+                    ),
+                }
+            }
+        }
+
+        // 검증 모드인데 개수를 안 줬으면 4다. 관문 A2가 묻는 수가 그것이다.
+        if probe && count == 1 {
+            count = 4;
+        }
+
+        let out_path = out_path.unwrap_or_else(|| {
+            paths
+                .state_file
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .join("panes-probe.json")
+        });
+
+        Self {
+            probe,
+            count,
+            out_path,
+        }
+    }
+}
+
 /// JSONL 한 덩어리를 이어 쓴다.
 ///
 /// 표본마다 왕복하면 계측 자체가 측정을 흔든다. 프런트가 모아서 한 번에 보낸다.

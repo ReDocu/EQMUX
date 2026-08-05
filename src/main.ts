@@ -1,12 +1,13 @@
-// S1-3 — 터미널 렌더러를 띄우고 렌더러 상태를 드러낸다.
+// S2-2 — 기동 분기와 레이아웃 화면.
 //
 // 화면에 글자가 그려지는 것만으로는 통과가 아니다.
 // DOM 렌더러로 조용히 폴백해도 글자는 그려진다 — 느릴 뿐이다.
-// 그래서 렌더 경로를 항상 눈에 보이게 표시한다.
+// 그래서 렌더 경로를 항상 눈에 보이게 표시한다 (S1-3부터의 규칙).
+//
+// 분기 순서는 lib.rs의 충돌 경고와 같은 말이어야 한다: 폭 > 지연 > 패널 검증 > 일반.
 
 import { invoke } from "@tauri-apps/api/core";
 import type { Terminal } from "@xterm/xterm";
-import type { FitAddon } from "@xterm/addon-fit";
 
 import {
   createTerminal,
@@ -16,10 +17,12 @@ import {
   CELL_PROBES,
   FONT_STACK,
   FONT_SIZE,
+  type TerminalHandle,
 } from "./terminal";
 import { runFontProbe, ensureFontsLoaded, type FontProbeResult } from "./font";
 import { LatencyProbe, installFrameHold, type Progress } from "./latency";
-import { PtyLink, bufferText } from "./pty";
+import { bufferText, type PtyLink, type PtyInfo } from "./pty";
+import { PanelManager, ensurePanes, renderStaticGrid } from "./panels";
 import { installGlobalHandlers, logError, logInfo } from "./log";
 import { verifyBundledLicense } from "./license";
 
@@ -58,6 +61,13 @@ interface FontProbeConfig {
   stack: string | null;
 }
 
+/** S2-2 — 기동 분할(`--panes=N`)·패널 무인 검증(`--panes-probe`). */
+interface PanesConfig {
+  probe: boolean;
+  count: number;
+  out_path: string;
+}
+
 interface AppInfo {
   name: string;
   version: string;
@@ -65,6 +75,7 @@ interface AppInfo {
   probe: ProbeConfig;
   pty_probe: PtyProbeConfig;
   font_probe: FontProbeConfig;
+  panes: PanesConfig;
   shell: string;
 }
 
@@ -103,7 +114,7 @@ async function main(): Promise<void> {
   modeEl.textContent = info.paths.isolated ? "격리 인스턴스" : "일반 인스턴스";
   modeEl.classList.add(info.paths.isolated ? "isolated" : "normal");
 
-  // 자가 검증 ③ — 프레임 홀드는 **터미널 생성 전에** 걸어야 한다.
+  // 자가 검증 ③ — 프레임 홀드는 **모든 터미널 생성 전에** 걸어야 한다.
   // xterm이 rAF를 잡은 뒤에 갈아끼우면 이미 등록된 콜백이 옛 경로로 돈다.
   if (info.probe.enabled && info.probe.frame_hold > 1) {
     installFrameHold(info.probe.frame_hold);
@@ -111,125 +122,321 @@ async function main(): Promise<void> {
 
   // 동봉 폰트의 라이선스 전문이 이 바이너리 안에 있는지 확인한다(OFL 1.1 조건 2).
   // 지연 계측 중에는 돌리지 않는다 — 4KB라도 표본 구간에 얹힌 일은 A-3 숫자에 섞인다.
-  // 기다리지 않는다: 판정은 stderr 한 줄로 남고, 라이선스 확인이 부팅을 늦출 이유는 없다.
   if (!info.probe.enabled) {
     void verifyBundledLicense();
   }
 
   // ⚠️ **터미널보다 먼저** 동봉 폰트를 붙인다. xterm은 셀 크기를 생성 시점에 한 번 재므로,
   // 그때 폰트가 없으면 격자가 폴백 기준으로 잡히고 나중에 폰트가 바뀌어도 안 고쳐진다.
-  // 그러면 A-2를 통과시켜 놓고 첫 화면만 어긋난다 (`src/font.ts` ensureFontsLoaded).
   const loadedFonts = await ensureFontsLoaded(["D2Coding"], FONT_SIZE);
   if (loadedFonts.length === 0) {
-    // 동봉해 놓고 안 붙은 상태다. 조용히 폴백으로 뜨면 A-2가 소리 없이 미달로 돌아간다.
     logError("동봉 폰트를 붙이지 못했다 — 폴백으로 뜬다 (A-2 미달 가능)", "D2Coding");
   }
 
-  // 폰트 스택 강제는 계측 여부와 무관하게 먹는다 — 육안 확인도 이 스택으로 해야 한다.
-  const { term, fit, status } = createTerminal(el("#term"), info.font_probe.stack);
+  const layoutEl = el<HTMLElement>("#layout");
+  const stack = info.font_probe.stack;
 
-  // 빈 버퍼에서 셀 폭을 먼저 재고 지운다. 데모 출력이 섞이면 열 위치를 못 잡는다.
-  const cellWidths = await new Promise<Record<string, number>>((resolve) => {
+  // ── A-2 폭 계측 — 터미널 하나만 있으면 된다. 재고, 남기고, 끝낸다.
+  if (info.font_probe.enabled) {
+    layoutEl.classList.add("single");
+    const { term } = createTerminal(layoutEl, stack);
+    await runFontProbeAndExit(info, await measureCells(term));
+    return;
+  }
+
+  // ── A-3 지연 계측 — 셸 없이 렌더 경로만 잰다. `--panes=N`이면 N분할 상태에서(§2-2).
+  if (info.probe.enabled) {
+    await runLatencyProbe(info, layoutEl, stack);
+    return;
+  }
+
+  // ── 일반 기동 — 백엔드 레이아웃 트리를 그린다 (S2-2). `--panes-probe`도 이 화면 위에서 돈다.
+  await runApp(info, layoutEl, stack);
+}
+
+/** 빈 버퍼에서 셀 폭을 재고 지운다. 데모·셸 출력이 섞이면 열 위치를 못 잡는다. */
+function measureCells(term: Terminal): Promise<Record<string, number>> {
+  return new Promise((resolve) => {
     term.write(CELL_PROBES.join(""), () => {
       const w = readCellWidths(term);
       term.reset();
       resolve(w);
     });
   });
+}
 
-  // A-2 폭 계측은 여기서 끝난다. 셸도 데모도 필요 없다 — 캔버스만 있으면 잰다.
-  // `cellWidths`가 나온 직후여야 한다: 기대 비율이 곧 xterm이 배정한 칸 수다.
-  if (info.font_probe.enabled) {
-    await runFontProbeAndExit(info, cellWidths);
-    return;
-  }
+/** 어떤 스택으로 그려진 화면인지 화면 안에 적는다 — 모르고 본 육안 확인은 A-2에서 못 쓴다. */
+function stackNote(info: AppInfo): string {
+  return info.font_probe.stack
+    ? `\r\n\x1b[33m폰트 스택 강제 — ${info.font_probe.stack}\x1b[0m`
+    : "";
+}
 
-  // 계측 모드는 렌더 경로만 재므로 셸을 붙이지 않는다(로컬 에코).
-  // PTY 왕복이 섞이면 A-3 숫자가 두 시점의 혼합이 된다 — docs/issue.md #10.
-  const usePty = !info.probe.enabled;
-
-  // 판정을 터미널에 먼저 찍는다. 아래 상태줄이나 IPC가 죽어도 이건 남는다.
-  writeDemo(
-    term,
-    status,
-    (usePty ? `셸 연결 중 — ${info.shell}` : "계측 모드 — 셸 없이 로컬 에코만 잰다.") +
-      // 어떤 스택으로 그려진 화면인지 화면 안에 적는다.
-      // 강제한 줄 모르고 본 육안 확인은 A-2에서 쓸 수 없다 — GATE-A §1이 그 경우였다.
-      (info.font_probe.stack ? `\r\n\x1b[33m폰트 스택 강제 — ${info.font_probe.stack}\x1b[0m` : ""),
-    !usePty,
-  );
-
-  const v = verdictOf(status);
+/**
+ * 렌더 판정을 상태줄과 stderr에 남긴다. 기준은 **첫 패널**이다 —
+ * 나머지 패널의 판정은 `panels`로 같이 실려 나간다 (4분할에서 하나만 폴백해도 보이게).
+ */
+function reportRenderer(
+  first: TerminalHandle,
+  cellWidths: Record<string, number>,
+  panels: { leaf?: string; verdict: string }[],
+): void {
+  const v = verdictOf(first.status);
   const rendEl = el("#renderer");
   rendEl.textContent = v.text;
   rendEl.classList.add(v.sgr === "32" ? "ok" : v.sgr === "33" ? "warn" : "bad");
-
-  el("#gpu").textContent = status.unmaskedRenderer ?? "(렌더러 문자열 없음)";
-
-  // 창 크기에 맞춘다. S2에서 패널 분할이 들어오면 이 자리를 레이아웃이 가져간다.
-  const ro = new ResizeObserver(() => {
-    try {
-      fit.fit();
-    } catch {
-      /* 창이 최소화되면 크기가 0이 된다 — 무시한다 */
-    }
-  });
-  ro.observe(el("#term"));
-
-  if (info.probe.enabled) {
-    const latEl = el("#latency");
-    latEl.hidden = false;
-    const probe = new LatencyProbe(term, {
-      autoSamples: info.probe.auto_samples,
-      injectMs: info.probe.inject_ms,
-      frameHold: info.probe.frame_hold,
-      gapMs: info.probe.gap_ms,
-      gpu: status.unmaskedRenderer,
-      onUpdate: (p: Progress) => {
-        latEl.textContent =
-          `n=${p.n} · 실작업 p99 ${fmt(p.work.p99)} · 대기 p99 ${fmt(p.wait.p99)}` +
-          ` · 총지연 p99 ${fmt(p.total.p99)} ms · [${p.path}]`;
-        // 화면에 거는 판정선은 **A-3-①(실작업 ≤ 8ms)** 이다. 총지연은 주사율이 절반 이상이라
-        // 여기에 걸면 기계마다 색이 갈린다 (docs/issue.md #10).
-        latEl.classList.toggle("ok", p.work.p99 <= 8);
-        latEl.classList.toggle("bad", p.work.p99 > 8);
-      },
-    });
-    probe.start();
-    logInfo(
-      `계측 시작 — 목표 ${info.probe.auto_samples ?? "수동"}회` +
-        ` · inject=${info.probe.inject_ms}ms · hold=${info.probe.frame_hold} · gap=${info.probe.gap_ms}ms`,
-    );
-  } else {
-    await startPty(term, fit, info);
-    // 계측 모드에서는 걸지 않는다. 500표본을 재는 동안 옆에서 폴더를 훑으면 그 잡음이 A-3에 얹힌다.
-    installAppDataReport();
-  }
-
-  console.log("[eqmux] renderer", status);
+  el("#gpu").textContent = first.status.unmaskedRenderer ?? "(렌더러 문자열 없음)";
 
   // 화면 없이도 렌더 경로를 확인할 수 있어야 한다.
   // 레이아웃 높이도 같이 실어 보낸다 — 상태줄이 화면 밖으로 밀리면 여기서 드러난다.
   const h = (sel: string) => Math.round(el(sel).getBoundingClientRect().height);
   void invoke("report_renderer", {
     status: JSON.stringify({
-      ...status,
+      ...first.status,
       verdict: v.text,
       // 논리 셀 폭. 한글·한자가 2가 아니면 A-2는 볼 것도 없이 실패다.
       cellWidths,
       // 컨테이너가 아니라 터미널이 실제로 쓰는 폰트를 적는다.
-      // 컨테이너 값을 적으면 셀 폭과 무관한 폰트가 로그에 남아 사람을 속인다.
-      fontFamily: term.options.fontFamily,
+      fontFamily: first.term.options.fontFamily,
+      panels,
       layout: {
         innerHeight: window.innerHeight,
         bar: h(".bar"),
-        term: h("#term"),
+        term: h("#layout"),
         status: h(".status"),
-        rows: term.rows,
-        cols: term.cols,
+        rows: first.term.rows,
+        cols: first.term.cols,
       },
     }),
   });
+}
+
+/**
+ * `--latency-probe` — 관문 A-3.
+ *
+ * `--panes=N`과 조합하면 **백엔드 레이아웃·PTY 없이** 화면만 N개로 나눈 상태에서 잰다.
+ * 계측 모드는 라이브 `state.json`을 만들지도 않는다(§2-4) — layout_* 명령을 부르지 않는다.
+ * 계측은 항상 1번 패널에서 돈다. 나머지는 유휴 — A2의 "유휴 4분할"과 같은 화면 조건이다.
+ */
+async function runLatencyProbe(
+  info: AppInfo,
+  layoutEl: HTMLElement,
+  stack: string | null,
+): Promise<void> {
+  const n = Math.max(1, info.panes.count);
+  let handles: TerminalHandle[];
+  if (n === 1) {
+    // 1패널은 S1-3 경로 그대로 단일 마운트 — 지난 A-3 값과 같은 조건을 유지한다.
+    layoutEl.classList.add("single");
+    handles = [createTerminal(layoutEl, stack)];
+  } else {
+    handles = renderStaticGrid(layoutEl, n, stack);
+  }
+  const first = handles[0];
+  const cellWidths = await measureCells(first.term);
+
+  writeDemo(
+    first.term,
+    first.status,
+    "계측 모드 — 셸 없이 로컬 에코만 잰다." +
+      (n > 1 ? ` · 패널 ${n}개(계측은 이 패널)` : "") +
+      stackNote(info),
+    true,
+  );
+  for (let i = 1; i < handles.length; i++) {
+    handles[i].term.write(`\x1b[90m패널 ${i + 1} — 계측 유휴 (셸·입력 없음)\x1b[0m`);
+  }
+
+  reportRenderer(
+    first,
+    cellWidths,
+    handles.map((h, i) => ({ leaf: `grid-${i + 1}`, verdict: verdictOf(h.status).text })),
+  );
+
+  const latEl = el("#latency");
+  latEl.hidden = false;
+  const probe = new LatencyProbe(first.term, {
+    autoSamples: info.probe.auto_samples,
+    injectMs: info.probe.inject_ms,
+    frameHold: info.probe.frame_hold,
+    gapMs: info.probe.gap_ms,
+    gpu: first.status.unmaskedRenderer,
+    panels: n,
+    onUpdate: (p: Progress) => {
+      latEl.textContent =
+        `n=${p.n} · 실작업 p99 ${fmt(p.work.p99)} · 대기 p99 ${fmt(p.wait.p99)}` +
+        ` · 총지연 p99 ${fmt(p.total.p99)} ms · [${p.path}]`;
+      // 화면에 거는 판정선은 **A-3-①(실작업 ≤ 8ms)** 이다. 총지연은 주사율이 절반 이상이라
+      // 여기에 걸면 기계마다 색이 갈린다 (docs/issue.md #10).
+      latEl.classList.toggle("ok", p.work.p99 <= 8);
+      latEl.classList.toggle("bad", p.work.p99 > 8);
+    },
+  });
+  probe.start();
+  logInfo(
+    `계측 시작 — 목표 ${info.probe.auto_samples ?? "수동"}회 · 패널 ${n}개` +
+      ` · inject=${info.probe.inject_ms}ms · hold=${info.probe.frame_hold} · gap=${info.probe.gap_ms}ms`,
+  );
+}
+
+/** 일반 기동 — 레이아웃 트리 렌더 + 패널마다 셸. `S2-2`의 본편이다. */
+async function runApp(info: AppInfo, layoutEl: HTMLElement, stack: string | null): Promise<void> {
+  let cellWidths: Record<string, number> = {};
+  let firstHandle: TerminalHandle | null = null;
+
+  const manager = new PanelManager(layoutEl, {
+    fontStack: stack,
+    usePty: true,
+    onFirstTerminal: async (handle) => {
+      firstHandle = handle;
+      cellWidths = await measureCells(handle.term);
+      // 판정을 터미널에 먼저 찍는다. 상태줄이나 IPC가 죽어도 이건 남는다.
+      writeDemo(handle.term, handle.status, `셸 연결 중 — ${info.shell}` + stackNote(info), false);
+    },
+    onFocus: (panel) => {
+      const shellEl = el("#shell");
+      if (panel.link) {
+        shellEl.textContent =
+          `셸 ${baseName(panel.link.shell ?? "?")} · pid ${panel.link.pid ?? "?"}` +
+          ` · ${panel.leafId}`;
+        shellEl.classList.add("ok");
+        shellEl.classList.remove("bad");
+      } else {
+        shellEl.textContent = `셸 없음 · ${panel.leafId}`;
+        shellEl.classList.add("bad");
+        shellEl.classList.remove("ok");
+      }
+    },
+  });
+
+  await manager.boot();
+
+  // `--panes=N` — 같은 화면을 매번 같은 방법으로 만든다. A2 측정의 재현 조건이다.
+  if (info.panes.count > manager.size) {
+    await ensurePanes(manager, info.panes.count);
+  }
+
+  if (firstHandle) {
+    reportRenderer(
+      firstHandle,
+      cellWidths,
+      manager.rendererReport().map((r) => ({ leaf: r.leaf, verdict: r.verdict })),
+    );
+  }
+
+  if (info.panes.probe) {
+    await runPanesProbe(manager, info);
+    return;
+  }
+
+  // 계측·검증이 아닐 때만 건다 — 표본 구간에 디스크 훑기를 얹지 않는다.
+  installAppDataReport();
+
+  if (info.pty_probe.enabled) {
+    const p = manager.focused();
+    if (p?.handle && p.link) {
+      void runPtyProbe(p.handle.term, p.link, info.pty_probe);
+    } else {
+      const msg = "셸이 붙은 패널이 없다";
+      await invoke("pty_probe_finish", { text: msg, verdict: `미달 — ${msg}` }).catch(
+        () => undefined,
+      );
+    }
+  }
+}
+
+/**
+ * `S2-2` 무인 검증 (`--panes-probe`) — §2-1 "닫으면 진짜로 없어지는가"를 통째로 돌린다.
+ *
+ * 4분할을 만들고 → 전부 닫는다 → 남은 것과 살아 있는 것을 센다.
+ * 마지막 잎은 규격상 안 닫힌다(`layout.rs`) — 그래서 "비어 있는가"가 아니라
+ * **"남긴 만큼만 있는가"**(PTY 1 · 캔버스 1)를 묻는다. 죽인 id가 목록에 남아 있으면 누수다.
+ */
+async function runPanesProbe(manager: PanelManager, info: AppInfo): Promise<void> {
+  const finish = async (pass: boolean, verdict: string, detail: object): Promise<void> => {
+    await invoke("panes_probe_finish", {
+      json: JSON.stringify(detail, null, 2),
+      verdict,
+      pass,
+    }).catch((e) => logError("panes_probe_finish 실패", e));
+  };
+
+  try {
+    const target = info.panes.count;
+    // 프롬프트가 그려질 시간. pty_spawn 자체는 boot에서 이미 끝났다.
+    await sleep(2000);
+
+    const peakLeaves = manager.leafIds();
+    const peakPtys = await invoke<PtyInfo[]>("pty_list");
+    const peakCanvases = canvasCount();
+    const peakRenderers = manager.rendererReport();
+
+    const killed: string[] = [];
+    while (manager.leafIds().length > 1) {
+      killed.push(...(await manager.close(manager.leafIds()[0])));
+    }
+    // kill → exit 이벤트 → 구독 해제가 돌 여유.
+    await sleep(500);
+
+    const afterLeaves = manager.leafIds();
+    const afterPtys = await invoke<PtyInfo[]>("pty_list");
+    const afterCanvases = canvasCount();
+
+    // xterm은 패널당 캔버스를 여러 장 쓴다(M2 실측 2장 — WebGL 컨텍스트는 그중 1개다).
+    // 장수를 박아 두면 xterm 판올림마다 검증이 거짓 미달을 낸다 — 비례로 잰다:
+    // 패널당 장수가 일정하고, 닫은 뒤에는 남은 패널 몫만 남아야 한다.
+    const perPanel = peakLeaves.length > 0 ? peakCanvases / peakLeaves.length : NaN;
+
+    const checks = {
+      opened_to_target: peakLeaves.length === target,
+      pty_per_panel: peakPtys.length === peakLeaves.length,
+      canvas_per_panel_uniform: Number.isInteger(perPanel) && perPanel >= 1,
+      renderers_alive: peakRenderers.every((r) => r.alive),
+      closed_to_one: afterLeaves.length === 1,
+      pty_list_matches_survivor: afterPtys.length === 1,
+      killed_ptys_gone: killed.every((k) => !afterPtys.some((p) => p.id === k)),
+      canvas_disposed: afterCanvases === perPanel * afterLeaves.length,
+    };
+    const pass = Object.values(checks).every(Boolean);
+    const failed = Object.entries(checks)
+      .filter(([, ok]) => !ok)
+      .map(([k]) => k);
+
+    const verdict =
+      `${pass ? "통과" : "미달"} — 패널 ${peakLeaves.length}/${target}` +
+      ` · PTY ${peakPtys.length}→${afterPtys.length} (기대 ${target}→1)` +
+      ` · 캔버스 ${peakCanvases}→${afterCanvases} (패널당 ${perPanel}장 기준 ${perPanel * afterLeaves.length}장 기대)` +
+      ` · 죽인 PTY ${killed.length}개 ${checks.killed_ptys_gone ? "모두 정리" : "누수"}` +
+      ` · 렌더러 생존 ${peakRenderers.filter((r) => r.alive).length}/${peakRenderers.length}` +
+      (pass ? "" : ` · 실패: ${failed.join(", ")}`);
+
+    await finish(pass, verdict, {
+      pass,
+      checks,
+      target,
+      canvases_per_panel: perPanel,
+      peak: {
+        leaves: peakLeaves,
+        ptys: peakPtys.map((p) => p.id),
+        canvases: peakCanvases,
+        renderers: peakRenderers,
+      },
+      after: {
+        leaves: afterLeaves,
+        ptys: afterPtys.map((p) => p.id),
+        canvases: afterCanvases,
+      },
+      killed,
+    });
+  } catch (e) {
+    logError("패널 무인 검증 중 예외", e);
+    await finish(false, `미달 — 검증 중 예외: ${e}`, { pass: false, error: String(e) });
+  }
+}
+
+/** 살아 있는 렌더 캔버스 수 — "정리했다고 믿는 것"과 DOM에 실제 남은 것을 구분한다. */
+function canvasCount(): number {
+  return document.querySelectorAll(".xterm-screen canvas").length;
 }
 
 /**
@@ -336,42 +543,6 @@ function installAppDataReport(): void {
 }
 
 /**
- * S1-4 — 셸을 붙인다.
- *
- * 실패해도 창은 살려 둔다. 검은 창만 남으면 사용자는 원인을 알 방법이 없다 —
- * 터미널·상태줄·stderr 세 곳에 같은 이유를 남긴다.
- */
-async function startPty(term: Terminal, fit: FitAddon, info: AppInfo): Promise<void> {
-  const shellEl = el("#shell");
-  const link = new PtyLink(term, fit);
-
-  try {
-    const p = await link.start();
-    shellEl.textContent = `셸 ${baseName(p.shell)} · pid ${p.pid ?? "?"}`;
-    shellEl.classList.add("ok");
-  } catch (e) {
-    const msg = `셸 실행 실패 — ${e}`;
-    shellEl.textContent = "셸 실행 실패";
-    shellEl.classList.add("bad");
-    logError("PTY 연결 실패", e);
-    term.write(`\r\n\x1b[31m[${msg}]\x1b[0m\r\n`);
-    if (info.pty_probe.enabled) {
-      await invoke("pty_probe_finish", { text: msg, verdict: `미달 — ${msg}` }).catch(
-        () => undefined,
-      );
-    }
-    return;
-  }
-
-  term.focus();
-  window.addEventListener("beforeunload", () => void link.dispose());
-
-  if (info.pty_probe.enabled) {
-    void runPtyProbe(term, link, info.pty_probe);
-  }
-}
-
-/**
  * S1-2·S1-4 무인 검증 — 화면 없이 셸 왕복을 증명한다.
  *
  * 두 가지를 본다:
@@ -435,7 +606,7 @@ window.addEventListener("DOMContentLoaded", () => {
       r.classList.add("bad");
     }
     // 화면 어딘가에도 반드시 남긴다. 조용한 실패가 제일 나쁘다.
-    const t = document.querySelector("#term");
+    const t = document.querySelector("#layout");
     if (t) {
       const pre = document.createElement("pre");
       pre.style.cssText = "color:#ff7a7a;font:12px monospace;padding:8px;white-space:pre-wrap";

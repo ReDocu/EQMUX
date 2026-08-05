@@ -171,10 +171,22 @@ impl PtyManager {
             .map_err(|e| Error::Pty(format!("resize: {e}")))
     }
 
+    /// 세션을 **맵에서 걷어낸 뒤** 죽인다. 순서가 곧 수명이다 (`S2-2`에서 잡은 누수):
+    ///
+    /// 죽이기만 하고 맵에 남겨 두면 정리는 읽기 스레드의 EOF → `reap`에 걸리는데,
+    /// ConPTY는 **마스터가 닫혀야** 읽기 파이프를 놓는 경우가 있다. 그러면 reap은 EOF를
+    /// 기다리고 EOF는 drop을 기다리는 원형 대기가 되어, 죽인 셸의 ConPTY·conhost가
+    /// 유휴 RAM으로 남는다 — 관문 A2가 재는 게 정확히 그 자리다.
+    /// 여기서 세션을 꺼내 drop하면 마스터가 닫히고, 읽기 스레드는 EOF로 끝난다.
     pub fn kill(&self, id: &str) -> Result<()> {
-        let mut map = self.sessions.lock().unwrap();
-        let s = map.get_mut(id).ok_or_else(|| not_found(id))?;
+        let mut s = self
+            .sessions
+            .lock()
+            .unwrap()
+            .remove(id)
+            .ok_or_else(|| not_found(id))?;
         s.child.kill().map_err(Error::from)
+        // drop(s) — master·writer가 닫히고 ConPTY가 정리된다.
     }
 
     pub fn list(&self) -> Vec<PtyInfo> {
@@ -187,6 +199,8 @@ impl PtyManager {
     }
 
     /// 세션을 걷어내고 종료 코드를 받는다. 읽기 스레드가 EOF를 만나면 부른다.
+    ///
+    /// `kill`이 먼저 걷어낸 세션이면 `None`이다 — 종료 코드는 못 주지만 누수는 아니다.
     fn reap(&self, id: &str) -> Option<u32> {
         let mut s = self.sessions.lock().unwrap().remove(id)?;
         s.child.wait().ok().map(|st| st.exit_code())

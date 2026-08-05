@@ -110,6 +110,11 @@ export interface ProbeOptions {
   gapMs: number;
   /** A-3-③ 기록 항목 */
   gpu: string | null;
+  /**
+   * 계측 화면의 패널 수 (`S2-2` §2-2 — 4분할 A-3 확인).
+   * 1패널 값과 4패널 값은 **다른 조건의 숫자다** — 요약에 안 적으면 나중에 섞인다.
+   */
+  panels?: number;
   onUpdate?: (p: Progress) => void;
 }
 
@@ -546,6 +551,7 @@ export class LatencyProbe {
         inject_ms: this.opts.injectMs,
         frame_hold: this.opts.frameHold,
         gap_ms: this.opts.gapMs,
+        panels: this.opts.panels ?? 1,
       },
       machine: {
         gpu: this.opts.gpu,

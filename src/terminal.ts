@@ -70,14 +70,30 @@ export interface TerminalHandle {
   term: Terminal;
   fit: FitAddon;
   status: RendererStatus;
+  /**
+   * 패널을 닫을 때 **반드시** 부른다 (`S2-2` · BRIEF §2-1).
+   *
+   * PTY는 백엔드(`layout_close`)가 죽이지만 xterm 버퍼와 WebGL 컨텍스트는
+   * 여기서만 놓인다 — 안 부르면 닫힌 패널이 그대로 유휴 RAM이고, A2가 그걸 잰다.
+   */
+  dispose(): void;
 }
 
 /**
  * @param stack 폰트 스택 강제(`--font-stack` / `EQMUX_FONT_STACK`). `null`이면 `FONT_STACK`.
  *   **A-2 계측의 핵심이다** — 스택에서 D2Coding만 빼면 이 기계가 곧 사용자 기계 조건이 된다
  *   ([docs/GATE-A.md](../docs/GATE-A.md) §1이 A-2를 "잠정"으로 둔 이유가 그것이다).
+ *
+ *   패널이 몇 개가 되어도 xterm 옵션은 **이 함수에서만** 만든다 — 패널별로 따로 짜면
+ *   스택이 갈라지고, A-2는 스택 하나를 전제로 통과했다 (BRIEF-S2-2 §2-3).
+ * @param onContextLoss 컨텍스트를 잃었을 때. 패널 표시등이 이걸로 실시간 갱신된다 —
+ *   유실은 생성 시점이 아니라 **다른 패널이 상한을 밀어낸 나중**에 온다.
  */
-export function createTerminal(container: HTMLElement, stack: string | null = null): TerminalHandle {
+export function createTerminal(
+  container: HTMLElement,
+  stack: string | null = null,
+  onContextLoss?: () => void,
+): TerminalHandle {
   const term = new Terminal({
     fontFamily: stack ?? FONT_STACK,
     fontSize: FONT_SIZE,
@@ -94,13 +110,74 @@ export function createTerminal(container: HTMLElement, stack: string | null = nu
   term.loadAddon(fit);
   term.open(container);
 
-  const status = attachWebgl(term);
+  const { status, addon } = attachWebgl(term, onContextLoss);
 
   fit.fit();
-  return { term, fit, status };
+
+  const dispose = (): void => {
+    // 컨텍스트를 잡은 캔버스를 DOM이 사라지기 전에 붙잡아 둔다.
+    const canvas = term.element?.querySelector<HTMLCanvasElement>(".xterm-screen canvas");
+    try {
+      addon?.dispose();
+    } catch {
+      /* 컨텍스트 유실 시 이미 정리됐다 — 닫기가 예외로 막히는 쪽이 더 나쁘다 */
+    }
+    try {
+      term.dispose();
+    } catch {
+      /* 위와 같다 */
+    }
+    // dispose가 캔버스를 떼어내도 GPU 쪽 자원은 GC를 기다린다.
+    // A2가 유휴 RAM을 재므로 기다리지 않고 즉시 놓는다.
+    if (canvas) {
+      const gl = canvas.getContext("webgl2") ?? canvas.getContext("webgl");
+      gl?.getExtension("WEBGL_lose_context")?.loseContext();
+    }
+  };
+
+  return { term, fit, status, dispose };
 }
 
-function attachWebgl(term: Terminal): RendererStatus {
+// GPU 판별은 프로세스당 한 번이면 된다 — 같은 WebView2 인스턴스면 결과가 같다.
+// 패널마다 확인용 컨텍스트를 새로 따면 그 컨텍스트도 브라우저 동시 상한을 깎아 먹는다.
+// 4패널이면 터미널 4 + 확인용 4 = 8개가 되어, §2-2가 경고한 유실을 우리가 앞당기게 된다.
+type GpuProbe = Pick<RendererStatus, "contextType" | "unmaskedRenderer" | "softwareRasterizer">;
+
+let gpuProbeCache: GpuProbe | null = null;
+
+function probeGpu(): GpuProbe {
+  if (gpuProbeCache) return gpuProbeCache;
+
+  const result: GpuProbe = {
+    contextType: "none",
+    unmaskedRenderer: null,
+    softwareRasterizer: false,
+  };
+
+  const probe = document.createElement("canvas");
+  const gl2 = probe.getContext("webgl2");
+  const gl = gl2 ?? probe.getContext("webgl");
+  if (gl) {
+    result.contextType = gl2 ? "webgl2" : "webgl";
+    const dbg = gl.getExtension("WEBGL_debug_renderer_info");
+    if (dbg) {
+      result.unmaskedRenderer = String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL));
+      result.softwareRasterizer = /swiftshader|software|llvmpipe|basic render/i.test(
+        result.unmaskedRenderer,
+      );
+    }
+    // 읽었으면 바로 놓는다. 확인용 컨텍스트가 상한 한 자리를 차지한 채 GC를 기다리면 안 된다.
+    gl.getExtension("WEBGL_lose_context")?.loseContext();
+  }
+
+  gpuProbeCache = result;
+  return result;
+}
+
+function attachWebgl(
+  term: Terminal,
+  onContextLoss?: () => void,
+): { status: RendererStatus; addon: WebglAddon | null } {
   const status: RendererStatus = {
     addonLoaded: false,
     canvasPresent: false,
@@ -111,20 +188,23 @@ function attachWebgl(term: Terminal): RendererStatus {
     error: null,
   };
 
+  let addon: WebglAddon | null = null;
   try {
-    const addon = new WebglAddon();
+    addon = new WebglAddon();
+    const attached = addon;
     // 컨텍스트를 잃으면 xterm은 조용히 DOM 렌더러로 돌아간다.
-    // 조용히 느려지는 것이 제일 나쁘다 — 반드시 기록한다.
-    addon.onContextLoss(() => {
+    // 조용히 느려지는 것이 제일 나쁘다 — 반드시 기록하고, 패널 표시등에도 올린다.
+    attached.onContextLoss(() => {
       status.contextLost = true;
       console.error("[eqmux] WebGL 컨텍스트 유실 — DOM 렌더러로 폴백한다");
-      addon.dispose();
+      attached.dispose();
+      onContextLoss?.();
     });
-    term.loadAddon(addon);
+    term.loadAddon(attached);
     status.addonLoaded = true;
   } catch (e) {
     status.error = String(e);
-    return status;
+    return { status, addon };
   }
 
   // 여기서부터가 진짜 확인이다. 애드온이 로드됐다는 것과
@@ -133,22 +213,13 @@ function attachWebgl(term: Terminal): RendererStatus {
   status.canvasPresent = !!canvas;
 
   // xterm이 이미 컨텍스트를 점유했으므로 같은 캔버스에서 다시 못 딴다.
-  // 같은 페이지에서 별도 캔버스로 확인한다 — 같은 WebView2 인스턴스라 결과는 동일하다.
-  const probe = document.createElement("canvas");
-  const gl2 = probe.getContext("webgl2");
-  const gl = gl2 ?? probe.getContext("webgl");
-  if (gl) {
-    status.contextType = gl2 ? "webgl2" : "webgl";
-    const dbg = gl.getExtension("WEBGL_debug_renderer_info");
-    if (dbg) {
-      status.unmaskedRenderer = String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL));
-      status.softwareRasterizer = /swiftshader|software|llvmpipe|basic render/i.test(
-        status.unmaskedRenderer,
-      );
-    }
-  }
+  // 같은 페이지의 별도 캔버스에서 **한 번만** 확인해 두고 나눠 쓴다 (`probeGpu`).
+  const gpu = probeGpu();
+  status.contextType = gpu.contextType;
+  status.unmaskedRenderer = gpu.unmaskedRenderer;
+  status.softwareRasterizer = gpu.softwareRasterizer;
 
-  return status;
+  return { status, addon };
 }
 
 /**

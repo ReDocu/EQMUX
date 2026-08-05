@@ -23,7 +23,7 @@ use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
 use appdata::AppDataWatch;
 use config::Paths;
-use probe::{FontProbeConfig, ProbeConfig, PtyProbeConfig};
+use probe::{FontProbeConfig, PanesConfig, ProbeConfig, PtyProbeConfig};
 use pty::PtyManager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -44,6 +44,7 @@ pub fn run() {
             commands::pty::pty_list,
             commands::pty::pty_probe_finish,
             commands::probe::font_probe_finish,
+            commands::probe::panes_probe_finish,
             commands::layout::layout_get,
             commands::layout::layout_split,
             commands::layout::layout_close,
@@ -126,10 +127,32 @@ pub fn run() {
                 eprintln!("[eqmux] 폰트 스택 강제 — {s}");
             }
 
+            // `S2-2` — 기동 분할과 패널 무인 검증. 설정만 읽는다 — 나누는 것은 프런트다.
+            let panes_cfg = PanesConfig::from_args(&paths);
+            if panes_cfg.probe {
+                eprintln!(
+                    "[eqmux] 패널 무인 검증 — 목표 {}개 · out = {}",
+                    panes_cfg.count,
+                    panes_cfg.out_path.display()
+                );
+            } else if panes_cfg.count > 1 {
+                eprintln!("[eqmux] 기동 분할 — 패널 {}개", panes_cfg.count);
+            }
+
             // 계측 모드는 로컬 에코로 렌더러만 재므로 PTY를 붙이지 않는다.
             // 두 경로가 같이 돌면 셸 에코와 로컬 에코가 겹쳐 숫자가 오염된다.
             if probe_cfg.enabled && pty_probe_cfg.enabled {
                 eprintln!("[eqmux] ⚠️ --latency-probe와 --pty-probe는 같이 못 쓴다 — PTY 검증만 돈다");
+            }
+            // 프런트 분기 순서(폭 > 지연 > 패널 > PTY)와 같은 말이어야 한다 — 다르면 경고가 거짓말이 된다.
+            if panes_cfg.probe && font_cfg.enabled {
+                eprintln!("[eqmux] ⚠️ --font-probe와 --panes-probe는 같이 못 쓴다 — 폭 계측만 돈다");
+            }
+            if panes_cfg.probe && probe_cfg.enabled {
+                eprintln!("[eqmux] ⚠️ --latency-probe와 --panes-probe는 같이 못 쓴다 — 지연 계측만 돈다");
+            }
+            if panes_cfg.probe && pty_probe_cfg.enabled {
+                eprintln!("[eqmux] ⚠️ --pty-probe와 --panes-probe는 같이 못 쓴다 — 패널 검증만 돈다");
             }
             // 폭 계측은 재고 바로 끝난다. 지연 계측과 겹치면 둘 다 못 쓴다.
             if font_cfg.enabled && probe_cfg.enabled {
@@ -188,6 +211,7 @@ pub fn run() {
             app.manage(probe_cfg);
             app.manage(pty_probe_cfg);
             app.manage(font_cfg);
+            app.manage(panes_cfg);
             app.manage(PtyManager::default());
             Ok(())
         })
