@@ -1,0 +1,7 @@
+[eqmux] 계측 모드 — out = C:\Users\LEE\AppData\Local\Temp\claude\C--Users-LEE-Desktop-workspace-Administrator-Dev\0b61a862-0960-4e27-ae84-ccaf8ecf02aa\scratchpad\lat.jsonl
+[eqmux]   자동 입력 50회 후 종료한다
+[eqmux][front:info] 계측 시작 — 목표 50회
+[eqmux][renderer] {"addonLoaded":true,"canvasPresent":true,"contextType":"webgl2","unmaskedRenderer":"ANGLE (AMD, AMD Radeon 780M Graphics (0x00001900) Direct3D11 vs_5_0 ps_5_0, D3D11)","softwareRasterizer":false,"contextLost":false,"error":null,"verdict":"WebGL2 · 하드웨어","layout":{"innerHeight":720,"bar":39,"term":656,"status":26,"rows":34,"cols":135}}
+[eqmux][probe] {"kind":"summary","input_path":"keydown","note":"OS→브라우저 keydown 디스패치 구간은 포함되지 않는다","total":{"n":50,"p50":8.900000005960464,"p95":13.399999991059303,"p99":74.20000000298023,"max":74.20000000298023,"mean":11.683999999761582},"parse":{"n":50,"p50":8.300000011920929,"p95":9.5,"p99":69.20000000298023,"max":69.20000000298023,"mean":9.702000000476836},"render":{"n":50,"p50":0.6000000089406967,"p95":4.5,"p99":45.29999999701977,"max":45.29999999701977,"mean":1.9819999992847444}}
+[eqmux][probe] out = C:\Users\LEE\AppData\Local\Temp\claude\C--Users-LEE-Desktop-workspace-Administrator-Dev\0b61a862-0960-4e27-ae84-ccaf8ecf02aa\scratchpad\lat.jsonl
+[0804/175523.187:ERROR:ui\gfx\win\window_impl.cc:172] Failed to unregister class Chrome_WidgetWin_0. Error = 1412

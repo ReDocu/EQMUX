@@ -1,0 +1,7 @@
+[eqmux] 계측 모드 — out = C:\Users\LEE\AppData\Local\Temp\claude\C--Users-LEE-Desktop-workspace-Administrator-Dev\0b61a862-0960-4e27-ae84-ccaf8ecf02aa\scratchpad\v.jsonl
+[eqmux]   자동 입력 100회 후 종료한다
+[eqmux][front:info] 계측 시작 — 목표 100회
+[eqmux][renderer] {"addonLoaded":true,"canvasPresent":true,"contextType":"webgl2","unmaskedRenderer":"ANGLE (AMD, AMD Radeon 780M Graphics (0x00001900) Direct3D11 vs_5_0 ps_5_0, D3D11)","softwareRasterizer":false,"contextLost":false,"error":null,"verdict":"WebGL2 · 하드웨어","cellWidths":{"A":1,"가":2,"漢":2,"ｱ":1,"→":1,"■":1},"fontFamily":"\"D2Coding\", \"Cascadia Mono\", \"굴림체\", \"돋움체\", Consolas, monospace","layout":{"innerHeight":720,"bar":39,"term":656,"status":26,"rows":34,"cols":135}}
+[eqmux][probe] {"kind":"summary","input_path":"keydown","note":"OS→브라우저 keydown 디스패치 구간은 포함되지 않는다","total":{"n":100,"p50":9.599999994039536,"p95":15.100000008940697,"p99":49.400000005960464,"max":82.6000000089407,"mean":11.262000000923871},"parse":{"n":100,"p50":8.799999997019768,"p95":9.900000005960464,"p99":10.200000002980232,"max":73.80000001192093,"mean":9.535000000447035},"render":{"n":100,"p50":0.5,"p95":6.700000002980232,"p99":8.799999997019768,"max":41.20000000298023,"mean":1.727000000476837}}
+[eqmux][probe] out = C:\Users\LEE\AppData\Local\Temp\claude\C--Users-LEE-Desktop-workspace-Administrator-Dev\0b61a862-0960-4e27-ae84-ccaf8ecf02aa\scratchpad\v.jsonl
+[0804/180238.496:ERROR:ui\gfx\win\window_impl.cc:172] Failed to unregister class Chrome_WidgetWin_0. Error = 1412
