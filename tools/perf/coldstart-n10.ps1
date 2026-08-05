@@ -7,6 +7,13 @@
 $ErrorActionPreference = 'Stop'
 
 . "$PSScriptRoot\_paths.ps1"                    # 경로는 하드코딩하지 않고 찾는다 (README §경로)
+
+# 🔴 착수 조건 — 여유 ≥ 3 GB (BRIEF-2026-08-05-KR3-M2.md §2-1 ②)
+#    KR3은 압력이 "유리한 쪽"으로 작용한다 — 압력이 높으면 기동이 느려져 기준선이 부풀고
+#    목표가 느슨해진다. A-4(워킹셋 잘림 → 보수적)와 방향이 반대다.
+#    그래서 게이트 미달은 경고가 아니라 중단이다 — 그 조건에서 잰 기준선은 판정을 유리하게 만든다.
+$memAtStart = Assert-MemoryHeadroom -MinFreeGb 3.0
+
 $ops      = Resolve-AcmuxOps
 $electron = Resolve-AcmuxElectron -Ops $ops
 $base     = Join-Path $env:TEMP 'acmux-coldstart'
@@ -143,8 +150,13 @@ function Stat([int[]]$v, [string]$label) {
   "{0} : n={1} 중앙값={2} p95={3} 최소={4} 최대={5} 평균={6}" -f $label, $n, $med, $p95, $s[0], $s[-1], $avg
 }
 
+$memAtEnd = Get-MemoryPressure   # 시작·종료 압력을 같은 형식으로 남긴다 (KR3-M2 브리프 §2-1 ③)
+
 ""
-"=== 결과 (ms) ==="
+"=== 결과 ($(Get-MachineCode) · ms) ==="
+"기계: $(Get-MachineLine)"
+"측정 시작 시 메모리: 여유 $($memAtStart.free_gb) GB · 사용률 $($memAtStart.used_pct)%"
+"측정 종료 시 메모리: 여유 $($memAtEnd.free_gb) GB · 사용률 $($memAtEnd.used_pct)%"
 Stat ($rows.create_ms | Where-Object { $_ -ne $null }) 'T0→세션생성 '
 Stat ($rows.prompt_ms | Where-Object { $_ -ne $null }) 'T0→첫프롬프트'
 Stat ($rows.all4_ms   | Where-Object { $_ -ne $null }) 'T0→4개준비  '
