@@ -1,11 +1,17 @@
-# a4-idle-ram-m1.ps1 — AgentCommender 유휴 RAM 기준선 재측정 (M1)
+# a4-idle-ram-m1.ps1 — AgentCommender 유휴 RAM 기준선 재측정 (기계 무관 — #15. 파일명의 -m1은 인용 유지용이다)
 # 규격: issue.md #6 — 터미널 4개 · 안정화 30초 후 · 30초 간격 · 10표본 · 중앙값
 # 격리: BASELINE.md §1 규칙 준수 (라이브 선행 확인 · 전후 acmux list · 격리 인스턴스만 종료)
 # 지표: WorkingSet64 (BASELINE §3.4와 동일 — 바꾸면 비교 불가)
 $ErrorActionPreference = 'Stop'
 
-$ops      = 'D:\ClaudeCockpit\root\AgentCommender\ops'
-$electron = Join-Path $ops 'node_modules\electron\dist\electron.exe'
+. "$PSScriptRoot\_paths.ps1"                    # 경로는 하드코딩하지 않고 찾는다 (README §경로)
+
+# 🔴 착수 조건 — 여유가 부족하면 앱이 아니라 메모리 압력을 재게 된다 (#15 · A-4-M2 브리프 §0)
+#    경고가 아니라 중단이다. 같은 기계에서 도는 세션들까지 같이 느려지기 때문이다.
+$memAtStart = Assert-MemoryHeadroom -MinFreeGb 3.0
+
+$ops      = Resolve-AcmuxOps
+$electron = Resolve-AcmuxElectron -Ops $ops
 $base     = Join-Path $env:TEMP 'acmux-a4'
 $udata    = Join-Path $base 'udata'
 $ws       = Join-Path $base 'ws'
@@ -145,7 +151,9 @@ $treeMed = Med ($rows.tree_mb)
 $shell   = Med (@(0..($rows.Count-1) | ForEach-Object { $rows[$_].pwsh_mb + $rows[$_].conhost_mb }))
 
 ""
-"=== 결과 (M1 · n=$SAMPLES · WorkingSet64 중앙값) ==="
+"=== 결과 ($(Get-MachineCode) · n=$SAMPLES · WorkingSet64 중앙값) ==="
+"기계: $(Get-MachineLine)"
+"측정 시작 시 메모리: 여유 $($memAtStart.free_gb) GB · 사용률 $($memAtStart.used_pct)%  (#15 할 일 3)"
 "앱 전용 (electron)   : $appMed MB   [범위 $(($rows.app_mb | Measure-Object -Min).Minimum) ~ $(($rows.app_mb | Measure-Object -Max).Maximum)]"
 "트리 전체            : $treeMed MB  [범위 $(($rows.tree_mb | Measure-Object -Min).Minimum) ~ $(($rows.tree_mb | Measure-Object -Max).Maximum)]"
 "셸 페이로드(pwsh+conhost): $shell MB"

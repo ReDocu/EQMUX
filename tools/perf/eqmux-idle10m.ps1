@@ -1,9 +1,10 @@
-# eqmux-idle10m.ps1 — EQMUX 앱 데이터 "설치 직후 10분 유휴" (M1)
+# eqmux-idle10m.ps1 — EQMUX 앱 데이터 "설치 직후 10분 유휴" (기계 무관 — 기계 코드는 실행 시 실측한다)
 # 절차: APPDATA-S2-1b.md §4 그대로. 세는 것은 eqmux.exe --appdata-report (같은 코드·같은 자)
 # PowerShell로 따로 세지 않는다 (§4 세아 요청).
 $ErrorActionPreference = 'Stop'
 
-$eq    = 'D:\workspace\Main\project\EQMUX\src-tauri\target\release\eqmux.exe'
+. "$PSScriptRoot\_paths.ps1"                    # 경로는 하드코딩하지 않고 찾는다 (README §경로)
+$eq    = Resolve-EqmuxExe
 $base  = Join-Path $env:TEMP 'eqmux-idle'
 $outCsv= Join-Path $PSScriptRoot 'eqmux-idle10m.csv'
 $IDLE  = 600
@@ -70,7 +71,9 @@ $rows | Export-Csv -LiteralPath $outCsv -NoTypeInformation -Encoding UTF8
 
 $f = $rows[-1]
 ""
-"=== 결과 (EQMUX · M1 · 빈 폴더 → 10분 유휴) ==="
+"=== 결과 (EQMUX · $(Get-MachineCode) · 빈 폴더 → 10분 유휴) ==="
+"기계: $(Get-MachineLine)"
+"측정한 exe: $eq ($([math]::Round((Get-Item $eq).Length/1MB,2)) MB · $((Get-Item $eq).LastWriteTime))"
 "총계   : $($f.total_mb) MB   캐시 $($f.cache_mb) MB ($($f.cache_pct)%)   파일 $($f.files)개"
 "대조군 : AgentCommender 30.43 MB (같은 조건 · M1)"
 "JSON   : $base\idle-10m.json"

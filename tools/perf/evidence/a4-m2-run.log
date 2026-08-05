@@ -1,0 +1,48 @@
+[paths] 메모리: 총 15.26 GB · 여유 3.16 GB · 사용률 79.3%
+[paths] ops ← 라이브 프로세스: C:\Users\LEE\Desktop\GitProject\ClaudeCodeTemplate\root\AgentCommender\ops
+=== 측정 전 라이브 세션 ===
+1	Manager	[Administrator]	pid=25640	C:\Users\LEE\Desktop\workspace\Administrator\Manager
+2	Dev	[Administrator]	pid=7324	C:\Users\LEE\Desktop\workspace\Administrator\Dev
+3	Supporter	[Administrator]	pid=27848	C:\Users\LEE\Desktop\workspace\Administrator\Supporter
+16	s15	[NovelTeam]	pid=18876	C:\Users\LEE\Desktop\workspace\NovelTeam\s15
+17	EduCraft	[EduCraft]	pid=15596	C:\Users\LEE\Desktop\workspace\EduCraft\EduCraft
+18	Explorer	[EduCraft]	pid=4064	C:\Users\LEE\Desktop\workspace\EduCraft\Explorer
+19	Gamer	[EduCraft]	pid=22060	C:\Users\LEE\Desktop\workspace\EduCraft\Gamer
+20	Worker	[EduCraft]	pid=32140	C:\Users\LEE\Desktop\workspace\EduCraft\Worker
+22	Heker	[HekerTon]	pid=22580	C:\Users\LEE\Desktop\workspace\HekerTon\Heker
+기동: pid=34712 · T0=12:01:24.825
+터미널 4개 준비: 2410 ms — 이후 아무 입력도 하지 않는다 (유휴)
+
+경과   트리MB   electron   pwsh   conhost   기타   프로세스수
+  30s     874.2      570.8   274.9      28.5       0        12
+  60s     865.8      563.6   273.7      28.5       0        12
+  90s     851.2      549.3   273.5      28.3       0        12
+ 120s     852.8        551   273.5      28.3       0        12
+ 150s     851.4      549.8   273.2      28.3       0        12
+ 180s     853.4      551.8   273.3      28.3       0        12
+ 210s     848.8      547.1   273.3      28.3       0        12
+ 240s     847.6      545.7   273.5      28.3       0        12
+ 270s     847.3      545.4   273.6      28.3       0        12
+ 300s     847.3      545.4   273.6      28.3       0        12
+
+=== 결과 (M2 · n=10 · WorkingSet64 중앙값) ===
+기계: M2 · DESKTOP-SQ0OEKB · Microsoft Windows 11 Home 10.0.22631 · 120 Hz · RAM 15.26 GB (여유 1.89 GB · 사용률 87.6%)
+측정 시작 시 메모리: 여유 3.16 GB · 사용률 79.3%  (#15 할 일 3)
+앱 전용 (electron)   : 549.6 MB   [범위 545.4 ~ 570.8]
+트리 전체            : 851.3 MB  [범위 847.3 ~ 874.2]
+셸 페이로드(pwsh+conhost): 301.8 MB
+진동 폭 (앱)         : 25.4 MB
+
+A-4 기준 (issue #6·#11): 앱 전용 ≤ 기준선의 40%  →  목표 = 219.8 MB
+CSV: C:\Users\LEE\Desktop\workspace\Administrator\project\EQMUX\tools\perf\a4-idle-ram-m1.csv
+=== 측정 후 라이브 세션 ===
+1	Manager	[Administrator]	pid=25640	C:\Users\LEE\Desktop\workspace\Administrator\Manager
+2	Dev	[Administrator]	pid=7324	C:\Users\LEE\Desktop\workspace\Administrator\Dev
+3	Supporter	[Administrator]	pid=27848	C:\Users\LEE\Desktop\workspace\Administrator\Supporter
+16	s15	[NovelTeam]	pid=18876	C:\Users\LEE\Desktop\workspace\NovelTeam\s15
+17	EduCraft	[EduCraft]	pid=15596	C:\Users\LEE\Desktop\workspace\EduCraft\EduCraft
+18	Explorer	[EduCraft]	pid=4064	C:\Users\LEE\Desktop\workspace\EduCraft\Explorer
+19	Gamer	[EduCraft]	pid=22060	C:\Users\LEE\Desktop\workspace\EduCraft\Gamer
+20	Worker	[EduCraft]	pid=32140	C:\Users\LEE\Desktop\workspace\EduCraft\Worker
+22	Heker	[HekerTon]	pid=22580	C:\Users\LEE\Desktop\workspace\HekerTon\Heker
+격리 잔여: 0 개

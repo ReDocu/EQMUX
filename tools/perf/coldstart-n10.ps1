@@ -6,8 +6,9 @@
 #   T_prompt = 헤더 '────' 줄 뒤에 처음으로 비지 않은 내용이 붙은 시각 = 셸 첫 출력(프롬프트)
 $ErrorActionPreference = 'Stop'
 
-$ops      = 'D:\ClaudeCockpit\root\AgentCommender\ops'
-$electron = Join-Path $ops 'node_modules\electron\dist\electron.exe'
+. "$PSScriptRoot\_paths.ps1"                    # 경로는 하드코딩하지 않고 찾는다 (README §경로)
+$ops      = Resolve-AcmuxOps
+$electron = Resolve-AcmuxElectron -Ops $ops
 $base     = Join-Path $env:TEMP 'acmux-coldstart'
 $udata    = Join-Path $base 'udata'
 $ws       = Join-Path $base 'ws'

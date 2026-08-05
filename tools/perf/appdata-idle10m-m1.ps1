@@ -1,4 +1,4 @@
-# appdata-idle10m-m1.ps1 — AgentCommender 앱 데이터 "설치 직후 10분 유휴" (M1)
+# appdata-idle10m-m1.ps1 — AgentCommender 앱 데이터 "설치 직후 10분 유휴" (기계 무관 — #15. 파일명의 -m1은 인용 유지용이다)
 # BASELINE.md §3.2b 재측정(§8 3c). 대조군: APPDATA-S2-1b.md §0 3·4번 · §4
 #
 # 세는 규칙은 APPDATA-S2-1b.md §2-3을 **그대로 옮겼다** — 자가 다르면 비교가 안 된다.
@@ -8,8 +8,9 @@
 #   워크스페이스는 udata 밖이라 애초에 안 들어간다 (§2-2와 결과 동일)
 $ErrorActionPreference = 'Stop'
 
-$ops      = 'D:\ClaudeCockpit\root\AgentCommender\ops'
-$electron = Join-Path $ops 'node_modules\electron\dist\electron.exe'
+. "$PSScriptRoot\_paths.ps1"                    # 경로는 하드코딩하지 않고 찾는다 (README §경로)
+$ops      = Resolve-AcmuxOps
+$electron = Resolve-AcmuxElectron -Ops $ops
 $base     = Join-Path $env:TEMP 'acmux-idle10m'
 $udata    = Join-Path $base 'udata'     # ← Electron userData. 이게 "앱 데이터" 층이다
 $ws       = Join-Path $base 'ws'
@@ -147,7 +148,8 @@ $rows | Export-Csv -LiteralPath $outCsv -NoTypeInformation -Encoding UTF8
 $final = $rows[-1]
 
 ""
-"=== 결과 (M1 · 빈 폴더 → 10분 유휴 · 세는 자: APPDATA-S2-1b §2-3) ==="
+"=== 결과 ($(Get-MachineCode) · 빈 폴더 → 10분 유휴 · 세는 자: APPDATA-S2-1b §2-3) ==="
+"기계: $(Get-MachineLine)"
 "총계   : $($final.total_mb) MB"
 "캐시   : $($final.cache_mb) MB ($($final.cache_pct)%)"
 "파일 수: $($final.files)"
