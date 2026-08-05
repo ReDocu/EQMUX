@@ -21,6 +21,7 @@ import { runFontProbe, ensureFontsLoaded, type FontProbeResult } from "./font";
 import { LatencyProbe, installFrameHold, type Progress } from "./latency";
 import { PtyLink, bufferText } from "./pty";
 import { installGlobalHandlers, logError, logInfo } from "./log";
+import { verifyBundledLicense } from "./license";
 
 interface Paths {
   state_file: string;
@@ -106,6 +107,13 @@ async function main(): Promise<void> {
   // xterm이 rAF를 잡은 뒤에 갈아끼우면 이미 등록된 콜백이 옛 경로로 돈다.
   if (info.probe.enabled && info.probe.frame_hold > 1) {
     installFrameHold(info.probe.frame_hold);
+  }
+
+  // 동봉 폰트의 라이선스 전문이 이 바이너리 안에 있는지 확인한다(OFL 1.1 조건 2).
+  // 지연 계측 중에는 돌리지 않는다 — 4KB라도 표본 구간에 얹힌 일은 A-3 숫자에 섞인다.
+  // 기다리지 않는다: 판정은 stderr 한 줄로 남고, 라이선스 확인이 부팅을 늦출 이유는 없다.
+  if (!info.probe.enabled) {
+    void verifyBundledLicense();
   }
 
   // ⚠️ **터미널보다 먼저** 동봉 폰트를 붙인다. xterm은 셀 크기를 생성 시점에 한 번 재므로,

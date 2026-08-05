@@ -2,4 +2,4 @@
 # 이 기계는 core.autocrlf=true라 그냥 두면 체크아웃 때 LF→CRLF로 바뀌고,
 # NOTICE-D2Coding.md에 적어 둔 sha256(정본 대조용)이 재현되지 않는다.
 # 법적 문서라 "내용은 같다"로 넘기지 않고 바이트를 고정한다.
-src/assets/fonts/LICENSE-OFL-1.1.txt -text
+public/licenses/LICENSE-OFL-1.1.txt -text
