@@ -31,7 +31,14 @@ pub fn pty_spawn(
 }
 
 #[tauri::command]
-pub fn pty_write(mgr: State<'_, PtyManager>, id: String, data: String) -> Result<()> {
+pub fn pty_write(
+    mgr: State<'_, PtyManager>,
+    policy: State<'_, crate::memlevel::MemoryPolicy>,
+    id: String,
+    data: String,
+) -> Result<()> {
+    // 입력은 활동이다 (`S2-10`). touch는 원자 스탬프 + 논블로킹 발사라 입력을 안 기다리게 한다.
+    policy.touch();
     mgr.write(&id, &data)
 }
 

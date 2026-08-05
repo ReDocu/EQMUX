@@ -115,6 +115,11 @@ export interface ProbeOptions {
    * 1패널 값과 4패널 값은 **다른 조건의 숫자다** — 요약에 안 적으면 나중에 섞인다.
    */
   panels?: number;
+  /**
+   * `S2-10` — 첫 키 전 유휴 대기(ms). 표기용이다: 대기는 호출자(main.ts)가 한다.
+   * 0이 아니면 요약의 `first`(표본 1)가 "유휴→첫 키" 값이라는 뜻이다.
+   */
+  idleWaitMs?: number;
   onUpdate?: (p: Progress) => void;
 }
 
@@ -552,7 +557,17 @@ export class LatencyProbe {
         frame_hold: this.opts.frameHold,
         gap_ms: this.opts.gapMs,
         panels: this.opts.panels ?? 1,
+        idle_wait_ms: this.opts.idleWaitMs ?? 0,
       },
+      // 표본 1 — idle_wait_ms > 0이면 "유휴(Low)→첫 키"의 실측값이다 (S2-10 인수 조건 3).
+      // 집계에도 포함되지만(실사용도 첫 키를 포함한다) 따로 꺼내 둬야 판정할 수 있다.
+      first: this.samples.length
+        ? {
+            work_ms: +this.samples[0].work.toFixed(3),
+            wait_ms: +this.samples[0].wait.toFixed(3),
+            total_ms: +this.samples[0].total.toFixed(3),
+          }
+        : null,
       machine: {
         gpu: this.opts.gpu,
         frame_interval_ms: round(frames),

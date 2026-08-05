@@ -46,6 +46,8 @@ interface ProbeConfig {
   frame_hold: number;
   /** 합성 키 간격(ms) */
   gap_ms: number;
+  /** S2-10 — 첫 키 전 유휴 대기(ms). 0이면 기존 동작. 유휴→첫 키 실측용 */
+  idle_wait_ms: number;
 }
 
 interface PtyProbeConfig {
@@ -260,6 +262,15 @@ async function runLatencyProbe(
 
   const latEl = el("#latency");
   latEl.hidden = false;
+
+  // S2-10 유휴→첫 키 모드 — 계측엔 PTY가 없어(#10) 복귀 트리거를 memlevel_touch로 재현한다.
+  // 발사 형태(IPC 한 발)가 pty_write와 같다. **표준 실행에는 안 건다** — 조건이 달라지면
+  // 지난 A-3 값과 비교가 깨진다. 요약 config에 idle_wait와 함께 찍혀 섞임을 막는다.
+  const idleWait = info.probe.idle_wait_ms;
+  if (idleWait > 0) {
+    first.term.onData(() => void invoke("memlevel_touch").catch(() => undefined));
+  }
+
   const probe = new LatencyProbe(first.term, {
     autoSamples: info.probe.auto_samples,
     injectMs: info.probe.inject_ms,
@@ -267,6 +278,7 @@ async function runLatencyProbe(
     gapMs: info.probe.gap_ms,
     gpu: first.status.unmaskedRenderer,
     panels: n,
+    idleWaitMs: idleWait,
     onUpdate: (p: Progress) => {
       latEl.textContent =
         `n=${p.n} · 실작업 p99 ${fmt(p.work.p99)} · 대기 p99 ${fmt(p.wait.p99)}` +
@@ -277,10 +289,19 @@ async function runLatencyProbe(
       latEl.classList.toggle("bad", p.work.p99 > 8);
     },
   });
+
+  if (idleWait > 0) {
+    // 유휴로 둔다 — Low 진입은 백엔드 stderr([memlevel])로 확인된다. 그 뒤 첫 키가 표본 1이다.
+    latEl.textContent = `유휴 대기 ${Math.round(idleWait / 1000)}s — Low 진입 후 첫 키를 잰다`;
+    logInfo(`유휴 대기 ${idleWait}ms 시작 — 종료 후 계측 개시 (S2-10 유휴→첫 키)`);
+    await sleep(idleWait);
+  }
+
   probe.start();
   logInfo(
     `계측 시작 — 목표 ${info.probe.auto_samples ?? "수동"}회 · 패널 ${n}개` +
-      ` · inject=${info.probe.inject_ms}ms · hold=${info.probe.frame_hold} · gap=${info.probe.gap_ms}ms`,
+      ` · inject=${info.probe.inject_ms}ms · hold=${info.probe.frame_hold} · gap=${info.probe.gap_ms}ms` +
+      (idleWait > 0 ? ` · idle_wait=${idleWait}ms` : ""),
   );
 }
 

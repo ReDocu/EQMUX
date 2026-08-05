@@ -239,6 +239,9 @@ fn spawn_reader(app: AppHandle, id: String, mut reader: Box<dyn Read + Send>) {
                             // 아직 한 글자도 완성되지 않았다. 다음 읽기를 기다린다.
                             continue;
                         }
+                        // 출력도 활동이다 (`S2-10`) — 긴 빌드가 찍는 동안 Low로 떨어지면
+                        // 화면이 실시간으로 갱신되는 중에 캐시를 버리게 된다.
+                        app.state::<crate::memlevel::MemoryPolicy>().touch();
                         if app
                             .emit(EVENT_DATA, DataEvent { id: &id, data: text })
                             .is_err()

@@ -47,6 +47,13 @@ pub struct ProbeConfig {
     pub frame_hold: u32,
     /// 합성 키 간격(ms).
     pub gap_ms: u64,
+    /// `S2-10` — 첫 키 전에 이만큼 유휴로 둔다(ms). 0이면 바로 시작(기존 동작).
+    ///
+    /// `--memory-policy-idle`보다 길게 주면 **Low 진입 후 첫 키**가 표본 1이 된다 —
+    /// 인수 조건 3("유휴→첫 키가 A-3 이내")을 재는 자리다. 이 모드에서는 프런트가
+    /// 키마다 `memlevel_touch`를 발사해 프로덕션 복귀 트리거를 재현한다.
+    /// **기존 A-3 값과 직접 비교하지 말 것** — 조건이 다르고, 요약 config에 같이 찍힌다.
+    pub idle_wait_ms: u64,
 }
 
 impl ProbeConfig {
@@ -59,6 +66,7 @@ impl ProbeConfig {
         let mut inject_ms = 0.0f64;
         let mut frame_hold = 1u32;
         let mut gap_ms = 8u64;
+        let mut idle_wait_ms = 0u64;
 
         for a in &args {
             if a == "--latency-probe" {
@@ -89,6 +97,11 @@ impl ProbeConfig {
                     Ok(n) => gap_ms = n,
                     _ => eprintln!("[eqmux] --latency-probe-gap-ms 값이 잘못됐다: {v:?} (무시)"),
                 }
+            } else if let Some(v) = a.strip_prefix("--latency-probe-idle-wait=") {
+                match v.parse::<u64>() {
+                    Ok(n) => idle_wait_ms = n,
+                    _ => eprintln!("[eqmux] --latency-probe-idle-wait 값이 잘못됐다: {v:?} (무시)"),
+                }
             }
         }
 
@@ -107,6 +120,7 @@ impl ProbeConfig {
             inject_ms,
             frame_hold,
             gap_ms,
+            idle_wait_ms,
         }
     }
 }

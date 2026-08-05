@@ -16,6 +16,7 @@ mod commands;
 mod config;
 mod error;
 mod layout;
+mod memlevel;
 mod probe;
 mod pty;
 
@@ -33,6 +34,7 @@ pub fn run() {
             commands::system::app_info,
             commands::system::app_data_report,
             commands::system::echo,
+            commands::system::memlevel_touch,
             commands::system::report_renderer,
             commands::system::log_front,
             commands::probe::probe_append,
@@ -184,30 +186,30 @@ pub fn run() {
 
             let window = win.build()?;
 
-            // SPIKE-A4 ④ — WebView2 공식 메모리 레버. Tauri 2.11이 안 감싸서 컨트롤러로 직접 간다.
-            // 진단 플래그다: 상시 켤지는 스파이크 숫자를 보고 결정한다(#19). 실패해도 앱은 뜬다 —
-            // 다만 "걸었다고 믿는 것"과 실제 적용을 가르기 위해 성공·실패를 반드시 stderr에 남긴다.
-            #[cfg(windows)]
-            if std::env::args().any(|a| a == "--memory-target=low") {
-                use webview2_com::Microsoft::Web::WebView2::Win32::{
-                    ICoreWebView2_19, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL,
-                };
-                use windows_core::Interface;
-                window.with_webview(|wv| unsafe {
-                    let applied = (|| -> std::result::Result<(), windows_core::Error> {
-                        let core = wv.controller().CoreWebView2()?;
-                        let core19: ICoreWebView2_19 = core.cast()?;
-                        // 1 = Low (docs.microsoft.com CoreWebView2MemoryUsageTargetLevel)
-                        core19.SetMemoryUsageTargetLevel(COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL(1))
-                    })();
-                    match applied {
-                        Ok(()) => eprintln!("[eqmux] WebView2 MemoryUsageTargetLevel = Low 적용"),
-                        Err(e) => eprintln!("[eqmux] ⚠️ MemoryUsageTargetLevel 적용 실패: {e}"),
-                    }
-                })?;
+            // `S2-10` — 유휴 연동 메모리 정책. 정적 레버(--memory-target=low · SPIKE-A4)가
+            // 있으면 정책은 스스로 꺼지고(정적이 이긴다) 여기서 한 번만 Low를 적용한다.
+            let mem_policy = memlevel::MemoryPolicy::from_args();
+            let static_low = std::env::args().any(|a| a == "--memory-target=low");
+            app.manage(mem_policy);
+            if static_low {
+                eprintln!("[eqmux] 정적 메모리 레버 — MemoryUsageTargetLevel(Low) 상시");
+                memlevel::apply(app.handle(), memlevel::Level::Low);
+            } else {
+                let policy = app.state::<memlevel::MemoryPolicy>();
+                policy.spawn_worker(app.handle().clone());
+                // 기동 자체가 활동이다 — 첫 유휴 카운트는 여기서 시작한다.
+                policy.touch();
             }
-            #[cfg(not(windows))]
-            let _ = &window;
+
+            // 포커스 "획득"은 활동이다. 지속 포커스는 아니다 — 근거는 memlevel.rs 머리말.
+            window.on_window_event({
+                let handle = app.handle().clone();
+                move |ev| {
+                    if matches!(ev, tauri::WindowEvent::Focused(true)) {
+                        handle.state::<memlevel::MemoryPolicy>().touch();
+                    }
+                }
+            });
 
             let font_probe_running = font_cfg.enabled;
 

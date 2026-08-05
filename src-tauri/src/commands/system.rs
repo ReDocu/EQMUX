@@ -87,3 +87,13 @@ pub fn log_front(level: String, msg: String) {
 pub fn echo(value: String) -> String {
     value
 }
+
+/// `S2-10` — 프런트가 활동을 알린다.
+///
+/// 실사용 입력은 `pty_write`가 이미 스탬프하므로 **이 명령의 주 사용처는 계측이다** —
+/// 지연 계측 모드는 PTY가 없어서(`docs/issue.md` #10) 유휴→복귀 경로를 이걸로 재현한다.
+/// 발사 형태(IPC 한 발)가 `pty_write`와 같아 프로덕션 트리거와 같은 모양이다.
+#[tauri::command]
+pub fn memlevel_touch(policy: State<'_, crate::memlevel::MemoryPolicy>) {
+    policy.touch();
+}
