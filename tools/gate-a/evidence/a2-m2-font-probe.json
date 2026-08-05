@@ -1,0 +1,440 @@
+{
+  "fontSize": 14,
+  "devicePixelRatio": 2,
+  "passDevicePx": 0.5,
+  "warnDevicePx": 1,
+  "stacks": [
+    {
+      "label": "현행 전체",
+      "stack": "\"D2Coding\", \"D2Coding ligature\", \"Cascadia Mono\", \"굴림체\", \"돋움체\", Consolas, monospace",
+      "entries": [
+        {
+          "family": "D2Coding",
+          "available": true
+        },
+        {
+          "family": "D2Coding ligature",
+          "available": false
+        },
+        {
+          "family": "Cascadia Mono",
+          "available": true
+        },
+        {
+          "family": "굴림체",
+          "available": true
+        },
+        {
+          "family": "돋움체",
+          "available": true
+        },
+        {
+          "family": "Consolas",
+          "available": true
+        },
+        {
+          "family": "monospace",
+          "available": true
+        }
+      ],
+      "asciiAdvance": 7,
+      "asciiEm": 0.5,
+      "chars": [
+        {
+          "ch": "A",
+          "codepoint": "U+0041",
+          "cells": 1,
+          "advance": 7,
+          "advanceEm": 0.5,
+          "advanceRepeat": 7,
+          "ratio": 1,
+          "designRatio": 1,
+          "errRatio": 0,
+          "errDevicePx": 0,
+          "resolvedBy": "D2Coding",
+          "candidates": [
+            "D2Coding"
+          ],
+          "inconclusive": false,
+          "verdict": "pass"
+        },
+        {
+          "ch": "가",
+          "codepoint": "U+AC00",
+          "cells": 2,
+          "advance": 14,
+          "advanceEm": 1,
+          "advanceRepeat": 14,
+          "ratio": 2,
+          "designRatio": 2,
+          "errRatio": 0,
+          "errDevicePx": 0,
+          "resolvedBy": "D2Coding",
+          "candidates": [
+            "D2Coding"
+          ],
+          "inconclusive": false,
+          "verdict": "pass"
+        },
+        {
+          "ch": "漢",
+          "codepoint": "U+6F22",
+          "cells": 2,
+          "advance": 14,
+          "advanceEm": 1,
+          "advanceRepeat": 14,
+          "ratio": 2,
+          "designRatio": 2,
+          "errRatio": 0,
+          "errDevicePx": 0,
+          "resolvedBy": "D2Coding",
+          "candidates": [
+            "D2Coding"
+          ],
+          "inconclusive": false,
+          "verdict": "pass"
+        },
+        {
+          "ch": "ｱ",
+          "codepoint": "U+FF71",
+          "cells": 1,
+          "advance": 7,
+          "advanceEm": 0.5,
+          "advanceRepeat": 7,
+          "ratio": 1,
+          "designRatio": 1,
+          "errRatio": 0,
+          "errDevicePx": 0,
+          "resolvedBy": null,
+          "candidates": [],
+          "inconclusive": false,
+          "verdict": "pass"
+        },
+        {
+          "ch": "→",
+          "codepoint": "U+2192",
+          "cells": 1,
+          "advance": 7,
+          "advanceEm": 0.5,
+          "advanceRepeat": 7,
+          "ratio": 1,
+          "designRatio": 1,
+          "errRatio": 0,
+          "errDevicePx": 0,
+          "resolvedBy": "D2Coding",
+          "candidates": [
+            "D2Coding"
+          ],
+          "inconclusive": false,
+          "verdict": "pass"
+        },
+        {
+          "ch": "■",
+          "codepoint": "U+25A0",
+          "cells": 1,
+          "advance": 7,
+          "advanceEm": 0.5,
+          "advanceRepeat": 7,
+          "ratio": 1,
+          "designRatio": 1,
+          "errRatio": 0,
+          "errDevicePx": 0,
+          "resolvedBy": "D2Coding",
+          "candidates": [
+            "D2Coding"
+          ],
+          "inconclusive": false,
+          "verdict": "pass"
+        }
+      ],
+      "bold": {
+        "asciiAdvance": 7,
+        "cjkRatio": 2,
+        "errDevicePx": 0,
+        "verdict": "pass"
+      },
+      "mixed": false,
+      "cjk": "pass",
+      "ambiguous": "pass"
+    },
+    {
+      "label": "D2Coding 전부 제외 (동봉 없었다면)",
+      "stack": "\"Cascadia Mono\", \"굴림체\", \"돋움체\", \"Consolas\", monospace",
+      "entries": [
+        {
+          "family": "Cascadia Mono",
+          "available": true
+        },
+        {
+          "family": "굴림체",
+          "available": true
+        },
+        {
+          "family": "돋움체",
+          "available": true
+        },
+        {
+          "family": "Consolas",
+          "available": true
+        },
+        {
+          "family": "monospace",
+          "available": true
+        }
+      ],
+      "asciiAdvance": 8.203,
+      "asciiEm": 0.5859,
+      "chars": [
+        {
+          "ch": "A",
+          "codepoint": "U+0041",
+          "cells": 1,
+          "advance": 8.203,
+          "advanceEm": 0.5859,
+          "advanceRepeat": 8.203,
+          "ratio": 1,
+          "designRatio": 1,
+          "errRatio": 0,
+          "errDevicePx": 0,
+          "resolvedBy": "Cascadia Mono",
+          "candidates": [
+            "Cascadia Mono"
+          ],
+          "inconclusive": false,
+          "verdict": "pass"
+        },
+        {
+          "ch": "가",
+          "codepoint": "U+AC00",
+          "cells": 2,
+          "advance": 14,
+          "advanceEm": 1,
+          "advanceRepeat": 14,
+          "ratio": 1.7067,
+          "designRatio": 1.7067,
+          "errRatio": -0.2933,
+          "errDevicePx": -4.812,
+          "resolvedBy": "굴림체",
+          "candidates": [
+            "굴림체"
+          ],
+          "inconclusive": false,
+          "verdict": "fail"
+        },
+        {
+          "ch": "漢",
+          "codepoint": "U+6F22",
+          "cells": 2,
+          "advance": 14,
+          "advanceEm": 1,
+          "advanceRepeat": 14,
+          "ratio": 1.7067,
+          "designRatio": 1.7067,
+          "errRatio": -0.2933,
+          "errDevicePx": -4.812,
+          "resolvedBy": "굴림체",
+          "candidates": [
+            "굴림체"
+          ],
+          "inconclusive": false,
+          "verdict": "fail"
+        },
+        {
+          "ch": "ｱ",
+          "codepoint": "U+FF71",
+          "cells": 1,
+          "advance": 7,
+          "advanceEm": 0.5,
+          "advanceRepeat": 7,
+          "ratio": 0.8533,
+          "designRatio": 0.8533,
+          "errRatio": -0.1467,
+          "errDevicePx": -2.406,
+          "resolvedBy": null,
+          "candidates": [],
+          "inconclusive": false,
+          "verdict": "fail"
+        },
+        {
+          "ch": "→",
+          "codepoint": "U+2192",
+          "cells": 1,
+          "advance": 8.203,
+          "advanceEm": 0.5859,
+          "advanceRepeat": 8.203,
+          "ratio": 1,
+          "designRatio": 1,
+          "errRatio": 0,
+          "errDevicePx": 0,
+          "resolvedBy": "Cascadia Mono",
+          "candidates": [
+            "Cascadia Mono"
+          ],
+          "inconclusive": false,
+          "verdict": "pass"
+        },
+        {
+          "ch": "■",
+          "codepoint": "U+25A0",
+          "cells": 1,
+          "advance": 8.203,
+          "advanceEm": 0.5859,
+          "advanceRepeat": 8.203,
+          "ratio": 1,
+          "designRatio": 1,
+          "errRatio": 0,
+          "errDevicePx": 0,
+          "resolvedBy": "Cascadia Mono",
+          "candidates": [
+            "Cascadia Mono"
+          ],
+          "inconclusive": false,
+          "verdict": "pass"
+        }
+      ],
+      "bold": {
+        "asciiAdvance": 8.203,
+        "cjkRatio": 1.8286,
+        "errDevicePx": -2.813,
+        "verdict": "fail"
+      },
+      "mixed": true,
+      "cjk": "fail",
+      "ambiguous": "pass"
+    },
+    {
+      "label": "Cascadia Mono 단독 (대조군)",
+      "stack": "\"Cascadia Mono\", monospace",
+      "entries": [
+        {
+          "family": "Cascadia Mono",
+          "available": true
+        },
+        {
+          "family": "monospace",
+          "available": true
+        }
+      ],
+      "asciiAdvance": 8.203,
+      "asciiEm": 0.5859,
+      "chars": [
+        {
+          "ch": "A",
+          "codepoint": "U+0041",
+          "cells": 1,
+          "advance": 8.203,
+          "advanceEm": 0.5859,
+          "advanceRepeat": 8.203,
+          "ratio": 1,
+          "designRatio": 1,
+          "errRatio": 0,
+          "errDevicePx": 0,
+          "resolvedBy": "Cascadia Mono",
+          "candidates": [
+            "Cascadia Mono"
+          ],
+          "inconclusive": false,
+          "verdict": "pass"
+        },
+        {
+          "ch": "가",
+          "codepoint": "U+AC00",
+          "cells": 2,
+          "advance": 14,
+          "advanceEm": 1,
+          "advanceRepeat": 14,
+          "ratio": 1.7067,
+          "designRatio": 1.7067,
+          "errRatio": -0.2933,
+          "errDevicePx": -4.812,
+          "resolvedBy": "monospace",
+          "candidates": [
+            "monospace"
+          ],
+          "inconclusive": false,
+          "verdict": "fail"
+        },
+        {
+          "ch": "漢",
+          "codepoint": "U+6F22",
+          "cells": 2,
+          "advance": 14,
+          "advanceEm": 1,
+          "advanceRepeat": 14,
+          "ratio": 1.7067,
+          "designRatio": 1.7067,
+          "errRatio": -0.2933,
+          "errDevicePx": -4.812,
+          "resolvedBy": "monospace",
+          "candidates": [
+            "monospace"
+          ],
+          "inconclusive": false,
+          "verdict": "fail"
+        },
+        {
+          "ch": "ｱ",
+          "codepoint": "U+FF71",
+          "cells": 1,
+          "advance": 7,
+          "advanceEm": 0.5,
+          "advanceRepeat": 7,
+          "ratio": 0.8533,
+          "designRatio": 0.8533,
+          "errRatio": -0.1467,
+          "errDevicePx": -2.406,
+          "resolvedBy": null,
+          "candidates": [],
+          "inconclusive": false,
+          "verdict": "fail"
+        },
+        {
+          "ch": "→",
+          "codepoint": "U+2192",
+          "cells": 1,
+          "advance": 8.203,
+          "advanceEm": 0.5859,
+          "advanceRepeat": 8.203,
+          "ratio": 1,
+          "designRatio": 1,
+          "errRatio": 0,
+          "errDevicePx": 0,
+          "resolvedBy": "Cascadia Mono",
+          "candidates": [
+            "Cascadia Mono"
+          ],
+          "inconclusive": false,
+          "verdict": "pass"
+        },
+        {
+          "ch": "■",
+          "codepoint": "U+25A0",
+          "cells": 1,
+          "advance": 8.203,
+          "advanceEm": 0.5859,
+          "advanceRepeat": 8.203,
+          "ratio": 1,
+          "designRatio": 1,
+          "errRatio": 0,
+          "errDevicePx": 0,
+          "resolvedBy": "Cascadia Mono",
+          "candidates": [
+            "Cascadia Mono"
+          ],
+          "inconclusive": false,
+          "verdict": "pass"
+        }
+      ],
+      "bold": {
+        "asciiAdvance": 8.203,
+        "cjkRatio": 1.8286,
+        "errDevicePx": -2.813,
+        "verdict": "fail"
+      },
+      "mixed": true,
+      "cjk": "fail",
+      "ambiguous": "pass"
+    }
+  ],
+  "note": "폰트가 몇 픽셀 advance로 그리는가를 잰 것이다. 화면에서 줄이 밀리는가는 재지 않았다 — xterm은 고정 격자라 advance가 어긋나도 칸은 안 밀리고 글리프가 제 칸을 넘거나 못 채운다. 육안을 대체하지 않는다. 비율이 틀리면 볼 것도 없이 미달이고, 맞으면 육안으로 넘긴다."
+}
