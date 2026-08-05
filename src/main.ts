@@ -4,7 +4,7 @@
 // DOM 렌더러로 조용히 폴백해도 글자는 그려진다 — 느릴 뿐이다.
 // 그래서 렌더 경로를 항상 눈에 보이게 표시한다 (S1-3부터의 규칙).
 //
-// 분기 순서는 lib.rs의 충돌 경고와 같은 말이어야 한다: 폭 > 지연 > 패널 검증 > 일반.
+// 분기 순서는 lib.rs의 충돌 경고와 같은 말이어야 한다: 폭 > 지연 > 패널 검증 > 프리셋 확인 > 일반.
 
 import { invoke } from "@tauri-apps/api/core";
 import type { Terminal } from "@xterm/xterm";
@@ -22,7 +22,15 @@ import {
 import { runFontProbe, ensureFontsLoaded, type FontProbeResult } from "./font";
 import { LatencyProbe, installFrameHold, type Progress } from "./latency";
 import { bufferText, type PtyLink, type PtyInfo } from "./pty";
-import { PanelManager, ensurePanes, renderStaticGrid } from "./panels";
+import {
+  PanelManager,
+  ensurePanes,
+  renderStaticGrid,
+  type LayoutNode,
+  type LayoutStateDto,
+  type PresetInfo,
+  type SplitDirection,
+} from "./panels";
 import { installFocusKeys, connectFocus } from "./focus";
 import { installGlobalHandlers, logError, logInfo } from "./log";
 import { verifyBundledLicense } from "./license";
@@ -71,6 +79,13 @@ interface PanesConfig {
   out_path: string;
 }
 
+/** S2-11 — 배치 프리셋 무인 확인(`--preset-probe`). `target`이 `all`이면 6종 전수. */
+interface PresetProbeConfig {
+  enabled: boolean;
+  target: string;
+  out_path: string;
+}
+
 interface AppInfo {
   name: string;
   version: string;
@@ -79,6 +94,7 @@ interface AppInfo {
   pty_probe: PtyProbeConfig;
   font_probe: FontProbeConfig;
   panes: PanesConfig;
+  preset_probe: PresetProbeConfig;
   shell: string;
 }
 
@@ -369,6 +385,12 @@ async function runApp(info: AppInfo, layoutEl: HTMLElement, stack: string | null
     return;
   }
 
+  // S2-11 — 배치 프리셋 무인 확인. 일반 화면 위에서 돌지만 검증이므로 상태바·디스크 훑기 앞이다.
+  if (info.preset_probe.enabled) {
+    await runPresetProbe(manager, info);
+    return;
+  }
+
   // 계측·검증이 아닐 때만 건다 — 표본 구간에 디스크 훑기를 얹지 않는다.
   installAppDataReport();
 
@@ -476,7 +498,174 @@ async function runPanesProbe(manager: PanelManager, info: AppInfo): Promise<void
 
 /** 살아 있는 렌더 캔버스 수 — "정리했다고 믿는 것"과 DOM에 실제 남은 것을 구분한다. */
 function canvasCount(): number {
-  return document.querySelectorAll(".xterm-screen canvas").length;
+  return canvasList().length;
+}
+
+/** 캔버스 **요소들**. 수만으로는 "새로 만든 8장"과 "그 8장"이 구분되지 않는다(`S2-11`). */
+function canvasList(): Element[] {
+  return [...document.querySelectorAll(".xterm-screen canvas")];
+}
+
+/**
+ * `S2-11` 무인 확인 (`--preset-probe`) — **"재배열이지 재생성이 아니다"를 기계가 판정한다.**
+ *
+ * 이건 화면으로 구분이 안 되는 성질이다. 새 셸 8개로 다시 뜬 화면과 살아 있는 세션을
+ * 옮겨 담은 화면은 똑같이 생겼다 — 스크롤백을 눈으로 뒤져야 갈린다. 그래서 신원을 대조한다.
+ *
+ *   ① **잎 id** — 트리가 같은 세션을 들고 있는가 (순서까지)
+ *   ② **PTY id** — 프로세스가 안 죽었는가 (`pty_list`는 살아 있는 것만 준다)
+ *   ③ **캔버스 요소 동일성** — xterm이 파괴·재생성되지 않았는가.
+ *      수만 세면 새로 만든 8장도 8장이다. **요소가 같아야** 버퍼·WebGL 컨텍스트가 산 것이다.
+ *   ④ 트리 모양이 `listPresets()`가 예고한 배치와 같은가.
+ *      **검증은 엔진과 따로 계산한다**(`shapeOf`) — 같은 코드로 검사하면 그 코드가 틀렸을 때
+ *      통과가 나온다.
+ */
+async function runPresetProbe(manager: PanelManager, info: AppInfo): Promise<void> {
+  const finish = async (pass: boolean, verdict: string, detail: object): Promise<void> => {
+    await invoke("preset_probe_finish", {
+      json: JSON.stringify(detail, null, 2),
+      verdict,
+      pass,
+    }).catch((e) => logError("preset_probe_finish 실패", e));
+  };
+
+  try {
+    // 프롬프트가 그려질 시간. 셸 자체는 boot에서 이미 떴다.
+    await sleep(2000);
+
+    const metas = await manager.listPresets();
+    const target = info.preset_probe.target;
+    const targets = target === "all" ? metas : metas.filter((m) => m.id === target);
+    if (targets.length === 0) {
+      await finish(false, `미달 — 모르는 프리셋: ${target}`, { pass: false, target });
+      return;
+    }
+
+    const baseLeaves = manager.leafIds();
+    const basePtys = (await invoke<PtyInfo[]>("pty_list")).map((p) => p.id).sort();
+    const baseCanvases = canvasList();
+    if (baseLeaves.length < 2) {
+      // 잎이 하나면 어떤 프리셋을 걸어도 같은 화면이라 아무것도 증명하지 못한다.
+      await finish(false, `미달 — 세션이 ${baseLeaves.length}개다. --panes=N으로 2개 이상 필요`, {
+        pass: false,
+        leaves: baseLeaves,
+      });
+      return;
+    }
+
+    const lines: string[] = [];
+    const results: object[] = [];
+    let allPass = true;
+
+    for (const meta of targets) {
+      await manager.applyPreset(meta.id);
+      // 재배열 뒤 격자 맞추기(fit)와 리사이즈가 가라앉을 시간.
+      await sleep(300);
+
+      const leaves = manager.leafIds();
+      const ptys = (await invoke<PtyInfo[]>("pty_list")).map((p) => p.id).sort();
+      const canvases = canvasList();
+      const tree = await invoke<LayoutStateDto>("layout_get");
+      const shape = shapeOf(tree.root);
+      const want = expectedShape(meta);
+      const cur = manager.currentPreset();
+
+      const checks = {
+        leaves_identical: sameList(leaves, baseLeaves),
+        ptys_identical: sameList(ptys, basePtys),
+        pty_per_leaf: ptys.length === leaves.length,
+        canvas_identity_preserved: sameElements(canvases, baseCanvases),
+        renderers_alive: manager.rendererReport().every((r) => r.alive),
+        current_preset_is_target: cur?.id === meta.id,
+        shape_matches_plan:
+          !!shape && shape.axis === want.axis && sameList(shape.groups, want.groups),
+      };
+      const failed = Object.entries(checks)
+        .filter(([, ok]) => !ok)
+        .map(([k]) => k);
+      if (failed.length) allPass = false;
+
+      lines.push(
+        `${failed.length ? "미달" : "통과"} ${meta.id} (${meta.short}) —` +
+          ` 계획 ${want.axis ?? "leaf"}[${want.groups.join(",")}]` +
+          ` 실제 ${shape ? `${shape.axis ?? "leaf"}[${shape.groups.join(",")}]` : "프리셋 모양 아님"}` +
+          ` · 잎 ${leaves.length} · PTY ${ptys.length} · 캔버스 ${canvases.length}` +
+          (failed.length ? ` · 실패: ${failed.join(", ")}` : ""),
+      );
+      results.push({
+        id: meta.id,
+        label: meta.label,
+        short: meta.short,
+        rule: meta.rule,
+        planned: want,
+        actual: shape,
+        checks,
+        pass: failed.length === 0,
+        leaves,
+        ptys,
+        canvases: canvases.length,
+        current_preset: cur?.id ?? null,
+      });
+    }
+
+    lines.unshift(
+      `${allPass ? "통과" : "미달"} — 프리셋 ${targets.length}종 ×` +
+        ` 세션 ${baseLeaves.length}개 · 잎·PTY·캔버스 신원 대조`,
+    );
+    await finish(allPass, lines.join("\n"), {
+      pass: allPass,
+      target,
+      sessions: baseLeaves.length,
+      base: { leaves: baseLeaves, ptys: basePtys, canvases: baseCanvases.length },
+      presets: results,
+    });
+  } catch (e) {
+    logError("프리셋 무인 확인 중 예외", e);
+    await finish(false, `미달 — 확인 중 예외: ${e}`, { pass: false, error: String(e) });
+  }
+}
+
+/** 트리를 (뿌리 방향 · 칸별 잎 수)로 눌러 본다. 프리셋이 만들 수 있는 모양이 아니면 `null`. */
+function shapeOf(root: LayoutNode): { axis: SplitDirection | null; groups: number[] } | null {
+  if (root.type === "leaf") return { axis: null, groups: [1] };
+  const inner: SplitDirection = root.direction === "row" ? "column" : "row";
+  const groups: number[] = [];
+  for (const c of root.children) {
+    const n = c.node;
+    if (n.type === "leaf") {
+      groups.push(1);
+      continue;
+    }
+    if (n.direction !== inner || !n.children.every((x) => x.node.type === "leaf")) return null;
+    groups.push(n.children.length);
+  }
+  return { axis: root.direction, groups };
+}
+
+/**
+ * 메타의 계획을 **정규화 뒤 모양**으로 옮긴다.
+ *
+ * 칸이 하나뿐인 계획(`1 × 8`)은 뿌리 분할이 걷히고 안쪽 분할이 뿌리로 올라온다
+ * (`layout.rs::normalize` — 외자식 분할 제거). 그 규칙을 여기서도 알아야 비교가 성립한다.
+ */
+function expectedShape(meta: PresetInfo): { axis: SplitDirection | null; groups: number[] } {
+  const inner: SplitDirection = meta.axis === "row" ? "column" : "row";
+  if (meta.groups.length === 1) {
+    const g = meta.groups[0];
+    return g === 1 ? { axis: null, groups: [1] } : { axis: inner, groups: Array(g).fill(1) };
+  }
+  return { axis: meta.axis, groups: meta.groups };
+}
+
+function sameList<T>(a: readonly T[], b: readonly T[]): boolean {
+  return a.length === b.length && a.every((v, i) => v === b[i]);
+}
+
+/** 순서는 봐주고 **구성은 안 봐준다** — 같은 요소들이 그대로 있어야 한다. */
+function sameElements(a: readonly Element[], b: readonly Element[]): boolean {
+  if (a.length !== b.length) return false;
+  const set = new Set(b);
+  return a.every((el) => set.has(el));
 }
 
 /**

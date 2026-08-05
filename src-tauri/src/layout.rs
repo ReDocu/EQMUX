@@ -127,6 +127,16 @@ pub struct LayoutState {
     /// 포커스된 **잎**의 id. 트리에 없는 id면 불러올 때 고쳐진다.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub focus: Option<String>,
+    /// 지금 걸려 있는 배치 프리셋 id (`S2-11` · `presets.rs`). 없으면 `None`.
+    ///
+    /// **스키마 자리는 여기까지가 `S2-11`이다.** 저장·복원은 `S3-4`(세션 영속)에서 한다 —
+    /// AgentCommender도 `SavedTeam`에 프리셋을 저장한다(FEATURE-DIFF D3).
+    /// 필드가 늘기만 하는 변경이라 `SCHEMA_VERSION`은 올리지 않는다(§버전 정책).
+    ///
+    /// 불러올 때 **모양이 안 맞으면 지운다**(`load`) — 틀린 배치 이름이 상태바에 뜨는 것은
+    /// 이름이 없는 것보다 나쁘다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset: Option<String>,
 }
 
 // ── id 발급 ──────────────────────────────────────────────────────────────────
@@ -193,6 +203,17 @@ impl Node {
         }
     }
 
+    /// 분할 노드를 만든다. **id 발급은 이 파일 밖으로 내보내지 않는다** —
+    /// 트리 밖에서 지은 id는 `bump_counter_past`가 못 세고, 그러면 언젠가 겹친다.
+    /// (`S2-11` 프리셋 엔진이 모양을 만들 때 쓴다)
+    pub fn split(direction: Direction, children: Vec<Child>) -> Self {
+        Node::Split {
+            id: next_id("split"),
+            direction,
+            children,
+        }
+    }
+
     /// 트리 안의 잎 id를 왼쪽부터 차례로.
     pub fn leaf_ids(&self) -> Vec<String> {
         let mut out = Vec::new();
@@ -222,6 +243,7 @@ impl LayoutState {
             version: SCHEMA_VERSION,
             root,
             focus,
+            preset: None,
         }
     }
 
@@ -239,6 +261,9 @@ impl LayoutState {
         match split_rec(&mut self.root, target_leaf, direction, new_leaf) {
             Ok(()) => {
                 self.focus = Some(new_id.clone());
+                // 구조가 바뀌었다 — 걸려 있던 배치 프리셋 이름은 더 이상 사실이 아니다(`S2-11`).
+                // 비율 변경(드래그)은 이름을 지우지 않는다. 그쪽은 `set_weights`다.
+                self.preset = None;
                 Ok(new_id)
             }
             Err(_) => Err(Error::Path(format!("잎을 찾지 못했다: {target_leaf}"))),
@@ -261,6 +286,8 @@ impl LayoutState {
         let mut killed = Vec::new();
         close_rec(&mut self.root, leaf_id, &mut killed);
         self.normalize();
+        // 잎이 하나 빠졌으면 프리셋 모양도 깨졌다 (`S2-11`).
+        self.preset = None;
 
         // 포커스가 사라진 잎이었으면 남은 첫 잎으로 옮긴다.
         let remaining = self.root.leaf_ids();
@@ -343,6 +370,34 @@ impl LayoutState {
         normalize_rec(&mut self.root);
     }
 
+    /// 🔴 **잎을 그대로 들고 트리 모양만 다시 짠다** (`S2-11` 배치 프리셋).
+    ///
+    /// `build`는 **받은 잎만** 써서 새 트리를 만든다 — 잎을 새로 만들지도, 버리지도 않는다.
+    /// 그래서 id·`pty_id`·`title`·`cwd`가 통째로 옮겨지고, **PTY도 xterm 버퍼도 안 죽는다.**
+    ///
+    /// 이 함수를 통과하지 않는 재배열 경로를 만들지 말 것. 잎을 새로 내는 순간
+    /// 프런트 `reconcile`이 "사라진 잎"으로 보고 패널을 파괴하고, `layout_close`가 PTY를 죽인다.
+    ///
+    /// 잎 순서는 **호출자가 정한다** — 받은 벡터의 순서가 곧 화면 순서다(열 우선 규칙이 여기 얹힌다).
+    pub fn rearrange(&mut self, build: impl FnOnce(Vec<Node>) -> Node) {
+        let old = std::mem::replace(&mut self.root, placeholder());
+        let mut leaves = Vec::new();
+        take_leaves(old, &mut leaves);
+        self.root = build(leaves);
+        self.normalize();
+
+        // 포커스는 잎을 따라간다 — 같은 잎이 그대로 있으니 보통은 그대로다.
+        // 애초에 없었거나 트리 밖을 가리키고 있었으면 여기서 고친다.
+        let leaves = self.root.leaf_ids();
+        if !self
+            .focus
+            .as_ref()
+            .is_some_and(|f| leaves.iter().any(|l| l == f))
+        {
+            self.focus = leaves.first().cloned();
+        }
+    }
+
     /// 저장·복원해도 되는 트리인가.
     ///
     /// **불러온 직후에 반드시 부른다.** 손으로 고친 파일, 다른 버전이 쓴 파일,
@@ -412,6 +467,18 @@ fn placeholder() -> Node {
         pty_id: None,
         title: None,
         cwd: None,
+    }
+}
+
+/// 트리를 해체해 잎만 **왼쪽부터 차례로** 꺼낸다. 노드를 복사하지 않고 옮긴다(`rearrange`).
+fn take_leaves(node: Node, out: &mut Vec<Node>) {
+    match node {
+        Node::Leaf { .. } => out.push(node),
+        Node::Split { children, .. } => {
+            for c in children {
+                take_leaves(c.node, out);
+            }
+        }
     }
 }
 
@@ -633,6 +700,15 @@ pub fn load(path: &Path) -> Loaded {
             *pty_id = None;
         }
     });
+
+    // 배치 프리셋 이름은 **모양이 맞을 때만** 믿는다 (`S2-11` · `presets::still_matches`).
+    // 손으로 고친 파일·다른 버전이 쓴 파일이 이름만 남기고 모양이 다를 수 있다.
+    if let Some(id) = state.preset.clone() {
+        if !crate::presets::still_matches(&state, &id) {
+            eprintln!("[eqmux][layout] 배치 프리셋 {id:?}가 트리 모양과 안 맞는다 — 이름을 버린다");
+            state.preset = None;
+        }
+    }
 
     bump_counter_past(&state.root);
     Loaded {
@@ -1029,6 +1105,30 @@ mod tests {
         // 지난 실행의 PTY는 살아 있지 않다 — 참조를 남기지 않는다.
         let json = serde_json::to_string(&loaded.state).unwrap();
         assert!(!json.contains("pty-1"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `S2-11` — 프리셋 이름의 스키마 자리가 왕복하는가. 저장·복원 본편은 `S3-4`다.
+    #[test]
+    fn 프리셋_이름은_왕복하고_모양이_어긋나면_버려진다() {
+        let dir = std::env::temp_dir().join(format!("eqmux-layout-{}", next_id("t")));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("state.json");
+
+        let mut st = four_way();
+        crate::presets::apply(&mut st, "grid-2x4").unwrap();
+        save(&path, &st).unwrap();
+        assert_eq!(
+            load(&path).state.preset.as_deref(),
+            Some("grid-2x4"),
+            "모양이 맞으면 이름이 살아온다"
+        );
+
+        // 이름만 남기고 모양이 다른 파일 — 이름을 버린다.
+        st.preset = Some("grid-8x1".into());
+        save(&path, &st).unwrap();
+        assert_eq!(load(&path).state.preset, None);
 
         std::fs::remove_dir_all(&dir).ok();
     }

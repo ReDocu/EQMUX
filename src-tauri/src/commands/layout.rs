@@ -12,6 +12,7 @@ use tauri::State;
 
 use crate::error::Result;
 use crate::layout::{Direction, LayoutState, LayoutStore};
+use crate::presets::{self, PresetInfo};
 use crate::pty::PtyManager;
 
 /// 지금 트리를 통째로 준다. `S2-2`가 이걸로 화면을 그린다.
@@ -73,6 +74,30 @@ pub fn layout_attach_pty(
     pty_id: Option<String>,
 ) -> Result<()> {
     store.update(|st| st.attach_pty(&leaf_id, pty_id))
+}
+
+// ── 배치 프리셋 (`S2-11`) ────────────────────────────────────────────────────
+//
+// 경계 API는 이 둘뿐이다. `S2-12`(피커 · 해원)와 `S2-13`(상태바 · 이안)은
+// **프런트 `panels.ts`의 applyPreset/currentPreset/listPresets**로만 접근한다 —
+// 이 명령을 직접 부르지 않는다. 화면 상태(줌·포커스)와 어긋나지 않게 하는 것이
+// `PanelManager`의 일이기 때문이다(`S2-4`에서 요소 접근자를 안 연 이유와 같다).
+
+/// 프리셋을 적용한다 — **트리 모양만 바꾸고 세션은 그대로 옮겨 담는다**(`presets.rs`).
+///
+/// PTY를 죽이지 않는다. 죽는 경로는 `layout_close` 하나뿐이고, 여기는 그 경로를 지나지 않는다.
+#[tauri::command]
+pub fn layout_apply_preset(store: State<'_, LayoutStore>, preset: String) -> Result<()> {
+    store.update(|st| presets::apply(st, &preset))
+}
+
+/// 프리셋 6종 메타. **지금 세션 수 N 기준**의 실제 배치가 같이 실려 나간다.
+///
+/// 피커가 목록을 하드코딩하지 않게 하려고 연다(`S2-12` 브리프 §2) —
+/// 종류가 늘거나 이름이 바뀌면 이 파일만 고치면 된다.
+#[tauri::command]
+pub fn layout_presets(store: State<'_, LayoutStore>) -> Vec<PresetInfo> {
+    presets::list(&store.get())
 }
 
 /// 지금 트리를 상태 파일로 남긴다.

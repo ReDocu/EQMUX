@@ -42,6 +42,29 @@ export interface LayoutStateDto {
   version: number;
   root: LayoutNode;
   focus?: string | null;
+  /** `S2-11` — 지금 걸린 배치 프리셋 id. 구조가 바뀌면 백엔드가 지운다. */
+  preset?: string | null;
+}
+
+/**
+ * `S2-11` 배치 프리셋 메타. **정본은 백엔드 `presets.rs`다** — 여기서 목록을 만들지 않는다.
+ *
+ * `axis`·`groups`는 정원(8)이 아니라 **지금 세션 수 기준**의 실제 배치다.
+ * `axis: "row"`면 `groups`가 열, `"column"`이면 행이다.
+ */
+export interface PresetInfo {
+  id: string;
+  /** 피커 칸 이름 — "2 × 4 그리드" */
+  label: string;
+  /** 상태바용 짧은 이름 — "2 × 4" */
+  short: string;
+  /** 배치 규칙 표기 — "GRID-COL" */
+  rule: string;
+  /** 디자인이 상정한 세션 수. 상한이 아니다 */
+  capacity: number;
+  axis: SplitDirection;
+  groups: number[];
+  current: boolean;
 }
 
 /** 화면에 살아 있는 패널 하나. `handle`은 요소가 DOM에 붙어 크기를 가진 뒤에 생긴다. */
@@ -100,6 +123,8 @@ export class PanelManager {
   private dragging = false;
   /** 줌된 잎 id (`S2-4` 경계 API). 줌은 화면 상태라 여기가 정본이다 — 닫히면 여기서 풀린다. */
   private zoomed: string | null = null;
+  /** 프리셋 메타 캐시 (`S2-11`). `currentPreset()`이 동기여야 해서 들고 있는다. */
+  private presetMeta: PresetInfo[] = [];
   /** 구조·기하 변경 구독자 (`S2-4` 경계 API). */
   private readonly layoutListeners = new Set<() => void>();
 
@@ -117,6 +142,7 @@ export class PanelManager {
 
   async boot(): Promise<void> {
     this.state = await invoke<LayoutStateDto>("layout_get");
+    await this.refreshPresets();
     await this.reconcile();
     // 새로고침이면 이전 페이지의 PTY가 죽지 않고 남는다 — 여기서 반드시 정리한다.
     window.addEventListener("beforeunload", () => {
@@ -222,6 +248,74 @@ export class PanelManager {
         // 구독자 예외가 레이아웃 갱신을 막으면 안 된다 — 남기고 계속 간다.
         logError("레이아웃 변경 구독자 예외", e);
       }
+    }
+  }
+
+  // ── `S2-11` 경계 API — 배치 프리셋 (#18 규칙 3) ────────────────────────────
+  //
+  // 피커(`S2-12` · 해원)와 상태바·컨텍스트 바(`S2-13` · 이안)는 **아래 셋만** 쓴다.
+  //   listPresets()    — 6종 메타. **하드코딩 금지** — 종류가 늘거나 이름이 바뀌면 여기만 바뀐다
+  //   applyPreset(id)  — 적용. **세션은 안 죽는다** (재배열이지 재생성이 아니다)
+  //   currentPreset()  — 지금 걸린 배치. 없으면 null
+  //
+  // `layout_apply_preset`을 직접 부르지 말 것. 트리만 바꾸면 화면(패널 DOM·줌·포커스)이
+  // 안 따라온다 — 그 둘을 맞추는 것이 이 클래스의 일이다(`S2-4`에서 요소 접근자를 안 연 이유와 같다).
+
+  /**
+   * 프리셋 6종 메타. `groups`는 **지금 세션 수 기준**의 실제 배치라 미리보기를 그릴 수 있다.
+   *
+   * 비동기인 이유: 정본이 백엔드(`presets.rs`)에 있고, 그 계산이 세션 수에 걸려 있다.
+   * 피커가 열릴 때 한 번 부르면 된다 — 부를 때마다 캐시도 같이 갱신된다.
+   */
+  async listPresets(): Promise<PresetInfo[]> {
+    await this.refreshPresets();
+    return this.presetMeta;
+  }
+
+  /**
+   * 지금 걸린 배치. 프리셋에서 벗어났으면 `null`.
+   *
+   * **동기다** — 상태바가 `onLayoutChanged`마다 부르는 값이라 왕복을 끼우지 않는다.
+   *
+   * 언제 `null`이 되나: **구조가 바뀌면**(분할·닫기) 백엔드가 이름을 지운다.
+   * **비율만 바뀐 것은 여전히 그 프리셋이다** — 디자인 푸터가 *"적용 후에도 분할선을 드래그해
+   * 비율을 조정할 수 있습니다"* 라고 하므로, 드래그가 이름을 떨어뜨리면 그 문구가 거짓말이 된다.
+   */
+  currentPreset(): PresetInfo | null {
+    const id = this.state?.preset ?? null;
+    if (!id) return null;
+    return this.presetMeta.find((p) => p.id === id) ?? null;
+  }
+
+  /**
+   * 프리셋을 적용한다. 잎(세션)은 그대로 옮겨 담긴다 — **PTY도 xterm 버퍼도 안 죽는다.**
+   *
+   * 줌은 푼다. 사용자가 "이 배치로 보여 달라"고 한 건데 한 패널이 전체 화면을 덮고 있으면
+   * 바뀐 배치를 볼 방법이 없다 — 확대는 일시적 상태고 배치 변경이 이긴다(`focus.ts`와 같은 판단).
+   */
+  applyPreset(id: string): Promise<void> {
+    return this.serialize(async () => {
+      if (this.zoomed) this.setZoom(null);
+      try {
+        await invoke("layout_apply_preset", { preset: id });
+      } catch (e) {
+        // 거부(모르는 이름)는 화면·stderr에 남기고 삼킨다 — 피커가 죽을 이유가 없다.
+        logError(`프리셋 적용 실패 — ${id}`, e);
+        return;
+      }
+      await this.refreshState();
+      await this.refreshPresets();
+      await this.reconcile();
+    });
+  }
+
+  private async refreshPresets(): Promise<void> {
+    try {
+      this.presetMeta = await invoke<PresetInfo[]>("layout_presets");
+    } catch (e) {
+      // 목록을 못 받아도 앱은 뜬다. 조용히 비우지 않는다 — 피커가 빈 이유를 알아야 한다.
+      logError("프리셋 목록 조회 실패", e);
+      this.presetMeta = [];
     }
   }
 

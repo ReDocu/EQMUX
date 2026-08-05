@@ -340,6 +340,80 @@ impl PanesConfig {
     }
 }
 
+/// `S2-11` 배치 프리셋 무인 확인 (`--preset-probe`).
+///
+/// # 왜 있나
+///
+/// 이 작업의 완료 기준은 *"재배열이지 재생성이 아니다"* 인데, 그건 **화면으로는 구분이 안 된다.**
+/// 8칸이 새 셸 8개로 다시 뜬 화면과, 살아 있는 세션을 옮겨 담은 화면은 똑같이 생겼다 —
+/// 스크롤백을 눈으로 뒤져야 갈린다. 그래서 잎 id·PTY id·캔버스 수를 **적용 전후로 대조**해
+/// 파일과 종료 코드로 남긴다. 교차 검증(해원·이안)은 이걸 그대로 돌리면 된다.
+///
+/// | 플래그 | 뜻 |
+/// |---|---|
+/// | `--preset-probe` | **6종 전수** 적용·대조 후 종료 |
+/// | `--preset-probe=<id>` | 한 종만 (`grid-2x4` 등) |
+/// | `--preset-probe-out=PATH` | 결과 JSON 경로 |
+///
+/// 세션 수는 `--panes=N`으로 준다. **안 주면 8**이다 — 디자인이 상정한 정원이 8이고,
+/// 프리셋이 열게 만드는 그 수를 그대로 재는 편이 낫다(브리프 §3).
+#[derive(Debug, Clone, Serialize)]
+pub struct PresetProbeConfig {
+    pub enabled: bool,
+    /// 확인할 프리셋 id. `all`이면 6종 전수.
+    pub target: String,
+    pub out_path: PathBuf,
+}
+
+/// `--preset-probe`가 개수를 안 받았을 때 쓰는 세션 수.
+pub const PRESET_PROBE_PANES: usize = 8;
+
+impl PresetProbeConfig {
+    pub fn from_args(paths: &Paths) -> Self {
+        let mut enabled = false;
+        let mut target = "all".to_string();
+        let mut out_path = None;
+
+        for a in std::env::args() {
+            if a == "--preset-probe" {
+                enabled = true;
+            } else if let Some(v) = a.strip_prefix("--preset-probe-out=") {
+                enabled = true;
+                out_path = Some(PathBuf::from(v));
+            } else if let Some(v) = a.strip_prefix("--preset-probe=") {
+                enabled = true;
+                // 없는 이름을 조용히 전수로 바꾸면 "한 종만 쟀다"고 믿은 채 다른 결과를 본다.
+                if v == "all" || crate::presets::find(v).is_some() {
+                    target = v.to_string();
+                } else {
+                    eprintln!(
+                        "[eqmux] --preset-probe 값이 잘못됐다: {v:?} (있는 것: all, {}) — 전수로 간다",
+                        crate::presets::PRESETS
+                            .iter()
+                            .map(|p| p.id)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                }
+            }
+        }
+
+        let out_path = out_path.unwrap_or_else(|| {
+            paths
+                .state_file
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .join("preset-probe.json")
+        });
+
+        Self {
+            enabled,
+            target,
+            out_path,
+        }
+    }
+}
+
 /// JSONL 한 덩어리를 이어 쓴다.
 ///
 /// 표본마다 왕복하면 계측 자체가 측정을 흔든다. 프런트가 모아서 한 번에 보낸다.

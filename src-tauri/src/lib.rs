@@ -17,6 +17,7 @@ mod config;
 mod error;
 mod layout;
 mod memlevel;
+mod presets;
 mod probe;
 mod pty;
 
@@ -24,7 +25,10 @@ use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
 use appdata::AppDataWatch;
 use config::Paths;
-use probe::{FontProbeConfig, PanesConfig, ProbeConfig, PtyProbeConfig};
+use probe::{
+    FontProbeConfig, PanesConfig, PresetProbeConfig, ProbeConfig, PtyProbeConfig,
+    PRESET_PROBE_PANES,
+};
 use pty::PtyManager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -47,7 +51,10 @@ pub fn run() {
             commands::pty::pty_probe_finish,
             commands::probe::font_probe_finish,
             commands::probe::panes_probe_finish,
+            commands::probe::preset_probe_finish,
             commands::layout::layout_get,
+            commands::layout::layout_apply_preset,
+            commands::layout::layout_presets,
             commands::layout::layout_split,
             commands::layout::layout_close,
             commands::layout::layout_set_weights,
@@ -130,7 +137,23 @@ pub fn run() {
             }
 
             // `S2-2` — 기동 분할과 패널 무인 검증. 설정만 읽는다 — 나누는 것은 프런트다.
-            let panes_cfg = PanesConfig::from_args(&paths);
+            let mut panes_cfg = PanesConfig::from_args(&paths);
+
+            // `S2-11` — 배치 프리셋 무인 확인. 개수를 안 받았으면 8이다(디자인 정원 · 브리프 §3).
+            // 두 설정이 다 만들어진 뒤에 여기서 맞춘다 — `PanesConfig`가 프리셋을 알 이유는 없다.
+            let preset_probe_cfg = PresetProbeConfig::from_args(&paths);
+            if preset_probe_cfg.enabled {
+                if panes_cfg.count <= 1 {
+                    panes_cfg.count = PRESET_PROBE_PANES;
+                }
+                eprintln!(
+                    "[eqmux] 배치 프리셋 무인 확인 — 대상 {} · 세션 {}개 · out = {}",
+                    preset_probe_cfg.target,
+                    panes_cfg.count,
+                    preset_probe_cfg.out_path.display()
+                );
+            }
+
             if panes_cfg.probe {
                 eprintln!(
                     "[eqmux] 패널 무인 검증 — 목표 {}개 · out = {}",
@@ -161,6 +184,21 @@ pub fn run() {
             // 폭 계측은 재고 바로 끝난다. 지연 계측과 겹치면 둘 다 못 쓴다.
             if font_cfg.enabled && probe_cfg.enabled {
                 eprintln!("[eqmux] ⚠️ --font-probe와 --latency-probe는 같이 못 쓴다 — 폭 계측만 돈다");
+            }
+            // 프리셋 확인은 일반 화면 위에서 돌므로 앞의 검증들에 전부 진다 (프런트 분기 순서와 같은 말).
+            if preset_probe_cfg.enabled {
+                if font_cfg.enabled {
+                    eprintln!("[eqmux] ⚠️ --font-probe와 --preset-probe는 같이 못 쓴다 — 폭 계측만 돈다");
+                }
+                if probe_cfg.enabled {
+                    eprintln!("[eqmux] ⚠️ --latency-probe와 --preset-probe는 같이 못 쓴다 — 지연 계측만 돈다");
+                }
+                if panes_cfg.probe {
+                    eprintln!("[eqmux] ⚠️ --panes-probe와 --preset-probe는 같이 못 쓴다 — 패널 검증만 돈다");
+                }
+                if pty_probe_cfg.enabled {
+                    eprintln!("[eqmux] ⚠️ --pty-probe와 --preset-probe는 같이 못 쓴다 — 프리셋 확인만 돈다");
+                }
             }
 
             if paths.isolated {
@@ -241,6 +279,7 @@ pub fn run() {
             app.manage(pty_probe_cfg);
             app.manage(font_cfg);
             app.manage(panes_cfg);
+            app.manage(preset_probe_cfg);
             app.manage(PtyManager::default());
             Ok(())
         })
