@@ -116,8 +116,6 @@ body {
   display: flex;
   min-width: 0;
   min-height: 0;
-  gap: 1px;
-  background: var(--line);
 }
 
 .split.row {
@@ -131,6 +129,43 @@ body {
 .split > * {
   min-width: 0;
   min-height: 0;
+}
+
+/* 분할선(S2-3) — 잡는 폭은 5px, 보이는 선은 가운데 1px 헤어라인.
+   드래그 중에는 fit이 멈추므로(panels.ts) 시각 피드백은 이 선의 색이 전부다. */
+.split-divider {
+  flex: 0 0 5px;
+  display: flex;
+  justify-content: center;
+  user-select: none;
+  touch-action: none;
+}
+
+.split-divider::after {
+  content: "";
+  background: var(--line);
+  flex: 0 0 1px;
+}
+
+.split.row > .split-divider {
+  cursor: col-resize;
+  flex-direction: row;
+}
+
+.split.column > .split-divider {
+  cursor: row-resize;
+  flex-direction: column;
+}
+
+.split-divider:hover::after,
+.split-divider.active::after {
+  background: var(--ok);
+}
+
+/* 계측 화면의 분할선 — 기하만 같고 조작은 없다 */
+.split-divider.static {
+  cursor: default;
+  pointer-events: none;
 }
 
 .panel {

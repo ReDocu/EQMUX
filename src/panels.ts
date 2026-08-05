@@ -1,7 +1,8 @@
 // S2-2 — 레이아웃 트리를 실제 화면으로 그린다.
 //
 // 백엔드(`layout.rs`)가 트리의 정본을 들고, 여기는 그 트리를 **읽어서** DOM으로 편다.
-// 프런트 사본으로 먼저 움직이는 것은 드래그(`S2-3`)부터다 — 이번엔 조작마다 다시 읽는다.
+// 분할·닫기는 조작마다 다시 읽는다. 예외는 드래그(`S2-3`) 하나 — 드래그 중에는 프런트가
+// flex-grow로 선행하고, **놓는 순간** `layout_set_weights`로 백엔드에 확정한다.
 //
 // 지키는 것 셋 (BRIEF-2026-08-05-S2-2 §2):
 //   ① **닫으면 진짜로 없어진다.** PTY는 백엔드(`layout_close`)가 죽이고, 트리에서 사라진
@@ -69,6 +70,23 @@ export interface PanelManagerOptions {
 /** 프런트 쪽 패널 상한. 백엔드 `--panes` 상한(`probe.rs` MAX_PANES)과 같은 수다. */
 const MAX_PANELS = 16;
 
+/**
+ * 드래그 최소 패널 크기(px) — 프런트 가드 (`S2-3` 제약 ③).
+ *
+ * 패널 막대(제목+버튼 3개)가 뭉개지지 않는 하한이다. 이건 UX 가드고,
+ * **불변식은 백엔드가 든다** — `layout.rs::set_weights`가 0·음수·비유한 비율을 거부한다.
+ */
+const MIN_PANEL_PX = 100;
+
+/** `S2-4`(해원)가 쓰는 화면 기하 — viewport 좌표다 (`getBoundingClientRect` 기준). */
+export interface PanelRect {
+  leafId: string;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
 export class PanelManager {
   private readonly container: HTMLElement;
   private readonly opts: PanelManagerOptions;
@@ -78,6 +96,10 @@ export class PanelManager {
   private firstDone = false;
   /** 조작 직렬화. 분할 버튼 연타가 refresh 중간에 끼어들면 트리와 화면이 갈린다. */
   private mutating: Promise<unknown> = Promise.resolve();
+  /** 드래그 중인가. 참이면 fit(→`pty_resize`)을 멈춘다 — `S2-3` 제약 ①. */
+  private dragging = false;
+  /** 구조·기하 변경 구독자 (`S2-4` 경계 API). */
+  private readonly layoutListeners = new Set<() => void>();
 
   constructor(container: HTMLElement, opts: PanelManagerOptions) {
     this.container = container;
@@ -112,6 +134,56 @@ export class PanelManager {
   focused(): Panel | null {
     const f = this.state?.focus;
     return (f && this.panels.get(f)) || this.panels.values().next().value || null;
+  }
+
+  // ── `S2-4` 경계 API (#18 규칙 3) ──────────────────────────────────────────
+  //
+  // 포커스 이동·줌(해원)은 **새 파일에서 아래 넷만** 쓴다 — `panels.ts` 내부(DOM 구조·
+  // Panel 필드)에 기대지 않는다. 모자라면 여기에 여는 것이지 내부를 잡는 게 아니다.
+  //   leafIds()          — 트리 순서(왼쪽부터)의 잎 id
+  //   activeLeaf()       — 포커스 잎 id
+  //   panelRect(s)()     — 화면 기하 (방향 탐색은 이 좌표로 계산한다)
+  //   focus(id)          — 포커스 이동 (백엔드 확정 포함)
+  //   onLayoutChanged(f) — 분할·닫기·드래그 확정 뒤 알림. 해지 함수를 돌려준다
+
+  /** 포커스된 잎 id. 패널이 아직 없으면 `null`. */
+  activeLeaf(): string | null {
+    return this.state?.focus ?? null;
+  }
+
+  /** 잎 하나의 화면 기하. 없는 id면 `null`. */
+  panelRect(leafId: string): PanelRect | null {
+    const p = this.panels.get(leafId);
+    if (!p) return null;
+    const r = p.el.getBoundingClientRect();
+    return { leafId, left: r.left, top: r.top, width: r.width, height: r.height };
+  }
+
+  /** 모든 잎의 화면 기하 — 트리 순서. */
+  panelRects(): PanelRect[] {
+    const out: PanelRect[] = [];
+    for (const id of this.leafIds()) {
+      const r = this.panelRect(id);
+      if (r) out.push(r);
+    }
+    return out;
+  }
+
+  /** 구조·기하가 바뀔 때(분할·닫기·드래그 확정) 불린다. 반환값이 구독 해지다. */
+  onLayoutChanged(cb: () => void): () => void {
+    this.layoutListeners.add(cb);
+    return () => this.layoutListeners.delete(cb);
+  }
+
+  private notifyLayoutChanged(): void {
+    for (const cb of this.layoutListeners) {
+      try {
+        cb();
+      } catch (e) {
+        // 구독자 예외가 레이아웃 갱신을 막으면 안 된다 — 남기고 계속 간다.
+        logError("레이아웃 변경 구독자 예외", e);
+      }
+    }
   }
 
   /** 무인 검증용 — 패널별 렌더 판정. */
@@ -246,6 +318,7 @@ export class PanelManager {
     }
 
     this.applyFocus();
+    this.notifyLayoutChanged();
   }
 
   private render(): void {
@@ -261,13 +334,95 @@ export class PanelManager {
     }
     const box = document.createElement("div");
     box.className = `split ${node.direction}`;
-    for (const child of node.children) {
+    node.children.forEach((child, i) => {
+      // 분할선은 매 렌더 새로 만든다 — split id는 normalize가 걷어내며 사라지는 값이라
+      // 오래 붙잡지 않는다(§머리말 ③). 드래그 핸들러가 잡는 id도 이 렌더의 것이다.
+      if (i > 0) box.appendChild(this.makeDivider(node.id, node.direction));
       const el = this.renderNode(child.node);
       el.style.flexGrow = String(child.weight);
       el.style.flexBasis = "0";
       box.appendChild(el);
-    }
+    });
     return box;
+  }
+
+  // ── 드래그 리사이즈 (`S2-3`) ──────────────────────────────────────────────
+  //
+  // 드래그 중에는 **프런트가 선행한다** — 이웃 두 칸의 flex-grow만 만진다(CSS가 화면을
+  // 따라온다). 터미널 격자·PTY는 건드리지 않다가, 놓는 순간 한 번에 확정한다:
+  // fit(→크기가 실제로 바뀐 패널만 `pty_resize`) + `layout_set_weights`.
+  // ConPTY reflow는 싸지 않다 — 매 프레임 보내면 그게 A-3에 얹힌다 (브리프 제약 ①).
+
+  private makeDivider(splitId: string, direction: SplitDirection): HTMLElement {
+    const d = document.createElement("div");
+    d.className = "split-divider";
+    d.addEventListener("pointerdown", (e) => this.beginDrag(e, d, splitId, direction));
+    return d;
+  }
+
+  private beginDrag(
+    e: PointerEvent,
+    divider: HTMLElement,
+    splitId: string,
+    direction: SplitDirection,
+  ): void {
+    const prev = divider.previousElementSibling as HTMLElement | null;
+    const next = divider.nextElementSibling as HTMLElement | null;
+    if (!prev || !next) return;
+
+    const horizontal = direction === "row";
+    const prevSize = horizontal ? prev.offsetWidth : prev.offsetHeight;
+    const nextSize = horizontal ? next.offsetWidth : next.offsetHeight;
+    const pairSize = prevSize + nextSize;
+    // 창이 최소 크기 둘을 못 담으면 드래그 자체가 무의미하다 — 시작하지 않는다.
+    if (pairSize < MIN_PANEL_PX * 2) return;
+
+    e.preventDefault();
+    divider.setPointerCapture(e.pointerId);
+    this.dragging = true;
+    divider.classList.add("active");
+
+    const startPos = horizontal ? e.clientX : e.clientY;
+    const pairGrow = growOf(prev) + growOf(next);
+
+    const onMove = (ev: PointerEvent): void => {
+      const delta = (horizontal ? ev.clientX : ev.clientY) - startPos;
+      // 최소 크기 가드(프런트 · 제약 ③). 불변식 쪽은 layout.rs::set_weights가 든다 —
+      // 여기 클램프 덕에 0이나 음수 비율은 애초에 만들어지지 않는다.
+      const newPrev = clamp(prevSize + delta, MIN_PANEL_PX, pairSize - MIN_PANEL_PX);
+      prev.style.flexGrow = String((pairGrow * newPrev) / pairSize);
+      next.style.flexGrow = String((pairGrow * (pairSize - newPrev)) / pairSize);
+    };
+    const onEnd = (): void => {
+      divider.removeEventListener("pointermove", onMove);
+      divider.removeEventListener("pointerup", onEnd);
+      divider.removeEventListener("pointercancel", onEnd);
+      divider.classList.remove("active");
+      this.dragging = false;
+      void this.commitWeights(splitId, divider.parentElement);
+    };
+    divider.addEventListener("pointermove", onMove);
+    divider.addEventListener("pointerup", onEnd);
+    divider.addEventListener("pointercancel", onEnd);
+  }
+
+  /** 드래그가 끝났다 — 격자·PTY·트리를 **여기서 한 번만** 맞춘다. */
+  private async commitWeights(splitId: string, splitEl: HTMLElement | null): Promise<void> {
+    for (const p of this.panels.values()) this.fitPanel(p);
+    if (!splitEl) return;
+    const weights = [...splitEl.children]
+      .filter((c) => !c.classList.contains("split-divider"))
+      .map((c) => growOf(c as HTMLElement));
+    try {
+      await invoke("layout_set_weights", { splitId, weights });
+      await this.refreshState();
+    } catch (e) {
+      // 확정 실패 — 화면과 트리가 갈린 채로 두지 않는다. 트리 값으로 화면을 되돌린다.
+      logError("비율 확정 실패 — 트리 값으로 되돌린다", e);
+      await this.refreshState();
+      await this.reconcile();
+    }
+    this.notifyLayoutChanged();
   }
 
   private createShell(leaf: LeafNode): Panel {
@@ -366,6 +521,9 @@ export class PanelManager {
   }
 
   private fitPanel(panel: Panel): void {
+    // 드래그 중에는 격자를 다시 재지 않는다 — fit이 돌면 xterm onResize → pty_resize가
+    // 매 프레임 나간다(제약 ①). 화면 상자는 CSS가 따라가고, 격자는 놓는 순간 맞춘다.
+    if (this.dragging) return;
     try {
       panel.handle?.fit.fit();
     } catch {
@@ -434,14 +592,19 @@ export function renderStaticGrid(
 
   // 격자를 **다 짠 뒤에** 터미널을 연다. 만들면서 열면 첫 셀이 아직 전체 높이일 때
   // 크기를 재서, 다음 행이 붙는 순간 격자가 틀어진 채 계측이 돈다.
+  //
+  // 분할선은 실제 앱과 같은 요소를 **드래그 없이** 둔다(`S2-3`) — 계측 화면의 기하가
+  // 실사용 4분할과 같아야 A-3·A2 숫자를 같은 조건이라 말할 수 있다.
   const bodies: HTMLElement[] = [];
   for (let r = 0; r < rows; r++) {
+    if (r > 0) grid.appendChild(staticDivider());
     const rowEl = document.createElement("div");
     rowEl.className = "split row";
     rowEl.style.flexGrow = "1";
     rowEl.style.flexBasis = "0";
     grid.appendChild(rowEl);
     for (let c = 0; c < cols && bodies.length < n; c++) {
+      if (c > 0) rowEl.appendChild(staticDivider());
       const cell = document.createElement("section");
       cell.className = "panel";
       cell.style.flexGrow = "1";
@@ -456,11 +619,26 @@ export function renderStaticGrid(
   return bodies.map((body) => createTerminal(body, fontStack));
 }
 
+function staticDivider(): HTMLElement {
+  const d = document.createElement("div");
+  d.className = "split-divider static";
+  return d;
+}
+
 // ── 트리 헬퍼 ────────────────────────────────────────────────────────────────
 
 export function leavesOf(node: LayoutNode): LeafNode[] {
   if (node.type === "leaf") return [node];
   return node.children.flatMap((c) => leavesOf(c.node));
+}
+
+function growOf(el: HTMLElement): number {
+  const g = parseFloat(el.style.flexGrow || "");
+  return Number.isFinite(g) && g > 0 ? g : 0;
+}
+
+function clamp(v: number, lo: number, hi: number): number {
+  return Math.min(Math.max(v, lo), hi);
 }
 
 function parentSplitOf(node: LayoutNode, leafId: string): SplitNode | null {

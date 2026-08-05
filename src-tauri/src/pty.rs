@@ -185,8 +185,17 @@ impl PtyManager {
             .unwrap()
             .remove(id)
             .ok_or_else(|| not_found(id))?;
-        s.child.kill().map_err(Error::from)
-        // drop(s) — master·writer가 닫히고 ConPTY가 정리된다.
+        let r = s.child.kill().map_err(Error::from);
+        // drop(s)가 master를 닫으며 ConPTY를 정리하는데, **이 닫기가 conhost 상태에 따라
+        // 블로킹된다**(S2-3에서 실측 — 메모리 압박 하에서 layout_close가 메인 스레드째
+        // 얼어붙어 창까지 멈췄다. 같은 코드가 세 번 통과한 적도 있다 — 그건 운이었다).
+        // 동기 명령은 메인 스레드에서 돈다. 자원 반납이 입력을 막게 두지 않는다 —
+        // 세션은 이미 맵에서 빠졌으므로 pty_list·A2 관점의 정리는 끝났고, drop은 반납만 남았다.
+        std::thread::Builder::new()
+            .name(format!("eqmux-pty-drop-{id}"))
+            .spawn(move || drop(s))
+            .map_err(|e| Error::Pty(format!("정리 스레드 생성 실패: {e}")))?;
+        r
     }
 
     pub fn list(&self) -> Vec<PtyInfo> {
