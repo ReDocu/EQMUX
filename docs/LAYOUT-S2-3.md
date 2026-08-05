@@ -43,9 +43,16 @@ pointerup ──────────▶ ① 전 패널 fit → 크기가 실
 | `activeLeaf(): string \| null` | 포커스 잎 id |
 | `panelRect(id)` / `panelRects()` | 화면 기하(viewport 좌표) — 방향 탐색은 이 좌표로 계산 |
 | `focus(id): Promise<void>` | 포커스 이동 (백엔드 확정 포함) |
-| `onLayoutChanged(cb): () => void` | 분할·닫기·드래그 확정 뒤 알림. 반환값이 구독 해지 |
+| `setZoom(id \| null)` / `zoomedLeaf()` | **패널 줌** (해원 요청으로 추가 · 08-05). 토글 = `setZoom(zoomedLeaf() ? null : activeLeaf())` |
+| `onLayoutChanged(cb): () => void` | 분할·닫기·드래그 확정·줌 뒤 알림. 반환값이 구독 해지 |
 
 모자라면 **API를 여기에 늘리는 것**이지 `panels.ts`를 직접 고치는 게 아니다 — B 영역 관할(세아).
+
+> **요소 접근자(`panelElement`)는 요청이 있었지만 안 열었다.** 분할 껍데기는 렌더마다 다시
+> 짜이므로 밖에서 요소에 건 클래스는 다음 reconcile에 증발하고, 형제 패널만 숨겨서는 조상
+> 분할의 빈 상자가 자리를 차지해 줌이 안 채워진다. 그래서 **상태를 받는 API**(`setZoom`)로
+> 열었다 — 메커니즘(CSS `:has` 접기·닫힘 시 줌 해제·fit 재적용)은 `panels.ts`가 들고,
+> 언제 걸지(키·토글)는 호출자(focus.ts) 몫이다.
 
 ## 4. 실측 (M2 · 2026-08-05 · 원표본 [INDEX-a3-s2-3.md](../tools/gate-a/evidence/INDEX-a3-s2-3.md))
 

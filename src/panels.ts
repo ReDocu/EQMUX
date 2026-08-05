@@ -98,6 +98,8 @@ export class PanelManager {
   private mutating: Promise<unknown> = Promise.resolve();
   /** 드래그 중인가. 참이면 fit(→`pty_resize`)을 멈춘다 — `S2-3` 제약 ①. */
   private dragging = false;
+  /** 줌된 잎 id (`S2-4` 경계 API). 줌은 화면 상태라 여기가 정본이다 — 닫히면 여기서 풀린다. */
+  private zoomed: string | null = null;
   /** 구조·기하 변경 구독자 (`S2-4` 경계 API). */
   private readonly layoutListeners = new Set<() => void>();
 
@@ -144,7 +146,12 @@ export class PanelManager {
   //   activeLeaf()       — 포커스 잎 id
   //   panelRect(s)()     — 화면 기하 (방향 탐색은 이 좌표로 계산한다)
   //   focus(id)          — 포커스 이동 (백엔드 확정 포함)
-  //   onLayoutChanged(f) — 분할·닫기·드래그 확정 뒤 알림. 해지 함수를 돌려준다
+  //   setZoom(id|null)   — 패널 줌 켜기/끄기. zoomedLeaf()가 현재 상태
+  //   onLayoutChanged(f) — 분할·닫기·드래그 확정·줌 뒤 알림. 해지 함수를 돌려준다
+  //
+  // 요소 접근자(panelElement)를 안 여는 이유: 분할 껍데기는 렌더마다 다시 짜여서(머리말 ③)
+  // 밖에서 요소에 건 상태는 다음 reconcile에 증발한다. 화면 상태는 여기가 들고,
+  // 밖은 "무엇을 원하는지"만 말한다 — 그래야 분할·닫기와 줌이 안 어긋난다.
 
   /** 포커스된 잎 id. 패널이 아직 없으면 `null`. */
   activeLeaf(): string | null {
@@ -169,7 +176,39 @@ export class PanelManager {
     return out;
   }
 
-  /** 구조·기하가 바뀔 때(분할·닫기·드래그 확정) 불린다. 반환값이 구독 해지다. */
+  /** 줌된 잎 id — 없으면 `null`. */
+  zoomedLeaf(): string | null {
+    return this.zoomed;
+  }
+
+  /**
+   * 패널 줌 (`S2-4`). 메커니즘은 여기, **언제 걸지는 호출자 몫**이다 —
+   * 토글은 `setZoom(zoomedLeaf() ? null : activeLeaf())` 한 줄이다.
+   *
+   * 줌 중 분할·닫기가 일어나면: 새 잎은 숨은 채 생기고, 줌된 잎이 닫히면 줌이 풀린다.
+   * 둘 다 reconcile이 처리한다 — 호출자가 정리할 것은 없다.
+   */
+  setZoom(leafId: string | null): void {
+    if (leafId !== null && !this.panels.has(leafId)) {
+      logError(`줌 대상이 없다: ${leafId}`);
+      return;
+    }
+    this.zoomed = leafId;
+    this.applyZoom();
+    // 보이는 패널의 크기가 바뀌었다 — 격자를 다시 맞춘다. 숨은 패널은 크기 0이라 건너뛴다.
+    for (const p of this.panels.values()) this.fitPanel(p);
+    this.applyFocus();
+    this.notifyLayoutChanged();
+  }
+
+  private applyZoom(): void {
+    this.container.classList.toggle("zoomed", this.zoomed !== null);
+    for (const [id, p] of this.panels) {
+      p.el.classList.toggle("zoom-target", id === this.zoomed);
+    }
+  }
+
+  /** 구조·기하가 바뀔 때(분할·닫기·드래그 확정·줌) 불린다. 반환값이 구독 해지다. */
   onLayoutChanged(cb: () => void): () => void {
     this.layoutListeners.add(cb);
     return () => this.layoutListeners.delete(cb);
@@ -292,6 +331,12 @@ export class PanelManager {
 
     // ③ 트리 모양대로 편다. 살아 있는 패널 요소는 새 위치로 옮겨질 뿐이다.
     this.render();
+
+    // ③-b 줌 상태 재적용 — 줌된 잎이 닫혔으면 푼다. 안 풀면 화면이 통째로 빈다.
+    if (this.zoomed && !alive.has(this.zoomed)) {
+      this.zoomed = null;
+    }
+    this.applyZoom();
 
     // ④ 크기가 확정됐다 — 이제 터미널을 연다.
     for (const panel of created) {

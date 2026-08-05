@@ -168,6 +168,21 @@ body {
   pointer-events: none;
 }
 
+/* 패널 줌 (S2-4) — 상태는 panels.ts(setZoom)가 정본, 여기는 그리기만 한다.
+   형제 패널을 숨기는 것만으론 부족하다: 조상 분할의 형제가 .split이면 빈 상자가
+   자리를 차지한다 — :has로 줌 대상을 못 품은 분할까지 접는다. */
+.layout.zoomed .panel:not(.zoom-target) {
+  display: none;
+}
+
+.layout.zoomed .split:not(:has(.zoom-target)) {
+  display: none;
+}
+
+.layout.zoomed .split-divider {
+  display: none;
+}
+
 .panel {
   display: flex;
   flex-direction: column;
