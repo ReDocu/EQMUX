@@ -281,6 +281,19 @@ async function runLatencyProbe(
 
 /** 일반 기동 — 레이아웃 트리 렌더 + 패널마다 셸. `S2-2`의 본편이다. */
 async function runApp(info: AppInfo, layoutEl: HTMLElement, stack: string | null): Promise<void> {
+  // `--panes=0` — 빈 화면(SPIKE-A4 바닥 B). 터미널·PTY·WebGL을 하나도 만들지 않는다.
+  // JS 번들은 이미 파싱된 뒤다 — B의 정의는 "번들 로드 + 인스턴스 0"이고 문서에 그렇게 적는다.
+  if (info.panes.count === 0) {
+    const note = document.createElement("div");
+    note.style.cssText = "display:flex;align-items:center;justify-content:center;height:100%;color:#7b87a8;font:13px 'Cascadia Mono',monospace";
+    note.textContent = "진단 모드 — 터미널 없음 (SPIKE-A4 바닥 측정)";
+    layoutEl.appendChild(note);
+    el("#renderer").textContent = "진단 — 렌더러 미생성";
+    el("#shell").textContent = "셸 없음";
+    logInfo("빈 화면 준비 완료 — xterm 0 · PTY 0 · WebGL 0");
+    installAppDataReport();
+    return;
+  }
   let cellWidths: Record<string, number> = {};
   let firstHandle: TerminalHandle | null = null;
 

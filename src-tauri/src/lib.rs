@@ -137,6 +137,8 @@ pub fn run() {
                 );
             } else if panes_cfg.count > 1 {
                 eprintln!("[eqmux] 기동 분할 — 패널 {}개", panes_cfg.count);
+            } else if panes_cfg.count == 0 {
+                eprintln!("[eqmux] 빈 화면(진단 · SPIKE-A4) — 터미널·PTY·WebGL 없음");
             }
 
             // 계측 모드는 로컬 에코로 렌더러만 재므로 PTY를 붙이지 않는다.
@@ -180,7 +182,32 @@ pub fn run() {
                 win = win.data_directory(dir);
             }
 
-            win.build()?;
+            let window = win.build()?;
+
+            // SPIKE-A4 ④ — WebView2 공식 메모리 레버. Tauri 2.11이 안 감싸서 컨트롤러로 직접 간다.
+            // 진단 플래그다: 상시 켤지는 스파이크 숫자를 보고 결정한다(#19). 실패해도 앱은 뜬다 —
+            // 다만 "걸었다고 믿는 것"과 실제 적용을 가르기 위해 성공·실패를 반드시 stderr에 남긴다.
+            #[cfg(windows)]
+            if std::env::args().any(|a| a == "--memory-target=low") {
+                use webview2_com::Microsoft::Web::WebView2::Win32::{
+                    ICoreWebView2_19, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL,
+                };
+                use windows_core::Interface;
+                window.with_webview(|wv| unsafe {
+                    let applied = (|| -> std::result::Result<(), windows_core::Error> {
+                        let core = wv.controller().CoreWebView2()?;
+                        let core19: ICoreWebView2_19 = core.cast()?;
+                        // 1 = Low (docs.microsoft.com CoreWebView2MemoryUsageTargetLevel)
+                        core19.SetMemoryUsageTargetLevel(COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL(1))
+                    })();
+                    match applied {
+                        Ok(()) => eprintln!("[eqmux] WebView2 MemoryUsageTargetLevel = Low 적용"),
+                        Err(e) => eprintln!("[eqmux] ⚠️ MemoryUsageTargetLevel 적용 실패: {e}"),
+                    }
+                })?;
+            }
+            #[cfg(not(windows))]
+            let _ = &window;
 
             let font_probe_running = font_cfg.enabled;
 

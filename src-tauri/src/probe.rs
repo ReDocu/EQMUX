@@ -262,6 +262,7 @@ impl FontProbeConfig {
 /// | 플래그 | 뜻 |
 /// |---|---|
 /// | `--panes=N` | 기동 직후 패널이 N개가 되게 나눈다. 창은 그대로 열려 있는다 |
+/// | `--panes=0` | **진단(SPIKE-A4)** — 터미널·PTY·WebGL 없이 창만 띄운다. 플랫폼 바닥 B를 잰다 |
 /// | `--panes-probe` | N개로 나눈 뒤 **전부 정상인지 확인하고 종료**한다 |
 /// | `--panes-probe-out=PATH` | 결과 JSON 경로 |
 ///
@@ -294,16 +295,18 @@ impl PanesConfig {
                 out_path = Some(PathBuf::from(v));
             } else if let Some(v) = a.strip_prefix("--panes=") {
                 match v.parse::<usize>() {
-                    Ok(n) if (1..=MAX_PANES).contains(&n) => count = n,
+                    // 0 = 빈 화면(진단). 터미널이 하나도 없는 상태는 사용 상태가 아니라
+                    // 측정 상태다 — SPIKE-A4의 바닥 B가 이걸로 나온다.
+                    Ok(n) if n <= MAX_PANES => count = n,
                     _ => eprintln!(
-                        "[eqmux] --panes 값이 잘못됐다: {v:?} (1~{MAX_PANES}) — 무시하고 1로 간다"
+                        "[eqmux] --panes 값이 잘못됐다: {v:?} (0~{MAX_PANES}) — 무시하고 1로 간다"
                     ),
                 }
             }
         }
 
-        // 검증 모드인데 개수를 안 줬으면 4다. 관문 A2가 묻는 수가 그것이다.
-        if probe && count == 1 {
+        // 검증 모드인데 개수를 안 줬으면(또는 빈 화면이면) 4다. 관문 A2가 묻는 수가 그것이다.
+        if probe && count <= 1 {
             count = 4;
         }
 
