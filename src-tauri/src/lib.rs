@@ -15,6 +15,7 @@ mod appdata;
 mod commands;
 mod config;
 mod error;
+mod layout;
 mod probe;
 mod pty;
 
@@ -43,6 +44,13 @@ pub fn run() {
             commands::pty::pty_list,
             commands::pty::pty_probe_finish,
             commands::probe::font_probe_finish,
+            commands::layout::layout_get,
+            commands::layout::layout_split,
+            commands::layout::layout_close,
+            commands::layout::layout_set_weights,
+            commands::layout::layout_focus,
+            commands::layout::layout_attach_pty,
+            commands::layout::layout_save,
         ])
         .setup(|app| {
             // 경로를 먼저 확정한다. 창보다 앞이어야 WebView2 데이터 폴더를 갈아끼울 수 있다.
@@ -62,6 +70,23 @@ pub fn run() {
                 }
                 // setup 안이라 이벤트 루프가 아직 없다 — `app.exit()`은 여기서 안 먹는다.
                 std::process::exit(0);
+            }
+
+            // `--layout-probe` — 저장 → 복원 → 같은 트리인가. 창을 안 연다 (`S2-1`).
+            // **실제 상태 경로로** 돌기 때문에 격리 스위치를 존중하는지까지 같이 증명된다.
+            let layout_probe = layout::LayoutProbe::from_args();
+            if layout_probe.enabled {
+                if paths.isolated {
+                    eprintln!("[eqmux] 격리 인스턴스로 왕복 검증한다");
+                } else {
+                    // 라이브 상태 파일을 덮어쓰게 된다. 조용히 지나가면 안 되는 자리다.
+                    eprintln!(
+                        "[eqmux] ⚠️ 라이브 상태 파일로 왕복 검증한다 — EQMUX_STATE_PATH로 격리하는 편이 낫다"
+                    );
+                }
+                let code = layout::run_probe(&paths.state_file, layout_probe.out_path.as_deref());
+                // setup 안이라 이벤트 루프가 아직 없다 — `app.exit()`은 여기서 안 먹는다.
+                std::process::exit(code);
             }
 
             let probe_cfg = ProbeConfig::from_args(&paths);
@@ -149,7 +174,15 @@ pub fn run() {
                 });
             }
 
+            // 레이아웃을 창보다 먼저 읽어 둔다 (`S2-1`).
+            // 프런트가 `layout_get`을 부르는 시점에는 이미 확정돼 있어야 한다 —
+            // 없으면 "빈 화면을 먼저 그리고 나중에 재배치"가 되고, 그 깜빡임은 못 지운다.
+            let loaded = layout::load(&paths.state_file);
+            layout::log_load(&loaded, &paths.state_file);
+            let layout_store = layout::LayoutStore::new(paths.state_file.clone(), loaded.state);
+
             // 명령에서 State<_>로 꺼내 쓴다.
+            app.manage(layout_store);
             app.manage(paths);
             app.manage(AppDataWatch::default());
             app.manage(probe_cfg);
