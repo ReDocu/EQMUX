@@ -1,0 +1,66 @@
+{
+  "pass": true,
+  "checks": {
+    "opened_to_target": true,
+    "pty_per_panel": true,
+    "canvas_per_panel_uniform": true,
+    "renderers_alive": true,
+    "closed_to_one": true,
+    "pty_list_matches_survivor": true,
+    "killed_ptys_gone": true,
+    "canvas_disposed": true
+  },
+  "target": 4,
+  "canvases_per_panel": 2,
+  "peak": {
+    "leaves": [
+      "leaf-1",
+      "leaf-4",
+      "leaf-2",
+      "leaf-6"
+    ],
+    "ptys": [
+      "pty-4",
+      "pty-1",
+      "pty-3",
+      "pty-2"
+    ],
+    "canvases": 8,
+    "renderers": [
+      {
+        "leaf": "leaf-1",
+        "verdict": "WebGL2 · 하드웨어",
+        "alive": true
+      },
+      {
+        "leaf": "leaf-2",
+        "verdict": "WebGL2 · 하드웨어",
+        "alive": true
+      },
+      {
+        "leaf": "leaf-4",
+        "verdict": "WebGL2 · 하드웨어",
+        "alive": true
+      },
+      {
+        "leaf": "leaf-6",
+        "verdict": "WebGL2 · 하드웨어",
+        "alive": true
+      }
+    ]
+  },
+  "after": {
+    "leaves": [
+      "leaf-6"
+    ],
+    "ptys": [
+      "pty-4"
+    ],
+    "canvases": 2
+  },
+  "killed": [
+    "pty-1",
+    "pty-3",
+    "pty-2"
+  ]
+}
