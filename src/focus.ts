@@ -76,6 +76,9 @@ function onKeydown(e: KeyboardEvent): void {
   if (!action || !host) return; // 앱 층 키가 아니거나 미연결(계측 모드) — 전부 통과.
   e.preventDefault();
   e.stopPropagation(); // 캡처 단계라 xterm 핸들러까지 내려가지 않는다 — 터미널 키 누수 차단.
+  // 줌은 누르고 있으면 keydown 반복으로 토글이 깜빡인다 — 반복은 삼키되 동작만 막는다
+  // (통과시키면 반복분이 터미널로 샌다). 이동은 반복을 허용한다 — 화살표를 눌러 걷는 동작이다.
+  if (action.kind === "zoom" && e.repeat) return;
   run(host, action);
 }
 
