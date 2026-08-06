@@ -56,13 +56,15 @@
   --blue-bg-soft: #17283c;
 
   /* 관제 화면(Q2sqrD) 실물에서 추가로 나온 토큰 — 전부 pen 리터럴이다.
-     --card: 세션 카드 배경(#111C29) · --badge-bg: 팀 배지(#1A2B43) ·
-     --chip-bg: 파란 칩 배경(#15243A) · --blue-soft: 파란 배지 위 글자(#B8D4FF) ·
-     --purple-bg/-line/-soft: 페르소나·git 계열(#21182E · #6D4A90 · #C9ABE9) ·
-     --red-line: 전체 종료 테두리(#6D3337) */
-  --card: #111c29;
+     --badge-bg: 팀 배지(#1A2B43) · --blue-soft: 파란 배지 위 글자(#B8D4FF) ·
+     --purple-bg/-line/-soft: 페르소나·담당·git 계열(#21182E · #6D4A90 · #C9ABE9) ·
+     --red-line: 전체 종료 테두리(#6D3337)
+
+     ✂️ 2026-08-06에 둘을 지웠다 — 카드 규격을 관제 그리드 실물로 맞추면서 쓸 자리가 없어졌다:
+     `--card`(#111C29)는 컴포넌트 `m1GupV`의 배경이었고 실물 카드는 --panel-2를 쓴다.
+     `--chip-bg`(#15243A)는 담당 칩을 파랑으로 본 흔적이고 실물은 보라(--purple-bg)다.
+     쓰는 데가 없는 토큰은 남기지 않는다 — 다음 사람이 근거로 오해한다. */
   --badge-bg: #1a2b43;
-  --chip-bg: #15243a;
   --blue-soft: #b8d4ff;
   --purple-bg: #21182e;
   --purple-line: #6d4a90;
@@ -1215,7 +1217,8 @@ svg.dash-stat-icon {
   min-width: 0;
 }
 
-/* 배지 — `Current Team Badge`: --badge-bg 배경 + 파란 테두리 + 파랑 글자(모노). */
+/* 배지 — pen `ZQx3s` `Current Team Badge`: --badge-bg 배경 + 파랑 글자(모노).
+   ⚠️ 테두리는 **왼쪽 2px 악센트 하나뿐**이다(`strokeWidth: {left: 2}`). 네 면을 두르지 않는다. */
 .dash-frame-badge {
   display: flex;
   align-items: center;
@@ -1223,7 +1226,8 @@ svg.dash-stat-icon {
   height: 32px;
   padding: 0 10px;
   background: var(--badge-bg);
-  border: 1px solid var(--blue);
+  border: 0;
+  border-left: 2px solid var(--blue);
   color: var(--blue);
 }
 
@@ -1265,16 +1269,19 @@ svg.dash-stat-icon {
   gap: 8px;
 }
 
-/* 칩 버튼 — `Assigned Project Chip`: --chip-bg + 파란 테두리. 누르면 터미널 화면으로 간다. */
+/* 칩 버튼 — pen `o30Yxu` `Assigned Project Chip`. 누르면 터미널 화면으로 간다.
+   ⚠️ **보라 계열이다**(fill #20182D · stroke #66468B) — 파랑이 아니다.
+   담당(페르소나)은 pen 전체에서 보라로 묶여 있다: `ba8JZ` 페르소나 생성 Action도 같은 계열.
+   1/255 차이라 기존 --purple-bg/--purple-line 토큰을 그대로 쓴다(토큰을 늘리지 않는다). */
 .dash-frame-chip {
   display: flex;
   align-items: center;
   gap: 6px;
   height: 28px;
   padding: 0 10px;
-  background: var(--chip-bg);
-  border: 1px solid var(--blue);
-  color: var(--blue);
+  background: var(--purple-bg);
+  border: 1px solid var(--purple-line);
+  color: var(--purple);
   font: inherit;
   cursor: pointer;
 }
@@ -1283,11 +1290,11 @@ svg.dash-stat-icon {
   font-family: "Cascadia Mono", Consolas, monospace;
   font-size: 11px;
   font-weight: 700;
-  color: var(--blue-soft);
+  color: var(--purple-soft);
 }
 
 .dash-frame-chip:hover {
-  background: var(--blue);
+  background: var(--purple-line);
   color: var(--bg);
 }
 
@@ -1338,8 +1345,13 @@ svg.dash-stat-icon {
 
 /* 카드 — pen `m1GupV`. `button`이다(누르면 그 터미널로 간다 · D4) — `div`로 만들면
    키보드로 못 닿는다. 그래서 버튼 기본 모양을 여기서 전부 지운다.
-   디자인은 **모든 카드에** 파란 테두리(위 2px · 나머지 1px)와 --card 배경을 준다 —
-   활성 구분은 점 색과 배경(--blue-bg-soft)이 맡는다. */
+
+   ⚠️ 파란 테두리는 **지금 보고 있는 세션 하나**의 것이다. 전부에 두르지 말 것.
+   재사용 컴포넌트 `m1GupV`가 선택 상태로 그려져 있어 한 번 그렇게 읽었다(2026-08-06 정정).
+   실물 그리드 `CD20h`가 정본이다 — 카드 8개 중 파란 것은 `k8JJQb` 하나뿐이고
+   나머지 일곱은 `#0F151D` 바탕에 `#2A3645` 1px다.
+   상태(ACTIVE/RUNNING/WAITING)는 **점 색과 라벨 색만** 바꾼다. 바탕은 안 건드린다 —
+   pen에서 pty-core·browser-kit이 ACTIVE인데도 바탕이 일반 카드와 같다. */
 .dash-card {
   display: flex;
   flex-direction: column;
@@ -1347,18 +1359,18 @@ svg.dash-stat-icon {
   gap: 8px;
   min-height: 106px;
   padding: 9px;
-  background: var(--card);
-  border: 1px solid var(--blue);
-  border-top-width: 2px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
   color: var(--text-soft);
   font: inherit;
   text-align: left;
   cursor: pointer;
 }
 
+/* 호버는 pen에 상태가 없다. 바탕만 한 단 올리고 테두리는 그대로 둔다 —
+   테두리를 밝히면 "선택됨"과 헷갈린다. */
 .dash-card:hover {
-  background: var(--blue-bg-soft);
-  border-color: var(--blue-soft);
+  background: var(--hover);
 }
 
 .dash-card:focus-visible {
@@ -1366,10 +1378,12 @@ svg.dash-stat-icon {
   outline-offset: -3px;
 }
 
-/* 활성 카드 — 배경만 살짝 올린다. 테두리는 이미 전부 파랗다(디자인). */
-.dash-card[data-pane-status="active"],
-.dash-card[data-pane-status="attention"] {
+/* 지금 보고 있는 세션 — pen `k8JJQb`. 윗변만 2px인 것도 실물 그대로다.
+   `aria-current`는 `dash.ts`가 이미 걸어 준다(활성 잎과 대조). */
+.dash-card[aria-current="true"] {
   background: var(--blue-bg-soft);
+  border-color: var(--blue);
+  border-top-width: 2px;
   color: var(--text);
 }
 
@@ -1397,16 +1411,37 @@ svg.dash-stat-icon {
   background: var(--muted);
 }
 
+/* 점(background)과 상태 글자(color)는 상태마다 **같은 토큰**을 쓴다. 짝을 붙여 적어
+   둘이 갈리지 않게 한다 — pen에서도 둘은 언제나 같은 색이다.
+   `waiting`이 앰버인 근거는 pen 관제 그리드다(`git-flow`·`qa-watch` = WAITING #D6A344).
+   ⚠️ 페인 헤더는 같은 상태를 `IDLE` + --muted로 그린다. pen에 페인 헤더의 유휴 상태
+   그림이 없어 근거가 한쪽뿐이다 — 팀장님 확인 대기(2026-08-06). */
 .dash-card[data-pane-status="active"] .dash-card-dot {
   background: var(--green);
+}
+.dash-card[data-pane-status="active"] .dash-card-status {
+  color: var(--green);
 }
 
 .dash-card[data-pane-status="running"] .dash-card-dot {
   background: var(--blue);
 }
+.dash-card[data-pane-status="running"] .dash-card-status {
+  color: var(--blue);
+}
+
+.dash-card[data-pane-status="waiting"] .dash-card-dot {
+  background: var(--amber);
+}
+.dash-card[data-pane-status="waiting"] .dash-card-status {
+  color: var(--amber);
+}
 
 .dash-card[data-pane-status="attention"] .dash-card-dot {
   background: var(--red);
+}
+.dash-card[data-pane-status="attention"] .dash-card-status {
+  color: var(--red);
 }
 
 .dash-card-name {
@@ -1420,90 +1455,78 @@ svg.dash-stat-icon {
   white-space: nowrap;
 }
 
-/* TERMINAL 배지 — `Terminal Mode Badge`: 헤어라인 테두리 + 파랑 아이콘·라벨(모노). */
-.dash-card-badge {
+/* 상태 글자 — pen `commander Session Status`. **테두리 없는 맨 글자**다.
+   색은 점과 같은 값을 쓴다(아래 규칙이 점·글자를 함께 잡는다). */
+.dash-card-status {
   flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  height: 20px;
-  padding: 0 6px;
-  border: 1px solid var(--line);
-  color: var(--blue);
-}
-
-.dash-card-badge svg.icon {
-  width: 10px;
-  height: 10px;
-}
-
-.dash-card-badge-label {
   font-family: "Cascadia Mono", Consolas, monospace;
   font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.08em;
+  color: var(--muted);
 }
 
-/* 모드 줄 — `Terminal Card Mode Row`. pen 문구는 "단순 터미널 세션"인데 카드마다 같은 말이라
-   정보가 0이다. 실제로 뜬 셸의 pid를 넣는다(`dash.ts`). */
-.dash-card-mode {
+/* 임무 줄 — pen `commander Mission Row`. 배정되면 보라(아이콘 --purple · 라벨 --purple-soft),
+   미배정이면 둘 다 --muted다(pen `port-watch` = "(배정 없음)"). 상자도 테두리도 없다.
+   임무 개념은 3·4차라 지금은 언제나 미배정이다 — 그래서 `data-empty`가 늘 붙는다. */
+.dash-card-mission {
   display: flex;
   align-items: center;
   gap: 6px;
-  color: var(--muted);
+  min-width: 0;
+  color: var(--purple);
 }
 
-.dash-card-shell {
+.dash-card-mission svg.icon {
+  flex: 0 0 auto;
+  width: 11px;
+  height: 11px;
+}
+
+.dash-card-mission-label {
   min-width: 0;
-  font-family: "Cascadia Mono", Consolas, monospace;
   font-size: 11px;
-  color: var(--muted);
+  color: var(--purple-soft);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* 메트릭 줄 — `Terminal CLAUDE Metric`. 자리(높이 30 · 배경 --panel-2 · 좌우 배치)는 그대로
-   쓰고 내용만 바꿨다: pen의 `CLAUDE.md 12.4 KB`는 전작 개념이라 EQMUX에 없다. */
-.dash-card-metric {
+/* 미배정 — 줄 전체가 회색으로 내려앉는다. 아이콘은 currentColor라 같이 따라온다. */
+.dash-card-mission[data-empty="true"] {
+  color: var(--muted);
+}
+
+.dash-card-mission[data-empty="true"] .dash-card-mission-label {
+  color: var(--muted);
+}
+
+/* 바닥 줄 — pen `commander Session Footer`: 왼쪽 "방금 전 · 48.2KB", 오른쪽 ↗.
+   ↗는 지금 보고 있는 카드에서만 파랗다(pen: `commander` #5797F2 · 나머지 #78879A). */
+.dash-card-foot {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  height: 30px;
-  padding: 0 8px;
-  background: var(--panel-2);
-  border: 1px solid var(--line-soft);
+  min-width: 0;
+  color: var(--muted);
 }
 
-.dash-card-metric-key {
+.dash-card-foot svg.icon {
   flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--blue);
-}
-
-.dash-card-metric-key svg.icon {
   width: 11px;
   height: 11px;
 }
 
-.dash-card-metric-label {
-  font-family: "Cascadia Mono", Consolas, monospace;
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  color: var(--blue-soft);
+.dash-card[aria-current="true"] .dash-card-foot svg.icon {
+  color: var(--blue);
 }
 
-/* 경로는 끝을 남긴다 — 접기는 `dash.ts` tailPath가 한다. CSS `direction: rtl`을 겹치면
-   JS가 붙인 앞머리 `…`가 뒤로 끌려가 두 번 접힌 것처럼 보인다(실측) — 안 쓴다. */
-.dash-card-cwd {
+.dash-card-foot-text {
   min-width: 0;
   font-family: "Cascadia Mono", Consolas, monospace;
   font-size: 11px;
-  color: var(--text);
+  color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

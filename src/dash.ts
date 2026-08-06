@@ -26,6 +26,7 @@
 
 import { icon, type IconName } from "./icons";
 import { logError } from "./log";
+import { onPtyBytes } from "./pty";
 import type { PaneStatus } from "./pane-header";
 import type { PtyReport } from "./panels";
 
@@ -70,6 +71,45 @@ export interface Dash {
 
 /** 표시 갱신 주기(ms) — `statusbar.ts`·`pane-header.ts`와 같은 값. */
 const REFRESH_MS = 500;
+
+/**
+ * 관제 카드의 상태 어휘 — pen `MuHxD` 그리드 실물 그대로.
+ *
+ * ⚠️ `pane-header.ts`의 라벨과 **일부러 다르다.** 페인 헤더는 `waiting`을 `IDLE`로 적고
+ * 관제 카드는 `WAITING`으로 적는다 — pen이 두 표면에 다른 낱말을 써 놨다.
+ * 상태값 자체(`PaneStatus`)는 하나이고 여기서 갈리는 것은 **표기뿐**이다.
+ */
+const STATUS_LABEL: Record<PaneStatus, string> = {
+  attention: "ATTENTION",
+  active: "ACTIVE",
+  running: "RUNNING",
+  waiting: "WAITING",
+};
+
+/** `pty://bytes` 한 세션의 마지막 관측. `at`은 **바이트가 늘어난** 시각이다. */
+interface ByteMark {
+  bytes: number;
+  at: number;
+}
+
+/** "22초 전" — pen footer 문구. 하루를 넘기면 날짜를 세지 않고 그냥 접는다. */
+function sinceLabel(at: number): string {
+  const s = Math.max(0, Math.round((Date.now() - at) / 1000));
+  if (s < 5) return "방금 전";
+  if (s < 60) return `${s}초 전`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}분 전`;
+  const h = Math.floor(m / 60);
+  return h < 24 ? `${h}시간 전` : "하루 넘음";
+}
+
+/** "48.2KB" — pen 표기(공백 없음). 1KB 미만은 바이트로 둔다. */
+function sizeLabel(bytes: number): string {
+  if (bytes < 1024) return `${bytes}B`;
+  const kb = bytes / 1024;
+  if (kb < 1024) return `${kb.toFixed(1)}KB`;
+  return `${(kb / 1024).toFixed(1)}MB`;
+}
 
 /** 그리드 열 수 — pen `Team Session Grid`가 4열이다. */
 const COLUMNS = 4;
@@ -141,21 +181,36 @@ function actButton(cls: string, glyph: IconName, label: string, run?: () => void
   return b;
 }
 
-// ── 카드 (pen `m1GupV`) ──────────────────────────────────────────────────────
+// ── 카드 (pen `k8JJQb`·`muOgS` — 관제 그리드 실물) ────────────────────────────
+//
+// ⚠️ pen에 세션 카드 규격이 **두 벌** 있다. 독립 컴포넌트 `m1GupV`(TERMINAL 배지 ·
+// "단순 터미널 세션" · 폴더 메트릭)와 관제 그리드 실물 `CD20h/MuHxD`(상태 글자 ·
+// 임무 · 마지막 출력)다. 처음엔 `m1GupV`를 따라갔는데 그건 **선택된 카드 한 장**이라
+// 장식이 더 많고, 여덟 장에 겹치니 화면이 밝아졌다.
+// **정본은 관제 화면에 실제로 놓인 쪽**이다 (팀장님 판정 2026-08-06).
 
 interface Card {
   root: HTMLButtonElement;
   dot: HTMLElement;
   name: HTMLElement;
-  mode: HTMLElement;
-  cwd: HTMLElement;
+  /** 우상단 상태 글자 — ACTIVE/RUNNING/WAITING/ATTENTION. 색은 점과 같다. */
+  status: HTMLElement;
+  /** 임무 줄. 임무 개념은 3·4차다 — 지금은 pen의 빈 상태 "(배정 없음)"을 쓴다. */
+  missionRow: HTMLElement;
+  mission: HTMLElement;
+  /** 좌하단 "N초 전 · X KB". 없는 값은 만들지 않는다 — 못 재면 자리를 비운다. */
+  foot: HTMLElement;
 }
 
 /**
- * 세션 카드. `button`이다 — 누르면 그 터미널로 간다(D4). 우상단은 pen대로 TERMINAL 배지,
- * 모드 줄은 pen 문구 "단순 터미널 세션"(EQMUX 세션은 전부 이 모드라 참이다).
- * pid는 툴팁에 둔다. 메트릭 줄의 `CLAUDE.md`는 여기 없는 파일이라 **폴더**를 둔다 —
- * 자리·색·배치는 pen 그대로다.
+ * 세션 카드. `button`이다 — 누르면 그 터미널로 간다(D4).
+ *
+ * 세 줄이고 pen 실물 그대로다:
+ *   ① [점] 셸·잎 이름 ............................ 상태 글자
+ *   ② [서류가방] 임무 ("(배정 없음)" — 3·4차 전까지 참이다)
+ *   ③ 마지막 출력 "N초 전 · X KB" ................. ↗
+ *
+ * 셸 경로·pid는 툴팁으로 내렸다 — pen 카드에 그 자리가 없다.
  */
 function createCard(leafId: string, onGo: (leafId: string) => void): Card {
   const root = el("button", "dash-card");
@@ -167,24 +222,21 @@ function createCard(leafId: string, onGo: (leafId: string) => void): Card {
   const dot = el("span", "dash-card-dot");
   const name = el("span", "dash-card-name");
   ident.append(dot, name);
-  const badge = el("span", "dash-card-badge");
-  badge.append(icon("square-terminal"), el("span", "dash-card-badge-label", "TERMINAL"));
-  head.append(ident, badge);
+  const status = el("span", "dash-card-status");
+  head.append(ident, status);
 
-  const modeRow = el("div", "dash-card-mode");
-  const mode = el("span", "dash-card-shell");
-  modeRow.append(icon("terminal"), mode);
+  const missionRow = el("div", "dash-card-mission");
+  const mission = el("span", "dash-card-mission-label");
+  missionRow.append(icon("briefcase-business"), mission);
 
-  const metric = el("div", "dash-card-metric");
-  const metricKey = el("span", "dash-card-metric-key");
-  metricKey.append(icon("folder"), el("span", "dash-card-metric-label", "폴더"));
-  const cwd = el("span", "dash-card-cwd");
-  metric.append(metricKey, cwd);
+  const footRow = el("div", "dash-card-foot");
+  const foot = el("span", "dash-card-foot-text");
+  footRow.append(foot, icon("arrow-up-right"));
 
-  root.append(head, modeRow, metric);
+  root.append(head, missionRow, footRow);
   root.addEventListener("click", () => onGo(leafId));
 
-  return { root, dot, name, mode, cwd };
+  return { root, dot, name, status, missionRow, mission, foot };
 }
 
 /** 추가 카드 (`U0CYyW`). */
@@ -389,6 +441,10 @@ export function installDash(mount: HTMLElement, opts: DashOptions): Dash {
   const cards = new Map<string, Card>();
   const addCard = opts.onAddSession ? createAddCard(opts.onAddSession) : null;
 
+  /** PTY id → 마지막으로 출력이 늘어난 시점과 그때의 누적 바이트. */
+  const byteMarks = new Map<string, ByteMark>();
+  const bytesOf = (ptyId: string): ByteMark | undefined => byteMarks.get(ptyId);
+
   const goTo = (leafId: string): void => {
     if (!leafId) return;
     // 포커스를 먼저 옮긴다 — 화면 전환이 실패해도 "어느 세션을 골랐는가"는 남아야 한다.
@@ -447,16 +503,27 @@ export function installDash(mount: HTMLElement, opts: DashOptions): Dash {
       setAttr(card.root, "aria-current", leafId === active ? "true" : "false");
       setText(card.name, pty ? `${baseName(pty.shell)} · ${leafId}` : leafId);
 
-      // 모드 줄 — pen 문구. 셸이 죽었으면 그 사실이 문구를 이긴다.
-      setText(card.mode, pty ? (pty.alive ? "단순 터미널 세션" : "셸 종료됨") : "셸 없음");
+      // 상태 글자 — 라벨 정본은 `pane-header.ts`다. 색은 CSS가 data-pane-status로 준다.
+      setText(card.status, STATUS_LABEL[status]);
 
-      if (pty) {
-        setText(card.cwd, tailPath(pty.cwd));
-        setAttr(card.cwd, "title", pty.cwd);
-      } else {
-        setText(card.cwd, "—");
-        setAttr(card.cwd, "title", "이 패널에는 셸이 붙지 않았다");
-      }
+      // 임무 줄 — 임무 개념(3·4차)이 붙기 전까지 배정은 없다. pen의 빈 상태를 그대로 쓴다.
+      // 셸이 없는 패널은 임무 이전의 문제라 그 사실을 먼저 말한다.
+      setText(card.mission, pty ? "(배정 없음)" : "셸 없음");
+      setAttr(card.missionRow, "data-empty", "true");
+
+      // 마지막 출력 — `pty://bytes`가 준 실측만 쓴다. 아직 한 번도 안 온 세션은
+      // "출력 없음"이다. 0 KB라고 적으면 "쟀는데 0"으로 읽혀 거짓이 된다.
+      const seen = pty ? bytesOf(pty.id) : undefined;
+      setText(
+        card.foot,
+        !pty
+          ? "—"
+          : !pty.alive
+            ? "셸 종료됨"
+            : seen
+              ? `${sinceLabel(seen.at)} · ${sizeLabel(seen.bytes)}`
+              : "출력 없음",
+      );
 
       setAttr(
         card.root,
@@ -480,6 +547,23 @@ export function installDash(mount: HTMLElement, opts: DashOptions): Dash {
   const offLayout = host.onLayoutChanged(refresh);
   const timer = window.setInterval(refresh, REFRESH_MS);
 
+  // `pty://bytes` 구독 — **숨어 있어도 계속 받는다.** A-3 규율은 "DOM을 만지지 말라"는
+  // 것이지 "듣지 말라"가 아니다. 여기서 하는 일은 Map에 숫자를 적는 것뿐이고,
+  // 안 들으면 관제를 열 때마다 마지막 출력이 "출력 없음"으로 되돌아간다.
+  let offBytes: (() => void) | null = null;
+  onPtyBytes((ev) => {
+    for (const s of ev.sessions) {
+      const prev = byteMarks.get(s.id);
+      // 늘어난 때만 시각을 갱신한다. 매 틱 찍으면 조용한 세션도 "방금 전"이 된다.
+      if (!prev) byteMarks.set(s.id, { bytes: s.bytes, at: Date.now() });
+      else if (s.bytes > prev.bytes) byteMarks.set(s.id, { bytes: s.bytes, at: Date.now() });
+    }
+  })
+    .then((un) => {
+      offBytes = un;
+    })
+    .catch((e) => logError("pty://bytes 구독 실패", e));
+
   return {
     setVisible: (on) => {
       if (shown === on) return;
@@ -492,6 +576,8 @@ export function installDash(mount: HTMLElement, opts: DashOptions): Dash {
     dispose: () => {
       window.clearInterval(timer);
       offLayout();
+      offBytes?.();
+      byteMarks.clear();
       cards.clear();
       mount.textContent = "";
     },

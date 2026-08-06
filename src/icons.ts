@@ -35,6 +35,7 @@ export type IconName =
   | "chevron-right"
   | "arrow-down"
   | "arrow-up"
+  | "arrow-up-right"
   | "git-commit-horizontal"
   | "diff";
 
@@ -84,6 +85,7 @@ const INNER: Record<IconName, string> = {
   "chevron-right": '<path d="m9 18 6-6-6-6"/>',
   "arrow-down": '<path d="M12 5v14"/><path d="m19 12-7 7-7-7"/>',
   "arrow-up": '<path d="m5 12 7-7 7 7"/><path d="M12 19V5"/>',
+  "arrow-up-right": '<path d="M7 7h10v10"/><path d="M7 17 17 7"/>',
   "git-commit-horizontal":
     '<circle cx="12" cy="12" r="3"/><line x1="3" x2="9" y1="12" y2="12"/><line x1="15" x2="21" y1="12" y2="12"/>',
   diff: '<path d="M12 3v14"/><path d="M5 10h14"/><path d="M5 21h14"/>',
