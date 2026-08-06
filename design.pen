@@ -25406,6 +25406,180 @@
                     },
                     {
                       "type": "frame",
+                      "id": "S3zPVH",
+                      "name": "Mission File Management Toolbar",
+                      "width": "fill_container",
+                      "height": 42,
+                      "fill": "$panel2",
+                      "stroke": "$lineSoft",
+                      "strokeWidth": {
+                        "top": 1,
+                        "bottom": 1
+                      },
+                      "gap": 6,
+                      "padding": [
+                        0,
+                        10
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "HSge9",
+                          "name": "New File Button",
+                          "height": 26,
+                          "fill": "#17283C",
+                          "stroke": "$blue",
+                          "strokeWidth": 1,
+                          "gap": 5,
+                          "padding": [
+                            0,
+                            8
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "icon",
+                              "id": "K2jI0",
+                              "name": "New File Icon",
+                              "width": 11,
+                              "height": 11,
+                              "icon": "file-plus",
+                              "library": "lucide",
+                              "fill": "$blue"
+                            },
+                            {
+                              "type": "text",
+                              "id": "nKCtQ",
+                              "name": "New File Label",
+                              "fill": "#B8D4FF",
+                              "content": "새 파일",
+                              "fontFamily": "$font-ui",
+                              "fontSize": 7,
+                              "fontWeight": "700"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "P0LnOQ",
+                          "name": "New Folder Button",
+                          "height": 26,
+                          "fill": "$panel",
+                          "stroke": "$line",
+                          "strokeWidth": 1,
+                          "gap": 5,
+                          "padding": [
+                            0,
+                            8
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "icon",
+                              "id": "wePaI",
+                              "name": "New Folder Icon",
+                              "width": 11,
+                              "height": 11,
+                              "icon": "folder-plus",
+                              "library": "lucide",
+                              "fill": "$purple"
+                            },
+                            {
+                              "type": "text",
+                              "id": "FH3UB",
+                              "name": "New Folder Label",
+                              "fill": "$text",
+                              "content": "새 폴더",
+                              "fontFamily": "$font-ui",
+                              "fontSize": 7,
+                              "fontWeight": "700"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "dgtZT",
+                          "name": "File Toolbar Spacer",
+                          "width": "fill_container",
+                          "height": 1
+                        },
+                        {
+                          "type": "frame",
+                          "id": "AQTet",
+                          "name": "Import Files Button",
+                          "width": 26,
+                          "height": 26,
+                          "fill": "$panel",
+                          "stroke": "$line",
+                          "strokeWidth": 1,
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "icon",
+                              "id": "cbOfv",
+                              "name": "Import Files Icon",
+                              "width": 11,
+                              "height": 11,
+                              "icon": "upload",
+                              "library": "lucide",
+                              "fill": "$cyan"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "HWuL5",
+                          "name": "Refresh Files Button",
+                          "width": 26,
+                          "height": 26,
+                          "fill": "$panel",
+                          "stroke": "$line",
+                          "strokeWidth": 1,
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "icon",
+                              "id": "kyjBq",
+                              "name": "Refresh Files Icon",
+                              "width": 11,
+                              "height": 11,
+                              "icon": "refresh-cw",
+                              "library": "lucide",
+                              "fill": "$muted"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "fAnUu",
+                          "name": "File More Menu Button",
+                          "width": 26,
+                          "height": 26,
+                          "fill": "$panel",
+                          "stroke": "$line",
+                          "strokeWidth": 1,
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "icon",
+                              "id": "vCDO0",
+                              "name": "File More Menu Icon",
+                              "width": 11,
+                              "height": 11,
+                              "icon": "ellipsis",
+                              "library": "lucide",
+                              "fill": "$muted"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
                       "id": "Qsg66",
                       "name": "Mission Tree Content",
                       "width": "fill_container",
@@ -25537,6 +25711,16 @@
                               "fontFamily": "$font-mono",
                               "fontSize": 6,
                               "fontWeight": "700"
+                            },
+                            {
+                              "type": "icon",
+                              "id": "JpPhh",
+                              "name": "AgentCommender File Actions Menu",
+                              "width": 11,
+                              "height": 11,
+                              "icon": "ellipsis-vertical",
+                              "library": "lucide",
+                              "fill": "$muted"
                             }
                           ]
                         },
@@ -25595,6 +25779,16 @@
                               "fontFamily": "$font-mono",
                               "fontSize": 6,
                               "fontWeight": "700"
+                            },
+                            {
+                              "type": "icon",
+                              "id": "XhYwH",
+                              "name": "TechDoc File Actions Menu",
+                              "width": 11,
+                              "height": 11,
+                              "icon": "ellipsis-vertical",
+                              "library": "lucide",
+                              "fill": "$muted"
                             }
                           ]
                         },
@@ -25767,6 +25961,254 @@
                           "fontFamily": "$font-mono",
                           "fontSize": 6,
                           "fontWeight": "700"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "tI5iW",
+                      "layoutPosition": "absolute",
+                      "x": 188,
+                      "y": 138,
+                      "name": "File Management Dropdown Menu",
+                      "width": 160,
+                      "height": 190,
+                      "fill": "$panel2",
+                      "stroke": "$line",
+                      "strokeWidth": 1,
+                      "effect": {
+                        "type": "shadow",
+                        "shadowType": "outer",
+                        "color": "#00000066",
+                        "offset": {
+                          "x": 0,
+                          "y": 6
+                        },
+                        "blur": 18
+                      },
+                      "layout": "vertical",
+                      "gap": 2,
+                      "padding": 6,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "QVda5",
+                          "name": "File Menu Title",
+                          "fill": "$muted",
+                          "content": "FILE ACTIONS",
+                          "fontFamily": "$font-mono",
+                          "fontSize": 6,
+                          "fontWeight": "700"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "rlRGq",
+                          "name": "Rename File Menu Item",
+                          "width": "fill_container",
+                          "height": 25,
+                          "gap": 7,
+                          "padding": [
+                            0,
+                            7
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "icon",
+                              "id": "js2AU",
+                              "name": "Rename File Icon",
+                              "width": 11,
+                              "height": 11,
+                              "icon": "pencil",
+                              "library": "lucide",
+                              "fill": "$text"
+                            },
+                            {
+                              "type": "text",
+                              "id": "I9VX6R",
+                              "name": "Rename File Label",
+                              "fill": "$text",
+                              "content": "이름 변경",
+                              "fontFamily": "$font-ui",
+                              "fontSize": 7,
+                              "fontWeight": "600"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "IBIhq",
+                          "name": "Move File Menu Item",
+                          "width": "fill_container",
+                          "height": 25,
+                          "gap": 7,
+                          "padding": [
+                            0,
+                            7
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "icon",
+                              "id": "ysJVp",
+                              "name": "Move File Icon",
+                              "width": 11,
+                              "height": 11,
+                              "icon": "folder-input",
+                              "library": "lucide",
+                              "fill": "$text"
+                            },
+                            {
+                              "type": "text",
+                              "id": "BV3Ub",
+                              "name": "Move File Label",
+                              "fill": "$text",
+                              "content": "다른 폴더로 이동",
+                              "fontFamily": "$font-ui",
+                              "fontSize": 7,
+                              "fontWeight": "600"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "fZrO5",
+                          "name": "Duplicate File Menu Item",
+                          "width": "fill_container",
+                          "height": 25,
+                          "gap": 7,
+                          "padding": [
+                            0,
+                            7
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "icon",
+                              "id": "xf4mO",
+                              "name": "Duplicate File Icon",
+                              "width": 11,
+                              "height": 11,
+                              "icon": "copy",
+                              "library": "lucide",
+                              "fill": "$text"
+                            },
+                            {
+                              "type": "text",
+                              "id": "J2AFT",
+                              "name": "Duplicate File Label",
+                              "fill": "$text",
+                              "content": "복제",
+                              "fontFamily": "$font-ui",
+                              "fontSize": 7,
+                              "fontWeight": "600"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "g2LdtP",
+                          "name": "Copy File Path Menu Item",
+                          "width": "fill_container",
+                          "height": 25,
+                          "gap": 7,
+                          "padding": [
+                            0,
+                            7
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "icon",
+                              "id": "KK7yV",
+                              "name": "Copy File Path Icon",
+                              "width": 11,
+                              "height": 11,
+                              "icon": "copy-check",
+                              "library": "lucide",
+                              "fill": "$text"
+                            },
+                            {
+                              "type": "text",
+                              "id": "W6sdk",
+                              "name": "Copy File Path Label",
+                              "fill": "$text",
+                              "content": "경로 복사",
+                              "fontFamily": "$font-ui",
+                              "fontSize": 7,
+                              "fontWeight": "600"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "PDYbA",
+                          "name": "Reveal File Menu Item",
+                          "width": "fill_container",
+                          "height": 25,
+                          "gap": 7,
+                          "padding": [
+                            0,
+                            7
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "icon",
+                              "id": "L8Blx",
+                              "name": "Reveal File Icon",
+                              "width": 11,
+                              "height": 11,
+                              "icon": "external-link",
+                              "library": "lucide",
+                              "fill": "$text"
+                            },
+                            {
+                              "type": "text",
+                              "id": "ZkDpf",
+                              "name": "Reveal File Label",
+                              "fill": "$text",
+                              "content": "탐색기에서 열기",
+                              "fontFamily": "$font-ui",
+                              "fontSize": 7,
+                              "fontWeight": "600"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "f5q5ih",
+                          "name": "Delete File Menu Item",
+                          "width": "fill_container",
+                          "height": 25,
+                          "gap": 7,
+                          "padding": [
+                            0,
+                            7
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "icon",
+                              "id": "y9w6rA",
+                              "name": "Delete File Icon",
+                              "width": 11,
+                              "height": 11,
+                              "icon": "trash-2",
+                              "library": "lucide",
+                              "fill": "$red"
+                            },
+                            {
+                              "type": "text",
+                              "id": "agpFD",
+                              "name": "Delete File Label",
+                              "fill": "$red",
+                              "content": "삭제",
+                              "fontFamily": "$font-ui",
+                              "fontSize": 7,
+                              "fontWeight": "600"
+                            }
+                          ]
                         }
                       ]
                     }
