@@ -184,7 +184,7 @@ pub fn run() {
             // 계측 모드는 로컬 에코로 렌더러만 재므로 PTY를 붙이지 않는다.
             // 두 경로가 같이 돌면 셸 에코와 로컬 에코가 겹쳐 숫자가 오염된다.
             if probe_cfg.enabled && pty_probe_cfg.enabled {
-                eprintln!("[eqmux] ⚠️ --latency-probe와 --pty-probe는 같이 못 쓴다 — PTY 검증만 돈다");
+                eprintln!("[eqmux] ⚠️ --latency-probe와 --pty-probe는 같이 못 쓴다 — 지연 계측만 돈다");
             }
             // 프런트 분기 순서(폭 > 지연 > 패널 > PTY)와 같은 말이어야 한다 — 다르면 경고가 거짓말이 된다.
             if panes_cfg.probe && font_cfg.enabled {
@@ -217,16 +217,21 @@ pub fn run() {
             }
             // 탭 확인은 프리셋 확인 바로 뒤다 — 프런트 분기 순서와 같은 말이어야 한다.
             if tab_probe_cfg.enabled {
+                // 탭보다 **앞서는** 것들. 이쪽이 걸리면 탭 확인은 못 돈다.
                 for (flag, on) in [
                     ("--font-probe", font_cfg.enabled),
                     ("--latency-probe", probe_cfg.enabled),
                     ("--panes-probe", panes_cfg.probe),
                     ("--preset-probe", preset_probe_cfg.enabled),
-                    ("--pty-probe", pty_probe_cfg.enabled),
                 ] {
                     if on {
                         eprintln!("[eqmux] ⚠️ {flag}와 --tab-probe는 같이 못 쓴다 — {flag} 쪽만 돈다");
                     }
+                }
+                // `--pty-probe`는 탭 확인보다 **뒤**다 (`main.ts` 탭 `:442` > PTY `:466`).
+                // 위 묶음에 같이 넣으면 이기는 쪽이 뒤집혀 경고가 거짓말이 된다 — `#20`과 같은 결함.
+                if pty_probe_cfg.enabled {
+                    eprintln!("[eqmux] ⚠️ --pty-probe와 --tab-probe는 같이 못 쓴다 — 탭 확인만 돈다");
                 }
             }
 

@@ -589,7 +589,9 @@ function canvasList(): Element[] {
  * 옮겨 담은 화면은 똑같이 생겼다 — 스크롤백을 눈으로 뒤져야 갈린다. 그래서 신원을 대조한다.
  *
  *   ① **잎 id** — 트리가 같은 세션을 들고 있는가 (순서까지)
- *   ② **PTY id** — 프로세스가 안 죽었는가 (`pty_list`는 살아 있는 것만 준다)
+ *   ①' **탭 id** (`S2-5`) — 탭이 자기 패널을 따라갔는가. 잎만 보면 탭이 샌 재배열을 못 잡는다
+ *   ② **PTY id** — 프로세스가 안 죽었는가 (`pty_list`는 살아 있는 것만 준다).
+ *      **셈의 단위는 탭이다** — v2에서 PTY는 잎이 아니라 탭에 붙는다
  *   ③ **캔버스 요소 동일성** — xterm이 파괴·재생성되지 않았는가.
  *      수만 세면 새로 만든 8장도 8장이다. **요소가 같아야** 버퍼·WebGL 컨텍스트가 산 것이다.
  *   ④ 트리 모양이 `listPresets()`가 예고한 배치와 같은가.
@@ -620,6 +622,7 @@ async function runPresetProbe(manager: PanelManager, info: AppInfo): Promise<voi
     const baseLeaves = manager.leafIds();
     const basePtys = (await invoke<PtyInfo[]>("pty_list")).map((p) => p.id).sort();
     const baseCanvases = canvasList();
+    const baseTabs = tabsOf((await invoke<LayoutStateDto>("layout_get")).root);
     if (baseLeaves.length < 2) {
       // 잎이 하나면 어떤 프리셋을 걸어도 같은 화면이라 아무것도 증명하지 못한다.
       await finish(false, `미달 — 세션이 ${baseLeaves.length}개다. --panes=N으로 2개 이상 필요`, {
@@ -643,13 +646,20 @@ async function runPresetProbe(manager: PanelManager, info: AppInfo): Promise<voi
       const canvases = canvasList();
       const tree = await invoke<LayoutStateDto>("layout_get");
       const shape = shapeOf(tree.root);
+      const tabs = tabsOf(tree.root);
       const want = expectedShape(meta);
       const cur = manager.currentPreset();
 
       const checks = {
         leaves_identical: sameList(leaves, baseLeaves),
+        // 탭도 순서까지 그대로여야 한다. 프리셋이 배치하는 단위는 패널이고, 탭은 자기 패널을
+        // 따라간다(`layout.rs` §탭). 잎만 대조하면 "탭이 다른 패널로 샌 재배열"이 통과한다.
+        tabs_identical: sameList(tabs, baseTabs),
         ptys_identical: sameList(ptys, basePtys),
-        pty_per_leaf: ptys.length === leaves.length,
+        // v1에서는 `ptys.length === leaves.length`였다. `S2-5`가 잎 하나에 탭 N개를 허용하면서
+        // **PTY가 붙는 단위가 잎에서 탭으로 내려갔다** — 잎으로 세면 탭 2개인 패널이 하나만
+        // 있어도 6종 전부 거짓 미달이 난다(실제로 팀장님 상태 파일에서 그렇게 났다).
+        pty_per_tab: ptys.length === tabs.length,
         canvas_identity_preserved: sameElements(canvases, baseCanvases),
         renderers_alive: manager.rendererReport().every((r) => r.alive),
         current_preset_is_target: cur?.id === meta.id,
@@ -665,7 +675,8 @@ async function runPresetProbe(manager: PanelManager, info: AppInfo): Promise<voi
         `${failed.length ? "미달" : "통과"} ${meta.id} (${meta.short}) —` +
           ` 계획 ${want.axis ?? "leaf"}[${want.groups.join(",")}]` +
           ` 실제 ${shape ? `${shape.axis ?? "leaf"}[${shape.groups.join(",")}]` : "프리셋 모양 아님"}` +
-          ` · 잎 ${leaves.length} · PTY ${ptys.length} · 캔버스 ${canvases.length}` +
+          ` · 잎 ${leaves.length} · 탭 ${tabs.length} · PTY ${ptys.length}` +
+          ` · 캔버스 ${canvases.length}` +
           (failed.length ? ` · 실패: ${failed.join(", ")}` : ""),
       );
       results.push({
@@ -678,6 +689,7 @@ async function runPresetProbe(manager: PanelManager, info: AppInfo): Promise<voi
         checks,
         pass: failed.length === 0,
         leaves,
+        tabs,
         ptys,
         canvases: canvases.length,
         current_preset: cur?.id ?? null,
@@ -686,13 +698,18 @@ async function runPresetProbe(manager: PanelManager, info: AppInfo): Promise<voi
 
     lines.unshift(
       `${allPass ? "통과" : "미달"} — 프리셋 ${targets.length}종 ×` +
-        ` 세션 ${baseLeaves.length}개 · 잎·PTY·캔버스 신원 대조`,
+        ` 세션 ${baseLeaves.length}개(탭 ${baseTabs.length}) · 잎·탭·PTY·캔버스 신원 대조`,
     );
     await finish(allPass, lines.join("\n"), {
       pass: allPass,
       target,
       sessions: baseLeaves.length,
-      base: { leaves: baseLeaves, ptys: basePtys, canvases: baseCanvases.length },
+      base: {
+        leaves: baseLeaves,
+        tabs: baseTabs,
+        ptys: basePtys,
+        canvases: baseCanvases.length,
+      },
       presets: results,
     });
   } catch (e) {
@@ -736,8 +753,16 @@ async function runTabProbe(manager: PanelManager, info: AppInfo): Promise<void> 
     }
 
     // ── 열기. 새 탭이 곧바로 활성이 되고 셸이 붙어야 한다.
+    //
+    // **시작 탭 수를 세고 나서 목표를 정한다.** 예전엔 `i = 1`로 시작해 "이 패널은 탭이
+    // 하나다"를 암묵 전제로 깔았는데, 저장된 상태를 복원하고 돌리면 그 전제가 깨져
+    // `opened_to_target`이 거짓 미달을 낸다(탭 2개짜리 패널에서 4/3). 프로브가 재는 것은
+    // **여는 동작**이지 시작 지점이 아니다.
+    const startTabs = manager.tabsOf(leaf).length;
+    // 이미 목표 이상이면 목표를 올린다 — 0개를 열면 아무것도 증명하지 못한다.
+    const target = Math.max(info.tab_probe.tabs, startTabs + 1);
     const opened: string[] = [];
-    for (let i = 1; i < info.tab_probe.tabs; i++) {
+    for (let i = startTabs; i < target; i++) {
       const id = await manager.newTab(leaf);
       if (id) opened.push(id);
       await sleep(800); // 셸 기동 + 첫 프롬프트
@@ -778,7 +803,9 @@ async function runTabProbe(manager: PanelManager, info: AppInfo): Promise<void> 
     const survivors = roundPtys.filter((p) => p !== victimPty);
 
     const checks = {
-      opened_to_target: tabs.length === info.tab_probe.tabs,
+      opened_to_target: tabs.length === target,
+      // 여는 동작을 실제로 쟀는가. 시작 탭이 이미 목표 이상이면 위 한 줄은 열지 않고도 참이 된다.
+      opened_at_least_one: opened.length >= 1,
       // 탭은 잎을 늘리지 않는다. 늘었다면 그건 분할이지 탭이 아니다.
       leaves_unchanged: afterOpenLeaves === baseLeaves,
       pty_per_tab: openedPtys.length === tabs.length,
@@ -802,7 +829,9 @@ async function runTabProbe(manager: PanelManager, info: AppInfo): Promise<void> 
     const pass = failed.length === 0;
 
     const verdict =
-      `${pass ? "통과" : "미달"} — 탭 ${tabs.length}/${info.tab_probe.tabs}` +
+      `${pass ? "통과" : "미달"} — 탭 ${tabs.length}/${target}` +
+      (target !== info.tab_probe.tabs ? ` (요청 ${info.tab_probe.tabs} · 시작 ${startTabs})` : "") +
+      ` · 새로 연 탭 ${opened.length}` +
       ` · 패널 ${baseLeaves}→${manager.leafIds().length} (불변 기대)` +
       ` · PTY ${openedPtys.length}→${roundPtys.length}→${afterClose.length} (전환 왕복 동일 ${
         checks.ptys_identical_after_switch ? "예" : "아니오"
@@ -815,7 +844,10 @@ async function runTabProbe(manager: PanelManager, info: AppInfo): Promise<void> 
     await finish(pass, verdict, {
       pass,
       checks,
+      // 요청값과 실제 목표를 둘 다 남긴다 — 복원된 상태에서는 갈린다.
       target_tabs: info.tab_probe.tabs,
+      effective_target: target,
+      start_tabs: startTabs,
       leaf,
       tabs,
       opened,
@@ -844,6 +876,20 @@ function shapeOf(root: LayoutNode): { axis: SplitDirection | null; groups: numbe
     groups.push(n.children.length);
   }
   return { axis: root.direction, groups };
+}
+
+/**
+ * 트리에 든 **탭 id 전부**를 잎 순서대로 편다 (`S2-5`).
+ *
+ * `shapeOf`와 같은 이유로 엔진이 아니라 **DTO를 직접 걸어서** 센다 — `PanelManager`에게
+ * 물으면 그 코드가 틀렸을 때 통과가 나온다(`runPresetProbe` 머리말 ④).
+ *
+ * 왜 잎이 아니라 탭이냐면, v2에서 **PTY가 붙는 단위가 탭이기 때문이다.** 잎 8개짜리
+ * 배치에서도 한 패널이 탭 둘을 들고 있으면 셸은 9개다.
+ */
+function tabsOf(node: LayoutNode): string[] {
+  if (node.type === "leaf") return node.tabs.map((t) => t.id);
+  return node.children.flatMap((c) => tabsOf(c.node));
 }
 
 /**
