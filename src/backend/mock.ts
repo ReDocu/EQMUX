@@ -1,0 +1,382 @@
+// MockBackend — SessionService(PRD C §7.1)의 프런트 소비 표면을 흉내 낸다.
+// M1에서 TauriBackend(invoke/Channel)로 교체하며, 화면은 Backend 인터페이스만 안다 (C9 모듈 경계).
+import type {
+  ConversationMessage,
+  EventRecord,
+  Job,
+  Mission,
+  Persona,
+  Session,
+  StoreUsage,
+  Workspace,
+} from "../types";
+
+export interface Backend {
+  listWorkspaces(): Workspace[];
+  listSessions(): Session[];
+  listMissions(): Mission[];
+  listJobs(): Job[];
+  listPersonas(): Persona[];
+  listEvents(): EventRecord[];
+  listMessages(): ConversationMessage[];
+  storeUsage(): StoreUsage;
+  /** 상태 변경 방송 (FR-C-43) — MockBackend는 타이머로 경과 시간만 진행시킨다 */
+  subscribe(cb: () => void): () => void;
+}
+
+// ── 목 데이터: docs/design.pen의 카피를 그대로 사용 (Academy 팀 시나리오) ──
+
+export const JOBS: Job[] = [
+  {
+    id: "lead",
+    name: "리드",
+    permissions: { write: true, commit: true, push: false },
+    responsibility: "전체 구조 · 임무 분해 · 최종 판단",
+    forbidden: "검증 없이 완료 선언 · 원격 push",
+  },
+  {
+    id: "impl",
+    name: "구현",
+    permissions: { write: true, commit: false, push: false },
+    responsibility: "작은 단위 구현과 자체 검증",
+    forbidden: "검증 없이 커밋 요청",
+  },
+  {
+    id: "verify",
+    name: "검증",
+    permissions: { write: false, commit: false, push: false },
+    responsibility: "테스트 · 증거 수집",
+    forbidden: "증거 없는 통과 판정",
+  },
+  {
+    id: "review",
+    name: "리뷰",
+    permissions: { write: false, commit: false, push: false },
+    responsibility: "변경 검토 · 품질 기준",
+    forbidden: "리뷰 없이 승인",
+  },
+];
+
+export const PERSONAS: Persona[] = [
+  { id: "kai", name: "카이", hint: "전체 구조와 위험을 먼저 본다", color: "blue" },
+  { id: "noel", name: "노엘", hint: "작은 단위로 구현하고 검증한다", color: "purple" },
+  { id: "lin", name: "린", hint: "경계와 정합성", color: "green" },
+  { id: "sol", name: "솔", hint: "증거 없는 완료를 인정하지 않는다", color: "amber" },
+  { id: "mira", name: "미라", hint: "운영 비용과 관측", color: "blue" },
+  { id: "jun", name: "준", hint: "계약과 인터페이스 우선", color: "purple" },
+  { id: "hana", name: "하나", hint: "문서와 재현 절차", color: "green" },
+  { id: "luca", name: "루카", hint: "사용자 흐름 중심", color: "blue" },
+];
+
+const WORKSPACES: Workspace[] = [
+  {
+    id: "academy",
+    name: "Academy",
+    path: "C:\\workspace\\Academy",
+    remote: "github.com/acme/academy",
+    branch: "main",
+    branchNote: "main · 2분 전",
+    open: true,
+    pathMissing: false,
+    teamFile: ".eqmux/team.json",
+    lastUsed: "2026-08-11 10:42",
+  },
+  {
+    id: "eqmux",
+    name: "EQMux",
+    path: "C:\\workspace\\EQMUX",
+    remote: "github.com/acme/eqmux",
+    branch: "dev",
+    branchNote: "dev · 18분 전",
+    open: true,
+    pathMissing: false,
+    teamFile: ".eqmux/team.json",
+    lastUsed: "2026-08-11 09:12",
+  },
+  {
+    id: "atlas",
+    name: "Atlas",
+    path: "D:\\repos\\Atlas",
+    remote: "github.com/acme/atlas",
+    branch: "feature/ui",
+    branchNote: "feature/ui · 1시간 전",
+    open: true,
+    pathMissing: false,
+    teamFile: ".eqmux/team.json",
+  },
+  {
+    id: "legacy",
+    name: "Legacy API",
+    path: "D:\\archive\\legacy-api",
+    remote: "github.com/acme/legacy",
+    branchNote: "경로를 찾을 수 없음",
+    open: false,
+    pathMissing: true,
+    teamFile: ".eqmux/team.json",
+  },
+  {
+    id: "docs",
+    name: "Docs",
+    path: "C:\\workspace\\docs",
+    branchNote: "main · 3일 전",
+    open: false,
+    pathMissing: false,
+    teamFile: ".eqmux/team.json",
+  },
+];
+
+const s = (
+  id: string,
+  ws: string,
+  slot: 1 | 2 | 3 | 4,
+  personaId: string,
+  jobId: string,
+  patch: Partial<Session>,
+): Session => ({
+  id,
+  workspaceId: ws,
+  slot,
+  personaId,
+  jobId,
+  shell: "pwsh",
+  cwd: `C:\\workspace\\${ws}`,
+  status: "idle",
+  subagents: 0,
+  resumable: true,
+  resumeReason: "transcript + cwd 일치",
+  degraded: false,
+  restartNeeded: false,
+  sinceMs: 3 * 60000,
+  scrollbackLines: 0,
+  lastOutput: "",
+  ...patch,
+});
+
+const SESSIONS: Session[] = [
+  s("kai@academy", "academy", 1, "kai", "lead", {
+    status: "busy",
+    subagents: 3,
+    missionId: "auth-refactor",
+    agentSessionId: "1cdd7ea4",
+    agentVersion: "2.1.226",
+    pid: 14764,
+    scrollbackLines: 18400,
+    memoryMb: 512,
+    memoryPeakMb: 640,
+    lastOutput: "작업 중 · 인증 리팩터",
+    sinceMs: 8 * 60000,
+  }),
+  s("noel@academy", "academy", 2, "noel", "impl", {
+    status: "waiting",
+    waitingFor: "Bash(npm publish)",
+    missionId: "auth-refactor",
+    agentSessionId: "8d19c2aa",
+    agentVersion: "2.1.226",
+    pid: 13044,
+    scrollbackLines: 12900,
+    memoryMb: 428,
+    memoryPeakMb: 611,
+    lastOutput: "승인 대기 · Bash(npm publish)",
+    sinceMs: 12 * 60000,
+  }),
+  s("lin@academy", "academy", 3, "lin", "review", {
+    status: "busy",
+    missionId: "auth-refactor",
+    agentSessionId: "77ab01ce",
+    agentVersion: "2.1.226",
+    pid: 20112,
+    scrollbackLines: 9100,
+    memoryMb: 302,
+    memoryPeakMb: 355,
+    restartNeeded: true,
+    lastOutput: "리뷰 중 · 승인 게이트",
+    sinceMs: 4 * 60000,
+  }),
+  s("sol@academy", "academy", 4, "sol", "verify", {
+    status: "idle",
+    missionId: "regression",
+    scrollbackLines: 2100,
+    memoryMb: 180,
+    memoryPeakMb: 240,
+    lastOutput: "회귀 검증 대기",
+    sinceMs: 2 * 60000,
+  }),
+  s("mira@eqmux", "eqmux", 1, "mira", "lead", {
+    status: "shell",
+    missionId: "storage-metrics",
+    scrollbackLines: 4400,
+    memoryMb: 210,
+    memoryPeakMb: 300,
+    lastOutput: "스토리지 계측",
+  }),
+  s("jun@eqmux", "eqmux", 2, "jun", "impl", {
+    status: "busy",
+    missionId: "prd-d-impl",
+    scrollbackLines: 7300,
+    memoryMb: 350,
+    memoryPeakMb: 420,
+    lastOutput: "PRD D 구현",
+  }),
+  s("hana@eqmux", "eqmux", 3, "hana", "impl", {
+    status: "dead",
+    exitCode: 1,
+    resumable: true,
+    scrollbackLines: 5100,
+    lastOutput: "종료됨 · exit 1",
+    sinceMs: 31 * 60000,
+  }),
+  s("luca@atlas", "atlas", 1, "luca", "lead", {
+    status: "idle",
+    scrollbackLines: 900,
+    memoryMb: 120,
+    lastOutput: "대기 중",
+  }),
+];
+
+const MISSIONS: Mission[] = [
+  {
+    id: "auth-refactor",
+    workspaceId: "academy",
+    name: "인증 리팩터",
+    file: ".eqmux/missions/auth-refactor.md",
+    status: "in-progress",
+    goal: "인증 모듈의 결합을 낮추고 세션 재개 경계를 명확히 한다.",
+    outputs: ["src/auth/* 리팩터", "회귀 테스트 통과", "린 리뷰 승인"],
+    branch: "feature/auth-refactor",
+    assigned: ["noel@academy", "lin@academy"],
+  },
+  {
+    id: "regression",
+    workspaceId: "academy",
+    name: "회귀 검증",
+    file: ".eqmux/missions/regression.md",
+    status: "todo",
+    goal: "인증 리팩터 산출물의 회귀 검증 증거를 수집한다.",
+    outputs: ["테스트 결과", "증거 로그"],
+    assigned: ["sol@academy"],
+  },
+  {
+    id: "storage-metrics",
+    workspaceId: "eqmux",
+    name: "세션 레지스트리",
+    file: ".eqmux/missions/mission.md",
+    status: "in-review",
+    goal: "레지스트리 watch와 폴백 경로 검증",
+    outputs: ["watch 구현", "degraded 테스트"],
+    assigned: ["mira@eqmux"],
+  },
+  {
+    id: "prd-d-impl",
+    workspaceId: "eqmux",
+    name: "트랜스크립트 파서",
+    file: ".eqmux/missions/mission.md",
+    status: "todo",
+    goal: "JSONL 턴 파서 + 폴백",
+    outputs: ["파서", "폴백 전환"],
+    assigned: ["jun@eqmux"],
+  },
+];
+
+const EVENTS: EventRecord[] = [
+  { id: "e1", time: "10:42", sessionId: "noel@academy", kind: "state", message: "busy → waiting" },
+  { id: "e2", time: "10:38", sessionId: "kai@academy", kind: "agent", message: "서브에이전트 3 시작" },
+  { id: "e3", time: "10:31", sessionId: "hana@eqmux", kind: "state", message: "종료됨 · exit 1" },
+  { id: "e4", time: "10:20", sessionId: "lin@academy", kind: "mission", message: "임무 배정 · 인증 리팩터" },
+  { id: "e5", time: "09:58", sessionId: "jun@eqmux", kind: "agent", message: "역할 파일 다시 읽음" },
+  { id: "e6", time: "09:48", kind: "store", message: "scrollback batch committed · 42ms" },
+  { id: "e7", time: "09:47", kind: "app", message: "EQMUX 시작 → 워크스페이스 Academy" },
+];
+
+const MESSAGES: ConversationMessage[] = [
+  {
+    id: "m1",
+    time: "10:34",
+    from: "노엘",
+    to: "린",
+    type: "handoff",
+    body: "auth/session.ts의 인터페이스 변경을 넘깁니다. migration test를 부탁해요.",
+    unread: false,
+  },
+  {
+    id: "m2",
+    time: "10:37",
+    from: "린",
+    to: "카이",
+    type: "escalate",
+    body: "기존 refresh token 경계가 PRD와 충돌합니다. 전체 교체 여부 판단이 필요합니다.",
+    unread: true,
+  },
+  {
+    id: "m3",
+    time: "10:39",
+    from: "카이",
+    to: "@all",
+    type: "report",
+    body: "교체 승인. 공개 API는 유지하고 내부 저장 계층만 바꿉니다.",
+    unread: true,
+  },
+  {
+    id: "m4",
+    time: "10:42",
+    from: "솔",
+    to: "노엘",
+    type: "review",
+    body: "npm publish 승인은 보류했습니다. dry-run 산출물을 먼저 첨부하세요.",
+    unread: true,
+  },
+];
+
+export class MockBackend implements Backend {
+  private listeners = new Set<() => void>();
+  private timer: ReturnType<typeof setInterval> | undefined;
+
+  listWorkspaces() {
+    return WORKSPACES;
+  }
+  listSessions() {
+    return SESSIONS;
+  }
+  listMissions() {
+    return MISSIONS;
+  }
+  listJobs() {
+    return JOBS;
+  }
+  listPersonas() {
+    return PERSONAS;
+  }
+  listEvents() {
+    return EVENTS;
+  }
+  listMessages() {
+    return MESSAGES;
+  }
+  storeUsage(): StoreUsage {
+    return {
+      dbFile: "Academy/session.db",
+      dbSizeMb: 324,
+      dbPercent: 64,
+      walLatencyMs: 42,
+      globalUsage: "1.28G",
+    };
+  }
+
+  subscribe(cb: () => void) {
+    this.listeners.add(cb);
+    if (!this.timer) {
+      this.timer = setInterval(() => {
+        for (const sess of SESSIONS) sess.sinceMs += 30000;
+        this.listeners.forEach((l) => l());
+      }, 30000);
+    }
+    return () => {
+      this.listeners.delete(cb);
+      if (this.listeners.size === 0 && this.timer) {
+        clearInterval(this.timer);
+        this.timer = undefined;
+      }
+    };
+  }
+}
+
+export const backend: Backend = new MockBackend();

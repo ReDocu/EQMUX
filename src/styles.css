@@ -1,0 +1,350 @@
+/* EQMUX 디자인 토큰 — docs/design.pen ZwtYR (SYSTEM 1.0 · square · dense · terminal-first) */
+:root {
+  --eq-bg: #0b0f14;
+  --eq-surface: #141a22;
+  --eq-surface-2: #10151c;
+  --eq-line: #263140;
+  --eq-text: #e8eef8;
+  --eq-muted: #7f90a8;
+  --eq-blue: #6e9eff;
+  --eq-blue-soft: #17253f;
+  --eq-blue-mid: #233a61;
+  --eq-purple: #b68af2;
+  --eq-purple-soft: #281d36;
+  --eq-green: #6bd38e;
+  --eq-green-soft: #10251b;
+  --eq-cyan: #55d1cf;
+  --eq-amber: #ddb34c;
+  --eq-amber-soft: #2b2212;
+  --eq-red: #ef6b73;
+  --eq-red-soft: #2a1519;
+  --eq-terminal: #080b10;
+  --eq-gutter: #0d1219;
+  --eq-code: #aab7c8;
+  --eq-font: "Inter", system-ui, sans-serif;
+  --eq-mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: var(--eq-bg);
+  color: var(--eq-text);
+  font-family: var(--eq-font);
+  font-size: 13px;
+  line-height: 1.45;
+  overflow: hidden;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+input,
+textarea,
+select {
+  font: inherit;
+  color: var(--eq-text);
+  background: var(--eq-surface-2);
+  border: 1px solid var(--eq-line);
+  padding: 6px 8px;
+  outline: none;
+}
+
+input:focus,
+textarea:focus {
+  border-color: var(--eq-blue);
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--eq-line);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ── 공통 프리미티브 (square · dense) ─────────────────────────── */
+.mono {
+  font-family: var(--eq-mono);
+}
+.muted {
+  color: var(--eq-muted);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid var(--eq-line);
+  background: var(--eq-surface);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.btn:hover {
+  border-color: var(--eq-muted);
+}
+.btn.primary {
+  background: var(--eq-blue-mid);
+  border-color: var(--eq-blue);
+  color: var(--eq-text);
+}
+.btn.primary:hover {
+  background: var(--eq-blue);
+  color: var(--eq-bg);
+}
+.btn.danger {
+  background: var(--eq-red-soft);
+  border-color: var(--eq-red);
+  color: var(--eq-red);
+}
+.btn.ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--eq-muted);
+}
+.btn.ghost:hover {
+  color: var(--eq-text);
+}
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.badge {
+  font-family: var(--eq-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 2px 6px;
+  border: 1px solid var(--eq-line);
+  color: var(--eq-muted);
+  white-space: nowrap;
+}
+.badge.blue {
+  color: var(--eq-blue);
+  border-color: var(--eq-blue-mid);
+  background: var(--eq-blue-soft);
+}
+.badge.purple {
+  color: var(--eq-purple);
+  border-color: var(--eq-purple);
+  background: var(--eq-purple-soft);
+}
+.badge.green {
+  color: var(--eq-green);
+  border-color: var(--eq-green);
+  background: var(--eq-green-soft);
+}
+.badge.amber {
+  color: var(--eq-amber);
+  border-color: var(--eq-amber);
+  background: var(--eq-amber-soft);
+}
+.badge.red {
+  color: var(--eq-red);
+  border-color: var(--eq-red);
+  background: var(--eq-red-soft);
+}
+
+.card {
+  background: var(--eq-surface);
+  border: 1px solid var(--eq-line);
+}
+.card.inset {
+  background: var(--eq-surface-2);
+}
+
+.eyebrow {
+  font-family: var(--eq-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--eq-muted);
+  text-transform: uppercase;
+}
+
+.kv {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--eq-line);
+  font-size: 12px;
+}
+.kv:last-child {
+  border-bottom: none;
+}
+.kv .k {
+  color: var(--eq-muted);
+}
+.kv .v {
+  font-family: var(--eq-mono);
+  text-align: right;
+}
+
+/* ── 앱 셸 ────────────────────────────────────────────────────── */
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+.app-main {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.appbar {
+  display: flex;
+  align-items: stretch;
+  background: var(--eq-surface-2);
+  border-bottom: 1px solid var(--eq-line);
+  height: 38px;
+  flex-shrink: 0;
+  user-select: none;
+}
+.appbar .brand {
+  font-family: var(--eq-mono);
+  font-weight: 800;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  color: var(--eq-blue);
+  border-right: 1px solid var(--eq-line);
+}
+.appbar .tabs {
+  display: flex;
+  align-items: stretch;
+  overflow-x: auto;
+}
+.appbar .tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 14px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--eq-muted);
+  border-right: 1px solid var(--eq-line);
+  position: relative;
+}
+.appbar .tab:hover {
+  color: var(--eq-text);
+}
+.appbar .tab.active {
+  color: var(--eq-text);
+  background: var(--eq-bg);
+  box-shadow: inset 0 2px 0 var(--eq-blue);
+}
+.appbar .tab .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+.appbar .tools {
+  margin-left: auto;
+  display: flex;
+  align-items: stretch;
+}
+.appbar .tool {
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  font-family: var(--eq-mono);
+  font-size: 11px;
+  color: var(--eq-muted);
+  border-left: 1px solid var(--eq-line);
+}
+.appbar .tool:hover {
+  color: var(--eq-text);
+}
+.appbar .tool.active {
+  color: var(--eq-blue);
+  background: var(--eq-blue-soft);
+}
+
+/* ── 화면 공통 레이아웃 ───────────────────────────────────────── */
+.screen {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.screen-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 22px 14px;
+  border-bottom: 1px solid var(--eq-line);
+  flex-shrink: 0;
+}
+.screen-head h1 {
+  font-size: 17px;
+  font-weight: 800;
+}
+.screen-head .sub {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--eq-muted);
+}
+.screen-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 18px 22px;
+}
+
+/* 상태 색 — 주의 예산: waiting=amber · dead/오류=red 만 유채색 */
+.st-waiting {
+  color: var(--eq-amber);
+}
+.st-dead {
+  color: var(--eq-red);
+}
+.st-busy,
+.st-shell,
+.st-idle,
+.st-starting {
+  color: var(--eq-muted);
+}
+
+/* 다이얼로그 */
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(4, 6, 10, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+.dialog {
+  width: 520px;
+  max-width: calc(100vw - 48px);
+  background: var(--eq-surface);
+  border: 1px solid var(--eq-line);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+}

@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"메인 윈도우 기본 권한","local":true,"windows":["main"],"permissions":["core:default"]}}
