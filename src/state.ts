@@ -9,12 +9,19 @@ export type View =
   | { kind: "connect" } // 레인 01 — 워크스페이스 연결
   | { kind: "casting"; wsId: string } // 레인 01 — 팀 캐스팅
   | { kind: "composition"; wsId: string } // 레인 01 — 팀 편성
-  | { kind: "conversation" } // 대화 탭 (M1)
+  | { kind: "roles" } // 역할 라이브러리 (화면 #7)
+  | { kind: "missions"; wsId: string } // 임무 배정 (화면 #8)
   | { kind: "settings" };
+
+export type PanelTab = "conversation" | "git" | "files" | "ports" | "missions";
 
 export const [view, setView] = createSignal<View>({ kind: "control" });
 export const [selectedSession, setSelectedSession] = createSignal<string | undefined>(undefined);
 export const [exitOpen, setExitOpen] = createSignal(false);
+
+/** 사이드 패널 (M1 — 대화는 패널 탭이며 메인 화면이 아니다) */
+export const [panelOpen, setPanelOpen] = createSignal(false);
+export const [panelTab, setPanelTab] = createSignal<PanelTab>("conversation");
 
 /** 백엔드 방송(FR-C-43) 수신 틱 — 화면은 tick()을 구독해 다시 그린다 */
 export const [tick, setTick] = createSignal(0);

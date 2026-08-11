@@ -4,14 +4,35 @@ import { backend } from "../backend/mock";
 import { setView } from "../state";
 import type { Permissions } from "../types";
 
-const PRESETS = ["표준", "집중구현", "리뷰중심", "탐색"] as const;
+type Slot = { badge: string; badgeColor: "blue" | "purple" | "green" | "amber"; personaId: string; jobId: string };
 
-const SLOT_PLAN: { badge: string; badgeColor: "blue" | "purple" | "green" | "amber"; personaId: string; jobId: string }[] = [
-  { badge: "LEAD", badgeColor: "blue", personaId: "kai", jobId: "lead" },
-  { badge: "BUILDER", badgeColor: "purple", personaId: "noel", jobId: "impl" },
-  { badge: "BUILDER", badgeColor: "purple", personaId: "lin", jobId: "impl" },
-  { badge: "REVIEW", badgeColor: "green", personaId: "sol", jobId: "verify" },
-];
+const PRESET_PLANS: Record<string, Slot[]> = {
+  표준: [
+    { badge: "LEAD", badgeColor: "blue", personaId: "kai", jobId: "lead" },
+    { badge: "BUILDER", badgeColor: "purple", personaId: "noel", jobId: "impl" },
+    { badge: "REVIEW", badgeColor: "green", personaId: "lin", jobId: "review" },
+    { badge: "VERIFY", badgeColor: "amber", personaId: "sol", jobId: "verify" },
+  ],
+  집중구현: [
+    { badge: "LEAD", badgeColor: "blue", personaId: "kai", jobId: "lead" },
+    { badge: "BUILDER", badgeColor: "purple", personaId: "noel", jobId: "impl" },
+    { badge: "BUILDER", badgeColor: "purple", personaId: "lin", jobId: "impl" },
+    { badge: "BUILDER", badgeColor: "purple", personaId: "jun", jobId: "impl" },
+  ],
+  리뷰중심: [
+    { badge: "LEAD", badgeColor: "blue", personaId: "kai", jobId: "lead" },
+    { badge: "REVIEW", badgeColor: "green", personaId: "lin", jobId: "review" },
+    { badge: "REVIEW", badgeColor: "green", personaId: "hana", jobId: "review" },
+    { badge: "VERIFY", badgeColor: "amber", personaId: "sol", jobId: "verify" },
+  ],
+  탐색: [
+    { badge: "LEAD", badgeColor: "blue", personaId: "luca", jobId: "lead" },
+    { badge: "BUILDER", badgeColor: "purple", personaId: "mira", jobId: "impl" },
+    { badge: "BUILDER", badgeColor: "purple", personaId: "jun", jobId: "impl" },
+    { badge: "VERIFY", badgeColor: "amber", personaId: "hana", jobId: "verify" },
+  ],
+};
+const PRESETS = Object.keys(PRESET_PLANS);
 
 function permText(p: Permissions): string {
   const mark = (b: boolean) => (b ? "✓" : "—");
@@ -20,9 +41,37 @@ function permText(p: Permissions): string {
 
 export function TeamCasting(props: { wsId: string }) {
   const ws = () => backend.listWorkspaces().find((w) => w.id === props.wsId);
-  const [preset, setPreset] = createSignal<(typeof PRESETS)[number]>("표준");
+  const [preset, setPreset] = createSignal(PRESETS[0]);
+  const [slots, setSlots] = createSignal<Slot[]>(PRESET_PLANS[PRESETS[0]]);
+  const [saved, setSaved] = createSignal(false);
   const persona = (id: string) => backend.listPersonas().find((p) => p.id === id);
   const job = (id: string) => backend.listJobs().find((j) => j.id === id);
+
+  const pickPreset = (p: string) => {
+    setPreset(p);
+    setSlots(PRESET_PLANS[p]);
+    setSaved(false);
+  };
+
+  // 캐스팅 변경 — 현재 편성에 없는 다음 페르소나로 순환
+  const cyclePersona = (i: number) => {
+    const all = backend.listPersonas();
+    const used = new Set(slots().map((sl) => sl.personaId));
+    const cur = all.findIndex((p) => p.id === slots()[i].personaId);
+    for (let step = 1; step <= all.length; step++) {
+      const cand = all[(cur + step) % all.length];
+      if (!used.has(cand.id)) {
+        setSlots(slots().map((sl, j) => (j === i ? { ...sl, personaId: cand.id } : sl)));
+        setSaved(false);
+        return;
+      }
+    }
+  };
+
+  const save = () => {
+    backend.applyCasting(props.wsId, slots());
+    setSaved(true);
+  };
 
   return (
     <div class="screen">
@@ -34,7 +83,7 @@ export function TeamCasting(props: { wsId: string }) {
         <div style={{ display: "flex", gap: "6px" }}>
           <For each={PRESETS}>
             {(p) => (
-              <button class="btn" classList={{ primary: preset() === p }} onClick={() => setPreset(p)}>
+              <button class="btn" classList={{ primary: preset() === p }} onClick={() => pickPreset(p)}>
                 {p}
               </button>
             )}
@@ -43,7 +92,7 @@ export function TeamCasting(props: { wsId: string }) {
       </div>
       <div class="screen-body">
         <div class="cast-grid">
-          <For each={SLOT_PLAN}>
+          <For each={slots()}>
             {(slot, i) => (
               <div class="card cast-slot">
                 <div class="cast-slot-head">
@@ -68,7 +117,7 @@ export function TeamCasting(props: { wsId: string }) {
                     {permText(job(slot.jobId)!.permissions)}
                   </div>
                 </div>
-                <button class="btn ghost" style={{ "align-self": "start" }}>
+                <button class="btn ghost" style={{ "align-self": "start" }} onClick={() => cyclePersona(i())}>
                   캐스팅 변경
                 </button>
               </div>
@@ -83,8 +132,16 @@ export function TeamCasting(props: { wsId: string }) {
             </div>
           </div>
           <div style={{ display: "flex", gap: "8px" }}>
-            <button class="btn">편성 저장</button>
-            <button class="btn primary" onClick={() => setView({ kind: "composition", wsId: props.wsId })}>
+            <button class="btn" onClick={save}>
+              {saved() ? "저장됨 ✓" : "편성 저장"}
+            </button>
+            <button
+              class="btn primary"
+              onClick={() => {
+                backend.applyCasting(props.wsId, slots());
+                setView({ kind: "composition", wsId: props.wsId });
+              }}
+            >
               편성 선택 →
             </button>
           </div>

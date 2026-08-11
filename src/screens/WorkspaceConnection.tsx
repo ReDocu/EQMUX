@@ -1,11 +1,14 @@
 // 워크스페이스 연결 (mmBPm) — 레인 01의 시작. git repo 1개 = 팀 1개 = 탭 1개 (W0).
 import { createSignal, For, Show } from "solid-js";
 import { backend } from "../backend/mock";
-import { setView } from "../state";
+import { setView, tick } from "../state";
 import { Eyebrow, KV } from "../components/ui";
 
 export function WorkspaceConnection() {
-  const workspaces = () => backend.listWorkspaces();
+  const workspaces = () => {
+    tick();
+    return backend.listWorkspaces();
+  };
   const [selectedId, setSelectedId] = createSignal(workspaces()[0]?.id);
   const selected = () => workspaces().find((w) => w.id === selectedId());
   const openCount = () => workspaces().filter((w) => w.open).length;
@@ -18,8 +21,12 @@ export function WorkspaceConnection() {
           <div class="sub">git repo 1개 = 팀 1개 = 탭 1개 · 등록 무제한 · 동시 오픈 10개</div>
         </div>
         <div style={{ display: "flex", gap: "8px" }}>
-          <button class="btn">원격에서 Clone</button>
-          <button class="btn primary">+ 로컬 저장소 연결</button>
+          <button class="btn" onClick={() => backend.addWorkspace("github.com/acme/cloned-repo")}>
+            원격에서 Clone
+          </button>
+          <button class="btn primary" onClick={() => backend.addWorkspace()}>
+            + 로컬 저장소 연결
+          </button>
         </div>
       </div>
       <div class="screen-body conn-body">
@@ -42,7 +49,16 @@ export function WorkspaceConnection() {
                   <Show when={ws.open}>
                     <span class="badge green">OPEN</span>
                   </Show>
-                  <span class="ws-item-action badge" classList={{ red: ws.pathMissing }}>
+                  <span
+                    class="ws-item-action badge"
+                    classList={{ red: ws.pathMissing }}
+                    style={{ cursor: ws.open ? "default" : "pointer" }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (ws.pathMissing) backend.repairWorkspace(ws.id);
+                      else if (!ws.open) backend.openWorkspace(ws.id);
+                    }}
+                  >
                     {ws.pathMissing ? "재지정" : ws.open ? "열림" : "열기"}
                   </span>
                 </div>
@@ -83,7 +99,10 @@ export function WorkspaceConnection() {
                   class="btn primary"
                   style={{ "margin-top": "14px", width: "100%", "justify-content": "center" }}
                   disabled={ws().pathMissing}
-                  onClick={() => setView({ kind: "casting", wsId: ws().id })}
+                  onClick={() => {
+                    backend.openWorkspace(ws().id);
+                    setView({ kind: "casting", wsId: ws().id });
+                  }}
                 >
                   {ws().pathMissing ? "경로 재지정 필요" : `${ws().name} 열기`}
                 </button>

@@ -16,5 +16,8 @@
     "typescript": "^5.7.3",
     "vite": "^6.2.0",
     "vite-plugin-solid": "^2.11.2"
+  },
+  "allowScripts": {
+    "esbuild@0.25.12": true
   }
 }

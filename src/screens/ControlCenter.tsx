@@ -1,11 +1,22 @@
 // 컨트롤 센터 (bi8Au) — 워크스페이스 탭의 기준 화면. 팀·세션 카드 / 터미널·저장·이벤트 / 인스펙터.
-// 터미널 페인은 M1(xterm.js + PTY)에서 실물이 되고, M0에서는 자리와 계약만 잡는다.
-import { For, Show } from "solid-js";
+// 터미널 텍스트는 목 출력이다 — M1에서 xterm.js + Rust PTY로 실물이 된다.
+import { createSignal, For, Show } from "solid-js";
 import { backend } from "../backend/mock";
 import { selectedSession, setSelectedSession, setView, tick } from "../state";
 import { Eyebrow, PersonaDot, StatusLabel } from "../components/ui";
 import { SessionDetailPanel } from "./SessionDetailPanel";
-import type { Workspace } from "../types";
+import { TranscriptPane } from "./TranscriptPane";
+import type { Session, Workspace } from "../types";
+
+// 세션 상태별 목 터미널 출력 — 2×2 그리드 시각 검증용
+function mockLines(s: Session, personaName: string): string[] {
+  const base = [`PS ${s.cwd}> claude --resume`, `Claude Code ${s.agentVersion ?? "2.1.226"} · ${personaName}`];
+  if (s.status === "waiting") return [...base, "⏸ 승인 대기 — " + (s.waitingFor ?? ""), "y/n 을 입력하세요"];
+  if (s.status === "dead") return [...base, `프로세스 종료 · exit ${s.exitCode ?? "?"}`, s.resumable ? "재개 가능 — --resume" : "재개 불가"];
+  if (s.status === "busy") return [...base, `⚙ ${s.lastOutput}`, `서브에이전트 ${s.subagents} · ${(s.scrollbackLines / 1000).toFixed(1)}K lines`];
+  if (s.status === "shell") return [...base, `PS ${s.cwd}> _`];
+  return [...base, `● ${s.lastOutput || "대기 중"}`];
+}
 
 export function ControlCenter(props: { workspace: Workspace }) {
   const sessions = () => {
@@ -22,6 +33,18 @@ export function ControlCenter(props: { workspace: Workspace }) {
   const job = (id: string) => backend.listJobs().find((j) => j.id === id);
   const selected = () => sessions().find((s) => s.id === selectedSession()) ?? sessions()[0];
 
+  const [centerTab, setCenterTab] = createSignal<"terminal" | "transcript">("terminal");
+  const [zoomed, setZoomed] = createSignal<string | undefined>(undefined); // B1 — 줌 토글
+
+  const gridSessions = () => {
+    const z = zoomed();
+    if (z) {
+      const s = sessions().find((x) => x.id === z);
+      if (s) return [s];
+    }
+    return sessions();
+  };
+
   return (
     <div class="screen">
       <div class="screen-head">
@@ -32,6 +55,9 @@ export function ControlCenter(props: { workspace: Workspace }) {
           </div>
         </div>
         <div style={{ display: "flex", gap: "8px" }}>
+          <button class="btn" onClick={() => setView({ kind: "missions", wsId: props.workspace.id })}>
+            임무
+          </button>
           <button class="btn" onClick={() => setView({ kind: "casting", wsId: props.workspace.id })}>
             캐스팅
           </button>
@@ -74,12 +100,17 @@ export function ControlCenter(props: { workspace: Workspace }) {
           </Show>
 
           <div style={{ "margin-top": "14px" }}>
-            <Eyebrow>임무 / 프로젝트</Eyebrow>
+            <div class="conn-list-head">
+              <Eyebrow>임무 / 프로젝트</Eyebrow>
+              <button class="btn ghost" onClick={() => setView({ kind: "missions", wsId: props.workspace.id })}>
+                관리 →
+              </button>
+            </div>
             <For each={missions()}>
               {(m) => (
                 <div class="card mission-row">
                   <span style={{ "font-weight": 600 }}>{m.name}</span>
-                  <span class="badge" classList={{ blue: m.status === "in-progress", purple: m.status === "in-review" }}>
+                  <span class="badge" classList={{ blue: m.status === "in-progress", purple: m.status === "in-review", green: m.status === "done" }}>
                     {m.status.toUpperCase()}
                   </span>
                   <div class="mono muted" style={{ "font-size": "10px", width: "100%" }}>
@@ -91,25 +122,72 @@ export function ControlCenter(props: { workspace: Workspace }) {
           </div>
         </div>
 
-        {/* 중: 터미널 자리 + 저장 상태 + SessionService 이벤트 */}
+        {/* 중: 터미널 2×2 그리드 / 트랜스크립트 + 저장 상태 + SessionService 이벤트 */}
         <div class="cc-center">
-          <div class="card terminal-slot">
-            <div class="terminal-head mono">
-              <span>◉ PTY {sessions().filter((s) => s.status !== "dead").length} ONLINE</span>
-              <span class="muted">▦ GRID · ROW FIRST</span>
-            </div>
-            <div class="terminal-body mono">
-              <div class="muted">— M1: xterm.js(WebGL) 가시 페인 렌더 + Rust PTY 브리지 —</div>
-              <For each={sessions()}>
+          <div style={{ display: "flex", gap: "6px", "margin-bottom": "8px" }}>
+            <button class="btn" classList={{ primary: centerTab() === "terminal" }} onClick={() => setCenterTab("terminal")}>
+              터미널
+            </button>
+            <button
+              class="btn"
+              classList={{ primary: centerTab() === "transcript" }}
+              onClick={() => setCenterTab("transcript")}
+              disabled={!selected()}
+            >
+              트랜스크립트
+            </button>
+            <Show when={zoomed()}>
+              <button class="btn ghost" style={{ "margin-left": "auto" }} onClick={() => setZoomed(undefined)}>
+                ▦ 2×2로 복귀
+              </button>
+            </Show>
+          </div>
+
+          <Show when={centerTab() === "terminal"}>
+            <div class="terminal-grid" classList={{ zoomed: !!zoomed() }}>
+              <For each={gridSessions()}>
                 {(s) => (
-                  <div>
-                    <span class="st-busy">{persona(s.personaId)?.name}</span>{" "}
-                    <span class="muted">PS {s.cwd}&gt;</span> <span>{s.lastOutput}</span>
+                  <div
+                    class="terminal-pane"
+                    classList={{ "pane-waiting": s.status === "waiting", "pane-dead": s.status === "dead", "pane-selected": selected()?.id === s.id }}
+                    onClick={() => setSelectedSession(s.id)}
+                  >
+                    <button
+                      class="terminal-head mono"
+                      style={{ width: "100%", "text-align": "left", cursor: "zoom-in" }}
+                      title="클릭하면 줌 토글 (B1)"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setZoomed(zoomed() === s.id ? undefined : s.id);
+                      }}
+                    >
+                      <span>
+                        SLOT {s.slot} · {persona(s.personaId)?.name}
+                      </span>
+                      <StatusLabel session={s} />
+                    </button>
+                    <div class="terminal-body mono pane-body">
+                      <For each={mockLines(s, persona(s.personaId)?.name ?? "?")}>{(l) => <div>{l}</div>}</For>
+                    </div>
+                  </div>
+                )}
+              </For>
+              <For each={Array.from({ length: zoomed() ? 0 : Math.max(0, 4 - sessions().length) })}>
+                {() => (
+                  <div class="terminal-pane pane-empty">
+                    <div class="terminal-body mono muted" style={{ display: "flex", "align-items": "center", "justify-content": "center" }}>
+                      빈 슬롯
+                    </div>
                   </div>
                 )}
               </For>
             </div>
-          </div>
+          </Show>
+
+          <Show when={centerTab() === "transcript" && selected()}>
+            {(s) => <TranscriptPane session={s()} />}
+          </Show>
+
           <div class="cc-strip">
             <div class="card strip-card">
               <Eyebrow>저장 상태</Eyebrow>

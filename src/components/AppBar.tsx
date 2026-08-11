@@ -1,12 +1,12 @@
 // 앱 바 (DdrkL) — 관제 고정 탭(맨 왼쪽, G1) + 워크스페이스 탭(B3) + 도구 토글.
 import { For, Show } from "solid-js";
 import { backend } from "../backend/mock";
-import { setExitOpen, setView, tick, view } from "../state";
+import { panelOpen, setExitOpen, setPanelOpen, setView, tick, view } from "../state";
 import { ATTENTION_ORDER } from "../types";
 
 const TOOLS: { key: string; label: string }[] = [
-  { key: "conversation", label: "대화" },
   { key: "connect", label: "워크스페이스" },
+  { key: "roles", label: "역할" },
   { key: "settings", label: "설정" },
 ];
 
@@ -14,6 +14,10 @@ export function AppBar() {
   const workspaces = () => {
     tick();
     return backend.listWorkspaces().filter((w) => w.open);
+  };
+  const unreadCount = () => {
+    tick();
+    return backend.listMessages().filter((m) => m.unread).length;
   };
 
   // 탭 뱃지 — 미확인 신호는 상위 전파된다 (FR-G-46). waiting > dead 만 색을 갖는다.
@@ -54,6 +58,20 @@ export function AppBar() {
         </For>
       </div>
       <div class="tools">
+        <button class="tool" classList={{ active: panelOpen() }} onClick={() => setPanelOpen((o) => !o)}>
+          패널
+          <Show when={unreadCount() > 0}>
+            <span
+              style={{
+                width: "6px",
+                height: "6px",
+                "border-radius": "50%",
+                background: "var(--eq-blue)",
+                "margin-left": "5px",
+              }}
+            />
+          </Show>
+        </button>
         <For each={TOOLS}>
           {(t) => (
             <button

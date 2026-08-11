@@ -2,6 +2,7 @@
 // 승인·거부는 여기서 제공하지 않는다 (G7) — 액션은 점프·재개·중지 3종.
 import { Show } from "solid-js";
 import { backend } from "../backend/mock";
+import { jumpToSession } from "../state";
 import { Eyebrow, KV, StatusLabel } from "../components/ui";
 import type { Session } from "../types";
 import { flagsToString, translatePermissions } from "../types";
@@ -78,18 +79,28 @@ export function SessionDetailPanel(props: { session: Session }) {
           <span class="mono st-waiting" style={{ "font-weight": 700 }}>
             권한 변경 감지 · 재시작 필요
           </span>
-          <button class="btn" title="재개 기반 재시작 — 대화를 잃지 않는다 (FR-D-26)">
+          <button
+            class="btn"
+            title="재개 기반 재시작 — 대화를 잃지 않는다 (FR-D-26)"
+            onClick={() => backend.restartSession(s().id)}
+          >
             대화 유지 재시작
           </button>
         </div>
       </Show>
 
       <div class="detail-actions">
-        <button class="btn primary">페인으로 점프</button>
-        <button class="btn" disabled={!s().resumable}>
+        <button class="btn primary" onClick={() => jumpToSession(s().workspaceId, s().id)}>
+          페인으로 점프
+        </button>
+        <button
+          class="btn"
+          disabled={!s().resumable || s().status !== "dead"}
+          onClick={() => backend.resumeSession(s().id)}
+        >
           재개
         </button>
-        <button class="btn danger" disabled={s().status === "dead"}>
+        <button class="btn danger" disabled={s().status === "dead"} onClick={() => backend.stopSession(s().id)}>
           중지
         </button>
       </div>

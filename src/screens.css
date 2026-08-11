@@ -368,3 +368,222 @@
     grid-template-columns: repeat(2, 1fr);
   }
 }
+
+/* ── 사이드 패널 (화면 #10) ── */
+.side-panel {
+  width: 360px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-left: 1px solid var(--eq-line);
+  background: var(--eq-surface-2);
+}
+.panel-tabs {
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid var(--eq-line);
+  height: 32px;
+  flex-shrink: 0;
+}
+.panel-tab {
+  padding: 0 12px;
+  font-family: var(--eq-mono);
+  font-size: 11px;
+  color: var(--eq-muted);
+  border-right: 1px solid var(--eq-line);
+}
+.panel-tab:hover {
+  color: var(--eq-text);
+}
+.panel-tab.active {
+  color: var(--eq-blue);
+  background: var(--eq-blue-soft);
+  box-shadow: inset 0 -2px 0 var(--eq-blue);
+}
+.panel-tab.close {
+  margin-left: auto;
+  border-right: none;
+  border-left: 1px solid var(--eq-line);
+}
+.panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 대화 탭 (패널 내부) */
+.conv-tab {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  gap: 8px;
+}
+.conv-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.conv-stream {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.conv-msg {
+  padding: 8px 10px;
+}
+.conv-msg.unread {
+  box-shadow: inset 2px 0 0 var(--eq-blue);
+}
+.conv-composer {
+  padding: 8px 10px;
+  flex-shrink: 0;
+}
+
+/* ── 터미널 2×2 그리드 (화면 #2) ── */
+.terminal-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.terminal-grid.zoomed {
+  grid-template-columns: 1fr;
+}
+.terminal-pane {
+  background: var(--eq-terminal);
+  border: 1px solid var(--eq-line);
+  display: flex;
+  flex-direction: column;
+  min-height: 130px;
+}
+.terminal-grid.zoomed .terminal-pane {
+  min-height: 268px;
+}
+.terminal-pane.pane-selected {
+  border-color: var(--eq-blue);
+}
+.terminal-pane.pane-waiting {
+  border-color: var(--eq-amber);
+  box-shadow: inset 0 2px 0 var(--eq-amber);
+}
+.terminal-pane.pane-dead {
+  border-color: var(--eq-red);
+  box-shadow: inset 0 2px 0 var(--eq-red);
+}
+.terminal-pane.pane-empty {
+  border-style: dashed;
+}
+.terminal-pane .pane-body {
+  min-height: 0;
+  flex: 1;
+  font-size: 11px;
+  line-height: 1.7;
+  padding: 8px 10px;
+  overflow: hidden;
+}
+
+/* ── 트랜스크립트 페인 (화면 #12) ── */
+.transcript {
+  display: flex;
+  flex-direction: column;
+}
+.transcript-body {
+  min-height: 220px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+.turn {
+  padding: 6px 8px;
+  margin-bottom: 6px;
+  border-left: 2px solid var(--eq-line);
+}
+.turn.user {
+  border-left-color: var(--eq-blue);
+  background: var(--eq-blue-soft);
+}
+.transcript-input {
+  display: flex;
+  gap: 6px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--eq-line);
+}
+
+/* ── 역할 라이브러리 (화면 #7) ── */
+.roles-body {
+  display: grid;
+  grid-template-columns: 1fr 300px;
+  gap: 16px;
+  align-items: start;
+}
+.roles-jobs {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-top: 8px;
+}
+.roles-personas {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  margin-top: 8px;
+}
+.role-persona {
+  padding: 10px 12px;
+  text-align: left;
+}
+.role-persona:hover {
+  border-color: var(--eq-muted);
+}
+.role-persona.selected {
+  border-color: var(--eq-blue);
+  box-shadow: inset 2px 0 0 var(--eq-blue);
+}
+
+/* ── 임무 배정 (화면 #8) ── */
+.assign-chip {
+  border: 1px solid var(--eq-line);
+  padding: 3px 8px 3px 4px;
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.assign-chip .persona-dot {
+  width: 18px;
+  height: 18px;
+  font-size: 10px;
+}
+.assign-chip.assigned {
+  border-color: var(--eq-blue);
+  background: var(--eq-blue-soft);
+  color: var(--eq-text);
+}
+
+/* ── 설정 값 버튼 ── */
+.setting-v {
+  border: none;
+  background: none;
+  padding: 0;
+  font-size: 12px;
+  color: var(--eq-text);
+}
+.setting-v:not(.fixed):hover {
+  color: var(--eq-blue);
+  text-decoration: underline;
+}
+.setting-v.fixed {
+  cursor: default;
+  color: var(--eq-muted);
+}
+.setting-v.changed {
+  color: var(--eq-blue);
+}

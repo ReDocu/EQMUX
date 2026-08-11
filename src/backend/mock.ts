@@ -22,6 +22,30 @@ export interface Backend {
   storeUsage(): StoreUsage;
   /** 상태 변경 방송 (FR-C-43) — MockBackend는 타이머로 경과 시간만 진행시킨다 */
   subscribe(cb: () => void): () => void;
+
+  // ── M0 목 mutation — M1에서 SessionService invoke로 교체 ──
+  sendMessage(from: string, to: string, type: ConversationMessage["type"], body: string): void;
+  markAllRead(): void;
+  resumeSession(id: string): void;
+  stopSession(id: string): void;
+  restartSession(id: string): void;
+  applyCasting(wsId: string, slots: { personaId: string; jobId: string }[]): void;
+  createMission(wsId: string, name: string, goal: string, branch?: string): void;
+  cycleMissionStatus(id: string): void;
+  toggleAssign(missionId: string, sessionId: string): void;
+  addWorkspace(remote?: string): void;
+  openWorkspace(id: string): void;
+  repairWorkspace(id: string): void;
+  savePersona(p: Persona): void;
+  addPersona(): void;
+  listTurns(sessionId: string): TranscriptTurn[];
+  sendInput(sessionId: string, text: string): void;
+}
+
+export interface TranscriptTurn {
+  role: "user" | "agent";
+  time: string;
+  text: string;
 }
 
 // ── 목 데이터: docs/design.pen의 카피를 그대로 사용 (Academy 팀 시나리오) ──
@@ -326,9 +350,39 @@ const MESSAGES: ConversationMessage[] = [
   },
 ];
 
+const nowTime = () => new Date().toTimeString().slice(0, 5);
+let seq = 100;
+
+// 세션별 목 트랜스크립트 (V1 — 실제로는 에이전트 로그 파일 참조)
+const TURNS = new Map<string, TranscriptTurn[]>([
+  [
+    "kai@academy",
+    [
+      { role: "user", time: "10:20", text: "인증 리팩터 임무를 시작해줘. 공개 API는 유지." },
+      { role: "agent", time: "10:21", text: "auth/ 구조를 파악했습니다. session.ts · token.ts · store.ts 3분할로 진행하고, 노엘에게 구현을 배분합니다." },
+      { role: "agent", time: "10:38", text: "서브에이전트 3개로 병렬 분석 중 — 저장 계층 교체 범위를 확정하는 중입니다." },
+    ],
+  ],
+  [
+    "noel@academy",
+    [
+      { role: "agent", time: "10:30", text: "session.ts 인터페이스 변경 완료. migration test가 필요해 린에게 핸드오프했습니다." },
+      { role: "agent", time: "10:42", text: "npm publish 실행 승인이 필요합니다 — Bash(npm publish)" },
+    ],
+  ],
+]);
+
 export class MockBackend implements Backend {
   private listeners = new Set<() => void>();
   private timer: ReturnType<typeof setInterval> | undefined;
+
+  private broadcast() {
+    this.listeners.forEach((l) => l());
+  }
+
+  private logEvent(kind: EventRecord["kind"], message: string, sessionId?: string) {
+    EVENTS.unshift({ id: `e${seq++}`, time: nowTime(), kind, message, sessionId });
+  }
 
   listWorkspaces() {
     return WORKSPACES;
@@ -359,6 +413,175 @@ export class MockBackend implements Backend {
       walLatencyMs: 42,
       globalUsage: "1.28G",
     };
+  }
+
+  sendMessage(from: string, to: string, type: ConversationMessage["type"], body: string) {
+    MESSAGES.push({ id: `m${seq++}`, time: nowTime(), from, to, type, body, unread: false });
+    this.broadcast();
+  }
+
+  markAllRead() {
+    for (const m of MESSAGES) m.unread = false;
+    this.broadcast();
+  }
+
+  resumeSession(id: string) {
+    const sess = SESSIONS.find((x) => x.id === id);
+    if (!sess || !sess.resumable) return;
+    sess.status = "busy";
+    sess.sinceMs = 0;
+    sess.exitCode = undefined;
+    sess.lastOutput = "재개됨 · transcript 복원";
+    this.logEvent("state", "dead → busy · 재개", id);
+    this.broadcast();
+  }
+
+  stopSession(id: string) {
+    const sess = SESSIONS.find((x) => x.id === id);
+    if (!sess || sess.status === "dead") return;
+    sess.status = "dead";
+    sess.exitCode = 0;
+    sess.sinceMs = 0;
+    sess.subagents = 0;
+    sess.waitingFor = undefined;
+    sess.lastOutput = "종료됨 · exit 0";
+    this.logEvent("state", "중지 · exit 0", id);
+    this.broadcast();
+  }
+
+  restartSession(id: string) {
+    const sess = SESSIONS.find((x) => x.id === id);
+    if (!sess) return;
+    sess.restartNeeded = false;
+    sess.status = "busy";
+    sess.sinceMs = 0;
+    sess.lastOutput = "재시작됨 · 대화 유지";
+    this.logEvent("state", "재개 기반 재시작 · 권한 반영", id);
+    this.broadcast();
+  }
+
+  applyCasting(wsId: string, slots: { personaId: string; jobId: string }[]) {
+    slots.slice(0, 4).forEach((slot, i) => {
+      const n = (i + 1) as 1 | 2 | 3 | 4;
+      const existing = SESSIONS.find((x) => x.workspaceId === wsId && x.slot === n);
+      if (existing) {
+        existing.personaId = slot.personaId;
+        existing.jobId = slot.jobId;
+      } else {
+        SESSIONS.push(
+          s(`${slot.personaId}@${wsId}`, wsId, n, slot.personaId, slot.jobId, {
+            status: "starting",
+            sinceMs: 0,
+            lastOutput: "세션 시작 중",
+          }),
+        );
+      }
+    });
+    this.logEvent("app", "캐스팅 적용 · team.json 저장");
+    this.broadcast();
+  }
+
+  createMission(wsId: string, name: string, goal: string, branch?: string) {
+    const id = `mission-${seq++}`;
+    MISSIONS.push({
+      id,
+      workspaceId: wsId,
+      name,
+      file: `.eqmux/missions/${id}.md`,
+      status: "todo",
+      goal,
+      outputs: [],
+      branch,
+      assigned: [],
+    });
+    this.logEvent("mission", `임무 생성 · ${name}`);
+    this.broadcast();
+  }
+
+  cycleMissionStatus(id: string) {
+    const m = MISSIONS.find((x) => x.id === id);
+    if (!m) return;
+    const order: Mission["status"][] = ["todo", "in-progress", "in-review", "done"];
+    m.status = order[(order.indexOf(m.status) + 1) % order.length];
+    this.logEvent("mission", `${m.name} → ${m.status}`);
+    this.broadcast();
+  }
+
+  toggleAssign(missionId: string, sessionId: string) {
+    const m = MISSIONS.find((x) => x.id === missionId);
+    if (!m) return;
+    const i = m.assigned.indexOf(sessionId);
+    if (i >= 0) m.assigned.splice(i, 1);
+    else m.assigned.push(sessionId);
+    const sess = SESSIONS.find((x) => x.id === sessionId);
+    if (sess) sess.missionId = i >= 0 ? undefined : missionId;
+    this.logEvent("mission", `임무 배정 변경 · ${m.name}`, sessionId);
+    this.broadcast();
+  }
+
+  addWorkspace(remote?: string) {
+    const n = seq++;
+    const name = remote ? remote.split("/").pop()! : `Repo-${n}`;
+    WORKSPACES.push({
+      id: `ws${n}`,
+      name,
+      path: `C:\\workspace\\${name}`,
+      remote,
+      branch: "main",
+      branchNote: remote ? "clone 완료 · 방금" : "main · 방금",
+      open: false,
+      pathMissing: false,
+      teamFile: ".eqmux/team.json",
+    });
+    this.logEvent("app", `저장소 등록 · ${name}`);
+    this.broadcast();
+  }
+
+  openWorkspace(id: string) {
+    const ws = WORKSPACES.find((x) => x.id === id);
+    if (!ws || ws.pathMissing) return;
+    if (!ws.open && WORKSPACES.filter((x) => x.open).length >= 10) {
+      this.logEvent("app", "동시 오픈 상한 10 도달 (B9)");
+    } else if (!ws.open) {
+      ws.open = true;
+      this.logEvent("app", `워크스페이스 열림 · ${ws.name}`);
+    }
+    this.broadcast();
+  }
+
+  repairWorkspace(id: string) {
+    const ws = WORKSPACES.find((x) => x.id === id);
+    if (!ws) return;
+    ws.pathMissing = false;
+    ws.branch = "main";
+    ws.branchNote = "main · 경로 재지정됨";
+    this.logEvent("app", `경로 재지정 · ${ws.name}`);
+    this.broadcast();
+  }
+
+  savePersona(p: Persona) {
+    const i = PERSONAS.findIndex((x) => x.id === p.id);
+    if (i >= 0) PERSONAS[i] = p;
+    this.logEvent("app", `페르소나 저장 · ${p.name}`);
+    this.broadcast();
+  }
+
+  addPersona() {
+    const n = seq++;
+    PERSONAS.push({ id: `p${n}`, name: `새 페르소나`, hint: "판단 성향 1줄 (P3 예산 5~10줄)", color: "blue" });
+    this.broadcast();
+  }
+
+  listTurns(sessionId: string): TranscriptTurn[] {
+    return TURNS.get(sessionId) ?? [];
+  }
+
+  sendInput(sessionId: string, text: string) {
+    const turns = TURNS.get(sessionId) ?? [];
+    turns.push({ role: "user", time: nowTime(), text });
+    turns.push({ role: "agent", time: nowTime(), text: "입력을 PTY로 전달했습니다 (V3) — 목 응답입니다." });
+    TURNS.set(sessionId, turns);
+    this.broadcast();
   }
 
   subscribe(cb: () => void) {
