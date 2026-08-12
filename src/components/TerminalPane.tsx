@@ -2,11 +2,14 @@
 // 세션당 Terminal 인스턴스는 정확히 1개를 만들어 REGISTRY에 유지한다 (세션은 페인보다 오래 산다).
 // 페인이 리마운트되면(줌·전체 화면·탭 전환) DOM 요소만 재부착한다 — 버퍼를 다시 쓰지 않으므로
 // ConPTY 리페인트가 중복 재생되지 않고 스크롤백이 온전히 이어진다.
-import { createSignal, onCleanup, onMount, Show } from "solid-js";
+// 링버퍼 꼭대기(FR-C-13)에서는 디스크 기록 칩이 떠서 스토어 스크롤백을 조각 로드한다 (FR-C-14).
+import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import "@xterm/xterm/css/xterm.css";
+import { pageScrollback } from "../backend/panels";
+import type { ScrollbackHit } from "../backend/panels";
 import {
   clipReadText,
   clipSaveImage,
@@ -251,7 +254,28 @@ export function TerminalPane(props: {
   mockLines?: string[];
 }) {
   let host!: HTMLDivElement;
+  let historyEl: HTMLDivElement | undefined;
   const [menu, setMenu] = createSignal<{ x: number; y: number; hasSel: boolean } | undefined>(undefined);
+
+  // ── 디스크 스크롤백 (FR-C-13·14) — 링버퍼 최상단에서만 칩이 뜬다 ──
+  const [atTop, setAtTop] = createSignal(false);
+  const [history, setHistory] = createSignal<ScrollbackHit[] | null>(null);
+
+  const openHistory = async () => {
+    const lines = await pageScrollback(props.wsId ?? "default", props.sessionId, null, 200);
+    setHistory(lines);
+    requestAnimationFrame(() => historyEl?.scrollTo(0, historyEl.scrollHeight));
+  };
+  const loadOlderHistory = async () => {
+    const h = history();
+    if (!h) return;
+    const older = await pageScrollback(props.wsId ?? "default", props.sessionId, h[0]?.seq ?? null, 200);
+    if (older.length === 0) return;
+    const prevHeight = historyEl?.scrollHeight ?? 0;
+    setHistory([...older, ...h]);
+    // 이어 보던 지점 유지 — 앞에 붙인 만큼 스크롤을 내린다
+    requestAnimationFrame(() => historyEl?.scrollTo(0, (historyEl.scrollHeight - prevHeight)));
+  };
 
   onMount(() => {
     let entry = REGISTRY.get(props.sessionId);
@@ -262,6 +286,11 @@ export function TerminalPane(props: {
     const e = entry;
     let cancelled = false;
     void ensureDragDrop();
+
+    // 위로 스크롤 최상단 감지 (FR-C-13) — 인메모리 5,000줄의 꼭대기 = 디스크 기록의 입구
+    const scrollDisp = isTauri()
+      ? e.term.onScroll((y) => setAtTop(y === 0 && e.term.buffer.active.baseY > 0))
+      : undefined;
 
     // 우클릭 컨텍스트 메뉴
     const onContextMenu = (ev: MouseEvent) => {
@@ -340,6 +369,7 @@ export function TerminalPane(props: {
 
     onCleanup(() => {
       cancelled = true;
+      scrollDisp?.dispose();
       clearTimeout(resizeTimer);
       clearTimeout(settleTimer);
       ro.disconnect();
@@ -358,7 +388,40 @@ export function TerminalPane(props: {
 
   return (
     <>
-      <div class="xterm-host" data-session-id={props.sessionId} ref={host} />
+      <div class="xterm-host" data-session-id={props.sessionId} ref={host}>
+        <Show when={isTauri() && atTop() && !history()}>
+          <button class="btn term-history-chip" onClick={() => void openHistory()}>
+            ▲ 디스크 기록 보기 — 링버퍼 위 기록 (FR-C-13)
+          </button>
+        </Show>
+        <Show when={history()}>
+          {(h) => (
+            <div class="card term-history" onMouseDown={(ev) => ev.stopPropagation()}>
+              <div style={{ display: "flex", "align-items": "center", padding: "3px 8px", gap: "6px" }}>
+                <span class="eyebrow">디스크 스크롤백 · {h().length}줄 로드됨</span>
+                <button
+                  class="btn ghost"
+                  style={{ "margin-left": "auto", padding: "1px 6px" }}
+                  onClick={() => setHistory(null)}
+                >
+                  ✕
+                </button>
+              </div>
+              <button class="btn ghost" style={{ padding: "2px" }} onClick={() => void loadOlderHistory()}>
+                ▲ 더 이전 200줄
+              </button>
+              <div class="mono term-history-lines" ref={historyEl}>
+                <For each={h()}>{(l) => <div>{l.text}</div>}</For>
+                <Show when={h().length === 0}>
+                  <div class="muted" style={{ padding: "8px" }}>
+                    디스크에 저장된 확정 줄이 없습니다
+                  </div>
+                </Show>
+              </div>
+            </div>
+          )}
+        </Show>
+      </div>
       <Show when={menu()}>
         {(m) => (
           <div

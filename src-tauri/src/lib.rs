@@ -479,6 +479,30 @@ fn msg_mark_read(store_state: State<StoreState>, workspace: String) -> Result<()
     messages::mark_read(&store_state.0.root(), &workspace)
 }
 
+/// 스크롤백 전문 검색 (FR-C-16) — FTS5 인덱스, 없으면 LIKE 폴백. 읽기 전용.
+#[tauri::command]
+fn scrollback_search(
+    store_state: State<StoreState>,
+    workspace: String,
+    query: String,
+    session: Option<String>,
+    limit: u32,
+) -> Result<Vec<store::SearchHit>, String> {
+    store::search(&store_state.0.root(), &workspace, &query, session.as_deref(), limit)
+}
+
+/// 디스크 페이징 (FR-C-13·14) — 인메모리 링버퍼 위쪽 기록을 조각 로드
+#[tauri::command]
+fn scrollback_page(
+    store_state: State<StoreState>,
+    workspace: String,
+    session: String,
+    before_seq: Option<i64>,
+    limit: u32,
+) -> Result<Vec<store::SearchHit>, String> {
+    store::page(&store_state.0.root(), &workspace, &session, before_seq, limit)
+}
+
 #[derive(Serialize)]
 struct SessionUsage {
     id: String,
@@ -1333,6 +1357,8 @@ pub fn run() {
             mission_set_status,
             mission_assign,
             scrollback_tail,
+            scrollback_search,
+            scrollback_page,
             store_usage_real,
             events_query,
             msg_list,

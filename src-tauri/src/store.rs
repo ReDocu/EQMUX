@@ -118,11 +118,30 @@ pub(crate) fn open_db(root: &Path, ws: &str) -> rusqlite::Result<Connection> {
     let _ = conn.pragma_update(None, "journal_mode", "WAL");
     let _ = conn.pragma_update(None, "synchronous", "NORMAL");
     conn.execute_batch(SCHEMA)?;
-    // 열 때 1회 보존 정리 (FR-C-50 30일) — 백그라운드 스레드라 UI를 막지 않는다 (FR-C-51)
-    let _ = conn.execute(
-        "DELETE FROM scrollback WHERE ts < ?1",
-        params![now_ms() - RETENTION_DAYS_MS],
+    // FTS5 인덱스 (FR-C-16) — 번들 SQLite에 FTS5가 없으면 조용히 넘어가고 검색은 LIKE 폴백
+    let _ = conn.execute_batch(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS scrollback_fts USING fts5(text, session_id UNINDEXED, seq UNINDEXED, ts UNINDEXED)",
     );
+    // 기존 DB 1회 시드 — 이 마일스톤 이전에 쌓인 줄도 검색에 잡히게. 실패(FTS 없음)면
+    // 표식을 남기지 않아 다음 열림 때 다시 시도한다.
+    let seeded: Option<String> = conn
+        .query_row("SELECT value FROM meta WHERE key = 'fts_seeded'", [], |r| r.get(0))
+        .ok();
+    if seeded.is_none()
+        && conn
+            .execute(
+                "INSERT INTO scrollback_fts (text, session_id, seq, ts)
+                 SELECT text, session_id, seq, ts FROM scrollback",
+                [],
+            )
+            .is_ok()
+    {
+        let _ = conn.execute("INSERT OR REPLACE INTO meta VALUES ('fts_seeded', '1')", []);
+    }
+    // 열 때 1회 보존 정리 (FR-C-50 30일) — 백그라운드 스레드라 UI를 막지 않는다 (FR-C-51)
+    let cutoff = now_ms() - RETENTION_DAYS_MS;
+    let _ = conn.execute("DELETE FROM scrollback WHERE ts < ?1", params![cutoff]);
+    let _ = conn.execute("DELETE FROM scrollback_fts WHERE ts < ?1", params![cutoff]);
     Ok(conn)
 }
 
@@ -260,6 +279,11 @@ fn flush(
                         "INSERT OR IGNORE INTO scrollback (session_id, seq, ts, text) VALUES (?1, ?2, ?3, ?4)",
                         params![id, cur.seq, now, text],
                     );
+                    // FTS 인덱스 동반 적재 (FR-C-16) — FTS5가 없으면 조용히 실패한다
+                    let _ = tx.execute(
+                        "INSERT INTO scrollback_fts (text, session_id, seq, ts) VALUES (?1, ?2, ?3, ?4)",
+                        params![text, id, cur.seq, now],
+                    );
                     *touched.entry(id.clone()).or_insert(0) += text.len() as i64;
                 }
                 StoreMsg::Event { id, kind, message, .. } => {
@@ -295,10 +319,122 @@ fn flush(
                         "DELETE FROM scrollback WHERE session_id = ?1 AND seq <= ?2",
                         params![id, cur.seq - SCROLLBACK_CAP_PER_SESSION],
                     );
+                    let _ = conn.execute(
+                        "DELETE FROM scrollback_fts WHERE session_id = ?1 AND seq <= ?2",
+                        params![id, cur.seq - SCROLLBACK_CAP_PER_SESSION],
+                    );
                 }
             }
         }
     }
+}
+
+// ── 스크롤백 검색·디스크 페이징 (FR-C-13·14·16) ──
+
+#[derive(serde::Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchHit {
+    pub session_id: String,
+    pub seq: i64,
+    pub ts: i64,
+    pub text: String,
+}
+
+/// FTS5 질의 정제 — 토큰마다 큰따옴표로 감싸 연산자·따옴표로 인한 구문 오류를 막는다 (AND 의미)
+pub fn fts_escape(q: &str) -> String {
+    q.split_whitespace()
+        .map(|t| format!("\"{}\"", t.replace('"', "")))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn hit_row(r: &rusqlite::Row) -> rusqlite::Result<SearchHit> {
+    Ok(SearchHit { session_id: r.get(0)?, seq: r.get(1)?, ts: r.get(2)?, text: r.get(3)? })
+}
+
+/// 전문 검색 (FR-C-16) — FTS5 우선, 가상 테이블이 없으면 LIKE 폴백. 최신 히트 우선.
+pub fn search(
+    root: &Path,
+    ws: &str,
+    query: &str,
+    session: Option<&str>,
+    limit: u32,
+) -> Result<Vec<SearchHit>, String> {
+    let path = db_path(root, ws);
+    if !path.exists() || query.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|e| e.to_string())?;
+    let limit = limit.min(200) as i64;
+    let run = |sql: &str, binds: &[&dyn rusqlite::ToSql]| -> rusqlite::Result<Vec<SearchHit>> {
+        let mut stmt = conn.prepare(sql)?;
+        let rows = stmt.query_map(binds, hit_row)?;
+        Ok(rows.filter_map(|r| r.ok()).collect())
+    };
+    let fts = fts_escape(query);
+    let via_fts = match session {
+        Some(s) => run(
+            "SELECT session_id, seq, ts, text FROM scrollback_fts
+             WHERE scrollback_fts MATCH ?1 AND session_id = ?2 ORDER BY ts DESC, seq DESC LIMIT ?3",
+            &[&fts, &s, &limit],
+        ),
+        None => run(
+            "SELECT session_id, seq, ts, text FROM scrollback_fts
+             WHERE scrollback_fts MATCH ?1 ORDER BY ts DESC, seq DESC LIMIT ?2",
+            &[&fts, &limit],
+        ),
+    };
+    match via_fts {
+        Ok(hits) => Ok(hits),
+        Err(_) => {
+            let pat = format!("%{}%", query.trim());
+            match session {
+                Some(s) => run(
+                    "SELECT session_id, seq, ts, text FROM scrollback
+                     WHERE text LIKE ?1 AND session_id = ?2 ORDER BY ts DESC, seq DESC LIMIT ?3",
+                    &[&pat, &s, &limit],
+                ),
+                None => run(
+                    "SELECT session_id, seq, ts, text FROM scrollback
+                     WHERE text LIKE ?1 ORDER BY ts DESC, seq DESC LIMIT ?2",
+                    &[&pat, &limit],
+                ),
+            }
+            .map_err(|e| e.to_string())
+        }
+    }
+}
+
+/// 디스크 페이징 (FR-C-13·14) — before_seq 이전 limit줄을 시간 오름차순으로.
+/// 인메모리 링버퍼(xterm 5,000줄) 위쪽의 기록을 필요할 때만 조각 로드한다.
+pub fn page(
+    root: &Path,
+    ws: &str,
+    session: &str,
+    before_seq: Option<i64>,
+    limit: u32,
+) -> Result<Vec<SearchHit>, String> {
+    let path = db_path(root, ws);
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT session_id, seq, ts, text FROM
+               (SELECT * FROM scrollback WHERE session_id = ?1 AND seq < ?2 ORDER BY seq DESC LIMIT ?3)
+             ORDER BY seq ASC",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(
+            params![session, before_seq.unwrap_or(i64::MAX), limit.min(500) as i64],
+            hit_row,
+        )
+        .map_err(|e| e.to_string())?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
 }
 
 /// TUI 리페인트 잔해 판정 — 상자 그리기 문자가 절반 이상인 줄은 스필하지 않는다.
@@ -398,5 +534,48 @@ impl LineAssembler {
         if !line.trim().is_empty() {
             emit(line);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fts_query_is_escaped_per_token() {
+        assert_eq!(fts_escape(r#"foo "bar" NEAR"#), r#""foo" "bar" "NEAR""#);
+    }
+
+    #[test]
+    fn search_and_page_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("eqmux-fts-{}", crate::workspace::now_ms()));
+        std::fs::create_dir_all(&dir).unwrap();
+        {
+            let conn = open_db(&dir, "ws").unwrap();
+            for i in 1..=50i64 {
+                let text = format!("line {i} {}", if i % 10 == 0 { "needle" } else { "hay" });
+                conn.execute(
+                    "INSERT INTO scrollback (session_id, seq, ts, text) VALUES ('s1', ?1, ?2, ?3)",
+                    params![i, 1_000 + i, text],
+                )
+                .unwrap();
+                // FTS5가 없는 빌드에서도 테스트가 성립하게 실패는 무시 (search가 LIKE로 폴백)
+                let _ = conn.execute(
+                    "INSERT INTO scrollback_fts (text, session_id, seq, ts) VALUES (?3, 's1', ?1, ?2)",
+                    params![i, 1_000 + i, text],
+                );
+            }
+        }
+        let hits = search(&dir, "ws", "needle", None, 50).unwrap();
+        assert_eq!(hits.len(), 5);
+        assert!(hits[0].seq > hits[4].seq); // 최신 우선
+        assert_eq!(search(&dir, "ws", "needle", Some("s2"), 50).unwrap().len(), 0);
+
+        let page1 = page(&dir, "ws", "s1", Some(21), 10).unwrap();
+        assert_eq!(page1.first().unwrap().seq, 11); // 커서 이전 10줄, 오름차순
+        assert_eq!(page1.last().unwrap().seq, 20);
+        let latest = page(&dir, "ws", "s1", None, 5).unwrap();
+        assert_eq!(latest.last().unwrap().seq, 50);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
