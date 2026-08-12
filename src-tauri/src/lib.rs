@@ -1056,6 +1056,25 @@ async fn tokio_sleep(d: std::time::Duration) {
         .ok();
 }
 
+// ── 레이아웃 영속 (FR-C-22·30) — 열린 탭·페인 배치·포커스를 앱데이터 layout.json에 ──
+// 스키마는 프런트 소유(JSON 통과) — 여기는 원자적 읽기·쓰기만 책임진다.
+
+#[tauri::command]
+fn layout_load(store_state: State<StoreState>) -> Option<serde_json::Value> {
+    let path = store_state.0.root().join("layout.json");
+    std::fs::read_to_string(path).ok().and_then(|s| serde_json::from_str(&s).ok())
+}
+
+#[tauri::command]
+fn layout_save(store_state: State<StoreState>, data: serde_json::Value) -> Result<(), String> {
+    let root = store_state.0.root();
+    std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+    let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
+    let tmp = root.join("layout.json.tmp");
+    std::fs::write(&tmp, json).map_err(|e| e.to_string())?;
+    std::fs::rename(tmp, root.join("layout.json")).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn session_log_dir() -> String {
     log_dir().to_string_lossy().into_owned()
@@ -1170,6 +1189,8 @@ pub fn run() {
             fs_preview,
             shutdown_flush,
             app_exit,
+            layout_load,
+            layout_save,
             session_log_dir,
             open_log_dir
         ])
