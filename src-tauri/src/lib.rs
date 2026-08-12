@@ -20,6 +20,7 @@ mod missions;
 mod roles;
 pub(crate) mod store;
 mod team;
+mod transcript;
 pub(crate) mod workspace;
 use store::{LineAssembler, Store, StoreMsg};
 use workspace::{WsEntry, WsInfo};
@@ -583,6 +584,36 @@ fn find_tracked(app: &AppHandle, id: &str) -> Option<(String, agent::Tracked)> {
         .map(|(u, t)| (u.clone(), t.clone()))
 }
 
+/// 세션의 Claude sessionId — 추적 맵 우선, 앱 재시작 후엔 agent_session 테이블 (FR-D-24)
+fn agent_uuid_for(app: &AppHandle, workspace: &str, id: &str) -> Option<String> {
+    if let Some((uuid, _)) = find_tracked(app, id) {
+        return Some(uuid);
+    }
+    let store: State<StoreState> = app.state();
+    let path = store::db_path(&store.0.root(), workspace);
+    let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+    conn.query_row(
+        "SELECT agent_session_id FROM agent_session WHERE session_id = ?1",
+        params![id],
+        |r| r.get(0),
+    )
+    .ok()
+}
+
+/// 트랜스크립트 열람 (FR-G-80~82) — 참조만: 경로에서 그때그때 읽는다 (V2).
+/// 파싱 불가·파일 없음은 Err → 프런트가 스크롤백 폴백으로 전환한다 (FR-G-86).
+#[tauri::command]
+fn transcript_read(
+    app: AppHandle,
+    workspace: String,
+    id: String,
+    cwd: String,
+) -> Result<transcript::TranscriptData, String> {
+    let uuid = agent_uuid_for(&app, &workspace, &id)
+        .ok_or("이 세션에서 실행된 에이전트가 없습니다")?;
+    transcript::read(&agent::transcript_path(&cwd, &uuid), 200)
+}
+
 /// 재개 (FR-D-21~23) — 사용자 트리거 전용. 같은 uuid + 같은 cwd로 --resume.
 /// 앱 재시작 후에는 추적 맵이 비어 있으므로 agent_session 테이블(FR-D-24)에서 복원한다.
 #[tauri::command]
@@ -986,6 +1017,7 @@ pub fn run() {
             agent_spawn,
             agent_resume,
             agent_restart,
+            transcript_read,
             team_load,
             team_save,
             role_save,
