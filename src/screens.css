@@ -114,11 +114,29 @@
 }
 
 /* ── 컨트롤 센터 ── */
+/* 화면 크기에 동적으로 맞춘다: 본문은 스크롤하지 않고, 중앙 터미널 그리드가
+   남은 높이를 페인들에 균등 분배하며(xterm fit), 좌·우 컬럼만 독립 스크롤한다. */
 .cc-body {
   display: grid;
   grid-template-columns: 280px 1fr 320px;
+  grid-template-rows: minmax(0, 1fr);
   gap: 16px;
-  align-items: start;
+  align-items: stretch;
+  overflow: hidden;
+}
+.cc-left,
+.cc-right {
+  min-height: 0;
+  overflow-y: auto;
+}
+.cc-center {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.cc-center .cc-strip,
+.cc-center .terminal-statusbar {
+  flex-shrink: 0;
 }
 .session-card {
   display: flex;
@@ -450,10 +468,15 @@
 }
 
 /* ── 터미널 2×2 그리드 (화면 #2) ── */
+/* 높이는 컨테이너가 정한다 — 페인이 내용(xterm 기본 24행)으로 그리드를 키우지 않는다 */
 .terminal-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
+  grid-auto-rows: minmax(0, 1fr);
   gap: 8px;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 .terminal-grid.zoomed {
   grid-template-columns: 1fr;
@@ -463,10 +486,9 @@
   border: 1px solid var(--eq-line);
   display: flex;
   flex-direction: column;
-  min-height: 130px;
-}
-.terminal-grid.zoomed .terminal-pane {
-  min-height: 268px;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
 }
 .terminal-pane.pane-selected {
   border-color: var(--eq-blue);
@@ -537,7 +559,7 @@
 /* xterm.js 실터미널 호스트 — 페인·전체 화면 크기는 ResizeObserver + FitAddon이 따라간다 */
 .xterm-host {
   flex: 1;
-  min-height: 100px;
+  min-height: 60px;
   padding: 4px 2px 4px 8px;
   overflow: hidden;
   background: var(--eq-terminal);
@@ -1571,7 +1593,7 @@
 /* ── 터미널 그리드 배치 모드 (srpYm 적용 결과) ── */
 .terminal-grid.layout-grid-col {
   grid-auto-flow: column;
-  grid-template-rows: repeat(2, minmax(130px, auto));
+  grid-template-rows: repeat(2, minmax(0, 1fr));
   grid-template-columns: repeat(2, 1fr);
 }
 .terminal-grid.layout-stack-v {
@@ -1588,10 +1610,10 @@
 }
 .terminal-grid.layout-main-bottom {
   grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: minmax(0, 2fr) minmax(0, 1fr);
 }
 .terminal-grid.layout-main-bottom .terminal-pane:first-child {
   grid-column: 1 / -1;
-  min-height: 190px;
 }
 .terminal-grid.zoomed {
   grid-template-columns: 1fr !important;
@@ -1638,19 +1660,8 @@
   font-weight: 700;
   letter-spacing: 0.04em;
 }
-.terminal-fullscreen .terminal-grid {
-  flex: 1;
-  min-height: 0;
-  grid-auto-rows: 1fr;
-}
 .terminal-fullscreen .terminal-grid.layout-grid-col {
-  grid-template-rows: repeat(2, 1fr);
-}
-.terminal-fullscreen .terminal-pane {
-  min-height: 0;
-}
-.terminal-fullscreen .terminal-pane .pane-body {
-  font-size: 12px;
+  grid-template-rows: repeat(2, minmax(0, 1fr));
 }
 .terminal-fullscreen .terminal-statusbar {
   margin-top: 0;
