@@ -102,6 +102,11 @@ export function getScrollback(id: string): string {
   return buffers.get(id) ?? "";
 }
 
+/** 클립보드 이미지를 임시 파일로 저장하고 경로를 돌려받는다 (%TEMP%\eqmux-pastes) */
+export function savePastedImage(dataB64: string, ext: string): Promise<string> {
+  return invoke<string>("save_pasted_image", { dataB64, ext });
+}
+
 /** 세션 로그 폴더 (~/.eqmux/logs) — 1차 파일 로그. Tauri 밖에서는 빈 문자열. */
 export async function sessionLogDir(): Promise<string> {
   if (!isTauri()) return "";

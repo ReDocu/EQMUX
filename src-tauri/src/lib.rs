@@ -450,6 +450,22 @@ fn open_log_dir() -> Result<(), String> {
     Ok(())
 }
 
+/// 클립보드 이미지 → 임시 파일 저장 — 터미널에는 파일 경로가 삽입된다 (Claude Code 멀티모달 입력용)
+#[tauri::command]
+fn save_pasted_image(data_b64: String, ext: String) -> Result<String, String> {
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data_b64.as_bytes())
+        .map_err(|e| e.to_string())?;
+    let safe_ext: String = ext.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+    let safe_ext = if safe_ext.is_empty() { "png".to_string() } else { safe_ext };
+    let dir = std::env::temp_dir().join("eqmux-pastes");
+    create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join(format!("paste-{}.{}", workspace::now_ms(), safe_ext));
+    std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
 #[tauri::command]
 fn app_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
@@ -481,6 +497,7 @@ pub fn run() {
             ws_unregister,
             ws_repath,
             ws_touch,
+            save_pasted_image,
             session_log_dir,
             open_log_dir
         ])

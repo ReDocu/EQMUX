@@ -522,6 +522,41 @@
   overflow: hidden;
 }
 
+/* 터미널 우클릭 메뉴 */
+.term-menu {
+  position: fixed;
+  z-index: 60;
+  min-width: 200px;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+}
+.term-menu-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 7px 12px;
+  font-size: 12px;
+  text-align: left;
+}
+.term-menu-item:hover:not(:disabled) {
+  background: var(--eq-blue-soft);
+}
+.term-menu-item:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.term-menu-item .mono {
+  font-size: 9px;
+}
+.term-menu-note {
+  padding: 5px 12px;
+  font-size: 10px;
+  border-top: 1px solid var(--eq-line);
+}
+
 /* 셸 선택 드롭다운 — 그리드(배치) 버튼 왼쪽 */
 .shell-picker {
   position: relative;

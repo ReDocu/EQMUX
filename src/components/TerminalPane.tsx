@@ -2,11 +2,20 @@
 // 세션당 Terminal 인스턴스는 정확히 1개를 만들어 REGISTRY에 유지한다 (세션은 페인보다 오래 산다).
 // 페인이 리마운트되면(줌·전체 화면·탭 전환) DOM 요소만 재부착한다 — 버퍼를 다시 쓰지 않으므로
 // ConPTY 리페인트가 중복 재생되지 않고 스크롤백이 온전히 이어진다.
-import { onCleanup, onMount } from "solid-js";
+import { createSignal, onCleanup, onMount, Show } from "solid-js";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { isTauri, onPtyExit, onPtyOutput, resizePty, scrollbackTail, spawnPty, writePty } from "../backend/pty";
+import {
+  isTauri,
+  onPtyExit,
+  onPtyOutput,
+  resizePty,
+  savePastedImage,
+  scrollbackTail,
+  spawnPty,
+  writePty,
+} from "../backend/pty";
 
 const EQ_THEME = {
   background: "#080b10",
@@ -44,6 +53,56 @@ export function disposeSessionTerminal(id: string) {
   }
 }
 
+// ── 클립보드 — 텍스트/이미지 붙여넣기 + 선택 복사 ──
+
+function blobToB64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(",")[1] ?? "");
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(blob);
+  });
+}
+
+/** 이미지 붙여넣기 → %TEMP%\eqmux-pastes에 저장 → 따옴표 친 경로를 입력에 삽입 */
+async function pasteImageFlow(sessionId: string, term: Terminal, blob: Blob): Promise<void> {
+  if (!isTauri()) {
+    term.write("\r\n\x1b[90m(이미지 붙여넣기는 Tauri 앱에서만 파일로 저장됩니다)\x1b[0m\r\n");
+    return;
+  }
+  try {
+    const ext = (blob.type.split("/")[1] ?? "png").replace(/[^a-z0-9]/gi, "") || "png";
+    const path = await savePastedImage(await blobToB64(blob), ext);
+    writePty(sessionId, `"${path}" `);
+  } catch {
+    term.write("\r\n\x1b[31m이미지 저장 실패\x1b[0m\r\n");
+  }
+}
+
+/** 우클릭·Ctrl+Shift+V 붙여넣기 — 이미지가 있으면 파일 경로로, 아니면 텍스트로 */
+async function pasteFromClipboard(sessionId: string, term: Terminal): Promise<void> {
+  try {
+    const items = await navigator.clipboard.read();
+    for (const item of items) {
+      const imgType = item.types.find((t) => t.startsWith("image/"));
+      if (imgType) {
+        await pasteImageFlow(sessionId, term, await item.getType(imgType));
+        return;
+      }
+    }
+  } catch {
+    /* 이미지 읽기 미지원/거부 → 텍스트 폴백 */
+  }
+  const text = await navigator.clipboard.readText().catch(() => "");
+  if (text) term.paste(text);
+}
+
+function copySelection(term: Terminal): void {
+  if (term.hasSelection()) {
+    void navigator.clipboard.writeText(term.getSelection()).catch(() => {});
+  }
+}
+
 function createEntry(): TermEntry {
   const term = new Terminal({
     fontFamily: '"IBM Plex Mono", ui-monospace, monospace',
@@ -64,6 +123,22 @@ async function initSession(
   props: { sessionId: string; cwd: string; wsId?: string; shell?: string; mockLines?: string[] },
 ) {
   const term = entry.term;
+
+  // Ctrl+Shift+C = 선택 복사 · Ctrl+Shift+V = 붙여넣기(이미지 포함). Ctrl+C는 그대로 SIGINT.
+  term.attachCustomKeyEventHandler((ev) => {
+    if (ev.type === "keydown" && ev.ctrlKey && ev.shiftKey) {
+      const k = ev.key.toLowerCase();
+      if (k === "c") {
+        copySelection(term);
+        return false;
+      }
+      if (k === "v") {
+        void pasteFromClipboard(props.sessionId, term);
+        return false;
+      }
+    }
+    return true;
+  });
 
   if (isTauri()) {
     onPtyOutput(props.sessionId, (data) => term.write(data));
@@ -113,6 +188,7 @@ export function TerminalPane(props: {
   mockLines?: string[];
 }) {
   let host!: HTMLDivElement;
+  const [menu, setMenu] = createSignal<{ x: number; y: number; hasSel: boolean } | undefined>(undefined);
 
   onMount(() => {
     let entry = REGISTRY.get(props.sessionId);
@@ -122,6 +198,31 @@ export function TerminalPane(props: {
     }
     const e = entry;
     let cancelled = false;
+
+    // Ctrl+V 붙여넣기에서 이미지가 잡히면 가로채 파일로 저장한다 (텍스트는 xterm 기본 처리)
+    const onPaste = (ev: ClipboardEvent) => {
+      const items = ev.clipboardData?.items;
+      if (!items) return;
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type.startsWith("image/")) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          const file = items[i].getAsFile();
+          if (file) void pasteImageFlow(props.sessionId, e.term, file);
+          return;
+        }
+      }
+    };
+    host.addEventListener("paste", onPaste, true);
+
+    // 우클릭 컨텍스트 메뉴
+    const onContextMenu = (ev: MouseEvent) => {
+      ev.preventDefault();
+      setMenu({ x: ev.clientX, y: ev.clientY, hasSel: e.term.hasSelection() });
+    };
+    host.addEventListener("contextmenu", onContextMenu);
+    const closeMenu = () => setMenu(undefined);
+    window.addEventListener("mousedown", closeMenu);
 
     const syncSize = () => {
       if (host.clientWidth < 40 || host.clientHeight < 24) return; // 0-크기 측정 방지
@@ -173,9 +274,48 @@ export function TerminalPane(props: {
       cancelled = true;
       clearTimeout(resizeTimer);
       ro.disconnect();
+      host.removeEventListener("paste", onPaste, true);
+      host.removeEventListener("contextmenu", onContextMenu);
+      window.removeEventListener("mousedown", closeMenu);
       // 터미널은 dispose하지 않는다 — REGISTRY가 세션 수명 동안 유지한다
     });
   });
 
-  return <div class="xterm-host" ref={host} />;
+  const menuAction = (fn: (term: Terminal) => void) => {
+    const e = REGISTRY.get(props.sessionId);
+    if (e) fn(e.term);
+    setMenu(undefined);
+  };
+
+  return (
+    <>
+      <div class="xterm-host" ref={host} />
+      <Show when={menu()}>
+        {(m) => (
+          <div
+            class="card term-menu"
+            style={{ left: `${m().x}px`, top: `${m().y}px` }}
+            onMouseDown={(ev) => ev.stopPropagation()}
+          >
+            <button class="term-menu-item" disabled={!m().hasSel} onClick={() => menuAction(copySelection)}>
+              복사 <span class="mono muted">Ctrl+Shift+C</span>
+            </button>
+            <button
+              class="term-menu-item"
+              onClick={() => menuAction((t) => void pasteFromClipboard(props.sessionId, t))}
+            >
+              붙여넣기 <span class="mono muted">Ctrl+Shift+V</span>
+            </button>
+            <button class="term-menu-item" onClick={() => menuAction((t) => t.selectAll())}>
+              모두 선택
+            </button>
+            <button class="term-menu-item" onClick={() => menuAction((t) => t.clear())}>
+              화면 지우기
+            </button>
+            <div class="term-menu-note muted">이미지 붙여넣기 → 파일 저장 후 경로 삽입</div>
+          </div>
+        )}
+      </Show>
+    </>
+  );
 }
