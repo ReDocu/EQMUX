@@ -1,18 +1,9 @@
-// 앱 바 (DdrkL) — 관제 고정 탭(맨 왼쪽, G1) + 워크스페이스 탭(B3, 닫기/추가) + 도구 열.
-// 도구 열은 design.pen DdrkL 구성을 따른다: 배치 · 임무 · git · 포트 · 로그 · 브라우저 · 팀 · 대화 · 설정.
+// 앱 바 (DdrkL) — 관제 고정 탭(맨 왼쪽, G1) + 워크스페이스 탭(B3, 닫기/추가) + 전역 도구 4종.
+// 패널 도구(git·포트·로그·브라우저·임무)는 사이드 패널 탭과 화면 버튼으로만 접근한다.
 import { For, Show } from "solid-js";
 import { backend } from "../backend/mock";
-import { openPanel, panelOpen, panelTab, setExitOpen, setView, tick, view } from "../state";
-import type { PanelTab } from "../state";
+import { setExitOpen, setView, tick, view } from "../state";
 import { ATTENTION_ORDER } from "../types";
-
-// 컨트롤 센터 헤더와 중복되는 도구(임무·배치·대화)는 화면 쪽에만 둔다 — Nav는 전역 도구만.
-const PANEL_TOOLS: { key: PanelTab; label: string }[] = [
-  { key: "git", label: "git" },
-  { key: "ports", label: "포트" },
-  { key: "logs", label: "로그" },
-  { key: "browser", label: "브라우저" },
-];
 
 export function AppBar() {
   const workspaces = () => {
@@ -29,8 +20,6 @@ export function AppBar() {
     if (top.status === "dead") return "var(--eq-red)";
     return undefined;
   };
-
-  const panelToolActive = (key: PanelTab) => panelOpen() && panelTab() === key;
 
   return (
     <div class="appbar">
@@ -75,13 +64,6 @@ export function AppBar() {
         </button>
       </div>
       <div class="tools">
-        <For each={PANEL_TOOLS}>
-          {(t) => (
-            <button class="tool" classList={{ active: panelToolActive(t.key) }} onClick={() => openPanel(t.key)}>
-              {t.label}
-            </button>
-          )}
-        </For>
         <button
           class="tool"
           classList={{ active: view().kind === "connect" }}
