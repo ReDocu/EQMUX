@@ -2,6 +2,7 @@
 // 역할의 permissions → 실행 플래그 번역(§4.5.1)은 types.ts의 translatePermissions가 담당한다.
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { flushInboxOnState } from "./conversation";
 import { backend } from "./mock";
 import { isTauri } from "./pty";
 import { saveRoleFile } from "./roles";
@@ -37,6 +38,8 @@ export function ensureAgentListeners(): Promise<void> {
         version: p.version ?? undefined,
         exitCode: p.exitCode ?? undefined,
       });
+      // 인박스 전달 (M3) — idle 전이가 곧 턴 종료 신호다
+      flushInboxOnState(p.session, p.status);
     }).then(() => {});
   }
   return ready;

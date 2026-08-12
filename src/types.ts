@@ -110,11 +110,13 @@ export interface EventRecord {
 export interface ConversationMessage {
   id: string;
   time: string;
-  from: string;
-  to: string; // "@all" | 세션 이름
+  from: string; // "나" | 발신 표시명
+  to: string; // "@all" | 세션 id (표시할 때 페르소나 이름으로 푼다)
   type: "ask" | "handoff" | "report" | "review" | "escalate"; // M2 — 강제 5종
   body: string;
   unread: boolean;
+  workspaceId?: string; // 실물 스트림의 스코프 — 목 시드는 미지정
+  ts?: number; // epoch ms — 실물 정렬 키
 }
 
 /** PRD D §4.5.1 번역표 */

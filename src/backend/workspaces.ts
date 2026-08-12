@@ -2,6 +2,7 @@
 // Tauri에서는 workspaces.json 실물 레지스트리가 목 목록을 대체(hydrate)하고,
 // 브라우저 dev에서는 기존 목 데이터가 그대로 남는다.
 import { invoke } from "@tauri-apps/api/core";
+import { refreshConversation } from "./conversation";
 import { restoreLayout, startLayoutSync } from "./layout";
 import { loadSettings } from "./settings";
 import { refreshLibrary } from "./library";
@@ -57,12 +58,13 @@ export async function refreshWorkspaces(): Promise<void> {
   backend.hydrateWorkspaces(list.map(toWorkspace));
   await refreshLibrary(); // 라이브러리 실파일 (FR-E-20~23) — 팀 복원이 이름·색을 참조하므로 먼저
   await restoreTeams(); // team.json → 슬롯 복원 (에이전트 자동 실행 없음, S3)
-  // 임무 실측 (FR-E-59) — 슬롯 복원 뒤에 돌아야 배정이 세션 missionId에 얹힌다
+  // 임무 실측 (FR-E-59) — 슬롯 복원 뒤에 돌아야 배정이 세션 missionId에 얹힌다.
+  // 대화 원장(PRD F)도 같은 타이밍에 읽는다 — 목 시드를 걷어내고 실물 스트림으로.
   await Promise.all(
     backend
       .listWorkspaces()
       .filter((w) => !w.pathMissing)
-      .map((w) => refreshMissions(w.id)),
+      .flatMap((w) => [refreshMissions(w.id), refreshConversation(w.id)]),
   );
   // 레이아웃 복원 (FR-C-22·30) — 워크스페이스가 실재해야 탭을 열 수 있다.
   // 설정을 먼저 로드해야 startView 옵션(FR-G-02)이 복원에 반영된다.

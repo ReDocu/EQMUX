@@ -2,6 +2,7 @@ import { Match, onCleanup, onMount, Show, Switch } from "solid-js";
 import { AppBar } from "./components/AppBar";
 import { SidePanel } from "./components/SidePanel";
 import { ensureAgentListeners } from "./backend/agent";
+import { startMessageBus } from "./backend/conversation";
 import { backend } from "./backend/mock";
 import { startMemorySampling } from "./backend/memory";
 import { isTauri } from "./backend/pty";
@@ -32,6 +33,8 @@ export function App() {
   onMount(() => void ensureAgentListeners());
   // 팀 편성 자동 저장 (PRD E) — 역할 슬롯 변경 → .eqmux/team.json + team.md
   onMount(() => startTeamSync());
+  // 메시지 버스 수신 (PRD F) — message-new → 스트림 반영 + 상태 기반 PTY 전달 (M3)
+  onMount(() => void startMessageBus());
   // 세션 메모리 계측 (FR-C-09 · C11) — Job Object 10초 샘플링, 표시 전용
   onMount(() => startMemorySampling());
 

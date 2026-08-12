@@ -1,10 +1,19 @@
 // 대화 탭 (KnvN6) — 사이드 패널 탭이며 메인 화면이 아니다 (M1).
-// 시간순 평면 스트림 · 타입 강제 5종 (M2) · @멘션 (M4) — 사람도 같은 스트림의 참여자다.
-import { createSignal, For } from "solid-js";
+// 워크스페이스 = 팀 = 스트림 하나 (M5 평면). 원장은 message 테이블(PRD F)이고
+// 발신은 msg_send, 전달은 conversation.ts의 인박스 + 상태 기반 PTY 주입 (M3).
+// 사람도 같은 스트림의 참여자다 (M4) — "@카이 내용"이면 그 세션, 없으면 @all.
+import { createEffect, createSignal, For, Show } from "solid-js";
+import {
+  ensureConversation,
+  markConversationRead,
+  MSG_MAX_BODY,
+  pendingInbox,
+  sendConversation,
+} from "../backend/conversation";
 import { backend } from "../backend/mock";
-import { tick } from "../state";
+import { tick, view } from "../state";
 import { Eyebrow } from "./ui";
-import type { ConversationMessage } from "../types";
+import type { ConversationMessage, Session } from "../types";
 
 const TYPES: ConversationMessage["type"][] = ["ask", "handoff", "report", "review", "escalate"];
 const TYPE_COLOR: Record<ConversationMessage["type"], string> = {
@@ -16,30 +25,85 @@ const TYPE_COLOR: Record<ConversationMessage["type"], string> = {
 };
 
 export function ConversationTab() {
+  // 스코프 = 활성 워크스페이스 탭, 아니면 첫 번째 열린 워크스페이스 (GitPanelTab과 같은 규칙)
+  const ws = () => {
+    tick();
+    const v = view();
+    const all = backend.listWorkspaces();
+    if (v.kind === "workspace") {
+      const cur = all.find((w) => w.id === (v as { id: string }).id);
+      if (cur) return cur;
+    }
+    return all.find((w) => w.open);
+  };
+  createEffect(() => {
+    const w = ws();
+    if (w) ensureConversation(w.id); // 늦게 등록된 워크스페이스도 첫 열람 때 원장을 읽는다
+  });
+
+  const personaName = (personaId: string) =>
+    backend.listPersonas().find((p) => p.id === personaId)?.name ?? personaId;
+  const wsSessions = () =>
+    backend.listSessions().filter((s) => s.workspaceId === ws()?.id && s.personaId);
+  const sessionName = (id: string) => {
+    const s = backend.listSessions().find((x) => x.id === id);
+    return s?.personaId ? personaName(s.personaId) : id;
+  };
+  const displayTo = (to: string) => (to === "@all" ? "@all" : sessionName(to));
+
   const messages = () => {
     tick();
-    return backend.listMessages();
+    const id = ws()?.id;
+    return backend.listMessages().filter((m) => m.workspaceId === id || m.workspaceId === undefined);
   };
   const unread = () => messages().filter((m) => m.unread).length;
+  const waitingInbox = () => {
+    tick();
+    const ids = new Set(wsSessions().map((s) => s.id));
+    return pendingInbox().filter((p) => ids.has(p.sessionId));
+  };
+
   const [selType, setSelType] = createSignal<ConversationMessage["type"]>("ask");
   const [filter, setFilter] = createSignal<"전체" | "미확인">("전체");
   const [draft, setDraft] = createSignal("");
+  const [error, setError] = createSignal<string | null>(null);
 
   const shown = () => (filter() === "미확인" ? messages().filter((m) => m.unread) : messages());
 
-  const send = () => {
+  // @멘션 해석 (M4) — 페르소나 이름·페르소나 id·세션 id 무엇으로든 그 세션을 찾는다
+  const target = (mention: string): Session | undefined =>
+    wsSessions().find(
+      (s) => personaName(s.personaId) === mention || s.personaId === mention || s.id === mention,
+    );
+
+  const send = async () => {
+    const w = ws();
     const body = draft().trim();
-    if (!body) return;
-    // @멘션 파싱 (M4) — "@카이 내용" 형태면 수신자를 분리한다
+    if (!w || !body) return;
     const m = body.match(/^@(\S+)\s+(.*)$/s);
-    backend.sendMessage("나", m ? `@${m[1]}` : "@all", selType(), m ? m[2] : body);
-    setDraft("");
+    let to = "@all";
+    let text = body;
+    if (m && m[1] !== "all") {
+      const t = target(m[1]);
+      if (!t) {
+        setError(`수신자 없음: @${m[1]} — 이 워크스페이스의 페르소나 이름으로`);
+        return;
+      }
+      to = t.id;
+      text = m[2];
+    } else if (m) {
+      text = m[2];
+    }
+    setError(await sendConversation(w.id, to, selType(), text));
+    if (!error()) setDraft("");
   };
 
   return (
     <div class="conv-tab">
       <div class="conv-head">
-        <Eyebrow>팀 대화 · {unread()} 미확인</Eyebrow>
+        <Eyebrow>
+          팀 대화{ws() ? ` · ${ws()!.name}` : ""} · {unread()} 미확인
+        </Eyebrow>
         <div style={{ display: "flex", gap: "4px" }}>
           <For each={["전체", "미확인"] as const}>
             {(f) => (
@@ -48,28 +112,53 @@ export function ConversationTab() {
               </button>
             )}
           </For>
-          <button class="btn ghost" onClick={() => backend.markAllRead()}>
+          <button class="btn ghost" onClick={() => markConversationRead(ws()?.id)}>
             모두 읽음
           </button>
         </div>
       </div>
+      <Show when={waitingInbox().length > 0}>
+        <div class="card inset" style={{ padding: "6px 10px", "font-size": "11px" }}>
+          <span class="muted">인박스 대기 (M3 — 턴 종료 시 전달): </span>
+          <For each={waitingInbox()}>
+            {(p, i) => (
+              <span class="mono">
+                {i() > 0 ? " · " : ""}
+                {sessionName(p.sessionId)} {p.count}건
+              </span>
+            )}
+          </For>
+        </div>
+      </Show>
       <div class="conv-stream">
-        <For each={shown()}>
-          {(m) => (
-            <div class="card conv-msg" classList={{ unread: m.unread }}>
-              <div style={{ display: "flex", "align-items": "center", gap: "6px" }}>
-                <span style={{ "font-weight": 700, "font-size": "12px" }}>
-                  {m.from} → {m.to}
-                </span>
-                <span class={`badge ${TYPE_COLOR[m.type]}`}>{m.type.toUpperCase()}</span>
-                <span class="mono muted" style={{ "margin-left": "auto", "font-size": "10px" }}>
-                  {m.time}
-                </span>
+        <Show
+          when={shown().length > 0}
+          fallback={
+            <div class="muted" style={{ padding: "16px", "font-size": "12px", "text-align": "center" }}>
+              아직 메시지가 없습니다 — 아래에서 타입을 골라 팀에 보내보세요.
+              <div class="mono" style={{ "font-size": "10px", "margin-top": "6px" }}>
+                idle 세션에는 즉시, 작업 중이면 턴 종료 시 전달됩니다 (M3)
               </div>
-              <div style={{ "margin-top": "4px", "font-size": "12px" }}>{m.body}</div>
             </div>
-          )}
-        </For>
+          }
+        >
+          <For each={shown()}>
+            {(m) => (
+              <div class="card conv-msg" classList={{ unread: m.unread }}>
+                <div style={{ display: "flex", "align-items": "center", gap: "6px" }}>
+                  <span style={{ "font-weight": 700, "font-size": "12px" }}>
+                    {m.from} → {displayTo(m.to)}
+                  </span>
+                  <span class={`badge ${TYPE_COLOR[m.type]}`}>{m.type.toUpperCase()}</span>
+                  <span class="mono muted" style={{ "margin-left": "auto", "font-size": "10px" }}>
+                    {m.time}
+                  </span>
+                </div>
+                <div style={{ "margin-top": "4px", "font-size": "12px" }}>{m.body}</div>
+              </div>
+            )}
+          </For>
+        </Show>
       </div>
       <div class="conv-composer card">
         <div style={{ display: "flex", gap: "4px", "flex-wrap": "wrap", "margin-bottom": "6px" }}>
@@ -88,15 +177,22 @@ export function ConversationTab() {
         <div style={{ display: "flex", gap: "6px" }}>
           <input
             style={{ flex: 1, "min-width": 0 }}
-            placeholder="@카이 질문… (@ 없으면 @all)"
+            placeholder={ws() ? "@카이 질문… (@ 없으면 @all)" : "열린 워크스페이스가 없습니다"}
+            disabled={!ws()}
+            maxLength={MSG_MAX_BODY}
             value={draft()}
             onInput={(e) => setDraft(e.currentTarget.value)}
-            onKeyDown={(e) => e.key === "Enter" && send()}
+            onKeyDown={(e) => e.key === "Enter" && void send()}
           />
-          <button class="btn primary" onClick={send}>
+          <button class="btn primary" disabled={!ws()} onClick={() => void send()}>
             보내기
           </button>
         </div>
+        <Show when={error()}>
+          <div style={{ color: "var(--red, #e5534b)", "font-size": "11px", "margin-top": "4px" }}>
+            {error()}
+          </div>
+        </Show>
       </div>
     </div>
   );

@@ -19,6 +19,7 @@ mod diff;
 mod fsx;
 mod job;
 mod library;
+mod messages;
 mod missions;
 mod ports;
 mod roles;
@@ -415,6 +416,56 @@ fn events_query(
         out
     };
     Ok(rows)
+}
+
+// ── 메시지 버스 (PRD F) — 원장은 message 테이블, 전달은 프런트의 PTY 주입 (M3) ──
+
+/// M6 분당 발신 상한의 창 상태 — key = "워크스페이스/발신자"
+#[derive(Default)]
+struct MsgRate(Mutex<HashMap<String, Vec<i64>>>);
+
+#[tauri::command]
+fn msg_list(
+    store_state: State<StoreState>,
+    workspace: String,
+    before_id: Option<i64>,
+    limit: u32,
+) -> Result<Vec<messages::MsgRow>, String> {
+    messages::list(&store_state.0.root(), &workspace, before_id, limit)
+}
+
+/// 발신 (M2 강제 5종 · M6 상한) — 적재 후 message-new를 방송해 스트림·전달이 한 경로로 흐른다.
+/// PRD I의 `eqmux send` CLI도 이 함수로 들어오게 된다.
+#[tauri::command]
+fn msg_send(
+    app: AppHandle,
+    store_state: State<StoreState>,
+    rate: State<MsgRate>,
+    workspace: String,
+    from: String,
+    to: String,
+    msg_type: String,
+    body: String,
+) -> Result<messages::MsgRow, String> {
+    messages::validate(&msg_type, &body)?; // 무효 발신은 상한을 소모하지 않는다
+    {
+        let mut map = rate.0.lock().map_err(|e| e.to_string())?;
+        let times = map.entry(format!("{workspace}/{from}")).or_default();
+        if !messages::allow_rate(times, workspace::now_ms() as i64) {
+            return Err("RATE_LIMIT".into());
+        }
+    }
+    let row = messages::send(&store_state.0.root(), &workspace, &from, &to, &msg_type, &body)?;
+    let _ = app.emit(
+        "message-new",
+        serde_json::json!({ "workspace": workspace, "message": row }),
+    );
+    Ok(row)
+}
+
+#[tauri::command]
+fn msg_mark_read(store_state: State<StoreState>, workspace: String) -> Result<(), String> {
+    messages::mark_read(&store_state.0.root(), &workspace)
 }
 
 #[derive(Serialize)]
@@ -1201,6 +1252,7 @@ pub fn run() {
             app.manage(StoreState(Store::new(root)));
             // 에이전트 런타임 (PRD D) — 세션 레지스트리 watch 시작 (FR-D-11)
             app.manage(agent::AgentRt::default());
+            app.manage(MsgRate::default()); // 메시지 버스 발신 상한 (M6)
             agent::start_registry_watch(app.handle().clone());
             Ok(())
         })
@@ -1229,6 +1281,9 @@ pub fn run() {
             scrollback_tail,
             store_usage_real,
             events_query,
+            msg_list,
+            msg_send,
+            msg_mark_read,
             ws_pick_folder,
             ws_registry,
             ws_register,

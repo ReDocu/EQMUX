@@ -27,6 +27,10 @@ export interface Backend {
   // ── M0 목 mutation — M1에서 SessionService invoke로 교체 ──
   sendMessage(from: string, to: string, type: ConversationMessage["type"], body: string): void;
   markAllRead(): void;
+  /** 메시지 원장 실측으로 그 워크스페이스 스트림을 교체 (PRD F) — Tauri에서만 호출된다 */
+  hydrateMessages(wsId: string, list: ConversationMessage[]): void;
+  /** message-new 이벤트 1건 반영 — 이미 있는 id는 무시한다 */
+  appendMessage(m: ConversationMessage): void;
   /** 미확인 해제 (FR-G-44) — 그 세션의 페인을 보거나 상세를 열면 해제된다 */
   markSeen(sessionId: string): void;
   /** 모두 확인 (FR-G-47) */
@@ -465,6 +469,23 @@ export class MockBackend implements Backend {
 
   markAllRead() {
     for (const m of MESSAGES) m.unread = false;
+    this.broadcast();
+  }
+
+  hydrateMessages(wsId: string, list: ConversationMessage[]) {
+    // 그 워크스페이스의 기존 스트림과 워크스페이스 없는 목 시드를 걷어내고 실측으로 교체
+    for (let i = MESSAGES.length - 1; i >= 0; i--) {
+      const w = MESSAGES[i].workspaceId;
+      if (w === wsId || w === undefined) MESSAGES.splice(i, 1);
+    }
+    MESSAGES.push(...list);
+    MESSAGES.sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
+    this.broadcast();
+  }
+
+  appendMessage(m: ConversationMessage) {
+    if (MESSAGES.some((x) => x.id === m.id)) return;
+    MESSAGES.push(m);
     this.broadcast();
   }
 

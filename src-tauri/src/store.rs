@@ -1,6 +1,6 @@
 // 세션 스토어 (PRD C) — SQLite WAL · 워크스페이스별 DB (FR-C-20a) · 배치 커밋 (FR-C-21).
 // 디스크에 적재하는 것은 VT를 통과해 확정된 줄이다 (FR-C-11) — raw 바이트는 로그 파일(1차) 몫.
-// 스키마 7테이블(FR-C-20)을 모두 만들되 M1은 session·scrollback·event만 채운다.
+// 스키마 7테이블(FR-C-20) + message(PRD F 원장) — 쓰기 열림 때마다 IF NOT EXISTS로 보장한다.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -76,6 +76,15 @@ CREATE TABLE IF NOT EXISTS notification (
   kind TEXT NOT NULL,
   payload TEXT
 );
+CREATE TABLE IF NOT EXISTS message (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts INTEGER NOT NULL,
+  sender TEXT NOT NULL,
+  recipient TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  body TEXT NOT NULL,
+  read INTEGER NOT NULL DEFAULT 0
+);
 ";
 
 const SCROLLBACK_CAP_PER_SESSION: i64 = 100_000; // FR-C-50
@@ -99,7 +108,8 @@ pub fn db_path(root: &Path, ws: &str) -> PathBuf {
     root.join("workspaces").join(sanitize(ws)).join("session.db")
 }
 
-fn open_db(root: &Path, ws: &str) -> rusqlite::Result<Connection> {
+/// 쓰기 열림 — 스키마 보장 포함. 메시지 버스(messages.rs)도 이 경로로 연다.
+pub(crate) fn open_db(root: &Path, ws: &str) -> rusqlite::Result<Connection> {
     let path = db_path(root, ws);
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
