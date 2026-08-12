@@ -7,11 +7,13 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import {
+  clipReadText,
+  clipSaveImage,
+  clipWriteText,
   isTauri,
   onPtyExit,
   onPtyOutput,
   resizePty,
-  savePastedImage,
   scrollbackTail,
   spawnPty,
   writePty,
@@ -53,54 +55,21 @@ export function disposeSessionTerminal(id: string) {
   }
 }
 
-// ── 클립보드 — 텍스트/이미지 붙여넣기 + 선택 복사 ──
+// ── 클립보드 — 네이티브(arboard) 경로. WebView2의 웹 Clipboard API는 권한 문제로 조용히 실패한다 ──
 
-function blobToB64(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => resolve(String(r.result).split(",")[1] ?? "");
-    r.onerror = () => reject(r.error);
-    r.readAsDataURL(blob);
-  });
-}
-
-/** 이미지 붙여넣기 → %TEMP%\eqmux-pastes에 저장 → 따옴표 친 경로를 입력에 삽입 */
-async function pasteImageFlow(sessionId: string, term: Terminal, blob: Blob): Promise<void> {
-  if (!isTauri()) {
-    term.write("\r\n\x1b[90m(이미지 붙여넣기는 Tauri 앱에서만 파일로 저장됩니다)\x1b[0m\r\n");
+/** 붙여넣기 — 클립보드에 이미지가 있으면 파일로 저장해 경로를 삽입, 아니면 텍스트 */
+async function pasteFromClipboard(sessionId: string, term: Terminal): Promise<void> {
+  const imgPath = await clipSaveImage();
+  if (imgPath) {
+    writePty(sessionId, `"${imgPath}" `);
     return;
   }
-  try {
-    const ext = (blob.type.split("/")[1] ?? "png").replace(/[^a-z0-9]/gi, "") || "png";
-    const path = await savePastedImage(await blobToB64(blob), ext);
-    writePty(sessionId, `"${path}" `);
-  } catch {
-    term.write("\r\n\x1b[31m이미지 저장 실패\x1b[0m\r\n");
-  }
-}
-
-/** 우클릭·Ctrl+Shift+V 붙여넣기 — 이미지가 있으면 파일 경로로, 아니면 텍스트로 */
-async function pasteFromClipboard(sessionId: string, term: Terminal): Promise<void> {
-  try {
-    const items = await navigator.clipboard.read();
-    for (const item of items) {
-      const imgType = item.types.find((t) => t.startsWith("image/"));
-      if (imgType) {
-        await pasteImageFlow(sessionId, term, await item.getType(imgType));
-        return;
-      }
-    }
-  } catch {
-    /* 이미지 읽기 미지원/거부 → 텍스트 폴백 */
-  }
-  const text = await navigator.clipboard.readText().catch(() => "");
+  const text = await clipReadText();
   if (text) term.paste(text);
 }
 
 function copySelection(term: Terminal): void {
-  if (term.hasSelection()) {
-    void navigator.clipboard.writeText(term.getSelection()).catch(() => {});
-  }
+  if (term.hasSelection()) clipWriteText(term.getSelection());
 }
 
 function createEntry(): TermEntry {
@@ -124,15 +93,16 @@ async function initSession(
 ) {
   const term = entry.term;
 
-  // Ctrl+Shift+C = 선택 복사 · Ctrl+Shift+V = 붙여넣기(이미지 포함). Ctrl+C는 그대로 SIGINT.
+  // Ctrl+Shift+C = 선택 복사 · Ctrl(+Shift)+V = 붙여넣기(이미지 포함). Ctrl+C는 그대로 SIGINT.
+  // Tauri에서는 Ctrl+V도 네이티브 클립보드 경로로 가로챈다 (WebView2 웹 API 우회).
   term.attachCustomKeyEventHandler((ev) => {
-    if (ev.type === "keydown" && ev.ctrlKey && ev.shiftKey) {
+    if (ev.type === "keydown" && ev.ctrlKey) {
       const k = ev.key.toLowerCase();
-      if (k === "c") {
+      if (ev.shiftKey && k === "c") {
         copySelection(term);
         return false;
       }
-      if (k === "v") {
+      if (k === "v" && (ev.shiftKey || isTauri())) {
         void pasteFromClipboard(props.sessionId, term);
         return false;
       }
@@ -199,22 +169,6 @@ export function TerminalPane(props: {
     const e = entry;
     let cancelled = false;
 
-    // Ctrl+V 붙여넣기에서 이미지가 잡히면 가로채 파일로 저장한다 (텍스트는 xterm 기본 처리)
-    const onPaste = (ev: ClipboardEvent) => {
-      const items = ev.clipboardData?.items;
-      if (!items) return;
-      for (let i = 0; i < items.length; i++) {
-        if (items[i].type.startsWith("image/")) {
-          ev.preventDefault();
-          ev.stopPropagation();
-          const file = items[i].getAsFile();
-          if (file) void pasteImageFlow(props.sessionId, e.term, file);
-          return;
-        }
-      }
-    };
-    host.addEventListener("paste", onPaste, true);
-
     // 우클릭 컨텍스트 메뉴
     const onContextMenu = (ev: MouseEvent) => {
       ev.preventDefault();
@@ -274,7 +228,6 @@ export function TerminalPane(props: {
       cancelled = true;
       clearTimeout(resizeTimer);
       ro.disconnect();
-      host.removeEventListener("paste", onPaste, true);
       host.removeEventListener("contextmenu", onContextMenu);
       window.removeEventListener("mousedown", closeMenu);
       // 터미널은 dispose하지 않는다 — REGISTRY가 세션 수명 동안 유지한다

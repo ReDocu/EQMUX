@@ -102,9 +102,25 @@ export function getScrollback(id: string): string {
   return buffers.get(id) ?? "";
 }
 
-/** 클립보드 이미지를 임시 파일로 저장하고 경로를 돌려받는다 (%TEMP%\eqmux-pastes) */
-export function savePastedImage(dataB64: string, ext: string): Promise<string> {
-  return invoke<string>("save_pasted_image", { dataB64, ext });
+// ── 네이티브 클립보드 — WebView2 웹 Clipboard API 권한 문제를 우회한다 ──
+
+export async function clipReadText(): Promise<string> {
+  if (!isTauri()) return navigator.clipboard.readText().catch(() => "");
+  return invoke<string>("clip_read_text").catch(() => "");
+}
+
+export function clipWriteText(text: string): void {
+  if (!isTauri()) {
+    void navigator.clipboard.writeText(text).catch(() => {});
+    return;
+  }
+  void invoke("clip_write_text", { text }).catch(() => {});
+}
+
+/** 클립보드에 이미지가 있으면 %TEMP%\eqmux-pastes\*.png로 저장하고 경로를 준다. 없으면 null. */
+export async function clipSaveImage(): Promise<string | null> {
+  if (!isTauri()) return null;
+  return invoke<string | null>("clip_save_image").catch(() => null);
 }
 
 /** 세션 로그 폴더 (~/.eqmux/logs) — 1차 파일 로그. Tauri 밖에서는 빈 문자열. */

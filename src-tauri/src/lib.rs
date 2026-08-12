@@ -450,20 +450,40 @@ fn open_log_dir() -> Result<(), String> {
     Ok(())
 }
 
-/// 클립보드 이미지 → 임시 파일 저장 — 터미널에는 파일 경로가 삽입된다 (Claude Code 멀티모달 입력용)
+// ── 네이티브 클립보드 (arboard) — WebView2의 웹 Clipboard API는 권한 문제로 조용히 실패한다 ──
+
 #[tauri::command]
-fn save_pasted_image(data_b64: String, ext: String) -> Result<String, String> {
-    use base64::Engine as _;
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(data_b64.as_bytes())
-        .map_err(|e| e.to_string())?;
-    let safe_ext: String = ext.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
-    let safe_ext = if safe_ext.is_empty() { "png".to_string() } else { safe_ext };
+fn clip_read_text() -> String {
+    let mut cb = match arboard::Clipboard::new() {
+        Ok(c) => c,
+        Err(_) => return String::new(),
+    };
+    cb.get_text().unwrap_or_default()
+}
+
+#[tauri::command]
+fn clip_write_text(text: String) -> Result<(), String> {
+    let mut cb = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+    cb.set_text(text).map_err(|e| e.to_string())
+}
+
+/// 클립보드 이미지 → %TEMP%\eqmux-pastes\*.png 저장 후 경로 반환. 이미지가 없으면 None.
+/// 터미널에는 파일 경로가 삽입된다 (Claude Code 멀티모달 입력용).
+#[tauri::command]
+fn clip_save_image() -> Result<Option<String>, String> {
+    let mut cb = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+    let img = match cb.get_image() {
+        Ok(i) => i,
+        Err(_) => return Ok(None),
+    };
+    let (w, h) = (img.width as u32, img.height as u32);
+    let rgba = image::RgbaImage::from_raw(w, h, img.bytes.into_owned())
+        .ok_or("클립보드 이미지 변환 실패")?;
     let dir = std::env::temp_dir().join("eqmux-pastes");
     create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let path = dir.join(format!("paste-{}.{}", workspace::now_ms(), safe_ext));
-    std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
-    Ok(path.to_string_lossy().into_owned())
+    let path = dir.join(format!("paste-{}.png", workspace::now_ms()));
+    rgba.save(&path).map_err(|e| e.to_string())?;
+    Ok(Some(path.to_string_lossy().into_owned()))
 }
 
 #[tauri::command]
@@ -497,7 +517,9 @@ pub fn run() {
             ws_unregister,
             ws_repath,
             ws_touch,
-            save_pasted_image,
+            clip_read_text,
+            clip_write_text,
+            clip_save_image,
             session_log_dir,
             open_log_dir
         ])
