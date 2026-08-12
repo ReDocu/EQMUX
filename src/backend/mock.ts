@@ -35,6 +35,7 @@ export interface Backend {
   toggleAssign(missionId: string, sessionId: string): void;
   addWorkspace(remote?: string): void;
   openWorkspace(id: string): void;
+  closeWorkspace(id: string): void;
   repairWorkspace(id: string): void;
   savePersona(p: Persona): void;
   addPersona(): void;
@@ -549,6 +550,14 @@ export class MockBackend implements Backend {
     this.broadcast();
   }
 
+  closeWorkspace(id: string) {
+    const ws = WORKSPACES.find((x) => x.id === id);
+    if (!ws || !ws.open) return;
+    ws.open = false;
+    this.logEvent("app", `워크스페이스 닫힘 · ${ws.name} (세션은 백그라운드 유지)`);
+    this.broadcast();
+  }
+
   repairWorkspace(id: string) {
     const ws = WORKSPACES.find((x) => x.id === id);
     if (!ws) return;
@@ -603,3 +612,141 @@ export class MockBackend implements Backend {
 }
 
 export const backend: Backend = new MockBackend();
+
+// ── 패널 목 데이터 — docs/design.pen PAlmZ(git) · KcL3j(로그) · rBkF0(포트) · AXXhV(diff)의 카피 ──
+
+export interface GitCommit {
+  hash: string;
+  message: string;
+  author: string;
+  when: string;
+  tag?: string;
+}
+
+export interface GitChangedFile {
+  status: "M" | "A" | "D";
+  path: string;
+  stat: string; // "+18 −6"
+}
+
+export interface DiffLine {
+  no: number;
+  text: string;
+  kind?: "add" | "del" | "ctx";
+}
+
+export const GIT_STATE = {
+  repo: "project/AcademyCurriculum",
+  branch: "main",
+  ahead: 4,
+  behind: 0,
+  changed: 25,
+  added: 18,
+  modified: 6,
+  deleted: 1,
+  lastCommit: "Sesac: 교재 기반 일차별 학습문서",
+  commits: [
+    { hash: "07c0aa9", message: "Sesac: 교재 기반 일차별 학습문서", author: "ReDocu", when: "1일 전", tag: "main" },
+    { hash: "d447777", message: "MBC: AI 커리큘럼 및 일차별 학습문서", author: "ReDocu", when: "1일 전" },
+    { hash: "da53823", message: "KY: 게임개발 24주 커리큘럼", author: "ReDocu", when: "1일 전" },
+    { hash: "e67e1e9", message: "프로젝트 메타 정보 추가", author: "ReDocu", when: "1일 전" },
+    { hash: "a5bafbe", message: "Initial commit", author: "ReDocu", when: "1일 전", tag: "origin/main" },
+  ] as GitCommit[],
+};
+
+/** Git Diff & Editor (AXXhV) — feature/auth-refactor의 변경 파일 목 */
+export const DIFF_BRANCH = { name: "feature/auth-refactor", ahead: 2, behind: 0 };
+
+export const DIFF_FILES: GitChangedFile[] = [
+  { status: "M", path: "src/auth/session.ts", stat: "+18 −6" },
+  { status: "M", path: "src/auth/token.ts", stat: "+9 −3" },
+  { status: "A", path: "src/auth/guard.ts", stat: "+42" },
+  { status: "M", path: "tests/auth/session.test.ts", stat: "+27 −4" },
+  { status: "M", path: "package.json", stat: "+2 −1" },
+  { status: "D", path: "src/auth/legacy.ts", stat: "−81" },
+];
+
+export const DIFF_BASE: { header: string; range: string; lines: DiffLine[] } = {
+  header: "feat(auth): add base session token · 2026-08-09 18:42",
+  range: "@@ createSession · restoreSession @@",
+  lines: [
+    { no: 1, text: 'import { sign, verify } from "./token";', kind: "del" },
+    { no: 2, text: 'import type { User } from "../types";' },
+    { no: 3, text: " " },
+    { no: 4, text: "export async function createSession(user: User) {" },
+    { no: 5, text: "  const token = sign(user.id);", kind: "del" },
+    { no: 6, text: "  return { token, user };", kind: "del" },
+    { no: 7, text: " " },
+    { no: 8, text: "}" },
+    { no: 9, text: " " },
+    { no: 10, text: "export async function restoreSession(raw: string) {" },
+    { no: 11, text: "  return verify(raw);", kind: "del" },
+    { no: 12, text: " " },
+    { no: 13, text: " " },
+    { no: 14, text: "}" },
+    { no: 15, text: "export const SESSION_TTL = 1000 * 60 * 60;" },
+  ],
+};
+
+export const DIFF_CURRENT: { header: string; range: string; lines: DiffLine[] } = {
+  header: "현재 내용 · 저장되지 않은 변경 1개",
+  range: "@@ createSession · restoreSession @@",
+  lines: [
+    { no: 1, text: 'import { signToken, verifyToken } from "./token";', kind: "add" },
+    { no: 2, text: 'import type { User } from "../types";' },
+    { no: 3, text: " " },
+    { no: 4, text: "export async function createSession(user: User) {" },
+    { no: 5, text: "  const claims = await buildClaims(user);", kind: "add" },
+    { no: 6, text: "  const token = await signToken(claims);", kind: "add" },
+    { no: 7, text: "  const expiresAt = Date.now() + SESSION_TTL;", kind: "add" },
+    { no: 8, text: "  return { token, user, expiresAt };", kind: "add" },
+    { no: 9, text: "}" },
+    { no: 10, text: "export async function restoreSession(raw: string) {" },
+    { no: 11, text: "  const result = await verifyToken(raw);", kind: "add" },
+    { no: 12, text: "  if (!result.valid) return null;", kind: "add" },
+    { no: 13, text: "  return hydrateSession(result.claims);", kind: "add" },
+    { no: 14, text: "}" },
+    { no: 15, text: "export const SESSION_TTL = 1000 * 60 * 60;" },
+  ],
+};
+
+/** 서버 로그 (KcL3j) — 실시간 스트림 목 */
+export interface ServerLog {
+  time: string;
+  type: "앱" | "세션" | "store" | "agent" | "git";
+  message: string;
+  level: "info" | "warn" | "error";
+  expandable?: boolean;
+}
+
+export const SERVER_LOGS: ServerLog[] = [
+  { time: "09:47:46", type: "앱", message: "EQMUX 시작 → 워크스페이스 Academy", level: "info" },
+  { time: "09:47:46", type: "세션", message: "세션 생성: EQMux/미라 (페르소나 모드)", level: "info" },
+  { time: "09:47:46", type: "세션", message: "세션 생성: Academy/카이 (Claude Code)", level: "info" },
+  { time: "09:47:46", type: "세션", message: "세션 생성: Academy/노엘 (Claude Code)", level: "info" },
+  { time: "09:47:48", type: "세션", message: "세션 생성: Academy/린 (Claude Code)", level: "info" },
+  { time: "09:48:02", type: "store", message: "scrollback batch committed · 42ms", level: "info" },
+  { time: "09:48:19", type: "agent", message: "노엘 resume mapping restored", level: "warn" },
+  { time: "09:49:04", type: "git", message: "git diff --check → exit 1", level: "error", expandable: true },
+  { time: "09:49:10", type: "store", message: "cleanup complete · 43MB reclaimed", level: "info" },
+];
+
+export const LOG_METRICS = { info: 112, warn: 11, error: 5, total: 128, rate: "4.2 events/s" };
+
+/** 포트 (rBkF0) — 세션 포트 + 시스템 포트 요약 */
+export interface SessionPort {
+  port: number;
+  badge: "LISTENING" | "DEBUG";
+  proc: string;
+  session: string;
+  host: string;
+}
+
+export const SESSION_PORTS: SessionPort[] = [
+  { port: 5173, badge: "LISTENING", proc: "vite", session: "노엘", host: "127.0.0.1" },
+  { port: 3000, badge: "LISTENING", proc: "next dev", session: "카이", host: "127.0.0.1" },
+  { port: 9229, badge: "DEBUG", proc: "node inspector", session: "린", host: "127.0.0.1" },
+];
+
+export const PORT_SUMMARY = { session: 3, system: 28, conflicts: 0, exposed: 0 };
+

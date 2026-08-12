@@ -101,7 +101,7 @@ export function WorkspaceConnection() {
                   disabled={ws().pathMissing}
                   onClick={() => {
                     backend.openWorkspace(ws().id);
-                    setView({ kind: "casting", wsId: ws().id });
+                    setView({ kind: "launch", wsId: ws().id });
                   }}
                 >
                   {ws().pathMissing ? "경로 재지정 필요" : `${ws().name} 열기`}

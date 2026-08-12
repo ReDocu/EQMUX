@@ -25493,7 +25493,6 @@
                               "width": "fill_container",
                               "height": 38,
                               "gap": 2,
-                              "layoutIncludeStroke": true,
                               "children": [
                                 {
                                   "type": "rectangle",
