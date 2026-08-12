@@ -673,6 +673,11 @@
 .xterm-host .xterm {
   height: 100%;
 }
+.xterm-host.drop-target {
+  outline: 1px solid var(--eq-blue);
+  outline-offset: -1px;
+  background: var(--eq-blue-soft);
+}
 
 /* ── 트랜스크립트 페인 (화면 #12) ── */
 .transcript {

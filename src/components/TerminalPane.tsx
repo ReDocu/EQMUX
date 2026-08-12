@@ -5,6 +5,7 @@
 import { createSignal, onCleanup, onMount, Show } from "solid-js";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import "@xterm/xterm/css/xterm.css";
 import {
   clipReadText,
@@ -70,6 +71,49 @@ async function pasteFromClipboard(sessionId: string, term: Terminal): Promise<vo
 
 function copySelection(term: Terminal): void {
   if (term.hasSelection()) clipWriteText(term.getSelection());
+}
+
+// ── 파일 끌어다 놓기 — Tauri가 OS 드래그를 가로채므로 웹 drop 대신 webview 이벤트를 쓴다 ──
+// 드롭 지점 아래의 페인을 찾아 따옴표 친 경로(들)를 그 세션 입력에 삽입한다.
+
+let dragDropInit = false;
+let dropTarget: HTMLElement | null = null;
+
+function hostAt(position: { x: number; y: number }): HTMLElement | null {
+  const scale = window.devicePixelRatio || 1;
+  const el = document.elementFromPoint(position.x / scale, position.y / scale);
+  return (el?.closest("[data-session-id]") as HTMLElement | null) ?? null;
+}
+
+function clearDropTarget() {
+  dropTarget?.classList.remove("drop-target");
+  dropTarget = null;
+}
+
+async function ensureDragDrop(): Promise<void> {
+  if (dragDropInit || !isTauri()) return;
+  dragDropInit = true;
+  await getCurrentWebview().onDragDropEvent((event) => {
+    const p = event.payload;
+    if (p.type === "enter" || p.type === "over") {
+      const host = hostAt(p.position);
+      if (host !== dropTarget) {
+        clearDropTarget();
+        dropTarget = host;
+        host?.classList.add("drop-target");
+      }
+    } else if (p.type === "drop") {
+      const host = hostAt(p.position);
+      clearDropTarget();
+      const sessionId = host?.getAttribute("data-session-id");
+      if (sessionId && p.paths.length > 0) {
+        writePty(sessionId, p.paths.map((f) => `"${f}"`).join(" ") + " ");
+        REGISTRY.get(sessionId)?.term.focus();
+      }
+    } else {
+      clearDropTarget();
+    }
+  });
 }
 
 function createEntry(): TermEntry {
@@ -168,6 +212,7 @@ export function TerminalPane(props: {
     }
     const e = entry;
     let cancelled = false;
+    void ensureDragDrop();
 
     // 우클릭 컨텍스트 메뉴
     const onContextMenu = (ev: MouseEvent) => {
@@ -242,7 +287,7 @@ export function TerminalPane(props: {
 
   return (
     <>
-      <div class="xterm-host" ref={host} />
+      <div class="xterm-host" data-session-id={props.sessionId} ref={host} />
       <Show when={menu()}>
         {(m) => (
           <div
