@@ -69,6 +69,17 @@ export function getScrollback(id: string): string {
   return buffers.get(id) ?? "";
 }
 
+/** 세션 로그 폴더 (~/.eqmux/logs) — 1차 파일 로그. Tauri 밖에서는 빈 문자열. */
+export async function sessionLogDir(): Promise<string> {
+  if (!isTauri()) return "";
+  return invoke<string>("session_log_dir").catch(() => "");
+}
+
+export function openLogDir(): void {
+  if (!isTauri()) return;
+  void invoke("open_log_dir").catch(() => {});
+}
+
 export function onPtyOutput(id: string, cb: (data: string) => void): () => void {
   if (!outputSubs.has(id)) outputSubs.set(id, new Set());
   outputSubs.get(id)!.add(cb);

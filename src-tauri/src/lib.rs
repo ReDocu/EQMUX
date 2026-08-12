@@ -3,9 +3,11 @@
 // 저장소(rusqlite)·에이전트 훅은 다음 단계에서 이 계층 뒤로 들어온다 (FR-C-01·02).
 
 use std::collections::HashMap;
+use std::fs::{create_dir_all, OpenOptions};
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 use serde::Serialize;
@@ -30,6 +32,24 @@ struct PtyOutput {
 struct PtyExit {
     id: String,
     code: Option<u32>,
+}
+
+/// 세션 로그 (1차 — 파일 append). PRD 12의 rusqlite WAL 스토어가 오면 그 뒤로 들어간다.
+fn log_dir() -> PathBuf {
+    let home = std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\".into());
+    Path::new(&home).join(".eqmux").join("logs")
+}
+
+fn log_file_name(id: &str) -> String {
+    let safe: String = id
+        .chars()
+        .map(|c| if c.is_alphanumeric() || matches!(c, '@' | '-' | '_' | '.') { c } else { '_' })
+        .collect();
+    format!("{safe}.log")
+}
+
+fn epoch_secs() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
 fn resolve_cwd(cwd: Option<String>) -> String {
@@ -108,13 +128,24 @@ fn pty_spawn(
     );
     drop(sessions);
 
-    // 출력 중계 스레드 — EOF에서 세션을 정리하고 종료 코드를 방송한다
+    // 출력 중계 스레드 — 로그 파일 append + EOF에서 세션 정리·종료 코드 방송
     std::thread::spawn(move || {
+        let mut log_file = {
+            let dir = log_dir();
+            let _ = create_dir_all(&dir);
+            OpenOptions::new().create(true).append(true).open(dir.join(log_file_name(&id))).ok()
+        };
+        if let Some(f) = log_file.as_mut() {
+            let _ = writeln!(f, "\n=== EQMUX session start · {} · epoch {} ===", id, epoch_secs());
+        }
         let mut buf = [0u8; 8192];
         loop {
             match reader.read(&mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
+                    if let Some(f) = log_file.as_mut() {
+                        let _ = f.write_all(&buf[..n]);
+                    }
                     let data = String::from_utf8_lossy(&buf[..n]).into_owned();
                     let _ = app.emit("pty-output", PtyOutput { id: id.clone(), data });
                 }
@@ -129,6 +160,9 @@ fn pty_spawn(
                 .and_then(|mut s| s.child.wait().ok())
                 .map(|st| st.exit_code())
         };
+        if let Some(f) = log_file.as_mut() {
+            let _ = writeln!(f, "\n=== session exit · {} · code {:?} · epoch {} ===", id, code, epoch_secs());
+        }
         let _ = app.emit("pty-exit", PtyExit { id: id.clone(), code });
     });
 
@@ -173,6 +207,22 @@ fn pty_list(state: State<PtyState>) -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
+fn session_log_dir() -> String {
+    log_dir().to_string_lossy().into_owned()
+}
+
+#[tauri::command]
+fn open_log_dir() -> Result<(), String> {
+    let dir = log_dir();
+    create_dir_all(&dir).map_err(|e| e.to_string())?;
+    std::process::Command::new("explorer")
+        .arg(&dir)
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 fn app_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
@@ -186,7 +236,9 @@ pub fn run() {
             pty_write,
             pty_resize,
             pty_kill,
-            pty_list
+            pty_list,
+            session_log_dir,
+            open_log_dir
         ])
         .run(tauri::generate_context!())
         .expect("EQMUX 실행 실패");

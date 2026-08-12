@@ -930,6 +930,14 @@
   border-radius: 50%;
   background: var(--eq-green);
 }
+.logsp-session-logs {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  margin-top: 8px;
+}
 
 /* ── 포트 패널 (rBkF0) ── */
 .portsp {

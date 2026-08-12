@@ -1,6 +1,8 @@
 // 서버 로그 패널 (KcL3j) — 레벨 필터 + 검색 + 실시간 스트림 목.
+// 저장: 브라우저에선 표시 중인 로그를 파일로 내보내고, Tauri에선 세션 로그 폴더를 연다.
 import { createMemo, createSignal, For, Show } from "solid-js";
 import { LOG_METRICS, SERVER_LOGS } from "../backend/mock";
+import { isTauri, openLogDir } from "../backend/pty";
 
 const LEVELS = ["전체", "INFO", "WARN", "ERROR"] as const;
 
@@ -17,6 +19,19 @@ export function LogsPanelTab() {
     }),
   );
 
+  // 표시 중인 로그를 텍스트 파일로 내보내기 (필터 반영)
+  const exportLogs = () => {
+    const text = logs()
+      .map((l) => `${l.time} [${l.level.toUpperCase()}] [${l.type}] ${l.message}`)
+      .join("\n");
+    const url = URL.createObjectURL(new Blob([text + "\n"], { type: "text/plain" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "eqmux-server-logs.txt";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div class="logsp">
       <div class="panel-head-row">
@@ -31,6 +46,9 @@ export function LogsPanelTab() {
         >
           <For each={LEVELS}>{(l) => <option value={l}>{l}</option>}</For>
         </select>
+        <button class="btn ghost" style={{ padding: "2px 7px" }} title="표시 중인 로그를 파일로 저장" onClick={exportLogs}>
+          ⤓ 저장
+        </button>
       </div>
 
       <input
@@ -82,6 +100,20 @@ export function LogsPanelTab() {
         </span>
         <span class="mono muted">{LOG_METRICS.rate}</span>
       </div>
+
+      <Show when={isTauri()}>
+        <div class="card inset logsp-session-logs">
+          <div>
+            <div style={{ "font-weight": 700, "font-size": "11px" }}>세션 로그 (PTY 원문)</div>
+            <div class="mono muted" style={{ "font-size": "10px" }}>
+              ~/.eqmux/logs/&lt;세션&gt;.log · 실시간 append
+            </div>
+          </div>
+          <button class="btn" onClick={openLogDir}>
+            폴더 열기
+          </button>
+        </div>
+      </Show>
     </div>
   );
 }

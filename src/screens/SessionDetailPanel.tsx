@@ -2,6 +2,7 @@
 // 승인·거부는 여기서 제공하지 않는다 (G7) — 액션은 점프·재개·중지 3종 + 역할 변경.
 import { createEffect, createSignal, For, on, Show } from "solid-js";
 import { backend } from "../backend/mock";
+import { isTauri, openLogDir } from "../backend/pty";
 import { jumpToSession } from "../state";
 import { Eyebrow, KV, StatusLabel } from "../components/ui";
 import type { Session } from "../types";
@@ -92,6 +93,16 @@ export function SessionDetailPanel(props: { session: Session }) {
           <KV k="PID · 셸" v={`${s().pid} · ${s().shell}`} />
         </Show>
         <KV k="cwd" v={s().cwd} />
+        <Show when={isTauri()}>
+          <KV
+            k="세션 로그"
+            v={
+              <button class="setting-v" title="로그 폴더 열기" onClick={openLogDir}>
+                ~/.eqmux/logs/{s().id}.log ↗
+              </button>
+            }
+          />
+        </Show>
       </div>
 
       <div style={{ "margin-top": "10px" }}>
