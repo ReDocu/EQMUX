@@ -15,8 +15,19 @@ export function Dashboard() {
     tick();
     return backend.listSessions();
   };
-  const workspaces = () => backend.listWorkspaces().filter((w) => w.open);
-  const missions = () => backend.listMissions();
+  // 등록된 워크스페이스는 전부 행으로 나열한다 (FR-G-04) — 열린 것 먼저, 닫힌 것은 접힌 행 (FR-G-08)
+  const workspaces = () => {
+    tick();
+    return backend
+      .listWorkspaces()
+      .slice()
+      .sort((a, b) => Number(b.open) - Number(a.open));
+  };
+  const openCount = () => workspaces().filter((w) => w.open).length;
+  const missions = () => {
+    tick();
+    return backend.listMissions();
+  };
 
   // 이벤트 피드 실연결 (FR-G-40) — 원천은 event 테이블. 상태 방송에 붙어 갱신하며 폴링하지 않는다.
   const [realFeed, setRealFeed] = createSignal<FeedEvent[]>([]);
@@ -69,7 +80,7 @@ export function Dashboard() {
         <div>
           <h1>관제 대시보드</h1>
           <div class="sub">
-            {workspaces().length} 워크스페이스 · {sessions().length} 세션 · 정렬: 주의 필요 순
+            등록 {workspaces().length} · 열림 {openCount()} · {sessions().length} 세션 · 정렬: 주의 필요 순
           </div>
         </div>
         <span class="badge">폴링 없음 · 상태 스트림 구독 (FR-G-09)</span>
@@ -81,7 +92,7 @@ export function Dashboard() {
             <div class="card tile">
               <div class="eyebrow">총 세션</div>
               <div class="tile-v mono">{sessions().length}</div>
-              <div class="muted">{workspaces().length}개 워크스페이스</div>
+              <div class="muted">워크스페이스 {openCount()}개 열림</div>
             </div>
             <div class="card tile">
               <div class="eyebrow">BUSY</div>
@@ -109,7 +120,14 @@ export function Dashboard() {
                   <span class="mono muted">
                     {ws.branch ?? "—"} · {ws.path}
                   </span>
+                  <Show when={!ws.open}>
+                    <span class="badge" style={{ "margin-left": "auto" }}>
+                      닫힘
+                    </span>
+                  </Show>
                 </div>
+                {/* 닫힌 워크스페이스는 접힌 행 — 세션이 없으므로 상태 셀도 없다 (FR-G-08) */}
+                <Show when={ws.open}>
                 <div class="ws-cells">
                   <For each={wsSessions(ws.id)}>
                     {(s) => (
@@ -143,9 +161,15 @@ export function Dashboard() {
                     )}
                   </For>
                 </div>
+                </Show>
               </div>
             )}
           </For>
+          <Show when={workspaces().length === 0}>
+            <div class="card" style={{ padding: "16px" }}>
+              <div class="muted">등록된 워크스페이스가 없습니다 — 상단 + 또는 워크스페이스 연결에서 git 저장소를 등록하세요</div>
+            </div>
+          </Show>
         </div>
 
         {/* 주의 & 이벤트 (FR-G-40~42) */}

@@ -48,8 +48,10 @@ export function ControlCenter(props: { workspace: Workspace }) {
       .filter((s) => s.workspaceId === props.workspace.id)
       .sort((a, b) => a.slot - b.slot);
   };
-  const missions = () =>
-    backend.listMissions().filter((m) => m.workspaceId === props.workspace.id);
+  const missions = () => {
+    tick();
+    return backend.listMissions().filter((m) => m.workspaceId === props.workspace.id);
+  };
   const usage = () => backend.storeUsage();
   const persona = (id: string) => backend.listPersonas().find((p) => p.id === id);
   const job = (id: string) => backend.listJobs().find((j) => j.id === id);
