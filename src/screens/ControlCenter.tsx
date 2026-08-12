@@ -15,6 +15,7 @@ import {
   tick,
 } from "../state";
 import { Eyebrow, PersonaDot, StatusLabel } from "../components/ui";
+import { killPty } from "../backend/pty";
 import { TerminalPane } from "../components/TerminalPane";
 import { SessionDetailPanel } from "./SessionDetailPanel";
 import { TranscriptPane } from "./TranscriptPane";
@@ -70,6 +71,14 @@ export function ControlCenter(props: { workspace: Workspace }) {
   const personaName = (id: string) => persona(id)?.name ?? "기본 터미널";
   const jobName = (id: string) => job(id)?.name ?? "셸";
 
+  // 슬롯 단위 터미널 추가/제거 — 페르소나 연결 없이 동작한다 (캐스팅과 독립)
+  const addTerminal = () => backend.addTerminal(props.workspace.id);
+  const removeTerminal = (s: Session) => {
+    killPty(s.id);
+    if (zoomed() === s.id) setZoomed(undefined);
+    backend.removeTerminal(s.id);
+  };
+
   const gridSessions = () => {
     const z = zoomed();
     if (z) {
@@ -101,7 +110,19 @@ export function ControlCenter(props: { workspace: Workspace }) {
               <span>
                 SLOT {s.slot} · {personaName(s.personaId)}
               </span>
-              <StatusLabel session={s} />
+              <span style={{ display: "inline-flex", "align-items": "center", gap: "8px" }}>
+                <StatusLabel session={s} />
+                <span
+                  class="pane-close"
+                  title="슬롯에서 터미널 제거"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    removeTerminal(s);
+                  }}
+                >
+                  ✕
+                </span>
+              </span>
             </button>
             <TerminalPane sessionId={s.id} cwd={s.cwd} mockLines={mockLines(s, persona(s.personaId)?.name ?? "?")} />
           </div>
@@ -109,11 +130,9 @@ export function ControlCenter(props: { workspace: Workspace }) {
       </For>
       <For each={Array.from({ length: zoomed() ? 0 : Math.max(0, 4 - sessions().length) })}>
         {() => (
-          <div class="terminal-pane pane-empty">
-            <div class="terminal-body mono muted" style={{ display: "flex", "align-items": "center", "justify-content": "center" }}>
-              빈 슬롯
-            </div>
-          </div>
+          <button class="terminal-pane pane-empty pane-add mono" title="빈 슬롯에 터미널 추가" onClick={addTerminal}>
+            + 터미널 추가
+          </button>
         )}
       </For>
     </div>
@@ -186,8 +205,8 @@ export function ControlCenter(props: { workspace: Workspace }) {
             )}
           </For>
           <Show when={sessions().length < 4}>
-            <button class="card session-card empty" onClick={() => setView({ kind: "casting", wsId: props.workspace.id })}>
-              <span class="muted">+ 캐스팅 — 빈 슬롯에 직무·페르소나 배정</span>
+            <button class="card session-card empty" onClick={addTerminal}>
+              <span class="muted">+ 터미널 추가 — 역할 없이 셸 세션 시작</span>
             </button>
           </Show>
 

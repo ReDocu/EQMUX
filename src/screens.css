@@ -491,6 +491,29 @@
   overflow: hidden;
 }
 
+/* 슬롯 단위 터미널 추가/제거 */
+.pane-close {
+  color: var(--eq-muted);
+  padding: 0 2px;
+  cursor: pointer;
+  font-size: 11px;
+}
+.pane-close:hover {
+  color: var(--eq-red);
+}
+.pane-add {
+  align-items: center;
+  justify-content: center;
+  color: var(--eq-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.pane-add:hover {
+  color: var(--eq-blue);
+  border-color: var(--eq-blue-mid);
+  border-style: solid;
+}
+
 /* xterm.js 실터미널 호스트 — 페인·전체 화면 크기는 ResizeObserver + FitAddon이 따라간다 */
 .xterm-host {
   flex: 1;

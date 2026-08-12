@@ -32,6 +32,10 @@ export interface Backend {
   applyCasting(wsId: string, slots: { personaId: string; jobId: string }[]): void;
   /** 기본 터미널 (S9u2S) — 역할 없는 셸 세션을 빈 슬롯에 시작한다. 이미 있으면 재사용. */
   startDefaultTerminal(wsId: string): void;
+  /** 슬롯에 터미널 추가 — 페르소나·직무 없이 빈 슬롯 하나를 셸 세션으로 채운다 */
+  addTerminal(wsId: string): void;
+  /** 슬롯에서 터미널 제거 — 세션을 삭제하고 임무 배정도 해제한다 */
+  removeTerminal(id: string): void;
   createMission(wsId: string, name: string, goal: string, branch?: string): void;
   cycleMissionStatus(id: string): void;
   toggleAssign(missionId: string, sessionId: string): void;
@@ -485,8 +489,6 @@ export class MockBackend implements Backend {
   }
 
   startDefaultTerminal(wsId: string) {
-    const ws = WORKSPACES.find((x) => x.id === wsId);
-    if (!ws) return;
     const existing = SESSIONS.find((x) => x.workspaceId === wsId && x.personaId === "");
     if (existing) {
       if (existing.status === "dead") {
@@ -499,6 +501,12 @@ export class MockBackend implements Backend {
       }
       return;
     }
+    this.addTerminal(wsId);
+  }
+
+  addTerminal(wsId: string) {
+    const ws = WORKSPACES.find((x) => x.id === wsId);
+    if (!ws) return;
     const used = new Set(SESSIONS.filter((x) => x.workspaceId === wsId).map((x) => x.slot));
     const slot = ([1, 2, 3, 4] as const).find((n) => !used.has(n));
     if (!slot) {
@@ -515,7 +523,20 @@ export class MockBackend implements Backend {
         lastOutput: "기본 터미널",
       }),
     );
-    this.logEvent("app", `기본 터미널 세션 시작 · ${ws.name}`);
+    this.logEvent("app", `터미널 추가 · ${ws.name} SLOT ${slot}`);
+    this.broadcast();
+  }
+
+  removeTerminal(id: string) {
+    const i = SESSIONS.findIndex((x) => x.id === id);
+    if (i < 0) return;
+    const sess = SESSIONS[i];
+    SESSIONS.splice(i, 1);
+    for (const m of MISSIONS) {
+      const j = m.assigned.indexOf(id);
+      if (j >= 0) m.assigned.splice(j, 1);
+    }
+    this.logEvent("state", `터미널 제거 · SLOT ${sess.slot}`, id);
     this.broadcast();
   }
 
