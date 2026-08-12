@@ -15,6 +15,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 mod agent;
+mod library;
 mod missions;
 mod roles;
 pub(crate) mod store;
@@ -750,6 +751,25 @@ fn mission_set_status(ws_path: String, id: String, status: String) -> Result<(),
     missions::set_status(&ws_path, &id, &status)
 }
 
+// ── 역할 라이브러리 (PRD E §4.3) — 전역 앱데이터 + 워크스페이스 오버라이드 2단 ──
+
+/// 라이브러리 목록 (FR-E-20·21) — ws_path를 주면 오버라이드가 병합된다
+#[tauri::command]
+fn library_list(store_state: State<StoreState>, ws_path: Option<String>) -> library::LibraryData {
+    library::list(&store_state.0.root(), ws_path.as_deref())
+}
+
+/// 페르소나 저장 (FR-E-28) — 전역 계층에 쓴다
+#[tauri::command]
+fn library_save_persona(store_state: State<StoreState>, persona: library::PersonaInfo) -> Result<(), String> {
+    library::save_persona(&store_state.0.root(), &persona)
+}
+
+#[tauri::command]
+fn library_delete_persona(store_state: State<StoreState>, id: String) -> Result<(), String> {
+    library::delete_persona(&store_state.0.root(), &id)
+}
+
 /// 배정·해제 (FR-E-53·54) — 역할 파일의 임무 블록을 삽입·교체·삭제한다 (멱등)
 #[tauri::command]
 fn mission_assign(ws_path: String, session: String, mission_id: Option<String>) -> Result<(), String> {
@@ -941,6 +961,7 @@ pub fn run() {
         .setup(|app| {
             // 스토어 루트 = 앱 데이터 (FR-C-20a — repo 안에 바이너리를 두지 않는다)
             let root = app.path().app_data_dir()?;
+            library::seed(&root); // 역할 라이브러리 시드 (FR-E-27) — 디렉터리가 없을 때만
             app.manage(StoreState(Store::new(root)));
             // 에이전트 런타임 (PRD D) — 세션 레지스트리 watch 시작 (FR-D-11)
             app.manage(agent::AgentRt::default());
@@ -961,6 +982,9 @@ pub fn run() {
             team_save,
             role_save,
             role_remove,
+            library_list,
+            library_save_persona,
+            library_delete_persona,
             mission_list,
             mission_create,
             mission_set_status,

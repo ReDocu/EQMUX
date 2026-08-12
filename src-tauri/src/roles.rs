@@ -7,12 +7,12 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 const MISSION_START: &str = "<!-- EQMUX:MISSION ";
 const MISSION_END: &str = "<!-- /EQMUX:MISSION -->";
 
-#[derive(Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct RolePermissions {
     pub write: bool,
@@ -105,7 +105,7 @@ pub fn ensure_gitignore(ws_path: &str) -> Result<(), String> {
 }
 
 /// 파일 → (frontmatter 줄들, 본문). frontmatter가 없으면 전부 본문 (FR-E-72 부분 파싱).
-fn split_frontmatter(text: &str) -> (Vec<String>, String) {
+pub(crate) fn split_frontmatter(text: &str) -> (Vec<String>, String) {
     let normalized = text.replace("\r\n", "\n");
     if let Some(rest) = normalized.strip_prefix("---\n") {
         if let Some(end) = rest.find("\n---\n") {

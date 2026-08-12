@@ -1,12 +1,16 @@
 // 역할 라이브러리 (화면 #7) — 직무 / 페르소나 목록 · 편집.
 // 직무=책임, 페르소나=판단 성향 (P1 분리). 전역 라이브러리 + 워크스페이스 오버라이드 (P2).
+// Tauri에서는 앱데이터 jobs/*.md·personas/*.md 실파일이 원본이다 (FR-E-20~23).
 import { createSignal, For, Show } from "solid-js";
+import { addPersonaFile, deletePersonaFile, savePersonaFile } from "../backend/library";
 import { backend } from "../backend/mock";
+import { isTauri } from "../backend/pty";
 import { tick } from "../state";
 import { Eyebrow, KV } from "../components/ui";
 import type { Persona } from "../types";
 
 const COLORS: Persona["color"][] = ["blue", "purple", "green", "amber"];
+const HINT_BUDGET = 10; // P3 — 페르소나 본문 5~10줄, 초과 시 경고 (FR-E-24)
 
 export function RoleLibrary() {
   const jobs = () => backend.listJobs();
@@ -32,8 +36,18 @@ export function RoleLibrary() {
   const save = () => {
     const p = sel();
     if (!p) return;
-    backend.savePersona({ ...p, name: draftName(), hint: draftHint(), color: draftColor() });
+    void savePersonaFile({ ...p, name: draftName(), hint: draftHint(), color: draftColor() });
     setSaved(true);
+  };
+
+  const hintLines = () => draftHint().split("\n").filter((l) => l.trim()).length;
+  // 캐스팅된 페르소나는 삭제를 막는다 — 역할 파일 합성이 이 항목을 참조한다
+  const inUse = () => backend.listSessions().some((s) => s.personaId === selId());
+  const remove = () => {
+    const id = selId();
+    if (!id || inUse()) return;
+    void deletePersonaFile(id);
+    setSelId(undefined);
   };
 
   return (
@@ -41,9 +55,12 @@ export function RoleLibrary() {
       <div class="screen-head">
         <div>
           <h1>역할 라이브러리</h1>
-          <div class="sub">직무=책임 · 페르소나=판단 성향 — 전역 라이브러리, 워크스페이스 오버라이드 (P2)</div>
+          <div class="sub">
+            직무=책임 · 페르소나=판단 성향 — {isTauri() ? "앱데이터 jobs/·personas/ 실파일" : "전역 라이브러리 (목)"} ·
+            워크스페이스 오버라이드는 .eqmux/jobs·personas (P2)
+          </div>
         </div>
-        <button class="btn primary" onClick={() => backend.addPersona()}>
+        <button class="btn primary" onClick={() => void addPersonaFile()}>
           + 페르소나 추가
         </button>
       </div>
@@ -104,9 +121,14 @@ export function RoleLibrary() {
               </label>
               <input value={draftName()} onInput={(e) => setDraftName(e.currentTarget.value)} />
               <label class="muted" style={{ "font-size": "11px" }}>
-                판단 성향 — 프롬프트 예산 5~10줄 (P3)
+                판단 성향 — 말투·성격 묘사가 아니라 판단 우선순위 · 강조점 · 금기 (FR-E-25) · 예산 5~10줄 (P3)
               </label>
-              <textarea rows={3} value={draftHint()} onInput={(e) => setDraftHint(e.currentTarget.value)} />
+              <textarea rows={4} value={draftHint()} onInput={(e) => setDraftHint(e.currentTarget.value)} />
+              <Show when={hintLines() > HINT_BUDGET}>
+                <div class="mono st-waiting" style={{ "font-size": "11px" }}>
+                  예산 초과 — {hintLines()}줄 / 권장 {HINT_BUDGET}줄. 성향 묘사는 토큰만 먹고 품질에 기여하지 않습니다 (FR-E-24)
+                </div>
+              </Show>
               <label class="muted" style={{ "font-size": "11px" }}>
                 색 — 캐릭터성은 UI에서만 표현
               </label>
@@ -129,6 +151,14 @@ export function RoleLibrary() {
               </div>
               <button class="btn primary" onClick={save}>
                 {saved() ? "저장됨 ✓" : "저장"}
+              </button>
+              <button
+                class="btn danger"
+                disabled={inUse()}
+                title={inUse() ? "캐스팅된 페르소나는 삭제할 수 없습니다" : "personas/<id>.md 파일 삭제"}
+                onClick={remove}
+              >
+                삭제 {inUse() ? "(캐스팅 중)" : ""}
               </button>
             </div>
           </Show>

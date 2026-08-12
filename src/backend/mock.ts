@@ -71,6 +71,8 @@ export interface Backend {
   repairWorkspace(id: string): void;
   /** 실물 레지스트리(workspaces.json)로 목록을 교체 — Tauri 부트스트랩 (PRD E) */
   hydrateWorkspaces(list: Workspace[]): void;
+  /** 라이브러리 실파일(jobs/·personas/)로 목 배열을 교체 (FR-E-20~23) — Tauri에서만 */
+  hydrateLibrary(jobs: Job[], personas: Persona[]): void;
   /** 등록 해제 (FR-E-09) — 목록에서만 지운다 */
   removeWorkspace(id: string): void;
   savePersona(p: Persona): void;
@@ -797,6 +799,13 @@ export class MockBackend implements Backend {
     ws.branch = "main";
     ws.branchNote = "main · 경로 재지정됨";
     this.logEvent("app", `경로 재지정 · ${ws.name}`);
+    this.broadcast();
+  }
+
+  hydrateLibrary(jobs: Job[], personas: Persona[]) {
+    // 배열 참조를 바꾸지 않고 내용만 교체 — 화면·합성이 같은 배열을 계속 본다
+    JOBS.splice(0, JOBS.length, ...jobs);
+    PERSONAS.splice(0, PERSONAS.length, ...personas);
     this.broadcast();
   }
 
