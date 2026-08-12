@@ -91,6 +91,90 @@ pub fn inspect(entry: &WsEntry) -> WsInfo {
     WsInfo { entry: e, exists, is_repo: repo }
 }
 
+// ── git 패널 실데이터 (PRD H) — 읽기 전용 관측. 쓰기 작업(pull·push·commit)은 제공하지 않는다 ──
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitCommitInfo {
+    pub hash: String,
+    pub message: String,
+    pub author: String,
+    pub when: String,
+    pub refs: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitOverview {
+    pub branch: String,
+    pub ahead: u32,
+    pub behind: u32,
+    pub changed: u32,
+    pub added: u32,
+    pub modified: u32,
+    pub deleted: u32,
+    pub commits: Vec<GitCommitInfo>,
+}
+
+/// 저장소 개요 실측 — 브랜치·업스트림 격차·작업트리 요약·최근 커밋.
+/// 업스트림이 없으면 ahead/behind는 0으로 둔다 (오류가 아니다).
+pub fn overview(path: &str) -> Result<GitOverview, String> {
+    if !is_repo(path) {
+        return Err("git 저장소가 아닙니다".into());
+    }
+    let branch = git(&["branch", "--show-current"], path)
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            git(&["rev-parse", "--short", "HEAD"], path)
+                .ok()
+                .map(|h| format!("(분리됨 {h})"))
+        })
+        .unwrap_or_else(|| "(빈 저장소)".into());
+    let (behind, ahead) = git(&["rev-list", "--left-right", "--count", "@{upstream}...HEAD"], path)
+        .ok()
+        .and_then(|s| {
+            let mut it = s.split_whitespace();
+            Some((it.next()?.parse().ok()?, it.next()?.parse().ok()?))
+        })
+        .unwrap_or((0, 0));
+    let mut added = 0u32;
+    let mut modified = 0u32;
+    let mut deleted = 0u32;
+    let mut changed = 0u32;
+    if let Ok(status) = git(&["status", "--porcelain"], path) {
+        for line in status.lines() {
+            let mut chars = line.chars();
+            let (Some(x), Some(y)) = (chars.next(), chars.next()) else { continue };
+            changed += 1;
+            if x == '?' || x == 'A' {
+                added += 1;
+            } else if x == 'D' || y == 'D' {
+                deleted += 1;
+            } else {
+                modified += 1;
+            }
+        }
+    }
+    let commits = git(&["log", "-n", "8", "--pretty=format:%h\t%s\t%an\t%cr\t%D"], path)
+        .map(|out| {
+            out.lines()
+                .map(|l| {
+                    let mut p = l.splitn(5, '\t');
+                    GitCommitInfo {
+                        hash: p.next().unwrap_or_default().into(),
+                        message: p.next().unwrap_or_default().into(),
+                        author: p.next().unwrap_or_default().into(),
+                        when: p.next().unwrap_or_default().into(),
+                        refs: p.next().unwrap_or_default().into(),
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(GitOverview { branch, ahead, behind, changed, added, modified, deleted, commits })
+}
+
 /// 경로에서 안정적 id 파생 — 폴더명 + 경로 해시. 재시작해도 같은 id (스토어 DB 경로의 키).
 pub fn make_id(path: &str) -> String {
     let name = Path::new(path)
@@ -114,4 +198,31 @@ pub fn entry_name(path: &str) -> String {
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| "repo".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn overview_reads_a_real_repo() {
+        let dir = std::env::temp_dir().join(format!("eqmux-git-{}", now_ms()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.to_string_lossy().into_owned();
+        git(&["init"], &path).unwrap();
+        git(&["config", "user.email", "t@t"], &path).unwrap();
+        git(&["config", "user.name", "t"], &path).unwrap();
+        assert!(overview(&path).is_ok(), "빈 저장소도 오류가 아니어야 한다");
+        fs::write(dir.join("a.txt"), "hi").unwrap();
+        git(&["add", "."], &path).unwrap();
+        git(&["commit", "-m", "first"], &path).unwrap();
+        fs::write(dir.join("b.txt"), "new").unwrap(); // untracked → 추가로 집계
+        let o = overview(&path).unwrap();
+        assert!(!o.branch.is_empty());
+        assert_eq!((o.changed, o.added), (1, 1));
+        assert_eq!(o.commits.len(), 1);
+        assert_eq!(o.commits[0].message, "first");
+        assert_eq!((o.ahead, o.behind), (0, 0)); // 업스트림 없음 = 0/0
+        fs::remove_dir_all(&dir).ok();
+    }
 }

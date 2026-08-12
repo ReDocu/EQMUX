@@ -843,6 +843,14 @@ fn ws_git_init(path: String) -> Result<(), String> {
     workspace::git(&["init"], &path).map(|_| ())
 }
 
+/// git 패널 실데이터 (PRD H) — 읽기 전용. git CLI 호출이라 blocking 스레드에서 돈다.
+#[tauri::command]
+async fn git_overview(ws_path: String) -> Result<workspace::GitOverview, String> {
+    tauri::async_runtime::spawn_blocking(move || workspace::overview(&ws_path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 /// 원격 clone 후 등록용 (FR-E-02) — clone된 로컬 경로를 돌려준다
 #[tauri::command]
 async fn ws_clone(url: String, parent: String) -> Result<String, String> {
@@ -996,6 +1004,7 @@ pub fn run() {
             ws_registry,
             ws_register,
             ws_git_init,
+            git_overview,
             ws_clone,
             ws_unregister,
             ws_repath,
