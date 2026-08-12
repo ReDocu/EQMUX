@@ -7,6 +7,7 @@ export function DefaultTerminalSetup(props: { wsId: string }) {
 
   const openTerminal = () => {
     backend.openWorkspace(props.wsId);
+    backend.startDefaultTerminal(props.wsId); // 역할 없는 셸 세션 → 실제 PTY 부착
     setView({ kind: "workspace", id: props.wsId });
   };
 

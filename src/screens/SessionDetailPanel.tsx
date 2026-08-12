@@ -23,7 +23,7 @@ export function SessionDetailPanel(props: { session: Session }) {
       <div class="detail-head">
         <div>
           <div style={{ "font-size": "15px", "font-weight": 800 }}>
-            {persona()?.name} · {job()?.name}
+            {persona()?.name ?? "기본 터미널"} · {job()?.name ?? "셸"}
           </div>
           <div class="mono muted" style={{ "font-size": "11px" }}>
             <Show when={s().agentVersion} fallback="에이전트 미기동">

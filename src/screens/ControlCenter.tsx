@@ -9,7 +9,9 @@ import {
   selectedSession,
   setLayoutPickerOpen,
   setSelectedSession,
+  setTerminalFull,
   setView,
+  terminalFull,
   tick,
 } from "../state";
 import { Eyebrow, PersonaDot, StatusLabel } from "../components/ui";
@@ -18,8 +20,9 @@ import { SessionDetailPanel } from "./SessionDetailPanel";
 import { TranscriptPane } from "./TranscriptPane";
 import type { Session, Workspace } from "../types";
 
-// 세션 상태별 목 터미널 출력 — 2×2 그리드 시각 검증용
+// 세션 상태별 목 터미널 출력 — 2×2 그리드 시각 검증용 (Tauri 밖 폴백 전용)
 function mockLines(s: Session, personaName: string): string[] {
+  if (!s.personaId) return ["PowerShell 7.6.4", `PS ${s.cwd}> _`]; // 기본 터미널 (역할 없음)
   const base = [`PS ${s.cwd}> claude --resume`, `Claude Code ${s.agentVersion ?? "2.1.226"} · ${personaName}`];
   if (s.status === "waiting") return [...base, "⏸ 승인 대기 — " + (s.waitingFor ?? ""), "y/n 을 입력하세요"];
   if (s.status === "dead") return [...base, `프로세스 종료 · exit ${s.exitCode ?? "?"}`, s.resumable ? "재개 가능 — --resume" : "재개 불가"];
@@ -49,20 +52,23 @@ export function ControlCenter(props: { workspace: Workspace }) {
 
   const [centerTab, setCenterTab] = createSignal<"terminal" | "transcript">("terminal");
   const [zoomed, setZoomed] = createSignal<string | undefined>(undefined); // B1 — 줌 토글
-  const [full, setFull] = createSignal(false); // 터미널 전체 화면 (포커스 모드)
 
   // ESC = 전체 화면 종료 (줌 상태가 있으면 줌부터 해제)
   onMount(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && full()) {
+      if (e.key === "Escape" && terminalFull()) {
         e.preventDefault();
         if (zoomed()) setZoomed(undefined);
-        else setFull(false);
+        else setTerminalFull(false);
       }
     };
     window.addEventListener("keydown", onKey);
     onCleanup(() => window.removeEventListener("keydown", onKey));
   });
+
+  // 역할 없는 셸 세션(기본 터미널)은 페르소나·직무 대신 고정 라벨을 쓴다
+  const personaName = (id: string) => persona(id)?.name ?? "기본 터미널";
+  const jobName = (id: string) => job(id)?.name ?? "셸";
 
   const gridSessions = () => {
     const z = zoomed();
@@ -93,7 +99,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
               }}
             >
               <span>
-                SLOT {s.slot} · {persona(s.personaId)?.name}
+                SLOT {s.slot} · {personaName(s.personaId)}
               </span>
               <StatusLabel session={s} />
             </button>
@@ -165,10 +171,10 @@ export function ControlCenter(props: { workspace: Workspace }) {
                 onClick={() => setSelectedSession(s.id)}
               >
                 <div class="session-card-head">
-                  <PersonaDot name={persona(s.personaId)?.name ?? "?"} color={persona(s.personaId)?.color ?? "blue"} />
-                  <span style={{ "font-weight": 700 }}>{persona(s.personaId)?.name}</span>
-                  <span class="badge">{job(s.jobId)?.name}</span>
-                  <Show when={s.slot === 1}>
+                  <PersonaDot name={personaName(s.personaId)} color={persona(s.personaId)?.color ?? "blue"} />
+                  <span style={{ "font-weight": 700 }}>{personaName(s.personaId)}</span>
+                  <span class="badge">{jobName(s.jobId)}</span>
+                  <Show when={s.slot === 1 && !!persona(s.personaId)}>
                     <span class="badge blue">LEAD</span>
                   </Show>
                 </div>
@@ -237,7 +243,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
                 ▦ {PANE_LAYOUTS.find((l) => l.key === paneLayout())?.name}
               </button>
             </Show>
-            <button class="btn ghost" title="터미널 전체 화면 — ESC로 종료" onClick={() => setFull(true)}>
+            <button class="btn ghost" title="터미널 전체 화면 — ESC로 종료" onClick={() => setTerminalFull(true)}>
               ⛶ 전체 화면
             </button>
           </div>
@@ -282,8 +288,8 @@ export function ControlCenter(props: { workspace: Workspace }) {
         </div>
       </div>
 
-      {/* 터미널 전체 화면 (포커스 모드) — 카드·인스펙터·앱 바를 모두 덮는다 */}
-      <Show when={full()}>
+      {/* 터미널 전체 화면 (포커스 모드) — 앱 바(Nav)는 유지, 그 아래만 덮는다 */}
+      <Show when={terminalFull()}>
         <div class="terminal-fullscreen">
           <div class="tf-head">
             <span class="mono tf-title">
@@ -303,7 +309,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
               <span class="mono muted" style={{ "font-size": "10px" }}>
                 ESC 종료
               </span>
-              <button class="btn" onClick={() => setFull(false)}>
+              <button class="btn" onClick={() => setTerminalFull(false)}>
                 ✕ 전체 화면 종료
               </button>
             </div>

@@ -1572,10 +1572,10 @@
   white-space: pre;
 }
 
-/* ── 터미널 전체 화면 (포커스 모드) ── */
+/* ── 터미널 전체 화면 (포커스 모드) — 앱 바(38px)는 가리지 않는다 ── */
 .terminal-fullscreen {
   position: fixed;
-  inset: 0;
+  inset: 38px 0 0 0;
   z-index: 40;
   background: var(--eq-bg);
   display: flex;

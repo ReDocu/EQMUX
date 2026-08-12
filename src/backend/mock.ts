@@ -30,6 +30,8 @@ export interface Backend {
   stopSession(id: string): void;
   restartSession(id: string): void;
   applyCasting(wsId: string, slots: { personaId: string; jobId: string }[]): void;
+  /** 기본 터미널 (S9u2S) — 역할 없는 셸 세션을 빈 슬롯에 시작한다. 이미 있으면 재사용. */
+  startDefaultTerminal(wsId: string): void;
   createMission(wsId: string, name: string, goal: string, branch?: string): void;
   cycleMissionStatus(id: string): void;
   toggleAssign(missionId: string, sessionId: string): void;
@@ -479,6 +481,41 @@ export class MockBackend implements Backend {
       }
     });
     this.logEvent("app", "캐스팅 적용 · team.json 저장");
+    this.broadcast();
+  }
+
+  startDefaultTerminal(wsId: string) {
+    const ws = WORKSPACES.find((x) => x.id === wsId);
+    if (!ws) return;
+    const existing = SESSIONS.find((x) => x.workspaceId === wsId && x.personaId === "");
+    if (existing) {
+      if (existing.status === "dead") {
+        existing.status = "shell";
+        existing.exitCode = undefined;
+        existing.sinceMs = 0;
+        existing.lastOutput = "기본 터미널 · 재시작";
+        this.logEvent("state", "기본 터미널 재시작", existing.id);
+        this.broadcast();
+      }
+      return;
+    }
+    const used = new Set(SESSIONS.filter((x) => x.workspaceId === wsId).map((x) => x.slot));
+    const slot = ([1, 2, 3, 4] as const).find((n) => !used.has(n));
+    if (!slot) {
+      this.logEvent("app", `세션 슬롯 가득 참 (4/4) · ${ws.name}`);
+      this.broadcast();
+      return;
+    }
+    SESSIONS.push(
+      s(`shell${slot}@${wsId}`, wsId, slot, "", "", {
+        status: "shell",
+        cwd: ws.path,
+        sinceMs: 0,
+        resumeReason: "일반 셸 · cwd 유지",
+        lastOutput: "기본 터미널",
+      }),
+    );
+    this.logEvent("app", `기본 터미널 세션 시작 · ${ws.name}`);
     this.broadcast();
   }
 

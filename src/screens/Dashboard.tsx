@@ -19,7 +19,8 @@ export function Dashboard() {
   const count = (st: string) => sessions().filter((s) => s.status === st).length;
   const subagents = () => sessions().reduce((n, s) => n + s.subagents, 0);
   const waitingSession = () => sessions().find((s) => s.status === "waiting");
-  const personaName = (s: Session) => backend.listPersonas().find((p) => p.id === s.personaId)?.name ?? s.personaId;
+  const personaName = (s: Session) =>
+    backend.listPersonas().find((p) => p.id === s.personaId)?.name ?? (s.personaId || "기본 터미널");
   const missionName = (s: Session) => missions().find((m) => m.id === s.missionId)?.name;
 
   // FR-G-07 — 주의 필요 순 정렬 (워크스페이스 행 안에서 셀 정렬)
