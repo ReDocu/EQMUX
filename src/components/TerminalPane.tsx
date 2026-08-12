@@ -260,11 +260,22 @@ export function TerminalPane(props: {
 
     const syncSize = () => {
       if (host.clientWidth < 40 || host.clientHeight < 24) return; // 0-크기 측정 방지
+      const prevCols = e.term.cols;
+      const prevRows = e.term.rows;
       e.fit.fit();
       if (isTauri() && e.initialized && (e.term.cols !== e.lastCols || e.term.rows !== e.lastRows)) {
         e.lastCols = e.term.cols;
         e.lastRows = e.term.rows;
         resizePty(props.sessionId, e.term.cols, e.term.rows);
+      }
+      // 크기가 실제로 바뀌었으면 전체 리페인트 — 리사이즈 직후 렌더 찌꺼기 방지
+      if (e.term.cols !== prevCols || e.term.rows !== prevRows) {
+        try {
+          e.term.refresh(0, Math.max(0, e.term.rows - 1));
+        } catch {
+          /* 렌더러 미준비 시 무시 */
+        }
+        e.term.scrollToBottom();
       }
     };
 
@@ -298,16 +309,20 @@ export function TerminalPane(props: {
 
     // 크기 추적 — 디바운스 + 실변경시에만 PTY resize (ConPTY는 resize마다 리페인트한다)
     let resizeTimer: ReturnType<typeof setTimeout> | undefined;
-    const ro = new ResizeObserver(() => {
+    const queueSync = () => {
       clearTimeout(resizeTimer);
       resizeTimer = setTimeout(syncSize, 120);
-    });
+    };
+    const ro = new ResizeObserver(queueSync);
     ro.observe(host);
+    // 창 최대화·모니터 이동 등 RO가 놓치는 경우의 백업 경로
+    window.addEventListener("resize", queueSync);
 
     onCleanup(() => {
       cancelled = true;
       clearTimeout(resizeTimer);
       ro.disconnect();
+      window.removeEventListener("resize", queueSync);
       host.removeEventListener("contextmenu", onContextMenu);
       window.removeEventListener("mousedown", closeMenu);
       // 터미널은 dispose하지 않는다 — REGISTRY가 세션 수명 동안 유지한다

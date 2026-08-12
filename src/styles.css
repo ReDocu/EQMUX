@@ -221,6 +221,7 @@ textarea:focus {
   min-width: 0;
   min-height: 0;
   overflow: auto;
+  overflow-x: hidden; /* 리사이즈 중 내부 픽셀 폭이 레이아웃을 밀어내도 가로 스크롤로 새지 않게 */
 }
 
 .appbar {

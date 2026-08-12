@@ -480,15 +480,17 @@
 /* 높이는 컨테이너가 정한다 — 페인이 내용(xterm 기본 24행)으로 그리드를 키우지 않는다 */
 .terminal-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  /* minmax(0,1fr) — xterm의 고정 픽셀 폭이 컬럼 최소폭을 부풀리지 못하게 한다 */
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   grid-auto-rows: minmax(0, 1fr);
   gap: 8px;
   flex: 1;
   min-height: 0;
+  min-width: 0;
   overflow: hidden;
 }
 .terminal-grid.zoomed {
-  grid-template-columns: 1fr;
+  grid-template-columns: minmax(0, 1fr);
 }
 .terminal-pane {
   background: var(--eq-terminal);
@@ -666,12 +668,14 @@
 .xterm-host {
   flex: 1;
   min-height: 60px;
+  min-width: 0;
   padding: 4px 2px 4px 8px;
   overflow: hidden;
   background: var(--eq-terminal);
 }
 .xterm-host .xterm {
   height: 100%;
+  max-width: 100%;
 }
 .xterm-host.drop-target {
   outline: 1px solid var(--eq-blue);
@@ -1733,19 +1737,19 @@
   grid-template-columns: repeat(2, 1fr);
 }
 .terminal-grid.layout-stack-v {
-  grid-template-columns: 1fr;
+  grid-template-columns: minmax(0, 1fr);
 }
 .terminal-grid.layout-row-h {
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 .terminal-grid.layout-main-right {
-  grid-template-columns: 2fr 1fr;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
 }
 .terminal-grid.layout-main-right .terminal-pane:first-child {
   grid-row: 1 / span 3;
 }
 .terminal-grid.layout-main-bottom {
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   grid-template-rows: minmax(0, 2fr) minmax(0, 1fr);
 }
 .terminal-grid.layout-main-bottom .terminal-pane:first-child {
