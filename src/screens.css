@@ -1291,6 +1291,13 @@
   padding: 7px 10px;
   font-size: 11px;
 }
+.browserp-frame {
+  flex: 1;
+  min-height: 200px;
+  width: 100%;
+  border: 1px solid var(--eq-line);
+  background: #fff; /* 로컬 앱 대부분이 밝은 배경을 전제한다 */
+}
 .browserp-view {
   flex: 1;
   min-height: 200px;

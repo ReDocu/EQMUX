@@ -3,6 +3,7 @@
 import { For, Show } from "solid-js";
 import { panelTab, setPanelOpen, setPanelTab } from "../state";
 import type { PanelTab } from "../state";
+import { BrowserPanelTab } from "./BrowserPanelTab";
 import { ConversationTab } from "./ConversationTab";
 import { GitPanelTab } from "./GitPanelTab";
 import { LogsPanelTab } from "./LogsPanelTab";
@@ -50,27 +51,7 @@ export function SidePanel() {
           <MissionExplorerTab />
         </Show>
         <Show when={panelTab() === "browser"}>
-          <div class="browserp">
-            <div class="panel-head-row">
-              <span class="panel-title">브라우저</span>
-              <span class="mono muted" style={{ "font-size": "10px" }}>
-                PREVIEW
-              </span>
-            </div>
-            <div class="card inset browserp-url mono">
-              <span class="muted">⟳</span>
-              <span>http://127.0.0.1:5173</span>
-            </div>
-            <div class="card inset browserp-view">
-              <div class="muted" style={{ "text-align": "center" }}>
-                <div style={{ "font-size": "22px", "margin-bottom": "8px" }}>◱</div>
-                세션 포트 미리보기
-                <div class="mono" style={{ "font-size": "10px", "margin-top": "6px" }}>
-                  vite · 노엘 · :5173 — M1에서 웹뷰로 연결됩니다
-                </div>
-              </div>
-            </div>
-          </div>
+          <BrowserPanelTab />
         </Show>
       </div>
     </div>
