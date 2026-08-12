@@ -124,6 +124,7 @@ function recipients(wsId: string, to: string) {
 
 function deliver(wsId: string, m: ConversationMessage): void {
   for (const s of recipients(wsId, m.to)) {
+    if (s.id === m.from) continue; // 에이전트 발신(@all)이 자기 자신에게 되돌아가지 않게
     if (s.status === "idle") {
       writePty(s.id, fmt(m)); // 유휴 = 프롬프트가 비어 있다 → 즉시 (M3)
     } else {

@@ -147,7 +147,7 @@ export function ConversationTab() {
               <div class="card conv-msg" classList={{ unread: m.unread }}>
                 <div style={{ display: "flex", "align-items": "center", gap: "6px" }}>
                   <span style={{ "font-weight": 700, "font-size": "12px" }}>
-                    {m.from} → {displayTo(m.to)}
+                    {m.from === "나" ? "나" : sessionName(m.from)} → {displayTo(m.to)}
                   </span>
                   <span class={`badge ${TYPE_COLOR[m.type]}`}>{m.type.toUpperCase()}</span>
                   <span class="mono muted" style={{ "margin-left": "auto", "font-size": "10px" }}>

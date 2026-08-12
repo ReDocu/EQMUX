@@ -14,12 +14,14 @@ use rusqlite::{params, Connection, OpenFlags};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
-mod agent;
+pub(crate) mod agent;
+mod cli;
 mod diff;
 mod fsx;
+pub(crate) mod ipc;
 mod job;
-mod library;
-mod messages;
+pub(crate) mod library;
+pub(crate) mod messages;
 mod missions;
 mod ports;
 mod roles;
@@ -257,11 +259,19 @@ fn pty_spawn(
 ) -> Result<(), String> {
     let dir = resolve_cwd(cwd);
     let label = shell.clone().unwrap_or_else(|| "pwsh".into());
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(|p| p.to_path_buf()));
     let builders = shell_candidates(shell)
         .into_iter()
         .map(|c| {
             let mut b = CommandBuilder::new(&c);
             b.cwd(&dir);
+            // 일반 셸에서도 `eqmux ping` 같은 CLI(PRD I)가 잡히게 PATH 앞에 앱 폴더를 붙인다
+            if let Some(d) = &exe_dir {
+                let path = std::env::var("PATH").unwrap_or_default();
+                b.env("PATH", format!("{};{}", d.display(), path));
+            }
             b
         })
         .collect();
@@ -420,9 +430,10 @@ fn events_query(
 
 // ── 메시지 버스 (PRD F) — 원장은 message 테이블, 전달은 프런트의 PTY 주입 (M3) ──
 
-/// M6 분당 발신 상한의 창 상태 — key = "워크스페이스/발신자"
+/// M6 분당 발신 상한의 창 상태 — key = "워크스페이스/발신자". 사람(커맨드)과
+/// 에이전트(파이프 IPC) 발신이 같은 창을 공유한다.
 #[derive(Default)]
-struct MsgRate(Mutex<HashMap<String, Vec<i64>>>);
+pub(crate) struct MsgRate(pub(crate) Mutex<HashMap<String, Vec<i64>>>);
 
 #[tauri::command]
 fn msg_list(
@@ -567,12 +578,30 @@ fn agent_spawn_inner(
         let p = roles::role_path(&cwd, &id);
         p.exists().then(|| p.to_string_lossy().into_owned())
     };
+    // 훅 2차 소스 주입 (D3 · FR-D-30 계열) — 사용자의 ~/.claude/settings.json과 repo의
+    // .claude/는 건드리지 않고, 앱데이터의 합성 설정을 --settings로만 얹는다 (FR-E-70과 일관)
+    if let Some(hs) = app
+        .path()
+        .app_data_dir()
+        .ok()
+        .map(|r| r.join("hook-settings.json"))
+        .filter(|p| p.exists())
+    {
+        args.push("--settings".into());
+        args.push(hs.to_string_lossy().into_owned());
+    }
+    let mut sys = String::new();
     if let Some(rf) = &role_file {
-        args.push("--append-system-prompt".into());
-        args.push(format!(
-            "당신의 역할 파일: {rf} — 시작 전에 읽고 따르십시오.\n팀 편성: .eqmux/team.md · 임무 정의: .eqmux/missions/"
+        sys.push_str(&format!(
+            "당신의 역할 파일: {rf} — 시작 전에 읽고 따르십시오.\n팀 편성: .eqmux/team.md · 임무 정의: .eqmux/missions/\n"
         ));
     }
+    // 메시지 버스 표면 (PRD I) — 팀 대화·자기 보고의 공식 통로를 알려준다
+    sys.push_str(
+        "팀 메시지: eqmux send --type ask|handoff|report|review|escalate [--to @이름] \"내용\" · 진척 보고: eqmux report \"한 줄\"",
+    );
+    args.push("--append-system-prompt".into());
+    args.push(sys);
     let builders = agent::claude_builders(&args, &cwd, &id, role_file.as_deref());
     let gen = spawn_pty_session(
         app.clone(),
@@ -655,7 +684,7 @@ fn kill_pty_for_restart(app: &AppHandle, id: &str) {
     }
 }
 
-fn find_tracked(app: &AppHandle, id: &str) -> Option<(String, agent::Tracked)> {
+pub(crate) fn find_tracked(app: &AppHandle, id: &str) -> Option<(String, agent::Tracked)> {
     let rt: State<agent::AgentRt> = app.state();
     let map = rt.by_uuid.lock().ok()?;
     map.iter()
@@ -1235,6 +1264,29 @@ fn app_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
+/// 훅 합성 설정 (D3) — 세션별 `--settings`로만 주입한다. 사용자의 ~/.claude/settings.json과
+/// repo .claude/는 절대 수정하지 않는다 (FR-E-70). 커맨드는 PATH의 eqmux를 부른다
+/// (claude_builders가 앱 폴더를 PATH 앞에 붙인다). 매 기동 때 다시 써서 형식을 앱이 소유한다.
+fn write_hook_settings(root: &Path) {
+    let hook = |event: &str| {
+        serde_json::json!([{ "hooks": [{ "type": "command", "command": format!("eqmux _hook {event}"), "timeout": 5 }] }])
+    };
+    let v = serde_json::json!({
+        "hooks": {
+            "UserPromptSubmit": hook("UserPromptSubmit"),
+            "Stop": hook("Stop"),
+            "Notification": hook("Notification"),
+        }
+    });
+    let _ = std::fs::create_dir_all(root);
+    let _ = std::fs::write(root.join("hook-settings.json"), v.to_string());
+}
+
+/// CLI 모드 엔트리 (PRD I) — main.rs가 argv 첫 토큰으로 분기한다. GUI를 띄우지 않는다.
+pub fn cli_main() -> i32 {
+    cli::run(std::env::args().skip(1).collect())
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
@@ -1243,6 +1295,7 @@ pub fn run() {
             // 스토어 루트 = 앱 데이터 (FR-C-20a — repo 안에 바이너리를 두지 않는다)
             let root = app.path().app_data_dir()?;
             library::seed(&root); // 역할 라이브러리 시드 (FR-E-27) — 디렉터리가 없을 때만
+            write_hook_settings(&root); // --settings 주입용 훅 합성 파일 (D3)
             // 설정 로드 (PRD J) — 손상되면 Null로 시작 (프런트 기본값이 받친다)
             let settings = std::fs::read_to_string(root.join("settings.json"))
                 .ok()
@@ -1254,6 +1307,7 @@ pub fn run() {
             app.manage(agent::AgentRt::default());
             app.manage(MsgRate::default()); // 메시지 버스 발신 상한 (M6)
             agent::start_registry_watch(app.handle().clone());
+            ipc::start_server(app.handle().clone()); // eqmux CLI 파이프 (PRD I)
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

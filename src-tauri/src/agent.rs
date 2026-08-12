@@ -1,6 +1,7 @@
 // 에이전트 런타임 (PRD D) — ClaudeCodeAdapter. Claude 고유 지식은 이 모듈에만 둔다 (FR-D-60).
 // 상태의 1차 소스는 세션 레지스트리 파일(§10.1)이며 출력 파싱을 하지 않는다 (FR-D-10).
-// 훅(2차 소스)·statusLine은 다음 단계 — PRD I의 `eqmux _hook` CLI와 함께 들어온다.
+// 2차 소스는 훅 — `eqmux _hook`(PRD I)이 파이프로 넣어주는 이벤트를 apply_hook이 받는다.
+// 두 소스 모두 Tracked diff → emit_state 한 경로로 나가므로 화면은 출처를 구분하지 않는다.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -114,6 +115,12 @@ pub fn claude_builders(
         // FR-D-04 환경변수 — 역할·팀 파일은 존재할 때만 (파일이 원본, FR-E-41)
         b.env("EQMUX_SESSION", app_session);
         b.env("EQMUX_TERMINAL", "eqmux");
+        // `eqmux` CLI(PRD I)가 PATH에서 잡히도록 앱 실행 파일 폴더를 앞에 붙인다 —
+        // 훅 커맨드·에이전트의 send/report가 절대 경로 없이 성립한다
+        if let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.to_path_buf())) {
+            let path = std::env::var("PATH").unwrap_or_default();
+            b.env("PATH", format!("{};{}", dir.display(), path));
+        }
         if let Some(rf) = role_file {
             b.env("EQMUX_ROLE_FILE", rf);
         }
@@ -219,6 +226,53 @@ fn maybe_notify(app: &AppHandle, evt: &AgentStateEvt) {
         body.push_str(&format!(" (그 사이 전이 {suppressed}건 합침)"));
     }
     let _ = app.notification().builder().title(title).body(body).show();
+}
+
+/// 훅 이벤트 → 상태 (D3 · FR-D-30 계열). 모르는 이벤트는 None — 조용히 무시한다.
+/// SubagentStop은 매핑하지 않는다 — 서브에이전트 종료 시점에 본체는 아직 busy다.
+pub fn hook_status(event: &str) -> Option<&'static str> {
+    match event {
+        "Stop" => Some("idle"),               // 턴 종료 — 인박스 flush(M3)의 즉시 신호
+        "UserPromptSubmit" => Some("busy"),   // 프롬프트 제출 = 작업 시작
+        "Notification" => Some("waiting"),    // 승인·응답 필요
+        _ => None,
+    }
+}
+
+/// 훅 2차 소스 — 레지스트리 스캔(1차)과 같은 diff 경로로 emit_state 한 곳에 합류한다.
+/// 레지스트리보다 빠르게 도착하므로 waiting 알림·인박스 전달의 지연이 줄어든다.
+pub fn apply_hook(app: &AppHandle, session: &str, event: &str, payload: &serde_json::Value) {
+    let Some(status) = hook_status(event) else { return };
+    let waiting = (status == "waiting")
+        .then(|| payload.get("message").and_then(|m| m.as_str()).map(str::to_string))
+        .flatten();
+    let rt: tauri::State<AgentRt> = app.state();
+    let mut evt = None;
+    if let Ok(mut map) = rt.by_uuid.lock() {
+        for (uuid, t) in map.iter_mut() {
+            if t.app_session != session || t.last_status == "dead" {
+                continue;
+            }
+            if t.last_status == status && t.last_waiting == waiting {
+                break; // 변화 없음 — 방송하지 않는다
+            }
+            t.last_status = status.into();
+            t.last_waiting = waiting.clone();
+            evt = Some(AgentStateEvt {
+                session: session.to_string(),
+                agent_session: uuid.clone(),
+                status: status.into(),
+                waiting_for: waiting,
+                resumable: resumable(&t.cwd, uuid),
+                version: None,
+                exit_code: None,
+            });
+            break;
+        }
+    }
+    if let Some(e) = evt {
+        emit_state(app, &e);
+    }
 }
 
 /// PTY EOF → dead 전이 (FR-D-50). 세대(gen)가 다르면 이미 재기동된 세션이므로 무시한다.
@@ -328,5 +382,17 @@ fn scan(app: &AppHandle) {
     }
     for evt in updates {
         emit_state(app, &evt);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn hook_events_map_to_states() {
+        assert_eq!(super::hook_status("Stop"), Some("idle"));
+        assert_eq!(super::hook_status("UserPromptSubmit"), Some("busy"));
+        assert_eq!(super::hook_status("Notification"), Some("waiting"));
+        assert_eq!(super::hook_status("SubagentStop"), None); // 본체는 아직 busy
+        assert_eq!(super::hook_status("PreToolUse"), None);
     }
 }
