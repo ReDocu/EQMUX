@@ -951,6 +951,30 @@ fn ws_touch(store_state: State<StoreState>, id: String) -> Result<(), String> {
     workspace::save(&root, &list)
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MemSample {
+    id: String,
+    bytes: u64,
+    peak_bytes: u64,
+}
+
+/// 세션 메모리 실측 (FR-C-09 · C11) — Job Object 계정 정보. 프런트가 10초 주기로 폴링하며
+/// 샘플은 event 테이블에 적재하지 않는다. 측정 실패 세션은 목록에서 빠진다 → "측정 불가".
+#[tauri::command]
+fn sessions_memory(state: State<PtyState>) -> Vec<MemSample> {
+    let Ok(sessions) = state.0.lock() else {
+        return Vec::new();
+    };
+    sessions
+        .iter()
+        .filter_map(|(id, s)| {
+            let (bytes, peak_bytes) = s.job.as_ref()?.memory_bytes()?;
+            Some(MemSample { id: id.clone(), bytes, peak_bytes })
+        })
+        .collect()
+}
+
 // ── 종료 시퀀스 (FR-C-60~63) — ①입력 차단(프런트) → ②flush → ③정상 종료 신호 → ④유예 후 트리 종료 ──
 
 /// ② 스크롤백·세션 매핑 flush — 2초 목표 (FR-C-63). true = 완료, false = 시한 초과(진행은 계속).
@@ -1108,6 +1132,7 @@ pub fn run() {
             clip_read_text,
             clip_write_text,
             clip_save_image,
+            sessions_memory,
             shutdown_flush,
             app_exit,
             session_log_dir,

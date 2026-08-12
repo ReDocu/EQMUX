@@ -50,6 +50,8 @@ export interface Backend {
     wsId: string,
     slots: { slot: number; persona: string; job: string; agentSessionId: string | null; resumable: boolean }[],
   ): void;
+  /** 세션 메모리 실측 반영 (FR-C-09) — 최신값·피크만 유지, 이벤트 적재 없음 */
+  applyMemory(samples: { id: string; mb: number; peakMb: number }[]): void;
   /** 실물 에이전트 상태 반영 (PRD D agent-state 이벤트) — Tauri에서만 호출된다 */
   applyAgentState(evt: {
     session: string;
@@ -646,6 +648,18 @@ export class MockBackend implements Backend {
       this.logEvent("app", `팀 복원 · ${ws.name} · ${added}개 슬롯 (team.json)`);
       this.broadcast();
     }
+  }
+
+  applyMemory(samples: { id: string; mb: number; peakMb: number }[]) {
+    let changed = false;
+    for (const m of samples) {
+      const sess = SESSIONS.find((x) => x.id === m.id);
+      if (!sess || (sess.memoryMb === m.mb && sess.memoryPeakMb === m.peakMb)) continue;
+      sess.memoryMb = m.mb;
+      sess.memoryPeakMb = m.peakMb;
+      changed = true;
+    }
+    if (changed) this.broadcast();
   }
 
   applyAgentState(evt: {

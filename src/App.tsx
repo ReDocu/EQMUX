@@ -3,6 +3,7 @@ import { AppBar } from "./components/AppBar";
 import { SidePanel } from "./components/SidePanel";
 import { ensureAgentListeners } from "./backend/agent";
 import { backend } from "./backend/mock";
+import { startMemorySampling } from "./backend/memory";
 import { isTauri } from "./backend/pty";
 import { performShutdown } from "./backend/shutdown";
 import { startTeamSync } from "./backend/team";
@@ -31,6 +32,8 @@ export function App() {
   onMount(() => void ensureAgentListeners());
   // 팀 편성 자동 저장 (PRD E) — 역할 슬롯 변경 → .eqmux/team.json + team.md
   onMount(() => startTeamSync());
+  // 세션 메모리 계측 (FR-C-09 · C11) — Job Object 10초 샘플링, 표시 전용
+  onMount(() => startMemorySampling());
 
   // 창 닫기 = 앱 완전 종료 (FR-C-60) — 실행 중 세션이 있으면 확인 다이얼로그 (FR-C-61),
   // 없으면 flush 시퀀스만 돌고 조용히 종료된다.

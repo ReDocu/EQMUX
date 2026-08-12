@@ -7,12 +7,16 @@
 mod win {
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
     use windows_sys::Win32::System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
-        SetInformationJobObject, TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectBasicProcessIdList,
+        JobObjectExtendedLimitInformation, QueryInformationJobObject, SetInformationJobObject,
+        TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
         JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     };
+    use windows_sys::Win32::System::ProcessStatus::{
+        K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
+    };
     use windows_sys::Win32::System::Threading::{
-        OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
+        OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
     };
 
     pub struct Job(HANDLE);
@@ -64,6 +68,60 @@ mod win {
                 TerminateJobObject(self.0, 1);
             }
         }
+
+        /// 프로세스 트리 메모리 (FR-C-09 · C11) — (현재 워킹셋 합, 잡 피크 커밋).
+        /// 실패는 None — 호출부가 "측정 불가"로 보고한다. 정확한 척하지 않는다.
+        pub fn memory_bytes(&self) -> Option<(u64, u64)> {
+            unsafe {
+                // 피크 — 잡 계정 정보
+                let mut ext: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+                if QueryInformationJobObject(
+                    self.0,
+                    JobObjectExtendedLimitInformation,
+                    &mut ext as *mut _ as *mut std::ffi::c_void,
+                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                    std::ptr::null_mut(),
+                ) == 0
+                {
+                    return None;
+                }
+                let peak = ext.PeakJobMemoryUsed as u64;
+
+                // 현재 — 잡 소속 pid 열거 후 워킹셋 합산 (자식 누락·경합 없음: 잡이 원본)
+                const CAP: usize = 128;
+                #[repr(C)]
+                struct PidList {
+                    assigned: u32,
+                    in_list: u32,
+                    pids: [usize; CAP],
+                }
+                let mut list = PidList { assigned: 0, in_list: 0, pids: [0; CAP] };
+                if QueryInformationJobObject(
+                    self.0,
+                    JobObjectBasicProcessIdList,
+                    &mut list as *mut _ as *mut std::ffi::c_void,
+                    std::mem::size_of::<PidList>() as u32,
+                    std::ptr::null_mut(),
+                ) == 0
+                {
+                    return None;
+                }
+                let mut total = 0u64;
+                for i in 0..(list.in_list as usize).min(CAP) {
+                    let ph = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, list.pids[i] as u32);
+                    if ph.is_null() {
+                        continue; // 이미 종료된 pid 등 — 합산에서 제외
+                    }
+                    let mut c: PROCESS_MEMORY_COUNTERS = std::mem::zeroed();
+                    c.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+                    if K32GetProcessMemoryInfo(ph, &mut c, c.cb) != 0 {
+                        total += c.WorkingSetSize as u64;
+                    }
+                    CloseHandle(ph);
+                }
+                Some((total, peak))
+            }
+        }
     }
 
     impl Drop for Job {
@@ -90,4 +148,7 @@ impl Job {
         false
     }
     pub fn terminate(&self) {}
+    pub fn memory_bytes(&self) -> Option<(u64, u64)> {
+        None
+    }
 }
