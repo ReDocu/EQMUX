@@ -73,10 +73,17 @@ export function ControlCenter(props: { workspace: Workspace }) {
 
   // 슬롯 단위 터미널 추가/제거 — 페르소나 연결 없이 동작한다 (캐스팅과 독립)
   const addTerminal = () => backend.addTerminal(props.workspace.id);
-  const removeTerminal = (s: Session) => {
+  const [removeTarget, setRemoveTarget] = createSignal<Session | undefined>(undefined);
+  const doRemove = (s: Session) => {
     killPty(s.id);
     if (zoomed() === s.id) setZoomed(undefined);
     backend.removeTerminal(s.id);
+    setRemoveTarget(undefined);
+  };
+  // ✕ 분기 — 기본 터미널은 즉시 제거, 역할 팀 세션은 편성·임무 영향이 있어 확인을 거친다
+  const removeTerminal = (s: Session) => {
+    if (!s.personaId) doRemove(s);
+    else setRemoveTarget(s);
   };
 
   const gridSessions = () => {
@@ -114,7 +121,8 @@ export function ControlCenter(props: { workspace: Workspace }) {
                 <StatusLabel session={s} />
                 <span
                   class="pane-close"
-                  title="슬롯에서 터미널 제거"
+                  classList={{ role: !!s.personaId }}
+                  title={s.personaId ? "역할 세션 제거 — 확인 필요" : "터미널 제거"}
                   onClick={(e) => {
                     e.stopPropagation();
                     removeTerminal(s);
@@ -336,6 +344,32 @@ export function ControlCenter(props: { workspace: Workspace }) {
           {paneGrid()}
           {statusBar()}
         </div>
+      </Show>
+
+      {/* 역할 세션 제거 확인 — 기본 터미널과 달리 편성 슬롯·임무 배정에 영향이 있다 */}
+      <Show when={removeTarget()}>
+        {(t) => (
+          <div class="overlay" onClick={() => setRemoveTarget(undefined)}>
+            <div class="dialog" style={{ width: "440px", padding: "16px 18px" }} onClick={(e) => e.stopPropagation()}>
+              <div style={{ "font-weight": 800, "font-size": "14px" }}>역할 세션 제거</div>
+              <div class="muted" style={{ "font-size": "12px", margin: "6px 0 10px" }}>
+                {personaName(t().personaId)} · {jobName(t().jobId)} — SLOT {t().slot}
+              </div>
+              <div class="card inset" style={{ padding: "8px 10px", "font-size": "11px", "line-height": 1.6 }}>
+                제거하면 팀 편성의 이 슬롯이 비워지고 임무 배정이 해제되며 PTY 프로세스가 종료됩니다.
+                변경은 다음 캐스팅 저장 때 .eqmux/team.json에 반영됩니다.
+              </div>
+              <div style={{ display: "flex", gap: "8px", "justify-content": "flex-end", "margin-top": "14px" }}>
+                <button class="btn" onClick={() => setRemoveTarget(undefined)}>
+                  취소
+                </button>
+                <button class="btn danger" onClick={() => doRemove(t())}>
+                  세션 제거
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </Show>
     </div>
   );

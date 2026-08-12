@@ -501,6 +501,26 @@
 .pane-close:hover {
   color: var(--eq-red);
 }
+.pane-close.role:hover {
+  color: var(--eq-amber); /* 역할 세션 ✕ — 즉시 삭제가 아니라 확인 다이얼로그 */
+}
+
+/* 역할 변경 (세션 상세) */
+.role-edit {
+  padding: 10px 12px;
+  margin-top: 10px;
+}
+.role-edit-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+.role-edit-row select {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  padding: 5px 6px;
+}
 .pane-add {
   align-items: center;
   justify-content: center;

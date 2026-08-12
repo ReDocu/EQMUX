@@ -36,6 +36,8 @@ export interface Backend {
   addTerminal(wsId: string): void;
   /** 슬롯에서 터미널 제거 — 세션을 삭제하고 임무 배정도 해제한다 */
   removeTerminal(id: string): void;
+  /** 역할 세션의 페르소나·직무 변경 — 직무가 바뀌면 권한 변경이므로 재시작 필요(E11′) */
+  updateSessionRole(id: string, personaId: string, jobId: string): void;
   createMission(wsId: string, name: string, goal: string, branch?: string): void;
   cycleMissionStatus(id: string): void;
   toggleAssign(missionId: string, sessionId: string): void;
@@ -537,6 +539,19 @@ export class MockBackend implements Backend {
       if (j >= 0) m.assigned.splice(j, 1);
     }
     this.logEvent("state", `터미널 제거 · SLOT ${sess.slot}`, id);
+    this.broadcast();
+  }
+
+  updateSessionRole(id: string, personaId: string, jobId: string) {
+    const sess = SESSIONS.find((x) => x.id === id);
+    if (!sess) return;
+    const permChanged = sess.jobId !== jobId;
+    sess.personaId = personaId;
+    sess.jobId = jobId;
+    if (permChanged) sess.restartNeeded = true;
+    const pName = PERSONAS.find((x) => x.id === personaId)?.name ?? personaId;
+    const jName = JOBS.find((x) => x.id === jobId)?.name ?? jobId;
+    this.logEvent("agent", `역할 변경 · ${pName} · ${jName}${permChanged ? " · 권한 변경 → 재시작 필요" : ""}`, id);
     this.broadcast();
   }
 

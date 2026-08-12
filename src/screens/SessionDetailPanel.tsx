@@ -1,8 +1,8 @@
 // 세션 상세 (lefeD) — 상태·실행 플래그 원문·메모리(C11)·재개 근거를 정직하게 표시한다.
-// 승인·거부는 여기서 제공하지 않는다 (G7) — 액션은 점프·재개·중지 3종.
-import { Show } from "solid-js";
+// 승인·거부는 여기서 제공하지 않는다 (G7) — 액션은 점프·재개·중지 3종 + 역할 변경.
+import { createEffect, createSignal, For, on, Show } from "solid-js";
 import { backend } from "../backend/mock";
-import { jumpToSession } from "../state";
+import { jumpToSession, setView } from "../state";
 import { Eyebrow, KV, StatusLabel } from "../components/ui";
 import type { Session } from "../types";
 import { flagsToString, translatePermissions } from "../types";
@@ -16,6 +16,21 @@ export function SessionDetailPanel(props: { session: Session }) {
     const j = job();
     return j ? flagsToString(translatePermissions(j.permissions), s().agentSessionId) : "—";
   };
+
+  // 역할 변경 (역할 팀 세션 전용) — 직무 변경은 권한 변경이므로 재시작 필요로 이어진다
+  const [pendPersona, setPendPersona] = createSignal(s().personaId);
+  const [pendJob, setPendJob] = createSignal(s().jobId);
+  createEffect(
+    on(
+      () => `${s().id}:${s().personaId}:${s().jobId}`,
+      () => {
+        setPendPersona(s().personaId);
+        setPendJob(s().jobId);
+      },
+    ),
+  );
+  const roleChanged = () => pendPersona() !== s().personaId || pendJob() !== s().jobId;
+  const applyRole = () => backend.updateSessionRole(s().id, pendPersona(), pendJob());
 
   return (
     <div class="detail">
@@ -73,6 +88,40 @@ export function SessionDetailPanel(props: { session: Session }) {
         <Eyebrow>실제 실행 플래그 (FR-D-41)</Eyebrow>
         <div class="card inset flags mono">{flags()}</div>
       </div>
+
+      {/* 역할 변경 — 역할 팀 세션에만 표시. 기본 터미널은 캐스팅으로 전환하는 진입점을 준다. */}
+      <Show
+        when={s().personaId}
+        fallback={
+          <div class="card inset role-edit">
+            <Eyebrow>역할 없는 세션</Eyebrow>
+            <div class="muted" style={{ "font-size": "11px", margin: "4px 0 8px" }}>
+              기본 터미널입니다. 역할·권한·임무가 필요하면 팀 캐스팅으로 전환하세요.
+            </div>
+            <button class="btn" onClick={() => setView({ kind: "casting", wsId: s().workspaceId })}>
+              역할 팀으로 전환 →
+            </button>
+          </div>
+        }
+      >
+        <div class="card inset role-edit">
+          <Eyebrow>역할 변경</Eyebrow>
+          <div class="role-edit-row">
+            <select value={pendPersona()} onChange={(e) => setPendPersona(e.currentTarget.value)}>
+              <For each={backend.listPersonas()}>{(p) => <option value={p.id}>{p.name}</option>}</For>
+            </select>
+            <select value={pendJob()} onChange={(e) => setPendJob(e.currentTarget.value)}>
+              <For each={backend.listJobs()}>{(j) => <option value={j.id}>{j.name}</option>}</For>
+            </select>
+            <button class="btn primary" disabled={!roleChanged()} onClick={applyRole}>
+              적용
+            </button>
+          </div>
+          <div class="muted" style={{ "font-size": "10px", "margin-top": "6px" }}>
+            직무를 바꾸면 실행 권한이 달라져 재시작이 필요합니다 (E11′).
+          </div>
+        </div>
+      </Show>
 
       <Show when={s().restartNeeded}>
         <div class="card restart-card">
