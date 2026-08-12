@@ -14,6 +14,8 @@ pub enum StoreMsg {
     SessionExit { ws: String, id: String, code: Option<u32> },
     Line { ws: String, id: String, text: String },
     Event { ws: String, id: Option<String>, kind: String, message: String },
+    /// 에이전트 재개 매핑 (FR-C-27 · FR-D-24)
+    AgentSession { ws: String, id: String, agent_session_id: String, log_path: String, resumable: bool },
 }
 
 pub struct Store {
@@ -165,7 +167,8 @@ fn ws_of(msg: &StoreMsg) -> &str {
         StoreMsg::SessionStart { ws, .. }
         | StoreMsg::SessionExit { ws, .. }
         | StoreMsg::Line { ws, .. }
-        | StoreMsg::Event { ws, .. } => ws,
+        | StoreMsg::Event { ws, .. }
+        | StoreMsg::AgentSession { ws, .. } => ws,
     }
 }
 
@@ -244,6 +247,13 @@ fn flush(
                     let _ = tx.execute(
                         "INSERT INTO event (ts, session_id, kind, payload) VALUES (?1, ?2, ?3, ?4)",
                         params![now, id, kind, message],
+                    );
+                }
+                StoreMsg::AgentSession { id, agent_session_id, log_path, resumable, .. } => {
+                    let _ = tx.execute(
+                        "INSERT INTO agent_session (session_id, agent_session_id, log_path, resumable) VALUES (?1, ?2, ?3, ?4)
+                         ON CONFLICT(session_id) DO UPDATE SET agent_session_id = excluded.agent_session_id, log_path = excluded.log_path, resumable = excluded.resumable",
+                        params![id, agent_session_id, log_path, i64::from(*resumable)],
                     );
                 }
             }

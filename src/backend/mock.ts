@@ -1,6 +1,7 @@
 // MockBackend — SessionService(PRD C §7.1)의 프런트 소비 표면을 흉내 낸다.
 // M1에서 TauriBackend(invoke/Channel)로 교체하며, 화면은 Backend 인터페이스만 안다 (C9 모듈 경계).
 import type {
+  AgentStatus,
   ConversationMessage,
   EventRecord,
   Job,
@@ -40,6 +41,16 @@ export interface Backend {
   removeTerminal(id: string): void;
   /** 역할 세션의 페르소나·직무 변경 — 직무가 바뀌면 권한 변경이므로 재시작 필요(E11′) */
   updateSessionRole(id: string, personaId: string, jobId: string): void;
+  /** 실물 에이전트 상태 반영 (PRD D agent-state 이벤트) — Tauri에서만 호출된다 */
+  applyAgentState(evt: {
+    session: string;
+    agentSession: string;
+    status?: AgentStatus;
+    waitingFor?: string;
+    resumable: boolean;
+    version?: string;
+    exitCode?: number;
+  }): void;
   createMission(wsId: string, name: string, goal: string, branch?: string): void;
   cycleMissionStatus(id: string): void;
   toggleAssign(missionId: string, sessionId: string): void;
@@ -570,6 +581,41 @@ export class MockBackend implements Backend {
     const pName = PERSONAS.find((x) => x.id === personaId)?.name ?? personaId;
     const jName = JOBS.find((x) => x.id === jobId)?.name ?? jobId;
     this.logEvent("app", `역할 세션 추가 · ${pName} · ${jName} · SLOT ${slot}`);
+    this.broadcast();
+  }
+
+  applyAgentState(evt: {
+    session: string;
+    agentSession: string;
+    status?: AgentStatus;
+    waitingFor?: string;
+    resumable: boolean;
+    version?: string;
+    exitCode?: number;
+  }) {
+    const sess = SESSIONS.find((x) => x.id === evt.session);
+    if (!sess) return;
+    const prev = sess.status;
+    sess.agentSessionId = evt.agentSession.slice(0, 8);
+    if (evt.status) sess.status = evt.status;
+    sess.waitingFor = evt.waitingFor;
+    sess.resumable = evt.resumable;
+    sess.resumeReason = evt.resumable ? "transcript + cwd 일치" : "transcript 없음";
+    if (evt.version) sess.agentVersion = evt.version;
+    sess.exitCode = evt.exitCode;
+    if (evt.status && prev !== evt.status) {
+      sess.sinceMs = 0;
+      if (evt.status !== "dead") sess.restartNeeded = sess.restartNeeded && evt.status === "starting";
+      sess.lastOutput =
+        evt.status === "waiting"
+          ? `승인 대기 · ${evt.waitingFor ?? ""}`
+          : evt.status === "dead"
+            ? `종료됨 · exit ${evt.exitCode ?? "?"}`
+            : evt.status === "busy"
+              ? "작업 중"
+              : sess.lastOutput;
+      this.logEvent("state", `${prev} → ${evt.status}`, sess.id);
+    }
     this.broadcast();
   }
 

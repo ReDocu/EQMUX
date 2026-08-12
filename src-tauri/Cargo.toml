@@ -16,6 +16,8 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 rfd = "0.15"
 arboard = "3.4"
 image = { version = "0.25", default-features = false, features = ["png"] }
+uuid = { version = "1", features = ["v4"] }
+notify = "6"
 
 [lib]
 name = "eqmux_lib"

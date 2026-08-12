@@ -1,0 +1,241 @@
+// 에이전트 런타임 (PRD D) — ClaudeCodeAdapter. Claude 고유 지식은 이 모듈에만 둔다 (FR-D-60).
+// 상태의 1차 소스는 세션 레지스트리 파일(§10.1)이며 출력 파싱을 하지 않는다 (FR-D-10).
+// 훅(2차 소스)·statusLine은 다음 단계 — PRD I의 `eqmux _hook` CLI와 함께 들어온다.
+
+use std::collections::HashMap;
+use std::fs;
+use std::path::PathBuf;
+use std::sync::mpsc::channel;
+use std::sync::Mutex;
+use std::time::Duration;
+
+use portable_pty::CommandBuilder;
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter, Manager};
+
+/// 추적 중인 에이전트 — 앱 세션(페인) ↔ Claude sessionId(FR-D-01 발급 UUID) 매핑
+#[derive(Clone)]
+pub struct Tracked {
+    pub app_session: String,
+    pub ws: String,
+    pub cwd: String,
+    pub name: String,
+    pub permission_mode: String,
+    pub disallowed: Vec<String>,
+    pub last_status: String,
+    pub last_waiting: Option<String>,
+    pub pty_gen: u64,
+}
+
+#[derive(Default)]
+pub struct AgentRt {
+    pub by_uuid: Mutex<HashMap<String, Tracked>>,
+}
+
+/// §7.1 상태 신호 스키마 (M1 부분집합)
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentStateEvt {
+    pub session: String,
+    pub agent_session: String,
+    pub status: String,
+    pub waiting_for: Option<String>,
+    pub resumable: bool,
+    pub version: Option<String>,
+    pub exit_code: Option<i64>,
+}
+
+/// 세션 레지스트리 레코드 (§10.1) — 부분 파싱 (FR-D-64): 모르는 필드는 무시,
+/// 필드 부재는 None. 공개 계약이 아니므로 전부 Option이다.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RegistryRecord {
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    waiting_for: Option<String>,
+    #[serde(default)]
+    version: Option<String>,
+}
+
+fn home() -> PathBuf {
+    PathBuf::from(std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\".into()))
+}
+
+fn sessions_dir() -> PathBuf {
+    home().join(".claude").join("sessions")
+}
+
+/// 트랜스크립트 경로 (§10.3) — cwd의 ':' '\' '/'를 '-'로 치환. cwd가 경로에 들어가므로
+/// 재개는 같은 cwd에서만 성립한다 (FR-D-03 · R4).
+pub fn transcript_path(cwd: &str, uuid: &str) -> PathBuf {
+    let escaped: String = cwd
+        .chars()
+        .map(|c| if matches!(c, ':' | '\\' | '/') { '-' } else { c })
+        .collect();
+    home()
+        .join(".claude")
+        .join("projects")
+        .join(escaped)
+        .join(format!("{uuid}.jsonl"))
+}
+
+/// 재개 가능 판정 = 트랜스크립트 존재 + 비어 있지 않음 (FR-D-20). 추정하지 않고 실측한다.
+pub fn resumable(cwd: &str, uuid: &str) -> bool {
+    fs::metadata(transcript_path(cwd, uuid))
+        .map(|m| m.len() > 0)
+        .unwrap_or(false)
+}
+
+/// 기동 커맨드 빌더 후보 (§4.1.1) — exe 직접 실행, 실패 시 cmd 경유(npm .cmd 설치 대비).
+/// bypassPermissions는 어떤 경로로도 만들지 않는다.
+pub fn claude_builders(args: &[String], cwd: &str, app_session: &str) -> Vec<CommandBuilder> {
+    let apply = |b: &mut CommandBuilder| {
+        b.cwd(cwd);
+        // FR-D-04 환경변수 (역할·팀 파일은 PRD E 실물화와 함께 추가)
+        b.env("EQMUX_SESSION", app_session);
+        b.env("EQMUX_TERMINAL", "eqmux");
+    };
+    let mut direct = CommandBuilder::new("claude");
+    for a in args {
+        direct.arg(a);
+    }
+    apply(&mut direct);
+    let mut via_cmd = CommandBuilder::new("cmd.exe");
+    via_cmd.arg("/c");
+    via_cmd.arg("claude");
+    for a in args {
+        via_cmd.arg(a);
+    }
+    apply(&mut via_cmd);
+    vec![direct, via_cmd]
+}
+
+/// 상태 방송 + 상태 전이 이벤트 기록 (FR-D-17)
+pub fn emit_state(app: &AppHandle, evt: &AgentStateEvt) {
+    let _ = app.emit("agent-state", evt.clone());
+    let store: tauri::State<crate::StoreState> = app.state();
+    let waiting = evt
+        .waiting_for
+        .as_deref()
+        .map(|w| format!(" · {w}"))
+        .unwrap_or_default();
+    let _ = store.0.sender().send(crate::store::StoreMsg::Event {
+        ws: evt.session.split('@').nth(1).unwrap_or("default").to_string(),
+        id: Some(evt.session.clone()),
+        kind: "agent-state".into(),
+        message: format!("{}{}", evt.status, waiting),
+    });
+}
+
+/// PTY EOF → dead 전이 (FR-D-50). 세대(gen)가 다르면 이미 재기동된 세션이므로 무시한다.
+pub fn on_pty_exit(app: &AppHandle, id: &str, code: Option<u32>, gen: u64) {
+    let rt: tauri::State<AgentRt> = app.state();
+    let mut evt = None;
+    if let Ok(mut map) = rt.by_uuid.lock() {
+        for (uuid, t) in map.iter_mut() {
+            if t.app_session == id && t.pty_gen == gen && t.last_status != "dead" {
+                t.last_status = "dead".into();
+                evt = Some(AgentStateEvt {
+                    session: id.to_string(),
+                    agent_session: uuid.clone(),
+                    status: "dead".into(),
+                    waiting_for: None,
+                    resumable: resumable(&t.cwd, uuid),
+                    version: None,
+                    exit_code: code.map(i64::from),
+                });
+                break;
+            }
+        }
+    }
+    if let Some(e) = evt {
+        emit_state(app, &e);
+    }
+}
+
+/// 레지스트리 watch (FR-D-11) — notify 실패 여부와 무관하게 2초 안전 재스캔을 겸한다.
+pub fn start_registry_watch(app: AppHandle) {
+    std::thread::spawn(move || {
+        let dir = sessions_dir();
+        let (tx, rx) = channel::<()>();
+        let _watcher = {
+            use notify::{recommended_watcher, RecursiveMode, Watcher};
+            let tx = tx.clone();
+            let mut w = recommended_watcher(move |_res| {
+                let _ = tx.send(());
+            })
+            .ok();
+            if let Some(watcher) = w.as_mut() {
+                let _ = watcher.watch(&dir, RecursiveMode::NonRecursive);
+            }
+            w
+        };
+        loop {
+            let _ = rx.recv_timeout(Duration::from_millis(2000));
+            while rx.try_recv().is_ok() {} // 버스트 병합
+            scan(&app);
+        }
+    });
+}
+
+/// 레지스트리 스캔 — sessionId 일치(FR-D-12)로만 우리 세션을 판별한다
+fn scan(app: &AppHandle) {
+    let rt: tauri::State<AgentRt> = app.state();
+    let tracked_uuids: Vec<String> = match rt.by_uuid.lock() {
+        Ok(m) => m.keys().cloned().collect(),
+        Err(_) => return,
+    };
+    if tracked_uuids.is_empty() {
+        return;
+    }
+    let entries = match fs::read_dir(sessions_dir()) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    let mut found: HashMap<String, RegistryRecord> = HashMap::new();
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if p.extension().map(|e| e == "json").unwrap_or(false) {
+            if let Ok(text) = fs::read_to_string(&p) {
+                if let Ok(rec) = serde_json::from_str::<RegistryRecord>(&text) {
+                    if let Some(sid) = rec.session_id.clone() {
+                        found.insert(sid, rec);
+                    }
+                }
+            }
+        }
+    }
+    let mut updates: Vec<AgentStateEvt> = Vec::new();
+    if let Ok(mut map) = rt.by_uuid.lock() {
+        for uuid in tracked_uuids {
+            let Some(t) = map.get_mut(&uuid) else { continue };
+            if t.last_status == "dead" {
+                continue;
+            }
+            if let Some(rec) = found.get(&uuid) {
+                // status 부재 시 기존 값 유지 (FR-D-64 — 훅 폴백은 다음 단계)
+                let status = rec.status.clone().unwrap_or_else(|| t.last_status.clone());
+                let waiting = rec.waiting_for.clone();
+                if status != t.last_status || waiting != t.last_waiting {
+                    t.last_status = status.clone();
+                    t.last_waiting = waiting.clone();
+                    updates.push(AgentStateEvt {
+                        session: t.app_session.clone(),
+                        agent_session: uuid.clone(),
+                        status,
+                        waiting_for: waiting,
+                        resumable: resumable(&t.cwd, &uuid),
+                        version: rec.version.clone(),
+                        exit_code: None,
+                    });
+                }
+            }
+        }
+    }
+    for evt in updates {
+        emit_state(app, &evt);
+    }
+}

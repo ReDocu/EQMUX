@@ -1,6 +1,7 @@
 import { Match, onCleanup, onMount, Show, Switch } from "solid-js";
 import { AppBar } from "./components/AppBar";
 import { SidePanel } from "./components/SidePanel";
+import { ensureAgentListeners } from "./backend/agent";
 import { backend } from "./backend/mock";
 import { refreshWorkspaces } from "./backend/workspaces";
 import { exitOpen, layoutPickerOpen, panelOpen, setLayoutPickerOpen, view } from "./state";
@@ -23,6 +24,8 @@ export function App() {
 
   // Tauri 부트스트랩 — workspaces.json 실물 레지스트리가 목 목록을 대체한다 (PRD E)
   onMount(() => void refreshWorkspaces());
+  // agent-state 이벤트 수신 시작 (PRD D) — 상태 스트림이 목 백엔드를 실측으로 덮는다
+  onMount(() => void ensureAgentListeners());
 
   // 페인 배치 단축키 (srpYm 푸터 명세) — CTRL + SHIFT + L
   onMount(() => {

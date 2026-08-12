@@ -174,6 +174,11 @@ export function ControlCenter(props: { workspace: Workspace }) {
               cwd={s.cwd}
               wsId={props.workspace.id}
               shell={shellCmdFor(s)}
+              agent={
+                s.personaId && job(s.jobId)
+                  ? { name: persona(s.personaId)?.name ?? s.personaId, permissions: job(s.jobId)!.permissions }
+                  : undefined
+              }
               mockLines={mockLines(s, persona(s.personaId)?.name ?? "?")}
             />
           </div>

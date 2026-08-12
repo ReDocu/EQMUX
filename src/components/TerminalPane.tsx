@@ -19,6 +19,8 @@ import {
   spawnPty,
   writePty,
 } from "../backend/pty";
+import { spawnAgent } from "../backend/agent";
+import type { Permissions } from "../types";
 
 const EQ_THEME = {
   background: "#080b10",
@@ -46,6 +48,12 @@ interface TermEntry {
 }
 
 const REGISTRY = new Map<string, TermEntry>();
+
+/** 세션의 현재 터미널 크기 — 재개/재시작 커맨드가 PTY 크기를 맞추는 데 쓴다 */
+export function sessionTermSize(id: string): { cols: number; rows: number } {
+  const e = REGISTRY.get(id);
+  return e ? { cols: e.term.cols, rows: e.term.rows } : { cols: 120, rows: 30 };
+}
 
 /** 세션 제거 시 호출 — PTY와 함께 터미널 인스턴스도 폐기한다 */
 export function disposeSessionTerminal(id: string) {
@@ -133,7 +141,14 @@ function createEntry(): TermEntry {
 /** 최초 1회 — 스트림 구독·재생·스폰. 리마운트에서는 다시 실행되지 않는다. */
 async function initSession(
   entry: TermEntry,
-  props: { sessionId: string; cwd: string; wsId?: string; shell?: string; mockLines?: string[] },
+  props: {
+    sessionId: string;
+    cwd: string;
+    wsId?: string;
+    shell?: string;
+    agent?: { name: string; permissions: Permissions };
+    mockLines?: string[];
+  },
 ) {
   const term = entry.term;
 
@@ -168,7 +183,26 @@ async function initSession(
       for (const line of tail) term.writeln(`\x1b[2m${line}\x1b[0m`);
       term.writeln("\x1b[90m─── 새 세션 시작 ───\x1b[0m");
     }
-    await spawnPty(props.sessionId, props.cwd, term.cols, term.rows, props.wsId, props.shell);
+    // 역할 세션 = Claude Code 에이전트 기동 (PRD D) / 기본 터미널 = 일반 셸
+    if (props.agent) {
+      try {
+        await spawnAgent(
+          props.sessionId,
+          props.wsId ?? "default",
+          props.cwd,
+          props.agent.name,
+          props.agent.permissions,
+          term.cols,
+          term.rows,
+        );
+      } catch (err) {
+        // 기동 실패 이유를 페인에 정직하게 표시 (FR-D-08)
+        term.writeln(`\r\n\x1b[31m에이전트 기동 실패 — ${String(err)}\x1b[0m`);
+        term.writeln("\x1b[90mclaude CLI 설치/로그인 상태를 확인하세요\x1b[0m");
+      }
+    } else {
+      await spawnPty(props.sessionId, props.cwd, term.cols, term.rows, props.wsId, props.shell);
+    }
     entry.lastCols = term.cols;
     entry.lastRows = term.rows;
   } else {
@@ -199,6 +233,7 @@ export function TerminalPane(props: {
   cwd: string;
   wsId?: string;
   shell?: string;
+  agent?: { name: string; permissions: Permissions };
   mockLines?: string[];
 }) {
   let host!: HTMLDivElement;

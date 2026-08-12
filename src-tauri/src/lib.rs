@@ -14,18 +14,22 @@ use rusqlite::{params, Connection, OpenFlags};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
-mod store;
+mod agent;
+pub(crate) mod store;
 mod workspace;
 use store::{LineAssembler, Store, StoreMsg};
 use workspace::{WsEntry, WsInfo};
 
-struct StoreState(Store);
+pub(crate) struct StoreState(pub(crate) Store);
 
 struct PtySession {
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
     child: Box<dyn Child + Send + Sync>,
+    gen: u64, // 같은 id로 재기동 시 이전 리더 스레드의 정리를 무효화하는 세대 표식
 }
+
+static NEXT_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 #[derive(Default)]
 struct PtyState(Mutex<HashMap<String, PtySession>>);
@@ -81,21 +85,23 @@ fn shell_candidates(shell: Option<String>) -> Vec<String> {
     v
 }
 
-#[tauri::command]
-fn pty_spawn(
+/// 공용 PTY 스폰 — 셸·에이전트가 같은 배관(로그·스토어 스필·수명 관리)을 탄다.
+/// 반환값은 이 PTY의 세대(gen) — 같은 id 재기동 시 이전 스레드의 정리를 무효화한다.
+fn spawn_pty_session(
     app: AppHandle,
-    state: State<PtyState>,
-    store_state: State<StoreState>,
     id: String,
-    cwd: Option<String>,
-    shell: Option<String>,
+    ws: String,
+    dir: String,
+    shell_label: String,
+    mut builders: Vec<CommandBuilder>,
     cols: u16,
     rows: u16,
-    workspace: Option<String>,
-) -> Result<(), String> {
+) -> Result<u64, String> {
+    let state: State<PtyState> = app.state();
+    let store_state: State<StoreState> = app.state();
     let mut sessions = state.0.lock().map_err(|e| e.to_string())?;
-    if sessions.contains_key(&id) {
-        return Ok(()); // 이미 실행 중 — 재부착만 한다
+    if let Some(existing) = sessions.get(&id) {
+        return Ok(existing.gen); // 이미 실행 중 — 재부착만 한다
     }
 
     let pty = native_pty_system();
@@ -108,25 +114,24 @@ fn pty_spawn(
         })
         .map_err(|e| e.to_string())?;
 
-    let dir = resolve_cwd(cwd);
     let mut child = None;
     let mut last_err = String::new();
-    for candidate in shell_candidates(shell) {
-        let mut cmd = CommandBuilder::new(&candidate);
-        cmd.cwd(&dir);
+    for cmd in builders.drain(..) {
+        let label = format!("{:?}", cmd.get_argv().first().cloned().unwrap_or_default());
         match pair.slave.spawn_command(cmd) {
             Ok(c) => {
                 child = Some(c);
                 break;
             }
-            Err(e) => last_err = format!("{candidate}: {e}"),
+            Err(e) => last_err = format!("{label}: {e}"),
         }
     }
-    let child = child.ok_or(format!("셸 실행 실패 — {last_err}"))?;
+    let child = child.ok_or(format!("실행 실패 — {last_err}"))?;
     drop(pair.slave);
 
     let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
     let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
+    let gen = NEXT_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
     sessions.insert(
         id.clone(),
@@ -134,18 +139,18 @@ fn pty_spawn(
             master: pair.master,
             writer,
             child,
+            gen,
         },
     );
     drop(sessions);
 
-    // 스토어에 세션 시작을 기록 (FR-C-03) — 워크스페이스 미지정 시 id의 @뒤를 쓴다
-    let ws = workspace.unwrap_or_else(|| id.split('@').nth(1).unwrap_or("default").to_string());
+    // 스토어에 세션 시작을 기록 (FR-C-03)
     let store_tx = store_state.0.sender();
     let _ = store_tx.send(StoreMsg::SessionStart {
         ws: ws.clone(),
         id: id.clone(),
         cwd: dir.clone(),
-        shell: "pwsh".into(),
+        shell: shell_label,
     });
 
     // 출력 중계 스레드 — 로그 파일 append + VT 통과 줄을 스토어로 스필 + EOF 정리
@@ -179,14 +184,18 @@ fn pty_spawn(
                 }
             }
         }
+        // 세대가 일치할 때만 정리한다 — 같은 id로 재기동된 새 세션을 지우면 안 된다
         let code = {
             let state: State<PtyState> = app.state();
             let mut sessions = state.0.lock().ok();
-            sessions
-                .as_mut()
-                .and_then(|s| s.remove(&id))
-                .and_then(|mut s| s.child.wait().ok())
-                .map(|st| st.exit_code())
+            let owned = sessions.as_mut().and_then(|s| {
+                if s.get(&id).map(|e| e.gen) == Some(gen) {
+                    s.remove(&id)
+                } else {
+                    None
+                }
+            });
+            owned.and_then(|mut s| s.child.wait().ok()).map(|st| st.exit_code())
         };
         if let Some(f) = log_file.as_mut() {
             let _ = writeln!(f, "\n=== session exit · {} · code {:?} · epoch {} ===", id, code, epoch_secs());
@@ -196,9 +205,34 @@ fn pty_spawn(
         });
         let _ = store_tx.send(StoreMsg::SessionExit { ws: ws.clone(), id: id.clone(), code });
         let _ = app.emit("pty-exit", PtyExit { id: id.clone(), code });
+        agent::on_pty_exit(&app, &id, code, gen); // 에이전트면 dead 전이 (FR-D-50)
     });
 
-    Ok(())
+    Ok(gen)
+}
+
+#[tauri::command]
+fn pty_spawn(
+    app: AppHandle,
+    id: String,
+    cwd: Option<String>,
+    shell: Option<String>,
+    cols: u16,
+    rows: u16,
+    workspace: Option<String>,
+) -> Result<(), String> {
+    let dir = resolve_cwd(cwd);
+    let label = shell.clone().unwrap_or_else(|| "pwsh".into());
+    let builders = shell_candidates(shell)
+        .into_iter()
+        .map(|c| {
+            let mut b = CommandBuilder::new(&c);
+            b.cwd(&dir);
+            b
+        })
+        .collect();
+    let ws = workspace.unwrap_or_else(|| id.split('@').nth(1).unwrap_or("default").to_string());
+    spawn_pty_session(app, id, ws, dir, label, builders, cols, rows).map(|_| ())
 }
 
 #[tauri::command]
@@ -325,6 +359,173 @@ fn store_usage_real(store_state: State<StoreState>, workspace: String) -> Result
         total_lines: total,
         sessions,
     })
+}
+
+// ── 에이전트 런타임 (PRD D) — 기동·재개·권한 재시작. Claude 지식은 agent.rs에만 있다 ──
+
+#[allow(clippy::too_many_arguments)]
+fn agent_spawn_inner(
+    app: AppHandle,
+    id: String,
+    ws: String,
+    cwd: String,
+    name: String,
+    permission_mode: String,
+    disallowed: Vec<String>,
+    cols: u16,
+    rows: u16,
+    uuid: String,
+    resume: bool,
+) -> Result<String, String> {
+    if !Path::new(&cwd).is_dir() {
+        return Err("워크스페이스 경로를 찾을 수 없습니다 — 재개는 같은 cwd에서만 성립합니다".into());
+    }
+    // §4.1.1 커맨드라인 계약 — bypassPermissions는 어떤 경로로도 만들지 않는다
+    let mut args: Vec<String> = Vec::new();
+    if resume {
+        args.push("--resume".into());
+        args.push(uuid.clone());
+    } else {
+        args.push("--session-id".into()); // FR-D-01 — 앱 발급 UUID가 재개 앵커
+        args.push(uuid.clone());
+    }
+    args.push("--name".into());
+    args.push(name.clone());
+    args.push("--permission-mode".into());
+    args.push(permission_mode.clone());
+    if !disallowed.is_empty() {
+        args.push("--disallowedTools".into());
+        args.push(disallowed.join(","));
+    }
+    let builders = agent::claude_builders(&args, &cwd, &id);
+    let gen = spawn_pty_session(
+        app.clone(),
+        id.clone(),
+        ws.clone(),
+        cwd.clone(),
+        "claude".into(),
+        builders,
+        cols,
+        rows,
+    )?;
+
+    let rt: State<agent::AgentRt> = app.state();
+    if let Ok(mut map) = rt.by_uuid.lock() {
+        map.retain(|u, t| !(t.app_session == id && *u != uuid));
+        map.insert(
+            uuid.clone(),
+            agent::Tracked {
+                app_session: id.clone(),
+                ws: ws.clone(),
+                cwd: cwd.clone(),
+                name,
+                permission_mode,
+                disallowed,
+                last_status: "starting".into(),
+                last_waiting: None,
+                pty_gen: gen,
+            },
+        );
+    }
+    // agent_session 매핑 저장 (FR-D-24 · FR-C-27)
+    let store: State<StoreState> = app.state();
+    let _ = store.0.sender().send(StoreMsg::AgentSession {
+        ws,
+        id: id.clone(),
+        agent_session_id: uuid.clone(),
+        log_path: agent::transcript_path(&cwd, &uuid).to_string_lossy().into_owned(),
+        resumable: agent::resumable(&cwd, &uuid),
+    });
+    agent::emit_state(
+        &app,
+        &agent::AgentStateEvt {
+            session: id,
+            agent_session: uuid.clone(),
+            status: "starting".into(),
+            waiting_for: None,
+            resumable: resume,
+            version: None,
+            exit_code: None,
+        },
+    );
+    Ok(uuid)
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn agent_spawn(
+    app: AppHandle,
+    id: String,
+    workspace: String,
+    cwd: String,
+    name: String,
+    permission_mode: String,
+    disallowed_tools: Vec<String>,
+    cols: u16,
+    rows: u16,
+) -> Result<String, String> {
+    let uuid = uuid::Uuid::new_v4().to_string();
+    agent_spawn_inner(app, id, workspace, cwd, name, permission_mode, disallowed_tools, cols, rows, uuid, false)
+}
+
+fn kill_pty_for_restart(app: &AppHandle, id: &str) {
+    let state: State<PtyState> = app.state();
+    let removed = state.0.lock().ok().and_then(|mut s| s.remove(id));
+    if let Some(mut s) = removed {
+        let _ = s.child.kill();
+    }
+}
+
+fn find_tracked(app: &AppHandle, id: &str) -> Option<(String, agent::Tracked)> {
+    let rt: State<agent::AgentRt> = app.state();
+    let map = rt.by_uuid.lock().ok()?;
+    map.iter()
+        .find(|(_, t)| t.app_session == id)
+        .map(|(u, t)| (u.clone(), t.clone()))
+}
+
+/// 재개 (FR-D-21~23) — 사용자 트리거 전용. 같은 uuid + 같은 cwd로 --resume.
+#[tauri::command]
+fn agent_resume(app: AppHandle, id: String, cols: u16, rows: u16) -> Result<String, String> {
+    let Some((uuid, t)) = find_tracked(&app, &id) else {
+        return Err("재개 정보 없음 — 이 세션에서 실행된 에이전트가 없습니다".into());
+    };
+    if !agent::resumable(&t.cwd, &uuid) {
+        return Err("재개 불가 — 트랜스크립트가 없습니다".into());
+    }
+    kill_pty_for_restart(&app, &id);
+    agent_spawn_inner(app, id, t.ws, t.cwd, t.name, t.permission_mode, t.disallowed, cols, rows, uuid, true)
+}
+
+/// 권한 변경 재시작 (E11′ · FR-D-26) — 재개로 수행해 대화를 잃지 않는다.
+/// 트랜스크립트가 아직 없으면(턴 0) 같은 uuid로 새로 뜬다.
+#[tauri::command]
+fn agent_restart(
+    app: AppHandle,
+    id: String,
+    permission_mode: String,
+    disallowed_tools: Vec<String>,
+    cols: u16,
+    rows: u16,
+) -> Result<String, String> {
+    let Some((uuid, t)) = find_tracked(&app, &id) else {
+        return Err("재시작 대상 없음 — 이 세션에서 실행된 에이전트가 없습니다".into());
+    };
+    let can_resume = agent::resumable(&t.cwd, &uuid);
+    kill_pty_for_restart(&app, &id);
+    agent_spawn_inner(
+        app,
+        id,
+        t.ws,
+        t.cwd,
+        t.name,
+        permission_mode,
+        disallowed_tools,
+        cols,
+        rows,
+        uuid,
+        can_resume,
+    )
 }
 
 // ── 워크스페이스 레지스트리 (PRD E §4.1) ──
@@ -498,6 +699,9 @@ pub fn run() {
             // 스토어 루트 = 앱 데이터 (FR-C-20a — repo 안에 바이너리를 두지 않는다)
             let root = app.path().app_data_dir()?;
             app.manage(StoreState(Store::new(root)));
+            // 에이전트 런타임 (PRD D) — 세션 레지스트리 watch 시작 (FR-D-11)
+            app.manage(agent::AgentRt::default());
+            agent::start_registry_watch(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -507,6 +711,9 @@ pub fn run() {
             pty_resize,
             pty_kill,
             pty_list,
+            agent_spawn,
+            agent_resume,
+            agent_restart,
             scrollback_tail,
             store_usage_real,
             ws_pick_folder,

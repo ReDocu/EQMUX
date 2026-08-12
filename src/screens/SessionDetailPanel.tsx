@@ -1,8 +1,10 @@
 // 세션 상세 (lefeD) — 상태·실행 플래그 원문·메모리(C11)·재개 근거를 정직하게 표시한다.
 // 승인·거부는 여기서 제공하지 않는다 (G7) — 액션은 점프·재개·중지 3종 + 역할 변경.
 import { createEffect, createSignal, For, on, Show } from "solid-js";
+import { restartAgent, resumeAgent } from "../backend/agent";
 import { backend } from "../backend/mock";
 import { isTauri, openLogDir } from "../backend/pty";
+import { sessionTermSize } from "../components/TerminalPane";
 import { jumpToSession } from "../state";
 import { Eyebrow, KV, StatusLabel } from "../components/ui";
 import type { Session } from "../types";
@@ -42,6 +44,39 @@ export function SessionDetailPanel(props: { session: Session }) {
   const roleChanged = () => pendPersona() !== s().personaId || pendJob() !== s().jobId;
   const applyRole = () => backend.updateSessionRole(s().id, pendPersona(), pendJob());
   const detachRole = () => backend.updateSessionRole(s().id, "", "");
+
+  const [actionErr, setActionErr] = createSignal<string | undefined>(undefined);
+
+  // 재개 (FR-D-21~23) — Tauri에서는 실제 --resume, 브라우저 목업에선 목 상태 전이
+  const doResume = async () => {
+    setActionErr(undefined);
+    if (isTauri() && s().personaId) {
+      const size = sessionTermSize(s().id);
+      try {
+        await resumeAgent(s().id, size.cols, size.rows);
+      } catch (err) {
+        setActionErr(String(err));
+        return;
+      }
+    }
+    backend.resumeSession(s().id);
+  };
+
+  // 권한 변경 재시작 (E11′ · FR-D-26) — 재개 기반, 대화 유지
+  const doRestart = async () => {
+    setActionErr(undefined);
+    if (isTauri() && s().personaId) {
+      const j = job();
+      const size = sessionTermSize(s().id);
+      try {
+        if (j) await restartAgent(s().id, j.permissions, size.cols, size.rows);
+      } catch (err) {
+        setActionErr(String(err));
+        return;
+      }
+    }
+    backend.restartSession(s().id);
+  };
 
   return (
     <div class="detail">
@@ -166,10 +201,16 @@ export function SessionDetailPanel(props: { session: Session }) {
           <button
             class="btn"
             title="재개 기반 재시작 — 대화를 잃지 않는다 (FR-D-26)"
-            onClick={() => backend.restartSession(s().id)}
+            onClick={() => void doRestart()}
           >
             대화 유지 재시작
           </button>
+        </div>
+      </Show>
+
+      <Show when={actionErr()}>
+        <div class="card conn-error mono" style={{ "margin-top": "8px" }}>
+          {actionErr()}
         </div>
       </Show>
 
@@ -180,7 +221,7 @@ export function SessionDetailPanel(props: { session: Session }) {
         <button
           class="btn"
           disabled={!s().resumable || s().status !== "dead"}
-          onClick={() => backend.resumeSession(s().id)}
+          onClick={() => void doResume()}
         >
           재개
         </button>
