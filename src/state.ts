@@ -48,6 +48,20 @@ export const [layoutPickerOpen, setLayoutPickerOpen] = createSignal(false);
 /** 터미널 전체 화면 (포커스 모드) — 앱 바는 유지되고 그 아래 영역만 덮는다 */
 export const [terminalFull, setTerminalFull] = createSignal(false);
 
+/** 새 터미널 셸 선택 — 실패 시 Rust 쪽 폴백 체인(pwsh → powershell → cmd)이 받친다 */
+export interface ShellChoice {
+  label: string; // Session.shell에 기록되는 식별자
+  name: string;
+  cmd: string;
+}
+export const SHELLS: ShellChoice[] = [
+  { label: "pwsh", name: "PowerShell 7", cmd: "pwsh.exe" },
+  { label: "powershell", name: "Windows PowerShell", cmd: "powershell.exe" },
+  { label: "git-bash", name: "Git Bash", cmd: "C:\\Program Files\\Git\\bin\\bash.exe" },
+  { label: "cmd", name: "cmd", cmd: "cmd.exe" },
+];
+export const [defaultShell, setDefaultShell] = createSignal<ShellChoice>(SHELLS[0]);
+
 /** 백엔드 방송(FR-C-43) 수신 틱 — 화면은 tick()을 구독해 다시 그린다 */
 export const [tick, setTick] = createSignal(0);
 backend.subscribe(() => setTick((t) => t + 1));

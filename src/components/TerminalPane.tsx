@@ -61,7 +61,7 @@ function createEntry(): TermEntry {
 /** 최초 1회 — 스트림 구독·재생·스폰. 리마운트에서는 다시 실행되지 않는다. */
 async function initSession(
   entry: TermEntry,
-  props: { sessionId: string; cwd: string; wsId?: string; mockLines?: string[] },
+  props: { sessionId: string; cwd: string; wsId?: string; shell?: string; mockLines?: string[] },
 ) {
   const term = entry.term;
 
@@ -79,7 +79,7 @@ async function initSession(
       for (const line of tail) term.writeln(`\x1b[2m${line}\x1b[0m`);
       term.writeln("\x1b[90m─── 새 세션 시작 ───\x1b[0m");
     }
-    await spawnPty(props.sessionId, props.cwd, term.cols, term.rows, props.wsId);
+    await spawnPty(props.sessionId, props.cwd, term.cols, term.rows, props.wsId, props.shell);
     entry.lastCols = term.cols;
     entry.lastRows = term.rows;
   } else {
@@ -105,7 +105,13 @@ async function initSession(
   }
 }
 
-export function TerminalPane(props: { sessionId: string; cwd: string; wsId?: string; mockLines?: string[] }) {
+export function TerminalPane(props: {
+  sessionId: string;
+  cwd: string;
+  wsId?: string;
+  shell?: string;
+  mockLines?: string[];
+}) {
   let host!: HTMLDivElement;
 
   onMount(() => {
@@ -115,15 +121,10 @@ export function TerminalPane(props: { sessionId: string; cwd: string; wsId?: str
       REGISTRY.set(props.sessionId, entry);
     }
     const e = entry;
-
-    if (!e.opened) {
-      e.term.open(host);
-      e.opened = true;
-    } else if (e.term.element) {
-      host.appendChild(e.term.element); // 리마운트 = DOM 재부착만
-    }
+    let cancelled = false;
 
     const syncSize = () => {
+      if (host.clientWidth < 40 || host.clientHeight < 24) return; // 0-크기 측정 방지
       e.fit.fit();
       if (isTauri() && e.initialized && (e.term.cols !== e.lastCols || e.term.rows !== e.lastRows)) {
         e.lastCols = e.term.cols;
@@ -132,14 +133,33 @@ export function TerminalPane(props: { sessionId: string; cwd: string; wsId?: str
       }
     };
 
-    requestAnimationFrame(() => {
+    // 컨테이너가 실제 크기를 가진 뒤에만 open/재부착한다 — 0-크기에서 열면 렌더러 측정이 깨진다
+    const attach = (tries: number) => {
+      if (cancelled) return;
+      if ((host.clientWidth < 40 || host.clientHeight < 24) && tries > 0) {
+        requestAnimationFrame(() => attach(tries - 1));
+        return;
+      }
+      if (!e.opened) {
+        e.term.open(host);
+        e.opened = true;
+      } else if (e.term.element && e.term.element.parentElement !== host) {
+        host.appendChild(e.term.element); // 리마운트 = DOM 재부착만
+      }
       syncSize();
       if (!e.initialized) {
         e.initialized = true;
         void initSession(e, props);
       }
+      // 재부착 후 전체 리페인트 — 캔버스/행 렌더가 detach 중 비워질 수 있다
+      try {
+        e.term.refresh(0, Math.max(0, e.term.rows - 1));
+      } catch {
+        /* 렌더러 미준비 시 무시 */
+      }
       e.term.scrollToBottom();
-    });
+    };
+    requestAnimationFrame(() => attach(60));
 
     // 크기 추적 — 디바운스 + 실변경시에만 PTY resize (ConPTY는 resize마다 리페인트한다)
     let resizeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -150,6 +170,7 @@ export function TerminalPane(props: { sessionId: string; cwd: string; wsId?: str
     ro.observe(host);
 
     onCleanup(() => {
+      cancelled = true;
       clearTimeout(resizeTimer);
       ro.disconnect();
       // 터미널은 dispose하지 않는다 — REGISTRY가 세션 수명 동안 유지한다

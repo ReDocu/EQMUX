@@ -33,7 +33,7 @@ export interface Backend {
   /** 기본 터미널 (S9u2S) — 역할 없는 셸 세션을 빈 슬롯에 시작한다. 이미 있으면 재사용. */
   startDefaultTerminal(wsId: string): void;
   /** 슬롯에 터미널 추가 — 페르소나·직무 없이 빈 슬롯 하나를 셸 세션으로 채운다 */
-  addTerminal(wsId: string): void;
+  addTerminal(wsId: string, shell?: string): void;
   /** 슬롯에 역할 세션 추가 — 스폰 시점에 권한 플래그가 결정되므로 재시작이 필요 없다 */
   addRoleSession(wsId: string, personaId: string, jobId: string): void;
   /** 슬롯에서 터미널 제거 — 세션을 삭제하고 임무 배정도 해제한다 */
@@ -508,7 +508,7 @@ export class MockBackend implements Backend {
     this.addTerminal(wsId);
   }
 
-  addTerminal(wsId: string) {
+  addTerminal(wsId: string, shell?: string) {
     const ws = WORKSPACES.find((x) => x.id === wsId);
     if (!ws) return;
     const used = new Set(SESSIONS.filter((x) => x.workspaceId === wsId).map((x) => x.slot));
@@ -521,13 +521,14 @@ export class MockBackend implements Backend {
     SESSIONS.push(
       s(`shell${slot}@${wsId}`, wsId, slot, "", "", {
         status: "shell",
+        shell: shell ?? "pwsh",
         cwd: ws.path,
         sinceMs: 0,
         resumeReason: "일반 셸 · cwd 유지",
         lastOutput: "기본 터미널",
       }),
     );
-    this.logEvent("app", `터미널 추가 · ${ws.name} SLOT ${slot}`);
+    this.logEvent("app", `터미널 추가 · ${ws.name} SLOT ${slot} · ${shell ?? "pwsh"}`);
     this.broadcast();
   }
 

@@ -47,10 +47,18 @@ export async function spawnPty(
   cols: number,
   rows: number,
   workspace?: string,
+  shell?: string,
 ): Promise<void> {
   if (!isTauri()) return;
   await ensureListeners();
-  await invoke("pty_spawn", { id, cwd, shell: null, cols, rows, workspace: workspace ?? null });
+  await invoke("pty_spawn", {
+    id,
+    cwd,
+    shell: shell ?? null,
+    cols,
+    rows,
+    workspace: workspace ?? null,
+  });
   spawned.add(id);
 }
 

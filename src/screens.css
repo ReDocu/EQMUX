@@ -513,6 +513,44 @@
   overflow: hidden;
 }
 
+/* 셸 선택 드롭다운 — 그리드(배치) 버튼 왼쪽 */
+.shell-picker {
+  position: relative;
+  margin-left: auto;
+}
+.shell-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 30;
+  min-width: 250px;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+}
+.shell-menu-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  width: 100%;
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--eq-line);
+  font-size: 12px;
+}
+.shell-menu-item:hover {
+  background: var(--eq-surface-2);
+}
+.shell-menu-item.active {
+  background: var(--eq-blue-soft);
+  box-shadow: inset 2px 0 0 var(--eq-blue);
+}
+.shell-menu-note {
+  padding: 6px 12px;
+  font-size: 10px;
+}
+
 /* 슬롯 단위 터미널 추가/제거 */
 .pane-close {
   color: var(--eq-muted);

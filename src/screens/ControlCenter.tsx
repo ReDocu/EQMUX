@@ -3,14 +3,17 @@
 import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { backend } from "../backend/mock";
 import {
+  defaultShell,
   openPanel,
   PANE_LAYOUTS,
   paneLayout,
   selectedSession,
+  setDefaultShell,
   setLayoutPickerOpen,
   setSelectedSession,
   setTerminalFull,
   setView,
+  SHELLS,
   terminalFull,
   tick,
 } from "../state";
@@ -96,9 +99,11 @@ export function ControlCenter(props: { workspace: Workspace }) {
     setAddOpen(true);
   };
   const addTerminal = () => {
-    backend.addTerminal(props.workspace.id);
+    backend.addTerminal(props.workspace.id, defaultShell().label);
     setAddOpen(false);
   };
+  const [shellMenuOpen, setShellMenuOpen] = createSignal(false);
+  const shellCmdFor = (s: Session) => SHELLS.find((x) => x.label === s.shell)?.cmd;
   const addRoleSession = () => {
     if (!addPersona() || !addJob()) return;
     backend.addRoleSession(props.workspace.id, addPersona(), addJob());
@@ -168,6 +173,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
               sessionId={s.id}
               cwd={s.cwd}
               wsId={props.workspace.id}
+              shell={shellCmdFor(s)}
               mockLines={mockLines(s, persona(s.personaId)?.name ?? "?")}
             />
           </div>
@@ -292,18 +298,41 @@ export function ControlCenter(props: { workspace: Workspace }) {
             >
               트랜스크립트
             </button>
+            {/* 셸 선택 — 그리드(배치) 버튼 왼쪽. 새로 추가하는 터미널부터 적용된다. */}
+            <div class="shell-picker">
+              <button class="btn ghost mono" title="새 터미널 셸 선택" onClick={() => setShellMenuOpen(!shellMenuOpen())}>
+                &gt;_ {defaultShell().name} ▾
+              </button>
+              <Show when={shellMenuOpen()}>
+                <div class="card shell-menu">
+                  <For each={SHELLS}>
+                    {(sh) => (
+                      <button
+                        class="shell-menu-item"
+                        classList={{ active: defaultShell().label === sh.label }}
+                        onClick={() => {
+                          setDefaultShell(sh);
+                          setShellMenuOpen(false);
+                        }}
+                      >
+                        <span style={{ "font-weight": 600 }}>{sh.name}</span>
+                        <span class="mono muted" style={{ "font-size": "10px" }}>
+                          {sh.cmd}
+                        </span>
+                      </button>
+                    )}
+                  </For>
+                  <div class="muted shell-menu-note">새로 추가하는 터미널부터 적용됩니다</div>
+                </div>
+              </Show>
+            </div>
             <Show when={zoomed()}>
-              <button class="btn ghost" style={{ "margin-left": "auto" }} onClick={() => setZoomed(undefined)}>
+              <button class="btn ghost" onClick={() => setZoomed(undefined)}>
                 ▦ 그리드로 복귀
               </button>
             </Show>
             <Show when={!zoomed()}>
-              <button
-                class="btn ghost mono"
-                style={{ "margin-left": "auto" }}
-                title="페인 배치 (srpYm)"
-                onClick={() => setLayoutPickerOpen(true)}
-              >
+              <button class="btn ghost mono" title="페인 배치 (srpYm)" onClick={() => setLayoutPickerOpen(true)}>
                 ▦ {PANE_LAYOUTS.find((l) => l.key === paneLayout())?.name}
               </button>
             </Show>
