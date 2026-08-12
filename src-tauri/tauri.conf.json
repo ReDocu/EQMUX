@@ -24,7 +24,16 @@
     }
   },
   "bundle": {
-    "active": false,
-    "icon": ["icons/icon.ico"]
+    "active": true,
+    "targets": ["nsis"],
+    "icon": ["icons/icon.ico"],
+    "publisher": "EQMENT Studio",
+    "shortDescription": "EQMUX — 멀티 에이전트 관제 MUX",
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["Korean", "English"]
+      }
+    }
   }
 }
