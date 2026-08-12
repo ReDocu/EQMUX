@@ -1,10 +1,13 @@
 // 임무 배정 (화면 #8) — 임무 목록 · 생성 · 세션 배정. 임무 = 브랜치 + 목표 (E12 — 연결하되 강제 아님).
-import { createSignal, For, Show } from "solid-js";
+// Tauri에서는 .eqmux/missions/*.md 실파일이 원본이다 (FR-E-51) — 화면은 브리지를 통해서만 쓴다.
+import { createSignal, For, onMount, Show } from "solid-js";
 import { backend } from "../backend/mock";
+import { createMission, cycleMissionStatus, refreshMissions, toggleAssign } from "../backend/missions";
 import { setView, tick } from "../state";
 import { Eyebrow, PersonaDot } from "../components/ui";
 
 export function Missions(props: { wsId: string }) {
+  onMount(() => void refreshMissions(props.wsId));
   const ws = () => backend.listWorkspaces().find((w) => w.id === props.wsId);
   const missions = () => {
     tick();
@@ -22,7 +25,7 @@ export function Missions(props: { wsId: string }) {
 
   const create = () => {
     if (!name().trim()) return;
-    backend.createMission(props.wsId, name().trim(), goal().trim(), branch().trim() || undefined);
+    void createMission(props.wsId, name().trim(), goal().trim(), branch().trim() || undefined);
     setName("");
     setGoal("");
     setBranch("");
@@ -52,7 +55,7 @@ export function Missions(props: { wsId: string }) {
                     classList={{ blue: m.status === "in-progress", purple: m.status === "in-review", green: m.status === "done" }}
                     style={{ cursor: "pointer" }}
                     title="클릭하면 다음 단계로"
-                    onClick={() => backend.cycleMissionStatus(m.id)}
+                    onClick={() => void cycleMissionStatus(props.wsId, m.id)}
                   >
                     {m.status.toUpperCase()}
                   </button>
@@ -74,7 +77,7 @@ export function Missions(props: { wsId: string }) {
                       <button
                         class="btn ghost assign-chip"
                         classList={{ assigned: m.assigned.includes(s.id) }}
-                        onClick={() => backend.toggleAssign(m.id, s.id)}
+                        onClick={() => void toggleAssign(props.wsId, m.id, s.id)}
                       >
                         <PersonaDot name={persona(s.personaId)?.name ?? "?"} color={persona(s.personaId)?.color ?? "blue"} />
                         {persona(s.personaId)?.name}

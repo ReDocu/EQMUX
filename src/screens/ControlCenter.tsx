@@ -18,8 +18,10 @@ import {
   tick,
 } from "../state";
 import { Eyebrow, PersonaDot, StatusLabel } from "../components/ui";
+import { refreshMissions } from "../backend/missions";
 import { isTauri, killPty, storeUsageReal } from "../backend/pty";
 import type { StoreUsageReal } from "../backend/pty";
+import { removeRoleFile } from "../backend/roles";
 import { disposeSessionTerminal, TerminalPane } from "../components/TerminalPane";
 import { SessionDetailPanel } from "./SessionDetailPanel";
 import { TranscriptPane } from "./TranscriptPane";
@@ -62,6 +64,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
   const [realUsage, setRealUsage] = createSignal<StoreUsageReal | undefined>(undefined);
   onMount(() => {
     if (!isTauri()) return;
+    void refreshMissions(props.workspace.id); // 임무 파일 실측 — 밖에서 편집됐어도 여기서 따라잡는다
     const load = () => void storeUsageReal(props.workspace.id).then(setRealUsage);
     load();
     const t = setInterval(load, 10_000);
@@ -114,6 +117,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
     killPty(s.id);
     disposeSessionTerminal(s.id);
     if (zoomed() === s.id) setZoomed(undefined);
+    if (s.personaId && !props.workspace.pathMissing) removeRoleFile(props.workspace.path, s.id);
     backend.removeTerminal(s.id);
     setRemoveTarget(undefined);
   };

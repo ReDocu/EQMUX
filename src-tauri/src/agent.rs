@@ -91,12 +91,25 @@ pub fn resumable(cwd: &str, uuid: &str) -> bool {
 
 /// 기동 커맨드 빌더 후보 (§4.1.1) — exe 직접 실행, 실패 시 cmd 경유(npm .cmd 설치 대비).
 /// bypassPermissions는 어떤 경로로도 만들지 않는다.
-pub fn claude_builders(args: &[String], cwd: &str, app_session: &str) -> Vec<CommandBuilder> {
+pub fn claude_builders(
+    args: &[String],
+    cwd: &str,
+    app_session: &str,
+    role_file: Option<&str>,
+) -> Vec<CommandBuilder> {
+    let team_md = std::path::Path::new(cwd).join(".eqmux").join("team.md");
+    let team_md = team_md.exists().then(|| team_md.to_string_lossy().into_owned());
     let apply = |b: &mut CommandBuilder| {
         b.cwd(cwd);
-        // FR-D-04 환경변수 (역할·팀 파일은 PRD E 실물화와 함께 추가)
+        // FR-D-04 환경변수 — 역할·팀 파일은 존재할 때만 (파일이 원본, FR-E-41)
         b.env("EQMUX_SESSION", app_session);
         b.env("EQMUX_TERMINAL", "eqmux");
+        if let Some(rf) = role_file {
+            b.env("EQMUX_ROLE_FILE", rf);
+        }
+        if let Some(tf) = &team_md {
+            b.env("EQMUX_TEAM_FILE", tf);
+        }
     };
     let mut direct = CommandBuilder::new("claude");
     for a in args {

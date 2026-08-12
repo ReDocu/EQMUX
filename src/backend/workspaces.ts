@@ -3,6 +3,7 @@
 // 브라우저 dev에서는 기존 목 데이터가 그대로 남는다.
 import { invoke } from "@tauri-apps/api/core";
 import { backend } from "./mock";
+import { refreshMissions } from "./missions";
 import { isTauri } from "./pty";
 import { restoreTeams } from "./team";
 import type { Workspace } from "../types";
@@ -52,6 +53,13 @@ export async function refreshWorkspaces(): Promise<void> {
   const list = await invoke<WsInfo[]>("ws_registry").catch(() => [] as WsInfo[]);
   backend.hydrateWorkspaces(list.map(toWorkspace));
   await restoreTeams(); // team.json → 슬롯 복원 (에이전트 자동 실행 없음, S3)
+  // 임무 실측 (FR-E-59) — 슬롯 복원 뒤에 돌아야 배정이 세션 missionId에 얹힌다
+  await Promise.all(
+    backend
+      .listWorkspaces()
+      .filter((w) => !w.pathMissing)
+      .map((w) => refreshMissions(w.id)),
+  );
 }
 
 export function pickFolder(): Promise<string | null> {

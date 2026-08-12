@@ -59,6 +59,8 @@ export interface Backend {
   createMission(wsId: string, name: string, goal: string, branch?: string): void;
   cycleMissionStatus(id: string): void;
   toggleAssign(missionId: string, sessionId: string): void;
+  /** 임무 파일 실측으로 목록을 교체 — 파일이 이긴다 (FR-E-74). Tauri에서만 호출된다 */
+  hydrateMissions(wsId: string, list: Mission[]): void;
   addWorkspace(remote?: string): void;
   openWorkspace(id: string): void;
   closeWorkspace(id: string): void;
@@ -696,6 +698,19 @@ export class MockBackend implements Backend {
     const order: Mission["status"][] = ["todo", "in-progress", "in-review", "done"];
     m.status = order[(order.indexOf(m.status) + 1) % order.length];
     this.logEvent("mission", `${m.name} → ${m.status}`);
+    this.broadcast();
+  }
+
+  hydrateMissions(wsId: string, list: Mission[]) {
+    for (let i = MISSIONS.length - 1; i >= 0; i--) {
+      if (MISSIONS[i].workspaceId === wsId) MISSIONS.splice(i, 1);
+    }
+    MISSIONS.push(...list);
+    // 배정의 원본은 역할 파일 (FR-E-58) — 세션의 missionId를 파일 실측에 맞춘다
+    for (const sess of SESSIONS) {
+      if (sess.workspaceId !== wsId) continue;
+      sess.missionId = list.find((m) => m.assigned.includes(sess.id))?.id;
+    }
     this.broadcast();
   }
 

@@ -4,6 +4,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { backend } from "./mock";
 import { isTauri } from "./pty";
+import { buildRolePayload } from "./roles";
 
 export interface TeamSlotInfo {
   slot: number;
@@ -39,9 +40,11 @@ function slotsOf(wsId: string) {
 
 let syncStarted = false;
 const lastSaved = new Map<string, string>();
+const lastRoleSaved = new Map<string, string>();
 let timer: ReturnType<typeof setTimeout> | undefined;
 
-/** 방송 구독 → 역할 슬롯 변경 감지 → team.json/team.md 자동 저장 (FR-E-11·12) */
+/** 방송 구독 → 역할 슬롯 변경 감지 → team.json/team.md 자동 저장 (FR-E-11·12)
+ *  + 역할 파일 합성 (FR-E-31) — 편성이 곧 합성 입력이므로 같은 디바운스에 편승한다 */
 export function startTeamSync(): void {
   if (syncStarted || !isTauri()) return;
   syncStarted = true;
@@ -53,10 +56,25 @@ export function startTeamSync(): void {
         const slots = slotsOf(ws.id);
         const json = JSON.stringify(slots);
         // 세션이 하나도 로드된 적 없는 워크스페이스는 건드리지 않는다 (파일이 원본)
-        if (json === "[]" && !lastSaved.has(ws.id)) continue;
-        if (lastSaved.get(ws.id) === json) continue;
-        lastSaved.set(ws.id, json);
-        void invoke("team_save", { wsPath: ws.path, slots }).catch(() => {});
+        if (json !== "[]" || lastSaved.has(ws.id)) {
+          if (lastSaved.get(ws.id) !== json) {
+            lastSaved.set(ws.id, json);
+            void invoke("team_save", { wsPath: ws.path, slots }).catch(() => {});
+          }
+        }
+        // 역할 파일 — 페르소나·직무·관계가 바뀐 워크스페이스만 다시 합성한다
+        const payloads = backend
+          .listSessions()
+          .filter((s) => s.workspaceId === ws.id && s.personaId)
+          .map(buildRolePayload)
+          .filter((p) => p !== undefined);
+        if (payloads.length === 0 && !lastRoleSaved.has(ws.id)) continue;
+        const roleJson = JSON.stringify(payloads);
+        if (lastRoleSaved.get(ws.id) === roleJson) continue;
+        lastRoleSaved.set(ws.id, roleJson);
+        for (const payload of payloads) {
+          void invoke("role_save", { wsPath: ws.path, payload }).catch(() => {});
+        }
       }
     }, 500);
   });

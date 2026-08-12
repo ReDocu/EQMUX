@@ -15,9 +15,11 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 mod agent;
+mod missions;
+mod roles;
 pub(crate) mod store;
 mod team;
-mod workspace;
+pub(crate) mod workspace;
 use store::{LineAssembler, Store, StoreMsg};
 use workspace::{WsEntry, WsInfo};
 
@@ -404,7 +406,19 @@ fn agent_spawn_inner(
         args.push("--disallowedTools".into());
         args.push(disallowed.join(","));
     }
-    let builders = agent::claude_builders(&args, &cwd, &id);
+    // 역할 주입 (FR-D-05 · FR-E-40~43) — 파일이 원본, 프롬프트는 2줄 포인터.
+    // 역할 파일이 없는 세션(역할 미부여)은 아무것도 주입하지 않는다.
+    let role_file = {
+        let p = roles::role_path(&cwd, &id);
+        p.exists().then(|| p.to_string_lossy().into_owned())
+    };
+    if let Some(rf) = &role_file {
+        args.push("--append-system-prompt".into());
+        args.push(format!(
+            "당신의 역할 파일: {rf} — 시작 전에 읽고 따르십시오.\n팀 편성: .eqmux/team.md · 임무 정의: .eqmux/missions/"
+        ));
+    }
+    let builders = agent::claude_builders(&args, &cwd, &id, role_file.as_deref());
     let gen = spawn_pty_session(
         app.clone(),
         id.clone(),
@@ -625,6 +639,60 @@ fn team_save(ws_path: String, slots: Vec<team::TeamSlot>) -> Result<(), String> 
     team::save(&ws_path, &slots)
 }
 
+// ── 역할 파일 합성 & 임무 (PRD E §4.4~4.6) — 원본은 전부 .eqmux/ 아래 텍스트 파일 ──
+
+/// 역할 파일 합성 저장 (FR-E-31) — 반환값은 절대 경로 (에이전트 주입에 쓰인다)
+#[tauri::command]
+fn role_save(ws_path: String, payload: roles::RolePayload) -> Result<String, String> {
+    roles::save(&ws_path, &payload)
+}
+
+/// 역할 해제·세션 제거 시 파일 삭제 — roles/는 gitignore라 repo 이력에 흔적이 없다
+#[tauri::command]
+fn role_remove(ws_path: String, session: String) -> Result<(), String> {
+    roles::remove(&ws_path, &session)
+}
+
+#[tauri::command]
+fn mission_list(ws_path: String) -> Vec<missions::MissionInfo> {
+    missions::list(&ws_path)
+}
+
+#[tauri::command]
+fn mission_create(
+    ws_path: String,
+    name: String,
+    goal: String,
+    branch: Option<String>,
+) -> Result<missions::MissionInfo, String> {
+    missions::create(&ws_path, &name, &goal, branch)
+}
+
+#[tauri::command]
+fn mission_set_status(ws_path: String, id: String, status: String) -> Result<(), String> {
+    missions::set_status(&ws_path, &id, &status)
+}
+
+/// 배정·해제 (FR-E-53·54) — 역할 파일의 임무 블록을 삽입·교체·삭제한다 (멱등)
+#[tauri::command]
+fn mission_assign(ws_path: String, session: String, mission_id: Option<String>) -> Result<(), String> {
+    match mission_id {
+        Some(id) => {
+            let m = missions::get(&ws_path, &id).ok_or("임무 파일을 찾을 수 없습니다")?;
+            let block = roles::MissionBlock {
+                id: m.id,
+                name: m.name,
+                status: m.status,
+                goal: m.goal,
+                outputs: m.outputs,
+                branch: m.branch,
+            };
+            roles::set_mission(&ws_path, &session, Some(&block))
+        }
+        None => roles::set_mission(&ws_path, &session, None),
+    }
+}
+
 // ── 워크스페이스 레지스트리 (PRD E §4.1) ──
 
 #[tauri::command]
@@ -813,6 +881,12 @@ pub fn run() {
             agent_restart,
             team_load,
             team_save,
+            role_save,
+            role_remove,
+            mission_list,
+            mission_create,
+            mission_set_status,
+            mission_assign,
             scrollback_tail,
             store_usage_real,
             ws_pick_folder,

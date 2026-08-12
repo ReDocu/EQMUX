@@ -3,6 +3,7 @@
 import { createEffect, createSignal, For, on, Show } from "solid-js";
 import { restartAgent, resumeAgent } from "../backend/agent";
 import { backend } from "../backend/mock";
+import { nudgeRoleReload, removeRoleFile, saveRoleFile } from "../backend/roles";
 import { isTauri, openLogDir } from "../backend/pty";
 import { sessionTermSize } from "../components/TerminalPane";
 import { jumpToSession } from "../state";
@@ -42,8 +43,20 @@ export function SessionDetailPanel(props: { session: Session }) {
     ),
   );
   const roleChanged = () => pendPersona() !== s().personaId || pendJob() !== s().jobId;
-  const applyRole = () => backend.updateSessionRole(s().id, pendPersona(), pendJob());
-  const detachRole = () => backend.updateSessionRole(s().id, "", "");
+  // 역할 변경 = 파일 즉시 갱신 (FR-E-44·46). 비권한 변경(직무 유지)은 "다시 읽어라" 안내 한 줄,
+  // 권한 변경(직무 교체)은 재시작 배지(E11′)가 담당한다.
+  const applyRole = () => {
+    const permissionChange = pendJob() !== s().jobId;
+    backend.updateSessionRole(s().id, pendPersona(), pendJob());
+    void saveRoleFile(s().id).then((path) => {
+      if (path && !permissionChange) nudgeRoleReload(s().id, path);
+    });
+  };
+  const detachRole = () => {
+    const ws = backend.listWorkspaces().find((w) => w.id === s().workspaceId);
+    backend.updateSessionRole(s().id, "", "");
+    if (ws && !ws.pathMissing) removeRoleFile(ws.path, s().id);
+  };
 
   const [actionErr, setActionErr] = createSignal<string | undefined>(undefined);
 
