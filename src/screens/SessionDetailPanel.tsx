@@ -2,7 +2,7 @@
 // 승인·거부는 여기서 제공하지 않는다 (G7) — 액션은 점프·재개·중지 3종 + 역할 변경.
 import { createEffect, createSignal, For, on, Show } from "solid-js";
 import { backend } from "../backend/mock";
-import { jumpToSession, setView } from "../state";
+import { jumpToSession } from "../state";
 import { Eyebrow, KV, StatusLabel } from "../components/ui";
 import type { Session } from "../types";
 import { flagsToString, translatePermissions } from "../types";
@@ -17,20 +17,30 @@ export function SessionDetailPanel(props: { session: Session }) {
     return j ? flagsToString(translatePermissions(j.permissions), s().agentSessionId) : "—";
   };
 
-  // 역할 변경 (역할 팀 세션 전용) — 직무 변경은 권한 변경이므로 재시작 필요로 이어진다
+  // 역할 부여/변경/해제 — 직무(권한) 변경은 재시작 필요(E11′)로 이어진다
+  const availablePersonas = () => {
+    const used = new Set(
+      backend
+        .listSessions()
+        .filter((x) => x.workspaceId === s().workspaceId && x.id !== s().id)
+        .map((x) => x.personaId),
+    );
+    return backend.listPersonas().filter((p) => !used.has(p.id));
+  };
   const [pendPersona, setPendPersona] = createSignal(s().personaId);
   const [pendJob, setPendJob] = createSignal(s().jobId);
   createEffect(
     on(
       () => `${s().id}:${s().personaId}:${s().jobId}`,
       () => {
-        setPendPersona(s().personaId);
-        setPendJob(s().jobId);
+        setPendPersona(s().personaId || (availablePersonas()[0]?.id ?? ""));
+        setPendJob(s().jobId || (backend.listJobs()[0]?.id ?? ""));
       },
     ),
   );
   const roleChanged = () => pendPersona() !== s().personaId || pendJob() !== s().jobId;
   const applyRole = () => backend.updateSessionRole(s().id, pendPersona(), pendJob());
+  const detachRole = () => backend.updateSessionRole(s().id, "", "");
 
   return (
     <div class="detail">
@@ -89,18 +99,29 @@ export function SessionDetailPanel(props: { session: Session }) {
         <div class="card inset flags mono">{flags()}</div>
       </div>
 
-      {/* 역할 변경 — 역할 팀 세션에만 표시. 기본 터미널은 캐스팅으로 전환하는 진입점을 준다. */}
+      {/* 역할 CRUD — 기본 터미널엔 부여, 역할 세션엔 변경·해제. 권한 변경은 재시작으로 이어진다. */}
       <Show
         when={s().personaId}
         fallback={
           <div class="card inset role-edit">
-            <Eyebrow>역할 없는 세션</Eyebrow>
-            <div class="muted" style={{ "font-size": "11px", margin: "4px 0 8px" }}>
-              기본 터미널입니다. 역할·권한·임무가 필요하면 팀 캐스팅으로 전환하세요.
+            <Eyebrow>역할 부여</Eyebrow>
+            <div class="muted" style={{ "font-size": "11px", margin: "4px 0 0" }}>
+              기본 터미널입니다. 페르소나·직무를 붙이면 역할 세션이 됩니다.
             </div>
-            <button class="btn" onClick={() => setView({ kind: "casting", wsId: s().workspaceId })}>
-              역할 팀으로 전환 →
-            </button>
+            <div class="role-edit-row">
+              <select value={pendPersona()} onChange={(e) => setPendPersona(e.currentTarget.value)}>
+                <For each={availablePersonas()}>{(p) => <option value={p.id}>{p.name}</option>}</For>
+              </select>
+              <select value={pendJob()} onChange={(e) => setPendJob(e.currentTarget.value)}>
+                <For each={backend.listJobs()}>{(j) => <option value={j.id}>{j.name}</option>}</For>
+              </select>
+              <button class="btn primary" disabled={!pendPersona() || !pendJob()} onClick={applyRole}>
+                역할 부여
+              </button>
+            </div>
+            <div class="muted" style={{ "font-size": "10px", "margin-top": "6px" }}>
+              이미 돌던 셸이라 권한 플래그 적용을 위해 재시작이 필요합니다 (E11′).
+            </div>
           </div>
         }
       >
@@ -108,7 +129,7 @@ export function SessionDetailPanel(props: { session: Session }) {
           <Eyebrow>역할 변경</Eyebrow>
           <div class="role-edit-row">
             <select value={pendPersona()} onChange={(e) => setPendPersona(e.currentTarget.value)}>
-              <For each={backend.listPersonas()}>{(p) => <option value={p.id}>{p.name}</option>}</For>
+              <For each={availablePersonas()}>{(p) => <option value={p.id}>{p.name}</option>}</For>
             </select>
             <select value={pendJob()} onChange={(e) => setPendJob(e.currentTarget.value)}>
               <For each={backend.listJobs()}>{(j) => <option value={j.id}>{j.name}</option>}</For>
@@ -120,6 +141,9 @@ export function SessionDetailPanel(props: { session: Session }) {
           <div class="muted" style={{ "font-size": "10px", "margin-top": "6px" }}>
             직무를 바꾸면 실행 권한이 달라져 재시작이 필요합니다 (E11′).
           </div>
+          <button class="btn ghost" style={{ "margin-top": "8px", "align-self": "flex-start" }} onClick={detachRole}>
+            역할 해제 — 기본 터미널로 전환
+          </button>
         </div>
       </Show>
 

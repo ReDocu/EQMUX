@@ -34,6 +34,8 @@ export interface Backend {
   startDefaultTerminal(wsId: string): void;
   /** 슬롯에 터미널 추가 — 페르소나·직무 없이 빈 슬롯 하나를 셸 세션으로 채운다 */
   addTerminal(wsId: string): void;
+  /** 슬롯에 역할 세션 추가 — 스폰 시점에 권한 플래그가 결정되므로 재시작이 필요 없다 */
+  addRoleSession(wsId: string, personaId: string, jobId: string): void;
   /** 슬롯에서 터미널 제거 — 세션을 삭제하고 임무 배정도 해제한다 */
   removeTerminal(id: string): void;
   /** 역할 세션의 페르소나·직무 변경 — 직무가 바뀌면 권한 변경이므로 재시작 필요(E11′) */
@@ -542,16 +544,44 @@ export class MockBackend implements Backend {
     this.broadcast();
   }
 
+  addRoleSession(wsId: string, personaId: string, jobId: string) {
+    const ws = WORKSPACES.find((x) => x.id === wsId);
+    if (!ws) return;
+    const used = new Set(SESSIONS.filter((x) => x.workspaceId === wsId).map((x) => x.slot));
+    const slot = ([1, 2, 3, 4] as const).find((n) => !used.has(n));
+    if (!slot) {
+      this.logEvent("app", `세션 슬롯 가득 참 (4/4) · ${ws.name}`);
+      this.broadcast();
+      return;
+    }
+    SESSIONS.push(
+      s(`${personaId}@${wsId}`, wsId, slot, personaId, jobId, {
+        status: "starting",
+        cwd: ws.path,
+        sinceMs: 0,
+        lastOutput: "세션 시작 중",
+      }),
+    );
+    const pName = PERSONAS.find((x) => x.id === personaId)?.name ?? personaId;
+    const jName = JOBS.find((x) => x.id === jobId)?.name ?? jobId;
+    this.logEvent("app", `역할 세션 추가 · ${pName} · ${jName} · SLOT ${slot}`);
+    this.broadcast();
+  }
+
   updateSessionRole(id: string, personaId: string, jobId: string) {
     const sess = SESSIONS.find((x) => x.id === id);
     if (!sess) return;
+    const wasRoleless = !sess.personaId;
     const permChanged = sess.jobId !== jobId;
     sess.personaId = personaId;
     sess.jobId = jobId;
     if (permChanged) sess.restartNeeded = true;
     const pName = PERSONAS.find((x) => x.id === personaId)?.name ?? personaId;
     const jName = JOBS.find((x) => x.id === jobId)?.name ?? jobId;
-    this.logEvent("agent", `역할 변경 · ${pName} · ${jName}${permChanged ? " · 권한 변경 → 재시작 필요" : ""}`, id);
+    const suffix = permChanged ? " · 권한 변경 → 재시작 필요" : "";
+    if (!personaId) this.logEvent("agent", `역할 해제 · 기본 터미널로 전환${suffix}`, id);
+    else if (wasRoleless) this.logEvent("agent", `역할 부여 · ${pName} · ${jName}${suffix}`, id);
+    else this.logEvent("agent", `역할 변경 · ${pName} · ${jName}${suffix}`, id);
     this.broadcast();
   }
 

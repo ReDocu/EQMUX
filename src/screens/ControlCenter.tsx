@@ -71,8 +71,28 @@ export function ControlCenter(props: { workspace: Workspace }) {
   const personaName = (id: string) => persona(id)?.name ?? "기본 터미널";
   const jobName = (id: string) => job(id)?.name ?? "셸";
 
-  // 슬롯 단위 터미널 추가/제거 — 페르소나 연결 없이 동작한다 (캐스팅과 독립)
-  const addTerminal = () => backend.addTerminal(props.workspace.id);
+  // 슬롯 단위 세션 추가 — 기본 터미널 / 역할 세션 2택 (C). 캐스팅은 팀 전체 프리셋 도구로 남는다.
+  const [addOpen, setAddOpen] = createSignal(false);
+  const [addPersona, setAddPersona] = createSignal("");
+  const [addJob, setAddJob] = createSignal("");
+  const availablePersonas = () => {
+    const used = new Set(sessions().map((x) => x.personaId));
+    return backend.listPersonas().filter((p) => !used.has(p.id));
+  };
+  const openAdd = () => {
+    setAddPersona(availablePersonas()[0]?.id ?? "");
+    setAddJob(backend.listJobs()[0]?.id ?? "");
+    setAddOpen(true);
+  };
+  const addTerminal = () => {
+    backend.addTerminal(props.workspace.id);
+    setAddOpen(false);
+  };
+  const addRoleSession = () => {
+    if (!addPersona() || !addJob()) return;
+    backend.addRoleSession(props.workspace.id, addPersona(), addJob());
+    setAddOpen(false);
+  };
   const [removeTarget, setRemoveTarget] = createSignal<Session | undefined>(undefined);
   const doRemove = (s: Session) => {
     killPty(s.id);
@@ -138,8 +158,8 @@ export function ControlCenter(props: { workspace: Workspace }) {
       </For>
       <For each={Array.from({ length: zoomed() ? 0 : Math.max(0, 4 - sessions().length) })}>
         {() => (
-          <button class="terminal-pane pane-empty pane-add mono" title="빈 슬롯에 터미널 추가" onClick={addTerminal}>
-            + 터미널 추가
+          <button class="terminal-pane pane-empty pane-add mono" title="빈 슬롯에 세션 추가" onClick={openAdd}>
+            + 세션 추가
           </button>
         )}
       </For>
@@ -213,8 +233,8 @@ export function ControlCenter(props: { workspace: Workspace }) {
             )}
           </For>
           <Show when={sessions().length < 4}>
-            <button class="card session-card empty" onClick={addTerminal}>
-              <span class="muted">+ 터미널 추가 — 역할 없이 셸 세션 시작</span>
+            <button class="card session-card empty" onClick={openAdd}>
+              <span class="muted">+ 세션 추가 — 기본 터미널 또는 역할 세션</span>
             </button>
           </Show>
 
@@ -343,6 +363,59 @@ export function ControlCenter(props: { workspace: Workspace }) {
           </div>
           {paneGrid()}
           {statusBar()}
+        </div>
+      </Show>
+
+      {/* 세션 추가 — 기본 터미널 / 역할 세션 2택. 역할 세션은 스폰 시점에 권한이 결정된다. */}
+      <Show when={addOpen()}>
+        <div class="overlay" onClick={() => setAddOpen(false)}>
+          <div class="dialog" style={{ width: "460px", padding: "16px 18px" }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ "font-weight": 800, "font-size": "14px" }}>빈 슬롯에 세션 추가</div>
+            <div class="muted" style={{ "font-size": "11px", margin: "4px 0 12px" }}>
+              {props.workspace.name} · {sessions().length}/4 슬롯 사용 중
+            </div>
+
+            <button class="card add-choice" onClick={addTerminal}>
+              <div>
+                <div style={{ "font-weight": 700, "font-size": "12px" }}>&gt;_ 기본 터미널</div>
+                <div class="muted" style={{ "font-size": "11px" }}>
+                  역할 없이 즉시 시작 · 언제든 역할 부여 가능
+                </div>
+              </div>
+              <span class="mono muted">→</span>
+            </button>
+
+            <div class="card add-choice role" onClick={(e) => e.stopPropagation()}>
+              <div style={{ width: "100%" }}>
+                <div style={{ "font-weight": 700, "font-size": "12px" }}>⛬ 역할 세션</div>
+                <div class="muted" style={{ "font-size": "11px", "margin-bottom": "8px" }}>
+                  페르소나·직무를 정해 시작 · 권한 플래그는 스폰 시점에 적용
+                </div>
+                <Show
+                  when={availablePersonas().length > 0}
+                  fallback={<div class="muted mono" style={{ "font-size": "11px" }}>남은 페르소나가 없습니다</div>}
+                >
+                  <div class="role-edit-row">
+                    <select value={addPersona()} onChange={(e) => setAddPersona(e.currentTarget.value)}>
+                      <For each={availablePersonas()}>{(p) => <option value={p.id}>{p.name}</option>}</For>
+                    </select>
+                    <select value={addJob()} onChange={(e) => setAddJob(e.currentTarget.value)}>
+                      <For each={backend.listJobs()}>{(j) => <option value={j.id}>{j.name}</option>}</For>
+                    </select>
+                    <button class="btn primary" onClick={addRoleSession}>
+                      생성
+                    </button>
+                  </div>
+                </Show>
+              </div>
+            </div>
+
+            <div style={{ display: "flex", "justify-content": "flex-end", "margin-top": "12px" }}>
+              <button class="btn" onClick={() => setAddOpen(false)}>
+                취소
+              </button>
+            </div>
+          </div>
         </div>
       </Show>
 
