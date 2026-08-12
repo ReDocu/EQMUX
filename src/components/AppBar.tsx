@@ -20,6 +20,15 @@ export function AppBar() {
     if (top.status === "dead") return "var(--eq-red)";
     return undefined;
   };
+  // 미확인 상위 전파 (FR-G-45·46) — 세션 → 워크스페이스 탭 → 관제 탭
+  const wsUnseen = (wsId: string) => {
+    tick();
+    return backend.listSessions().some((s) => s.workspaceId === wsId && s.unseen);
+  };
+  const anyUnseen = () => {
+    tick();
+    return backend.listSessions().some((s) => s.unseen);
+  };
 
   return (
     <div class="appbar">
@@ -31,6 +40,9 @@ export function AppBar() {
           onClick={() => setView({ kind: "control" })}
         >
           관제
+          <Show when={anyUnseen()}>
+            <span class="unread-dot" />
+          </Show>
         </button>
         <For each={workspaces()}>
           {(ws) => (
@@ -43,6 +55,9 @@ export function AppBar() {
                 {(color) => <span class="dot" style={{ background: color() }} />}
               </Show>
               {ws.name}
+              <Show when={wsUnseen(ws.id)}>
+                <span class="unread-dot" />
+              </Show>
               <span
                 class="tab-close"
                 title="워크스페이스 닫기 (세션은 백그라운드 유지)"

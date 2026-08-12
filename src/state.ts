@@ -66,8 +66,9 @@ export const [defaultShell, setDefaultShell] = createSignal<ShellChoice>(SHELLS[
 export const [tick, setTick] = createSignal(0);
 backend.subscribe(() => setTick((t) => t + 1));
 
-/** 대시보드 셀 클릭 = 1클릭 점프 (FR-G-50) */
+/** 대시보드 셀 클릭 = 1클릭 점프 (FR-G-50). 페인을 보는 것이므로 미확인도 해제된다 (FR-G-44) */
 export function jumpToSession(workspaceId: string, sessionId: string) {
   setSelectedSession(sessionId);
+  backend.markSeen(sessionId);
   setView({ kind: "workspace", id: workspaceId });
 }

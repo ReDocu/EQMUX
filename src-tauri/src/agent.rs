@@ -2,7 +2,7 @@
 // 상태의 1차 소스는 세션 레지스트리 파일(§10.1)이며 출력 파싱을 하지 않는다 (FR-D-10).
 // 훅(2차 소스)·statusLine은 다음 단계 — PRD I의 `eqmux _hook` CLI와 함께 들어온다.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::mpsc::channel;
@@ -12,6 +12,7 @@ use std::time::Duration;
 use portable_pty::CommandBuilder;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
+use tauri_plugin_notification::NotificationExt;
 
 /// 추적 중인 에이전트 — 앱 세션(페인) ↔ Claude sessionId(FR-D-01 발급 UUID) 매핑
 #[derive(Clone)]
@@ -27,9 +28,18 @@ pub struct Tracked {
     pub pty_gen: u64,
 }
 
+/// 세션당 알림 합침 상태 (FR-G-32) — 마지막 발신 시각 + 그 사이 억제된 건수
+struct NotifyGate {
+    last_ms: i64,
+    suppressed: u32,
+}
+
 #[derive(Default)]
 pub struct AgentRt {
     pub by_uuid: Mutex<HashMap<String, Tracked>>,
+    /// 사용자가 의도한 종료 (중지·제거) — dead 알림 대상이 아니다 (G3: dead = 의도치 않은 종료)
+    pub expected_exit: Mutex<HashSet<String>>,
+    notify_gate: Mutex<HashMap<String, NotifyGate>>,
 }
 
 /// §7.1 상태 신호 스키마 (M1 부분집합)
@@ -126,7 +136,7 @@ pub fn claude_builders(
     vec![direct, via_cmd]
 }
 
-/// 상태 방송 + 상태 전이 이벤트 기록 (FR-D-17)
+/// 상태 방송 + 상태 전이 이벤트 기록 (FR-D-17) + OS 알림 (FR-G-30)
 pub fn emit_state(app: &AppHandle, evt: &AgentStateEvt) {
     let _ = app.emit("agent-state", evt.clone());
     let store: tauri::State<crate::StoreState> = app.state();
@@ -141,6 +151,68 @@ pub fn emit_state(app: &AppHandle, evt: &AgentStateEvt) {
         kind: "agent-state".into(),
         message: format!("{}{}", evt.status, waiting),
     });
+    maybe_notify(app, evt);
+}
+
+const NOTIFY_MIN_INTERVAL_MS: i64 = 60_000; // 세션당 최소 간격 — 반복 전이는 이 창 안에서 합쳐진다
+
+/// OS 알림 — `waiting`·`dead` 진입 2종에만 (G3 · FR-G-30). 상태 diff는 호출부(scan·EOF)가
+/// 이미 보장하므로 여기 도달한 waiting/dead는 전부 "진입"이다.
+fn maybe_notify(app: &AppHandle, evt: &AgentStateEvt) {
+    if evt.status != "waiting" && evt.status != "dead" {
+        return;
+    }
+    let rt: tauri::State<AgentRt> = app.state();
+    // 사용자가 의도한 종료(중지·제거)는 dead 알림 대상이 아니다
+    if evt.status == "dead" {
+        if let Ok(mut expected) = rt.expected_exit.lock() {
+            if expected.remove(&evt.session) {
+                return;
+            }
+        }
+    }
+    // 창이 포커스를 갖고 있으면 내지 않는다 (FR-G-31) — 인앱 표현으로 충분하다
+    let focused = app
+        .webview_windows()
+        .values()
+        .any(|w| w.is_focused().unwrap_or(false));
+    if focused {
+        return;
+    }
+    // 같은 세션의 반복 전이 합침 (FR-G-32) — 최소 간격 안에서는 개수만 센다
+    let suppressed = {
+        let Ok(mut gates) = rt.notify_gate.lock() else { return };
+        let now = crate::workspace::now_ms();
+        let gate = gates
+            .entry(evt.session.clone())
+            .or_insert(NotifyGate { last_ms: 0, suppressed: 0 });
+        if now - gate.last_ms < NOTIFY_MIN_INTERVAL_MS {
+            gate.suppressed += 1;
+            return;
+        }
+        let n = gate.suppressed;
+        gate.last_ms = now;
+        gate.suppressed = 0;
+        n
+    };
+    let name = evt.session.split('@').next().unwrap_or(&evt.session);
+    let title = if evt.status == "waiting" {
+        format!("{name} · 승인 대기")
+    } else {
+        format!("{name} · 종료됨")
+    };
+    let mut body = if evt.status == "waiting" {
+        evt.waiting_for.clone().unwrap_or_else(|| "사람의 응답이 필요합니다".into())
+    } else {
+        match evt.exit_code {
+            Some(c) => format!("exit {c} · 재개 {}", if evt.resumable { "가능" } else { "불가" }),
+            None => "프로세스가 종료되었습니다".into(),
+        }
+    };
+    if suppressed > 0 {
+        body.push_str(&format!(" (그 사이 전이 {suppressed}건 합침)"));
+    }
+    let _ = app.notification().builder().title(title).body(body).show();
 }
 
 /// PTY EOF → dead 전이 (FR-D-50). 세대(gen)가 다르면 이미 재기동된 세션이므로 무시한다.

@@ -27,6 +27,10 @@ export interface Backend {
   // ── M0 목 mutation — M1에서 SessionService invoke로 교체 ──
   sendMessage(from: string, to: string, type: ConversationMessage["type"], body: string): void;
   markAllRead(): void;
+  /** 미확인 해제 (FR-G-44) — 그 세션의 페인을 보거나 상세를 열면 해제된다 */
+  markSeen(sessionId: string): void;
+  /** 모두 확인 (FR-G-47) */
+  markAllSeen(): void;
   resumeSession(id: string): void;
   stopSession(id: string): void;
   restartSession(id: string): void;
@@ -226,6 +230,7 @@ const SESSIONS: Session[] = [
   s("noel@academy", "academy", 2, "noel", "impl", {
     status: "waiting",
     waitingFor: "Bash(npm publish)",
+    unseen: true,
     missionId: "auth-refactor",
     agentSessionId: "8d19c2aa",
     agentVersion: "2.1.226",
@@ -278,6 +283,7 @@ const SESSIONS: Session[] = [
     status: "dead",
     exitCode: 1,
     resumable: true,
+    unseen: true,
     scrollbackLines: 5100,
     lastOutput: "종료됨 · exit 1",
     sinceMs: 31 * 60000,
@@ -456,6 +462,24 @@ export class MockBackend implements Backend {
   markAllRead() {
     for (const m of MESSAGES) m.unread = false;
     this.broadcast();
+  }
+
+  markSeen(sessionId: string) {
+    const sess = SESSIONS.find((x) => x.id === sessionId);
+    if (!sess?.unseen) return; // 변경 없으면 방송하지 않는다 — 열람 효과의 재귀 방지
+    sess.unseen = false;
+    this.broadcast();
+  }
+
+  markAllSeen() {
+    let changed = false;
+    for (const sess of SESSIONS) {
+      if (sess.unseen) {
+        sess.unseen = false;
+        changed = true;
+      }
+    }
+    if (changed) this.broadcast();
   }
 
   resumeSession(id: string) {
@@ -644,6 +668,8 @@ export class MockBackend implements Backend {
     sess.exitCode = evt.exitCode;
     if (evt.status && prev !== evt.status) {
       sess.sinceMs = 0;
+      // 미확인 마킹은 알림 대상과 같은 2종뿐이다 (FR-G-45)
+      if (evt.status === "waiting" || evt.status === "dead") sess.unseen = true;
       if (evt.status !== "dead") sess.restartNeeded = sess.restartNeeded && evt.status === "starting";
       sess.lastOutput =
         evt.status === "waiting"

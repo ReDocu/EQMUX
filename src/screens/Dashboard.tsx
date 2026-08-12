@@ -1,7 +1,10 @@
 // 관제 고정 탭 — 다중 워크스페이스 대시보드 (result_prd §3.2 · sYRf5 배경 시안).
 // 관측과 이동만 제공한다. 승인·거부·일괄 액션은 없다 (G7).
-import { For, Show } from "solid-js";
+import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { queryGlobalEvents } from "../backend/events";
+import type { FeedEvent } from "../backend/events";
 import { backend } from "../backend/mock";
+import { isTauri } from "../backend/pty";
 import { jumpToSession, tick } from "../state";
 import { StatusLabel } from "../components/ui";
 import type { Session } from "../types";
@@ -14,7 +17,25 @@ export function Dashboard() {
   };
   const workspaces = () => backend.listWorkspaces().filter((w) => w.open);
   const missions = () => backend.listMissions();
-  const events = () => backend.listEvents();
+
+  // 이벤트 피드 실연결 (FR-G-40) — 원천은 event 테이블. 상태 방송에 붙어 갱신하며 폴링하지 않는다.
+  const [realFeed, setRealFeed] = createSignal<FeedEvent[]>([]);
+  onMount(() => {
+    if (!isTauri()) return;
+    const load = () => void queryGlobalEvents(60).then(setRealFeed);
+    load();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const unsub = backend.subscribe(() => {
+      clearTimeout(timer);
+      timer = setTimeout(load, 500);
+    });
+    onCleanup(() => {
+      clearTimeout(timer);
+      unsub();
+    });
+  });
+  const events = () =>
+    isTauri() ? realFeed() : backend.listEvents().map((e) => ({ ...e, sessionId: e.sessionId }));
 
   const count = (st: string) => sessions().filter((s) => s.status === st).length;
   const subagents = () => sessions().reduce((n, s) => n + s.subagents, 0);
@@ -22,6 +43,13 @@ export function Dashboard() {
   const personaName = (s: Session) =>
     backend.listPersonas().find((p) => p.id === s.personaId)?.name ?? (s.personaId || "기본 터미널");
   const missionName = (s: Session) => missions().find((m) => m.id === s.missionId)?.name;
+  // 피드 행의 발신자 — 이미 사라진 세션의 이벤트도 남으므로 안전 조회
+  const eventName = (sessionId?: string) => {
+    if (!sessionId) return "앱";
+    const s = sessions().find((x) => x.id === sessionId);
+    return s ? personaName(s) : sessionId.split("@")[0];
+  };
+  const unseenCount = () => sessions().filter((s) => s.unseen).length;
 
   // FR-G-07 — 주의 필요 순 정렬 (워크스페이스 행 안에서 셀 정렬)
   const wsSessions = (wsId: string) =>
@@ -94,7 +122,12 @@ export function Dashboard() {
                         onClick={() => jumpToSession(ws.id, s.id)}
                         title="클릭하면 해당 페인으로 점프 (FR-G-50)"
                       >
-                        <div class="cell-name">{personaName(s)}</div>
+                        <div class="cell-name">
+                          {personaName(s)}
+                          <Show when={s.unseen}>
+                            <span class="unread-dot" title="미확인 — 열람하면 해제 (FR-G-44)" />
+                          </Show>
+                        </div>
                         <StatusLabel session={s} />
                         <div class="cell-mission muted">{cellLine2(s)}</div>
                       </button>
@@ -117,8 +150,15 @@ export function Dashboard() {
 
         {/* 주의 & 이벤트 (FR-G-40~42) */}
         <div class="dash-side">
-          <div class="eyebrow" style={{ "margin-bottom": "8px" }}>
-            주의 & 이벤트 · 전역
+          <div style={{ display: "flex", "align-items": "center", "margin-bottom": "8px", gap: "8px" }}>
+            <div class="eyebrow" style={{ flex: 1 }}>
+              주의 & 이벤트 · 전역
+            </div>
+            <Show when={unseenCount() > 0}>
+              <button class="btn ghost" title="모든 세션의 미확인 해제 (FR-G-47)" onClick={() => backend.markAllSeen()}>
+                모두 확인 ({unseenCount()})
+              </button>
+            </Show>
           </div>
           <Show when={waitingSession()}>
             {(w) => (
@@ -136,18 +176,21 @@ export function Dashboard() {
               </button>
             )}
           </Show>
-          <div class="card" style={{ "margin-top": "10px" }}>
+          <div class="card" style={{ "margin-top": "10px", "max-height": "60vh", "overflow-y": "auto" }}>
             <For each={events()}>
               {(e) => (
                 <div class="event-row">
                   <span class="mono muted">{e.time}</span>
-                  <span style={{ "font-weight": 600 }}>
-                    {e.sessionId ? personaName(sessions().find((s) => s.id === e.sessionId)!) : "앱"}
-                  </span>
+                  <span style={{ "font-weight": 600 }}>{eventName(e.sessionId)}</span>
                   <span class="muted">{e.message}</span>
                 </div>
               )}
             </For>
+            <Show when={events().length === 0}>
+              <div class="muted" style={{ "font-size": "11px", padding: "6px" }}>
+                아직 이벤트가 없습니다
+              </div>
+            </Show>
           </div>
         </div>
       </div>

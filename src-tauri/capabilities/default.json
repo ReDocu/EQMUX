@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "메인 윈도우 기본 권한",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "notification:default"]
 }

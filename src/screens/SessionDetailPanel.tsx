@@ -1,10 +1,12 @@
 // 세션 상세 (lefeD) — 상태·실행 플래그 원문·메모리(C11)·재개 근거를 정직하게 표시한다.
 // 승인·거부는 여기서 제공하지 않는다 (G7) — 액션은 점프·재개·중지 3종 + 역할 변경.
-import { createEffect, createSignal, For, on, Show } from "solid-js";
+import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
 import { restartAgent, resumeAgent } from "../backend/agent";
+import { queryEvents } from "../backend/events";
+import type { FeedEvent } from "../backend/events";
 import { backend } from "../backend/mock";
 import { nudgeRoleReload, removeRoleFile, saveRoleFile } from "../backend/roles";
-import { isTauri, openLogDir } from "../backend/pty";
+import { isTauri, killPty, openLogDir } from "../backend/pty";
 import { sessionTermSize } from "../components/TerminalPane";
 import { jumpToSession } from "../state";
 import { Eyebrow, KV, StatusLabel } from "../components/ui";
@@ -13,6 +15,27 @@ import { flagsToString, translatePermissions } from "../types";
 
 export function SessionDetailPanel(props: { session: Session }) {
   const s = () => props.session;
+  // 상세를 열면 미확인 해제 (FR-G-44) — markSeen은 변경 없으면 방송하지 않아 재귀가 없다
+  createEffect(() => {
+    if (s().unseen) backend.markSeen(s().id);
+  });
+
+  // 세션 스코프 이벤트 피드 (FR-G-61) — 원천은 event 테이블, 상태 방송에 붙어 갱신
+  const [feed, setFeed] = createSignal<FeedEvent[]>([]);
+  onMount(() => {
+    if (!isTauri()) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const load = () => void queryEvents(s().workspaceId, { session: s().id, limit: 8 }).then(setFeed);
+    createEffect(on(() => s().id, load));
+    const unsub = backend.subscribe(() => {
+      clearTimeout(timer);
+      timer = setTimeout(load, 500);
+    });
+    onCleanup(() => {
+      clearTimeout(timer);
+      unsub();
+    });
+  });
   const persona = () => backend.listPersonas().find((p) => p.id === s().personaId);
   const job = () => backend.listJobs().find((j) => j.id === s().jobId);
   const mission = () => backend.listMissions().find((m) => m.id === s().missionId);
@@ -168,6 +191,21 @@ export function SessionDetailPanel(props: { session: Session }) {
         <div class="card inset flags mono">{flags()}</div>
       </div>
 
+      <Show when={isTauri() && feed().length > 0}>
+        <div style={{ "margin-top": "10px" }}>
+          <Eyebrow>세션 이벤트 (FR-G-61)</Eyebrow>
+          <div class="card inset" style={{ padding: "6px 10px" }}>
+            <For each={feed()}>
+              {(e) => (
+                <div class="mono muted" style={{ "font-size": "11px", "line-height": 1.7 }}>
+                  {e.time} {e.message}
+                </div>
+              )}
+            </For>
+          </div>
+        </div>
+      </Show>
+
       {/* 역할 CRUD — 기본 터미널엔 부여, 역할 세션엔 변경·해제. 권한 변경은 재시작으로 이어진다. */}
       <Show
         when={s().personaId}
@@ -249,7 +287,15 @@ export function SessionDetailPanel(props: { session: Session }) {
         >
           재개
         </button>
-        <button class="btn danger" disabled={s().status === "dead"} onClick={() => backend.stopSession(s().id)}>
+        <button
+          class="btn danger"
+          disabled={s().status === "dead"}
+          onClick={() => {
+            // 실제 PTY 종료 (FR-G-52) — 의도한 종료라 OS 알림은 나지 않는다 (Rust expected_exit)
+            if (isTauri()) killPty(s().id);
+            backend.stopSession(s().id);
+          }}
+        >
           중지
         </button>
       </div>

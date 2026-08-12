@@ -18,6 +18,8 @@ import {
   tick,
 } from "../state";
 import { Eyebrow, PersonaDot, StatusLabel } from "../components/ui";
+import { queryEvents } from "../backend/events";
+import type { FeedEvent } from "../backend/events";
 import { refreshMissions } from "../backend/missions";
 import { isTauri, killPty, storeUsageReal } from "../backend/pty";
 import type { StoreUsageReal } from "../backend/pty";
@@ -70,6 +72,27 @@ export function ControlCenter(props: { workspace: Workspace }) {
     const t = setInterval(load, 10_000);
     onCleanup(() => clearInterval(t));
   });
+
+  // 워크스페이스 스코프 이벤트 (FR-G-41) — 스트립의 SessionService 칸을 실데이터로
+  const [wsFeed, setWsFeed] = createSignal<FeedEvent[]>([]);
+  onMount(() => {
+    if (!isTauri()) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const load = () => void queryEvents(props.workspace.id, { limit: 4 }).then(setWsFeed);
+    load();
+    const unsub = backend.subscribe(() => {
+      clearTimeout(timer);
+      timer = setTimeout(load, 500);
+    });
+    onCleanup(() => {
+      clearTimeout(timer);
+      unsub();
+    });
+  });
+  const stripEvents = () =>
+    isTauri()
+      ? wsFeed().map((e) => ({ time: e.time, message: e.message }))
+      : backend.listEvents().slice(0, 4).map((e) => ({ time: e.time, message: e.message }));
 
   // ESC = 전체 화면 종료 (줌 상태가 있으면 줌부터 해제)
   onMount(() => {
@@ -390,8 +413,8 @@ export function ControlCenter(props: { workspace: Workspace }) {
               </Show>
             </div>
             <div class="card strip-card">
-              <Eyebrow>SessionService 이벤트</Eyebrow>
-              <For each={backend.listEvents().slice(0, 4)}>
+              <Eyebrow>SessionService 이벤트 {isTauri() ? "(실측)" : "(목)"}</Eyebrow>
+              <For each={stripEvents()}>
                 {(e) => (
                   <div class="mono muted" style={{ "font-size": "11px" }}>
                     {e.time} {e.message}

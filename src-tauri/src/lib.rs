@@ -267,9 +267,18 @@ fn pty_resize(state: State<PtyState>, id: String, cols: u16, rows: u16) -> Resul
 }
 
 #[tauri::command]
-fn pty_kill(state: State<PtyState>, store_state: State<StoreState>, id: String) -> Result<(), String> {
+fn pty_kill(
+    state: State<PtyState>,
+    store_state: State<StoreState>,
+    rt: State<agent::AgentRt>,
+    id: String,
+) -> Result<(), String> {
     let mut sessions = state.0.lock().map_err(|e| e.to_string())?;
     if let Some(mut s) = sessions.remove(&id) {
+        // 사용자가 의도한 종료 — dead 전이는 나되 OS 알림은 내지 않는다 (G3)
+        if let Ok(mut expected) = rt.expected_exit.lock() {
+            expected.insert(id.clone());
+        }
         let _ = s.child.kill();
         let ws = id.split('@').nth(1).unwrap_or("default").to_string();
         let _ = store_state.0.sender().send(StoreMsg::Event {
@@ -311,6 +320,74 @@ fn scrollback_tail(
         .query_map(params![session, count], |r| r.get::<_, String>(0))
         .map_err(|e| e.to_string())?;
     Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EventRow {
+    id: i64,
+    ts: i64,
+    session_id: Option<String>,
+    kind: String,
+    payload: Option<String>,
+}
+
+/// 이벤트 피드 조회 (FR-G-40·41·43) — 원천은 event 테이블, G는 별도 저장을 하지 않는다.
+/// 스코프: session 지정 시 세션 / 미지정 시 워크스페이스. 전역은 프런트가 워크스페이스별로
+/// 모아 병합한다 (DB가 워크스페이스 단위라서). 페이징은 before_id 커서.
+#[tauri::command]
+fn events_query(
+    store_state: State<StoreState>,
+    workspace: String,
+    session: Option<String>,
+    before_id: Option<i64>,
+    limit: u32,
+) -> Result<Vec<EventRow>, String> {
+    let path = store::db_path(&store_state.0.root(), &workspace);
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|e| e.to_string())?;
+    let cursor = before_id.unwrap_or(i64::MAX);
+    let limit = limit.min(500) as i64;
+    let map = |r: &rusqlite::Row| -> rusqlite::Result<EventRow> {
+        Ok(EventRow {
+            id: r.get(0)?,
+            ts: r.get(1)?,
+            session_id: r.get(2)?,
+            kind: r.get(3)?,
+            payload: r.get(4)?,
+        })
+    };
+    let rows = if let Some(sess) = session {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, ts, session_id, kind, payload FROM event
+                 WHERE session_id = ?1 AND id < ?2 ORDER BY id DESC LIMIT ?3",
+            )
+            .map_err(|e| e.to_string())?;
+        let out = stmt
+            .query_map(params![sess, cursor, limit], map)
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect::<Vec<_>>();
+        out
+    } else {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, ts, session_id, kind, payload FROM event
+                 WHERE id < ?1 ORDER BY id DESC LIMIT ?2",
+            )
+            .map_err(|e| e.to_string())?;
+        let out = stmt
+            .query_map(params![cursor, limit], map)
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect::<Vec<_>>();
+        out
+    };
+    Ok(rows)
 }
 
 #[derive(Serialize)]
@@ -859,6 +936,7 @@ fn app_version() -> &'static str {
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .manage(PtyState::default())
         .setup(|app| {
             // 스토어 루트 = 앱 데이터 (FR-C-20a — repo 안에 바이너리를 두지 않는다)
@@ -889,6 +967,7 @@ pub fn run() {
             mission_assign,
             scrollback_tail,
             store_usage_real,
+            events_query,
             ws_pick_folder,
             ws_registry,
             ws_register,
