@@ -1328,10 +1328,13 @@
 }
 .dts-grid {
   display: grid;
-  grid-template-columns: 380px 1fr;
+  grid-template-columns: 380px minmax(0, 1fr);
   gap: 12px;
   margin-bottom: 12px;
   align-items: start;
+}
+.dts-grid > * {
+  min-width: 0; /* 긴 실경로가 컬럼을 밀어내지 않는다 */
 }
 .dts-guide {
   display: flex;
@@ -1339,6 +1342,11 @@
   align-items: flex-start;
   gap: 10px;
   padding: 16px;
+  overflow: hidden;
+}
+.dts-guide .card.inset {
+  align-self: stretch;
+  min-width: 0;
 }
 .dts-guide-title {
   font-size: 16px;
@@ -1363,6 +1371,12 @@
 .dts-screen {
   min-height: 180px;
   font-size: 12px;
+  overflow: hidden;
+}
+.dts-screen > div {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .dts-cursor {
   animation: dts-blink 1.1s steps(1) infinite;
@@ -1385,6 +1399,9 @@
   gap: 2px;
   padding: 7px 9px;
   font-size: 10px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
 }
 .dts-slot.active {
   border-color: var(--eq-green);

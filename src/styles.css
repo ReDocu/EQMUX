@@ -196,10 +196,13 @@ textarea:focus {
 }
 .kv .k {
   color: var(--eq-muted);
+  flex-shrink: 0;
 }
 .kv .v {
   font-family: var(--eq-mono);
   text-align: right;
+  min-width: 0;
+  word-break: break-all; /* 실경로 등 긴 mono 값이 레이아웃을 뚫지 않게 */
 }
 
 /* ── 앱 셸 ────────────────────────────────────────────────────── */
