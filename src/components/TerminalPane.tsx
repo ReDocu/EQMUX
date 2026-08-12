@@ -176,11 +176,24 @@ async function initSession(
     });
     term.onData((data) => writePty(props.sessionId, data));
 
-    // 앱 재시작 복구 (FR-C-31·32) — 스토어의 확정 줄을 흐리게 재생하고 경계를 긋는다
+    // 앱 재시작 복구 (FR-C-31·32) — 스토어의 확정 줄을 흐리게 재생하고 경계를 긋는다.
+    // 기존 DB에 남은 TUI 잔해(상자 문자 프레임 조각·연속 중복)는 재생에서 걸러낸다.
+    const BOXY = /[─│╭╮╯╰┌┐└┘═║╔╗╚╝┃━╌╍┤├┬┴┼]/g;
+    const isNoise = (l: string) => {
+      const t = l.replace(/\s/g, "");
+      if (!t) return true;
+      return ((t.match(BOXY) ?? []).length * 2) >= t.length;
+    };
     const tail = await scrollbackTail(props.wsId ?? "default", props.sessionId, 500);
-    if (tail.length > 0) {
-      term.writeln(`\x1b[90m─── 이전 세션 스크롤백 · 마지막 ${tail.length}줄 재생 ───\x1b[0m`);
-      for (const line of tail) term.writeln(`\x1b[2m${line}\x1b[0m`);
+    let prevLine = "";
+    const cleaned = tail.filter((l) => {
+      if (isNoise(l) || l === prevLine) return false;
+      prevLine = l;
+      return true;
+    });
+    if (cleaned.length > 0) {
+      term.writeln(`\x1b[90m─── 이전 세션 스크롤백 · 마지막 ${cleaned.length}줄 재생 ───\x1b[0m`);
+      for (const line of cleaned) term.writeln(`\x1b[2m${line}\x1b[0m`);
       term.writeln("\x1b[90m─── 새 세션 시작 ───\x1b[0m");
     }
     // 역할 세션 = Claude Code 에이전트 기동 (PRD D) / 기본 터미널 = 일반 셸
@@ -309,9 +322,15 @@ export function TerminalPane(props: {
 
     // 크기 추적 — 디바운스 + 실변경시에만 PTY resize (ConPTY는 resize마다 리페인트한다)
     let resizeTimer: ReturnType<typeof setTimeout> | undefined;
+    let settleTimer: ReturnType<typeof setTimeout> | undefined;
     const queueSync = () => {
       clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(syncSize, 120);
+      clearTimeout(settleTimer);
+      resizeTimer = setTimeout(() => {
+        syncSize();
+        // 드래그가 끝난 뒤 한 번 더 수렴 — PTY와 xterm 열 수가 어긋난 채 남지 않게
+        settleTimer = setTimeout(syncSize, 350);
+      }, 100);
     };
     const ro = new ResizeObserver(queueSync);
     ro.observe(host);
@@ -321,6 +340,7 @@ export function TerminalPane(props: {
     onCleanup(() => {
       cancelled = true;
       clearTimeout(resizeTimer);
+      clearTimeout(settleTimer);
       ro.disconnect();
       window.removeEventListener("resize", queueSync);
       host.removeEventListener("contextmenu", onContextMenu);

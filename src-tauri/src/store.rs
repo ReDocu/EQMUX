@@ -281,6 +281,27 @@ fn flush(
     }
 }
 
+/// TUI 리페인트 잔해 판정 — 상자 그리기 문자가 절반 이상인 줄은 스필하지 않는다.
+/// Claude Code처럼 인라인 박스를 다시 그리는 TUI의 프레임 조각이 스크롤백을 오염시키는 것을 막는다.
+pub fn is_tui_noise(line: &str) -> bool {
+    let mut total = 0usize;
+    let mut boxy = 0usize;
+    for c in line.chars() {
+        if c.is_whitespace() {
+            continue;
+        }
+        total += 1;
+        if matches!(
+            c,
+            '─' | '│' | '╭' | '╮' | '╯' | '╰' | '┌' | '┐' | '└' | '┘' | '═' | '║' | '╔'
+                | '╗' | '╚' | '╝' | '┃' | '━' | '╌' | '╍' | '┤' | '├' | '┬' | '┴' | '┼'
+        ) {
+            boxy += 1;
+        }
+    }
+    total > 0 && boxy * 2 >= total
+}
+
 /// VT 시퀀스를 걸러 확정된 줄만 뽑아내는 조립기 (FR-C-11).
 /// CSI·OSC·단축 ESC를 제거하고, \r 덮어쓰기(진행 표시줄)는 마지막 내용만 남긴다.
 /// 완전한 VT 파서(PRD A)가 오면 그 확정 줄로 교체한다.

@@ -165,6 +165,7 @@ fn spawn_pty_session(
             let _ = writeln!(f, "\n=== EQMUX session start · {} · epoch {} ===", id, epoch_secs());
         }
         let mut assembler = LineAssembler::new();
+        let mut last_spilled = String::new();
         let mut buf = [0u8; 8192];
         loop {
             match reader.read(&mut buf) {
@@ -175,6 +176,11 @@ fn spawn_pty_session(
                     }
                     let data = String::from_utf8_lossy(&buf[..n]).into_owned();
                     assembler.push(&data, |line| {
+                        // TUI 프레임 잔해·연속 중복은 스필하지 않는다 (재생 오염 방지)
+                        if store::is_tui_noise(&line) || line == last_spilled {
+                            return;
+                        }
+                        last_spilled = line.clone();
                         let _ = store_tx.send(StoreMsg::Line {
                             ws: ws.clone(),
                             id: id.clone(),
