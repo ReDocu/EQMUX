@@ -2,21 +2,12 @@
 // 도구 열은 design.pen DdrkL 구성을 따른다: 배치 · 임무 · git · 포트 · 로그 · 브라우저 · 팀 · 대화 · 설정.
 import { For, Show } from "solid-js";
 import { backend } from "../backend/mock";
-import {
-  openPanel,
-  panelOpen,
-  panelTab,
-  setExitOpen,
-  setLayoutPickerOpen,
-  setView,
-  tick,
-  view,
-} from "../state";
+import { openPanel, panelOpen, panelTab, setExitOpen, setView, tick, view } from "../state";
 import type { PanelTab } from "../state";
 import { ATTENTION_ORDER } from "../types";
 
+// 컨트롤 센터 헤더와 중복되는 도구(임무·배치·대화)는 화면 쪽에만 둔다 — Nav는 전역 도구만.
 const PANEL_TOOLS: { key: PanelTab; label: string }[] = [
-  { key: "missions", label: "임무" },
   { key: "git", label: "git" },
   { key: "ports", label: "포트" },
   { key: "logs", label: "로그" },
@@ -84,9 +75,6 @@ export function AppBar() {
         </button>
       </div>
       <div class="tools">
-        <button class="tool" title="페인 배치 (CTRL+SHIFT+L)" onClick={() => setLayoutPickerOpen(true)}>
-          배치
-        </button>
         <For each={PANEL_TOOLS}>
           {(t) => (
             <button class="tool" classList={{ active: panelToolActive(t.key) }} onClick={() => openPanel(t.key)}>
