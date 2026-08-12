@@ -54,6 +54,7 @@ export interface Session {
   exitCode?: number;
   missionId?: string;
   restartNeeded: boolean; // 권한 변경 감지 (E11′)
+  restored?: boolean; // team.json에서 복원됨 — 에이전트 자동 실행 없음, 재개 칩만 (S3)
   sinceMs: number; // 현재 status 진입 이후 경과
   scrollbackLines: number;
   memoryMb?: number; // C11 · FR-C-09

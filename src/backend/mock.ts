@@ -41,6 +41,11 @@ export interface Backend {
   removeTerminal(id: string): void;
   /** 역할 세션의 페르소나·직무 변경 — 직무가 바뀌면 권한 변경이므로 재시작 필요(E11′) */
   updateSessionRole(id: string, personaId: string, jobId: string): void;
+  /** team.json에서 복원된 슬롯을 세션으로 채운다 — 에이전트는 자동 실행하지 않는다 (S3) */
+  hydrateTeam(
+    wsId: string,
+    slots: { slot: number; persona: string; job: string; agentSessionId: string | null; resumable: boolean }[],
+  ): void;
   /** 실물 에이전트 상태 반영 (PRD D agent-state 이벤트) — Tauri에서만 호출된다 */
   applyAgentState(evt: {
     session: string;
@@ -584,6 +589,37 @@ export class MockBackend implements Backend {
     this.broadcast();
   }
 
+  hydrateTeam(
+    wsId: string,
+    slots: { slot: number; persona: string; job: string; agentSessionId: string | null; resumable: boolean }[],
+  ) {
+    const ws = WORKSPACES.find((x) => x.id === wsId);
+    if (!ws) return;
+    let added = 0;
+    for (const sl of slots) {
+      const slot = sl.slot as 1 | 2 | 3 | 4;
+      const used = SESSIONS.some((x) => x.workspaceId === wsId && x.slot === slot);
+      if (used || slot < 1 || slot > 4) continue;
+      SESSIONS.push(
+        s(`${sl.persona}@${wsId}`, wsId, slot, sl.persona, sl.job, {
+          status: "shell",
+          cwd: ws.path,
+          sinceMs: 0,
+          restored: true,
+          resumable: sl.resumable,
+          resumeReason: sl.resumable ? "transcript + cwd 일치" : "transcript 없음",
+          agentSessionId: sl.agentSessionId?.slice(0, 8),
+          lastOutput: sl.resumable ? "복원됨 · 재개 대기" : "복원됨 · 새 시작 필요",
+        }),
+      );
+      added++;
+    }
+    if (added > 0) {
+      this.logEvent("app", `팀 복원 · ${ws.name} · ${added}개 슬롯 (team.json)`);
+      this.broadcast();
+    }
+  }
+
   applyAgentState(evt: {
     session: string;
     agentSession: string;
@@ -595,6 +631,7 @@ export class MockBackend implements Backend {
   }) {
     const sess = SESSIONS.find((x) => x.id === evt.session);
     if (!sess) return;
+    sess.restored = false; // 실물 에이전트가 붙었다 — 복원 대기 상태 해제
     const prev = sess.status;
     sess.agentSessionId = evt.agentSession.slice(0, 8);
     if (evt.status) sess.status = evt.status;

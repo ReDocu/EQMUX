@@ -16,6 +16,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 mod agent;
 pub(crate) mod store;
+mod team;
 mod workspace;
 use store::{LineAssembler, Store, StoreMsg};
 use workspace::{WsEntry, WsInfo};
@@ -485,10 +486,50 @@ fn find_tracked(app: &AppHandle, id: &str) -> Option<(String, agent::Tracked)> {
 }
 
 /// 재개 (FR-D-21~23) — 사용자 트리거 전용. 같은 uuid + 같은 cwd로 --resume.
+/// 앱 재시작 후에는 추적 맵이 비어 있으므로 agent_session 테이블(FR-D-24)에서 복원한다.
 #[tauri::command]
-fn agent_resume(app: AppHandle, id: String, cols: u16, rows: u16) -> Result<String, String> {
-    let Some((uuid, t)) = find_tracked(&app, &id) else {
-        return Err("재개 정보 없음 — 이 세션에서 실행된 에이전트가 없습니다".into());
+#[allow(clippy::too_many_arguments)]
+fn agent_resume(
+    app: AppHandle,
+    id: String,
+    workspace: String,
+    cwd: String,
+    name: String,
+    permission_mode: String,
+    disallowed_tools: Vec<String>,
+    cols: u16,
+    rows: u16,
+) -> Result<String, String> {
+    let (uuid, t) = match find_tracked(&app, &id) {
+        Some(x) => x,
+        None => {
+            // 스토어 폴백 — 재부팅 후 복귀 (S3)
+            let store: State<StoreState> = app.state();
+            let path = store::db_path(&store.0.root(), &workspace);
+            let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .map_err(|_| "재개 정보 없음 — 스토어가 비어 있습니다".to_string())?;
+            let uuid: String = conn
+                .query_row(
+                    "SELECT agent_session_id FROM agent_session WHERE session_id = ?1",
+                    params![id],
+                    |r| r.get(0),
+                )
+                .map_err(|_| "재개 정보 없음 — 이 세션에서 실행된 에이전트가 없습니다".to_string())?;
+            (
+                uuid,
+                agent::Tracked {
+                    app_session: id.clone(),
+                    ws: workspace,
+                    cwd,
+                    name,
+                    permission_mode,
+                    disallowed: disallowed_tools,
+                    last_status: "dead".into(),
+                    last_waiting: None,
+                    pty_gen: 0,
+                },
+            )
+        }
     };
     if !agent::resumable(&t.cwd, &uuid) {
         return Err("재개 불가 — 트랜스크립트가 없습니다".into());
@@ -526,6 +567,56 @@ fn agent_restart(
         uuid,
         can_resume,
     )
+}
+
+// ── 팀 편성 파일 (PRD E §4.2) ──
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TeamSlotInfo {
+    #[serde(flatten)]
+    slot: team::TeamSlot,
+    agent_session_id: Option<String>,
+    resumable: bool,
+}
+
+/// team.json 로드 + 슬롯별 재개 정보 결합 (agent_session 테이블 · 트랜스크립트 실측)
+#[tauri::command]
+fn team_load(
+    store_state: State<StoreState>,
+    workspace_id: String,
+    ws_path: String,
+) -> Result<Vec<TeamSlotInfo>, String> {
+    let file = team::load(&ws_path);
+    let db = store::db_path(&store_state.0.root(), &workspace_id);
+    let conn = Connection::open_with_flags(&db, OpenFlags::SQLITE_OPEN_READ_ONLY).ok();
+    let out = file
+        .slots
+        .into_iter()
+        .map(|slot| {
+            let session_id = format!("{}@{}", slot.persona, workspace_id);
+            let uuid: Option<String> = conn.as_ref().and_then(|c| {
+                c.query_row(
+                    "SELECT agent_session_id FROM agent_session WHERE session_id = ?1",
+                    params![session_id],
+                    |r| r.get(0),
+                )
+                .ok()
+            });
+            let resumable = uuid
+                .as_deref()
+                .map(|u| agent::resumable(&ws_path, u))
+                .unwrap_or(false);
+            TeamSlotInfo { slot, agent_session_id: uuid, resumable }
+        })
+        .collect();
+    Ok(out)
+}
+
+/// team.json + team.md 저장 (FR-E-11·12·17)
+#[tauri::command]
+fn team_save(ws_path: String, slots: Vec<team::TeamSlot>) -> Result<(), String> {
+    team::save(&ws_path, &slots)
 }
 
 // ── 워크스페이스 레지스트리 (PRD E §4.1) ──
@@ -714,6 +805,8 @@ pub fn run() {
             agent_spawn,
             agent_resume,
             agent_restart,
+            team_load,
+            team_save,
             scrollback_tail,
             store_usage_real,
             ws_pick_folder,

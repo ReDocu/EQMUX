@@ -3,6 +3,7 @@ import { AppBar } from "./components/AppBar";
 import { SidePanel } from "./components/SidePanel";
 import { ensureAgentListeners } from "./backend/agent";
 import { backend } from "./backend/mock";
+import { startTeamSync } from "./backend/team";
 import { refreshWorkspaces } from "./backend/workspaces";
 import { exitOpen, layoutPickerOpen, panelOpen, setLayoutPickerOpen, view } from "./state";
 import { ControlCenter } from "./screens/ControlCenter";
@@ -26,6 +27,8 @@ export function App() {
   onMount(() => void refreshWorkspaces());
   // agent-state 이벤트 수신 시작 (PRD D) — 상태 스트림이 목 백엔드를 실측으로 덮는다
   onMount(() => void ensureAgentListeners());
+  // 팀 편성 자동 저장 (PRD E) — 역할 슬롯 변경 → .eqmux/team.json + team.md
+  onMount(() => startTeamSync());
 
   // 페인 배치 단축키 (srpYm 푸터 명세) — CTRL + SHIFT + L
   onMount(() => {

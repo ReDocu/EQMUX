@@ -65,9 +65,27 @@ export async function spawnAgent(
   });
 }
 
-/** 재개 (FR-D-21~23) — 사용자 트리거 전용 */
-export function resumeAgent(sessionId: string, cols: number, rows: number): Promise<string> {
-  return invoke<string>("agent_resume", { id: sessionId, cols, rows });
+/** 재개 (FR-D-21~23) — 사용자 트리거 전용. 앱 재시작 후엔 스토어 매핑으로 복원된다. */
+export function resumeAgent(
+  sessionId: string,
+  wsId: string,
+  cwd: string,
+  name: string,
+  permissions: Permissions,
+  cols: number,
+  rows: number,
+): Promise<string> {
+  const f = translatePermissions(permissions);
+  return invoke<string>("agent_resume", {
+    id: sessionId,
+    workspace: wsId,
+    cwd,
+    name,
+    permissionMode: f.permissionMode,
+    disallowedTools: f.disallowedTools,
+    cols,
+    rows,
+  });
 }
 
 /** 권한 변경 재시작 (E11′ · FR-D-26) — 재개 기반, 대화 유지 */

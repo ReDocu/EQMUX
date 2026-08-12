@@ -175,7 +175,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
               wsId={props.workspace.id}
               shell={shellCmdFor(s)}
               agent={
-                s.personaId && job(s.jobId)
+                s.personaId && job(s.jobId) && !s.restored
                   ? { name: persona(s.personaId)?.name ?? s.personaId, permissions: job(s.jobId)!.permissions }
                   : undefined
               }

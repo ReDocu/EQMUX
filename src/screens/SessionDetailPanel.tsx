@@ -51,9 +51,19 @@ export function SessionDetailPanel(props: { session: Session }) {
   const doResume = async () => {
     setActionErr(undefined);
     if (isTauri() && s().personaId) {
+      const j = job();
+      if (!j) return;
       const size = sessionTermSize(s().id);
       try {
-        await resumeAgent(s().id, size.cols, size.rows);
+        await resumeAgent(
+          s().id,
+          s().workspaceId,
+          s().cwd,
+          persona()?.name ?? s().personaId,
+          j.permissions,
+          size.cols,
+          size.rows,
+        );
       } catch (err) {
         setActionErr(String(err));
         return;
@@ -220,7 +230,8 @@ export function SessionDetailPanel(props: { session: Session }) {
         </button>
         <button
           class="btn"
-          disabled={!s().resumable || s().status !== "dead"}
+          classList={{ primary: !!s().restored && s().resumable }}
+          disabled={!s().resumable || (s().status !== "dead" && !s().restored)}
           onClick={() => void doResume()}
         >
           재개

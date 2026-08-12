@@ -4,6 +4,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { backend } from "./mock";
 import { isTauri } from "./pty";
+import { restoreTeams } from "./team";
 import type { Workspace } from "../types";
 
 export interface WsEntry {
@@ -45,11 +46,12 @@ function toWorkspace(w: WsInfo): Workspace {
   };
 }
 
-/** 레지스트리를 다시 읽어 목 백엔드의 워크스페이스 목록을 실물로 교체한다 */
+/** 레지스트리를 다시 읽어 목 백엔드의 워크스페이스 목록을 실물로 교체하고 팀 슬롯을 복원한다 */
 export async function refreshWorkspaces(): Promise<void> {
   if (!isTauri()) return;
   const list = await invoke<WsInfo[]>("ws_registry").catch(() => [] as WsInfo[]);
   backend.hydrateWorkspaces(list.map(toWorkspace));
+  await restoreTeams(); // team.json → 슬롯 복원 (에이전트 자동 실행 없음, S3)
 }
 
 export function pickFolder(): Promise<string | null> {
