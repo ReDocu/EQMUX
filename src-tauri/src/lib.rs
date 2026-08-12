@@ -15,7 +15,9 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 mod store;
+mod workspace;
 use store::{LineAssembler, Store, StoreMsg};
+use workspace::{WsEntry, WsInfo};
 
 struct StoreState(Store);
 
@@ -325,6 +327,113 @@ fn store_usage_real(store_state: State<StoreState>, workspace: String) -> Result
     })
 }
 
+// ── 워크스페이스 레지스트리 (PRD E §4.1) ──
+
+#[tauri::command]
+fn ws_pick_folder() -> Option<String> {
+    rfd::FileDialog::new()
+        .set_title("워크스페이스로 등록할 폴더 선택")
+        .pick_folder()
+        .map(|p| p.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn ws_registry(store_state: State<StoreState>) -> Vec<WsInfo> {
+    workspace::load(&store_state.0.root())
+        .iter()
+        .map(workspace::inspect)
+        .collect()
+}
+
+/// 등록 (FR-E-01) — git 저장소가 아니면 "NOT_A_REPO"를 돌려주고 프런트가 git init을 묻는다
+#[tauri::command]
+fn ws_register(store_state: State<StoreState>, path: String) -> Result<WsInfo, String> {
+    if !Path::new(&path).is_dir() {
+        return Err("폴더를 찾을 수 없습니다".into());
+    }
+    if !workspace::is_repo(&path) {
+        return Err("NOT_A_REPO".into());
+    }
+    let root = store_state.0.root();
+    let mut list = workspace::load(&root);
+    if let Some(existing) = list.iter_mut().find(|e| e.path.eq_ignore_ascii_case(&path)) {
+        existing.last_used = workspace::now_ms();
+        let info = workspace::inspect(existing);
+        workspace::save(&root, &list)?;
+        return Ok(info);
+    }
+    let entry = WsEntry {
+        id: workspace::make_id(&path),
+        name: workspace::entry_name(&path),
+        path: path.clone(),
+        remote: None,
+        branch: None,
+        last_used: workspace::now_ms(),
+    };
+    list.push(entry.clone());
+    workspace::save(&root, &list)?;
+    Ok(workspace::inspect(&entry))
+}
+
+#[tauri::command]
+fn ws_git_init(path: String) -> Result<(), String> {
+    workspace::git(&["init"], &path).map(|_| ())
+}
+
+/// 원격 clone 후 등록용 (FR-E-02) — clone된 로컬 경로를 돌려준다
+#[tauri::command]
+async fn ws_clone(url: String, parent: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let name = url
+            .trim_end_matches('/')
+            .trim_end_matches(".git")
+            .rsplit('/')
+            .next()
+            .unwrap_or("repo")
+            .to_string();
+        workspace::git(&["clone", &url], &parent)?;
+        Ok(Path::new(&parent).join(name).to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// 등록 해제 (FR-E-09) — 레지스트리에서만 지운다
+#[tauri::command]
+fn ws_unregister(store_state: State<StoreState>, id: String) -> Result<(), String> {
+    let root = store_state.0.root();
+    let mut list = workspace::load(&root);
+    list.retain(|e| e.id != id);
+    workspace::save(&root, &list)
+}
+
+/// 경로 재지정 (FR-E-08)
+#[tauri::command]
+fn ws_repath(store_state: State<StoreState>, id: String, path: String) -> Result<WsInfo, String> {
+    if !Path::new(&path).is_dir() {
+        return Err("폴더를 찾을 수 없습니다".into());
+    }
+    let root = store_state.0.root();
+    let mut list = workspace::load(&root);
+    let entry = list.iter_mut().find(|e| e.id == id).ok_or("등록 항목 없음")?;
+    entry.path = path;
+    entry.name = workspace::entry_name(&entry.path);
+    entry.last_used = workspace::now_ms();
+    let info = workspace::inspect(entry);
+    workspace::save(&root, &list)?;
+    Ok(info)
+}
+
+#[tauri::command]
+fn ws_touch(store_state: State<StoreState>, id: String) -> Result<(), String> {
+    let root = store_state.0.root();
+    let mut list = workspace::load(&root);
+    if let Some(entry) = list.iter_mut().find(|e| e.id == id) {
+        entry.last_used = workspace::now_ms();
+    }
+    workspace::save(&root, &list)
+}
+
 #[tauri::command]
 fn session_log_dir() -> String {
     log_dir().to_string_lossy().into_owned()
@@ -364,6 +473,14 @@ pub fn run() {
             pty_list,
             scrollback_tail,
             store_usage_real,
+            ws_pick_folder,
+            ws_registry,
+            ws_register,
+            ws_git_init,
+            ws_clone,
+            ws_unregister,
+            ws_repath,
+            ws_touch,
             session_log_dir,
             open_log_dir
         ])

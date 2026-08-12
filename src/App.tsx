@@ -2,6 +2,7 @@ import { Match, onCleanup, onMount, Show, Switch } from "solid-js";
 import { AppBar } from "./components/AppBar";
 import { SidePanel } from "./components/SidePanel";
 import { backend } from "./backend/mock";
+import { refreshWorkspaces } from "./backend/workspaces";
 import { exitOpen, layoutPickerOpen, panelOpen, setLayoutPickerOpen, view } from "./state";
 import { ControlCenter } from "./screens/ControlCenter";
 import { Dashboard } from "./screens/Dashboard";
@@ -19,6 +20,9 @@ import { WorkspaceConnection } from "./screens/WorkspaceConnection";
 
 export function App() {
   const v = view;
+
+  // Tauri 부트스트랩 — workspaces.json 실물 레지스트리가 목 목록을 대체한다 (PRD E)
+  onMount(() => void refreshWorkspaces());
 
   // 페인 배치 단축키 (srpYm 푸터 명세) — CTRL + SHIFT + L
   onMount(() => {

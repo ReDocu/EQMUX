@@ -317,6 +317,15 @@
   background: var(--eq-surface);
   border: 1px solid var(--eq-line);
 }
+.conn-error {
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  font-size: 11px;
+  color: var(--eq-red);
+  border-color: var(--eq-red);
+  background: var(--eq-red-soft);
+  word-break: break-all;
+}
 
 /* ── 팀 캐스팅 / 편성 ── */
 .cast-grid,

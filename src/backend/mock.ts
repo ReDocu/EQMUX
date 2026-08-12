@@ -47,6 +47,10 @@ export interface Backend {
   openWorkspace(id: string): void;
   closeWorkspace(id: string): void;
   repairWorkspace(id: string): void;
+  /** 실물 레지스트리(workspaces.json)로 목록을 교체 — Tauri 부트스트랩 (PRD E) */
+  hydrateWorkspaces(list: Workspace[]): void;
+  /** 등록 해제 (FR-E-09) — 목록에서만 지운다 */
+  removeWorkspace(id: string): void;
   savePersona(p: Persona): void;
   addPersona(): void;
   listTurns(sessionId: string): TranscriptTurn[];
@@ -669,6 +673,36 @@ export class MockBackend implements Backend {
     ws.branch = "main";
     ws.branchNote = "main · 경로 재지정됨";
     this.logEvent("app", `경로 재지정 · ${ws.name}`);
+    this.broadcast();
+  }
+
+  hydrateWorkspaces(list: Workspace[]) {
+    const openIds = new Set(WORKSPACES.filter((w) => w.open).map((w) => w.id));
+    WORKSPACES.length = 0;
+    for (const w of list) WORKSPACES.push({ ...w, open: openIds.has(w.id) });
+    // 레지스트리에 없는 워크스페이스의 목 세션·임무는 함께 걷어낸다
+    const valid = new Set(WORKSPACES.map((w) => w.id));
+    for (let i = SESSIONS.length - 1; i >= 0; i--) {
+      if (!valid.has(SESSIONS[i].workspaceId)) SESSIONS.splice(i, 1);
+    }
+    for (let i = MISSIONS.length - 1; i >= 0; i--) {
+      if (!valid.has(MISSIONS[i].workspaceId)) MISSIONS.splice(i, 1);
+    }
+    this.broadcast();
+  }
+
+  removeWorkspace(id: string) {
+    const i = WORKSPACES.findIndex((x) => x.id === id);
+    if (i < 0) return;
+    const ws = WORKSPACES[i];
+    WORKSPACES.splice(i, 1);
+    for (let j = SESSIONS.length - 1; j >= 0; j--) {
+      if (SESSIONS[j].workspaceId === id) SESSIONS.splice(j, 1);
+    }
+    for (let j = MISSIONS.length - 1; j >= 0; j--) {
+      if (MISSIONS[j].workspaceId === id) MISSIONS.splice(j, 1);
+    }
+    this.logEvent("app", `등록 해제 · ${ws.name} (디스크는 그대로)`);
     this.broadcast();
   }
 
