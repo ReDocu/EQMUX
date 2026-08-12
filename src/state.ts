@@ -13,7 +13,7 @@ export type View =
   | { kind: "composition"; wsId: string } // 레인 01 — 팀 편성
   | { kind: "roles" } // 역할 라이브러리 (화면 #7)
   | { kind: "missions"; wsId: string } // 임무 배정 (화면 #8)
-  | { kind: "gitdiff" } // Git Diff & Editor (AXXhV)
+  | { kind: "gitdiff"; wsId?: string } // Git Diff & Editor (AXXhV) — wsId 없으면 활성 워크스페이스
   | { kind: "settings" };
 
 export type PanelTab = "conversation" | "git" | "ports" | "logs" | "missions" | "browser";

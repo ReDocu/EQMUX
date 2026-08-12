@@ -99,7 +99,7 @@ export function App() {
               <Missions wsId={(v() as { kind: "missions"; wsId: string }).wsId} />
             </Match>
             <Match when={v().kind === "gitdiff"}>
-              <GitDiffEditor />
+              <GitDiffEditor wsId={(v() as { kind: "gitdiff"; wsId?: string }).wsId} />
             </Match>
             <Match when={v().kind === "settings"}>
               <Settings />

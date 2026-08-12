@@ -88,7 +88,7 @@ export function GitPanelTab() {
   };
 
   const openDiff = () => {
-    setView({ kind: "gitdiff" });
+    setView({ kind: "gitdiff", wsId: ws()?.id });
     setPanelOpen(false);
   };
 

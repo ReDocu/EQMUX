@@ -15,6 +15,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 mod agent;
+mod diff;
 mod fsx;
 mod job;
 mod library;
@@ -995,6 +996,22 @@ async fn ports_snapshot(app: AppHandle) -> Vec<ports::PortRow> {
         .unwrap_or_default()
 }
 
+/// 변경 파일 목록 (PRD H diff) — porcelain 상태 + numstat 집계
+#[tauri::command]
+async fn diff_changed_files(ws_path: String) -> Result<Vec<diff::ChangedFile>, String> {
+    tauri::async_runtime::spawn_blocking(move || diff::changed_files(&ws_path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// HEAD ↔ 워크트리 양측 비교 (PRD H diff) — 읽기 전용
+#[tauri::command]
+async fn diff_file(ws_path: String, path: String) -> Result<diff::FileDiff, String> {
+    tauri::async_runtime::spawn_blocking(move || diff::file_diff(&ws_path, &path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 /// 탐색기 파일 트리 (PRD H) — 깊이·개수 상한, 무거운 디렉터리 제외
 #[tauri::command]
 fn fs_tree(ws_path: String) -> Vec<fsx::FsNode> {
@@ -1187,6 +1204,8 @@ pub fn run() {
             ports_snapshot,
             fs_tree,
             fs_preview,
+            diff_changed_files,
+            diff_file,
             shutdown_flush,
             app_exit,
             layout_load,
