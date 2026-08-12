@@ -17,7 +17,7 @@ import {
 import { Eyebrow, PersonaDot, StatusLabel } from "../components/ui";
 import { isTauri, killPty, storeUsageReal } from "../backend/pty";
 import type { StoreUsageReal } from "../backend/pty";
-import { TerminalPane } from "../components/TerminalPane";
+import { disposeSessionTerminal, TerminalPane } from "../components/TerminalPane";
 import { SessionDetailPanel } from "./SessionDetailPanel";
 import { TranscriptPane } from "./TranscriptPane";
 import type { Session, Workspace } from "../types";
@@ -107,6 +107,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
   const [removeTarget, setRemoveTarget] = createSignal<Session | undefined>(undefined);
   const doRemove = (s: Session) => {
     killPty(s.id);
+    disposeSessionTerminal(s.id);
     if (zoomed() === s.id) setZoomed(undefined);
     backend.removeTerminal(s.id);
     setRemoveTarget(undefined);

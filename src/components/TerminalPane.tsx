@@ -1,19 +1,12 @@
 // 실터미널 페인 — xterm.js 렌더 + PTY 브리지.
-// Tauri 안: 실제 pwsh PTY에 부착. 밖(vite dev): 목 라인을 그리고 로컬 에코만 한다.
+// 세션당 Terminal 인스턴스는 정확히 1개를 만들어 REGISTRY에 유지한다 (세션은 페인보다 오래 산다).
+// 페인이 리마운트되면(줌·전체 화면·탭 전환) DOM 요소만 재부착한다 — 버퍼를 다시 쓰지 않으므로
+// ConPTY 리페인트가 중복 재생되지 않고 스크롤백이 온전히 이어진다.
 import { onCleanup, onMount } from "solid-js";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import {
-  getScrollback,
-  isTauri,
-  onPtyExit,
-  onPtyOutput,
-  resizePty,
-  scrollbackTail,
-  spawnPty,
-  writePty,
-} from "../backend/pty";
+import { isTauri, onPtyExit, onPtyOutput, resizePty, scrollbackTail, spawnPty, writePty } from "../backend/pty";
 
 const EQ_THEME = {
   background: "#080b10",
@@ -31,100 +24,135 @@ const EQ_THEME = {
   white: "#e8eef8",
 };
 
+interface TermEntry {
+  term: Terminal;
+  fit: FitAddon;
+  opened: boolean;
+  initialized: boolean;
+  lastCols: number;
+  lastRows: number;
+}
+
+const REGISTRY = new Map<string, TermEntry>();
+
+/** 세션 제거 시 호출 — PTY와 함께 터미널 인스턴스도 폐기한다 */
+export function disposeSessionTerminal(id: string) {
+  const e = REGISTRY.get(id);
+  if (e) {
+    e.term.dispose();
+    REGISTRY.delete(id);
+  }
+}
+
+function createEntry(): TermEntry {
+  const term = new Terminal({
+    fontFamily: '"IBM Plex Mono", ui-monospace, monospace',
+    fontSize: 12,
+    lineHeight: 1.25,
+    cursorBlink: true,
+    scrollback: 5000, // FR-C-10 — 인메모리 링버퍼, 초과분은 스토어가 갖고 있다
+    theme: EQ_THEME,
+  });
+  const fit = new FitAddon();
+  term.loadAddon(fit);
+  return { term, fit, opened: false, initialized: false, lastCols: 0, lastRows: 0 };
+}
+
+/** 최초 1회 — 스트림 구독·재생·스폰. 리마운트에서는 다시 실행되지 않는다. */
+async function initSession(
+  entry: TermEntry,
+  props: { sessionId: string; cwd: string; wsId?: string; mockLines?: string[] },
+) {
+  const term = entry.term;
+
+  if (isTauri()) {
+    onPtyOutput(props.sessionId, (data) => term.write(data));
+    onPtyExit(props.sessionId, (code) => {
+      term.write(`\r\n\x1b[31m프로세스 종료 · exit ${code ?? "?"}\x1b[0m\r\n`);
+    });
+    term.onData((data) => writePty(props.sessionId, data));
+
+    // 앱 재시작 복구 (FR-C-31·32) — 스토어의 확정 줄을 흐리게 재생하고 경계를 긋는다
+    const tail = await scrollbackTail(props.wsId ?? "default", props.sessionId, 500);
+    if (tail.length > 0) {
+      term.writeln(`\x1b[90m─── 이전 세션 스크롤백 · 마지막 ${tail.length}줄 재생 ───\x1b[0m`);
+      for (const line of tail) term.writeln(`\x1b[2m${line}\x1b[0m`);
+      term.writeln("\x1b[90m─── 새 세션 시작 ───\x1b[0m");
+    }
+    await spawnPty(props.sessionId, props.cwd, term.cols, term.rows, props.wsId);
+    entry.lastCols = term.cols;
+    entry.lastRows = term.rows;
+  } else {
+    // 목 폴백 — 브라우저 dev에서는 정적 라인 + 로컬 에코 (1회만 기록)
+    const prompt = `\x1b[38;5;110mPS ${props.cwd}>\x1b[0m `;
+    for (const line of props.mockLines ?? []) term.writeln(line);
+    term.write(prompt);
+    let input = "";
+    term.onData((data) => {
+      if (data === "\r") {
+        term.write(`\r\n\x1b[90m(목 세션 — Tauri에서 실행하면 실제 셸이 붙습니다)\x1b[0m\r\n${prompt}`);
+        input = "";
+      } else if (data === "\x7f") {
+        if (input.length > 0) {
+          input = input.slice(0, -1);
+          term.write("\b \b");
+        }
+      } else if (data >= " " || data === "\t") {
+        input += data;
+        term.write(data);
+      }
+    });
+  }
+}
+
 export function TerminalPane(props: { sessionId: string; cwd: string; wsId?: string; mockLines?: string[] }) {
   let host!: HTMLDivElement;
 
   onMount(() => {
-    const term = new Terminal({
-      fontFamily: '"IBM Plex Mono", ui-monospace, monospace',
-      fontSize: 12,
-      lineHeight: 1.25,
-      cursorBlink: true,
-      scrollback: 5000,
-      theme: EQ_THEME,
-    });
-    const fit = new FitAddon();
-    term.loadAddon(fit);
-    term.open(host);
-    fit.fit();
+    let entry = REGISTRY.get(props.sessionId);
+    if (!entry) {
+      entry = createEntry();
+      REGISTRY.set(props.sessionId, entry);
+    }
+    const e = entry;
 
-    const cleanups: (() => void)[] = [];
-
-    if (isTauri()) {
-      // 실제 PTY — 재부착이면 인메모리 버퍼 복원, 앱 재시작이면 스토어에서 재생 (FR-C-31)
-      cleanups.push(onPtyOutput(props.sessionId, (data) => term.write(data)));
-      cleanups.push(
-        onPtyExit(props.sessionId, (code) => {
-          term.write(`\r\n\x1b[31m프로세스 종료 · exit ${code ?? "?"}\x1b[0m\r\n`);
-        }),
-      );
-      const d = term.onData((data) => writePty(props.sessionId, data));
-      cleanups.push(() => d.dispose());
-
-      void (async () => {
-        const backlog = getScrollback(props.sessionId);
-        if (backlog) {
-          term.write(backlog);
-        } else {
-          const tail = await scrollbackTail(props.wsId ?? "default", props.sessionId, 500);
-          if (tail.length > 0) {
-            // 재생과 새 출력 사이의 시각적 경계 (FR-C-32) — 살아있는 척하지 않는다
-            term.writeln(`\x1b[90m─── 이전 세션 스크롤백 · 마지막 ${tail.length}줄 재생 ───\x1b[0m`);
-            for (const line of tail) term.writeln(`\x1b[2m${line}\x1b[0m`);
-            term.writeln("\x1b[90m─── 새 세션 시작 ───\x1b[0m");
-          }
-        }
-        await spawnPty(props.sessionId, props.cwd, term.cols, term.rows, props.wsId);
-      })();
-    } else {
-      // 목 폴백 — 브라우저 dev에서는 정적 라인 + 로컬 에코
-      const prompt = `\x1b[38;5;110mPS ${props.cwd}>\x1b[0m `;
-      for (const line of props.mockLines ?? []) term.writeln(line);
-      term.write(prompt);
-      let input = "";
-      const d = term.onData((data) => {
-        if (data === "\r") {
-          term.write(`\r\n\x1b[90m(목 세션 — Tauri에서 실행하면 실제 셸이 붙습니다)\x1b[0m\r\n${prompt}`);
-          input = "";
-        } else if (data === "\x7f") {
-          if (input.length > 0) {
-            input = input.slice(0, -1);
-            term.write("\b \b");
-          }
-        } else if (data >= " " || data === "\t") {
-          input += data;
-          term.write(data);
-        }
-      });
-      cleanups.push(() => d.dispose());
+    if (!e.opened) {
+      e.term.open(host);
+      e.opened = true;
+    } else if (e.term.element) {
+      host.appendChild(e.term.element); // 리마운트 = DOM 재부착만
     }
 
-    // 페인 크기 추적 — 배치 변경·줌·전체 화면 모두 여기서 흡수된다.
-    // 디바운스 + 실제 변경시에만 PTY resize — ConPTY는 resize마다 전체 리페인트를 쏟아낸다.
-    let lastCols = term.cols;
-    let lastRows = term.rows;
+    const syncSize = () => {
+      e.fit.fit();
+      if (isTauri() && e.initialized && (e.term.cols !== e.lastCols || e.term.rows !== e.lastRows)) {
+        e.lastCols = e.term.cols;
+        e.lastRows = e.term.rows;
+        resizePty(props.sessionId, e.term.cols, e.term.rows);
+      }
+    };
+
+    requestAnimationFrame(() => {
+      syncSize();
+      if (!e.initialized) {
+        e.initialized = true;
+        void initSession(e, props);
+      }
+      e.term.scrollToBottom();
+    });
+
+    // 크기 추적 — 디바운스 + 실변경시에만 PTY resize (ConPTY는 resize마다 리페인트한다)
     let resizeTimer: ReturnType<typeof setTimeout> | undefined;
     const ro = new ResizeObserver(() => {
       clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(() => {
-        fit.fit();
-        if (isTauri() && (term.cols !== lastCols || term.rows !== lastRows)) {
-          lastCols = term.cols;
-          lastRows = term.rows;
-          resizePty(props.sessionId, term.cols, term.rows);
-        }
-      }, 120);
+      resizeTimer = setTimeout(syncSize, 120);
     });
     ro.observe(host);
-    cleanups.push(() => {
-      clearTimeout(resizeTimer);
-      ro.disconnect();
-    });
 
     onCleanup(() => {
-      cleanups.forEach((c) => c());
-      term.dispose();
-      // PTY는 죽이지 않는다 — 세션은 페인보다 오래 산다 (줌·탭 전환·재부착)
+      clearTimeout(resizeTimer);
+      ro.disconnect();
+      // 터미널은 dispose하지 않는다 — REGISTRY가 세션 수명 동안 유지한다
     });
   });
 
