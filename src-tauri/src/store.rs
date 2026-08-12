@@ -16,6 +16,8 @@ pub enum StoreMsg {
     Event { ws: String, id: Option<String>, kind: String, message: String },
     /// 에이전트 재개 매핑 (FR-C-27 · FR-D-24)
     AgentSession { ws: String, id: String, agent_session_id: String, log_path: String, resumable: bool },
+    /// 종료 flush (FR-C-62②) — 대기 배치를 즉시 커밋하고 ack를 보낸다
+    Flush(Sender<()>),
 }
 
 pub struct Store {
@@ -144,6 +146,12 @@ fn run(root: PathBuf, rx: Receiver<StoreMsg>) {
 
     loop {
         match rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(StoreMsg::Flush(ack)) => {
+                // 종료 flush (FR-C-62·63) — 배치 창을 기다리지 않고 즉시 커밋 후 ack
+                flush(&root, &mut dbs, &mut cursors, &mut pending);
+                let _ = ack.send(());
+                continue;
+            }
             Ok(msg) => {
                 pending.push(msg);
                 if pending.len() < BATCH_MAX {
@@ -169,6 +177,7 @@ fn ws_of(msg: &StoreMsg) -> &str {
         | StoreMsg::Line { ws, .. }
         | StoreMsg::Event { ws, .. }
         | StoreMsg::AgentSession { ws, .. } => ws,
+        StoreMsg::Flush(_) => "default", // 도달 불가 — run 루프가 pending에 넣지 않는다
     }
 }
 
@@ -256,6 +265,7 @@ fn flush(
                         params![id, agent_session_id, log_path, i64::from(*resumable)],
                     );
                 }
+                StoreMsg::Flush(_) => {} // pending에 들어오지 않는다 (run 루프에서 즉시 처리)
             }
         }
         for (id, bytes) in &touched {

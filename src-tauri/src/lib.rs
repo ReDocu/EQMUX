@@ -15,6 +15,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 mod agent;
+mod job;
 mod library;
 mod missions;
 mod roles;
@@ -32,6 +33,7 @@ struct PtySession {
     writer: Box<dyn Write + Send>,
     child: Box<dyn Child + Send + Sync>,
     gen: u64, // 같은 id로 재기동 시 이전 리더 스레드의 정리를 무효화하는 세대 표식
+    job: Option<job::Job>, // FR-C-05 — 자식 트리 정리. drop = KILL_ON_JOB_CLOSE
 }
 
 static NEXT_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -134,6 +136,12 @@ fn spawn_pty_session(
     let child = child.ok_or(format!("실행 실패 — {last_err}"))?;
     drop(pair.slave);
 
+    // FR-C-05 — 세션 트리를 Job Object로 묶는다. 실패해도 세션은 동작한다 (child.kill 폴백).
+    let job = job::Job::new_kill_on_close();
+    if let (Some(j), Some(pid)) = (job.as_ref(), child.process_id()) {
+        j.assign_pid(pid);
+    }
+
     let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
     let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
     let gen = NEXT_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -145,6 +153,7 @@ fn spawn_pty_session(
             writer,
             child,
             gen,
+            job,
         },
     );
     drop(sessions);
@@ -280,6 +289,9 @@ fn pty_kill(
         // 사용자가 의도한 종료 — dead 전이는 나되 OS 알림은 내지 않는다 (G3)
         if let Ok(mut expected) = rt.expected_exit.lock() {
             expected.insert(id.clone());
+        }
+        if let Some(j) = &s.job {
+            j.terminate(); // FR-C-05 — 자식 트리까지 즉시 정리
         }
         let _ = s.child.kill();
         let ws = id.split('@').nth(1).unwrap_or("default").to_string();
@@ -572,6 +584,9 @@ fn kill_pty_for_restart(app: &AppHandle, id: &str) {
     let state: State<PtyState> = app.state();
     let removed = state.0.lock().ok().and_then(|mut s| s.remove(id));
     if let Some(mut s) = removed {
+        if let Some(j) = &s.job {
+            j.terminate(); // FR-C-05 — 재시작도 트리째 정리 후 새로 띄운다
+        }
         let _ = s.child.kill();
     }
 }
@@ -936,6 +951,55 @@ fn ws_touch(store_state: State<StoreState>, id: String) -> Result<(), String> {
     workspace::save(&root, &list)
 }
 
+// ── 종료 시퀀스 (FR-C-60~63) — ①입력 차단(프런트) → ②flush → ③정상 종료 신호 → ④유예 후 트리 종료 ──
+
+/// ② 스크롤백·세션 매핑 flush — 2초 목표 (FR-C-63). true = 완료, false = 시한 초과(진행은 계속).
+#[tauri::command]
+fn shutdown_flush(store_state: State<StoreState>) -> bool {
+    let (ack_tx, ack_rx) = std::sync::mpsc::channel();
+    if store_state.0.sender().send(StoreMsg::Flush(ack_tx)).is_err() {
+        return false;
+    }
+    ack_rx.recv_timeout(std::time::Duration::from_secs(2)).is_ok()
+}
+
+/// ③④ 전 세션에 Ctrl+C(정상 종료 신호) → 유예 → Job Object 트리 종료 → 앱 종료.
+/// 종료 직전 마지막 flush를 한 번 더 시도한다 (세션 exit 이벤트까지 적재).
+#[tauri::command]
+async fn app_exit(app: AppHandle) {
+    let state: State<PtyState> = app.state();
+    // ③ 정상 종료 신호 — TUI 에이전트가 스스로 정리할 기회
+    if let Ok(mut sessions) = state.0.lock() {
+        for s in sessions.values_mut() {
+            let _ = s.writer.write_all(b"\x03");
+            let _ = s.writer.flush();
+        }
+    }
+    tokio_sleep(std::time::Duration::from_millis(500)).await; // ④ 유예
+    if let Ok(mut sessions) = state.0.lock() {
+        for (_, s) in sessions.drain() {
+            if let Some(j) = &s.job {
+                j.terminate(); // FR-C-05 — 트리째
+            }
+            let mut child = s.child;
+            let _ = child.kill();
+        }
+    }
+    // 세션 exit 기록까지 flush (최대 1초 — 이미 ②를 거쳤으므로 잔량은 적다)
+    let store: State<StoreState> = app.state();
+    let (ack_tx, ack_rx) = std::sync::mpsc::channel();
+    if store.0.sender().send(StoreMsg::Flush(ack_tx)).is_ok() {
+        let _ = ack_rx.recv_timeout(std::time::Duration::from_secs(1));
+    }
+    app.exit(0);
+}
+
+async fn tokio_sleep(d: std::time::Duration) {
+    tauri::async_runtime::spawn_blocking(move || std::thread::sleep(d))
+        .await
+        .ok();
+}
+
 #[tauri::command]
 fn session_log_dir() -> String {
     log_dir().to_string_lossy().into_owned()
@@ -1044,6 +1108,8 @@ pub fn run() {
             clip_read_text,
             clip_write_text,
             clip_save_image,
+            shutdown_flush,
+            app_exit,
             session_log_dir,
             open_log_dir
         ])
