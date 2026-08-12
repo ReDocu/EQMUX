@@ -15,9 +15,11 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 mod agent;
+mod fsx;
 mod job;
 mod library;
 mod missions;
+mod ports;
 mod roles;
 pub(crate) mod store;
 mod team;
@@ -975,6 +977,36 @@ fn sessions_memory(state: State<PtyState>) -> Vec<MemSample> {
         .collect()
 }
 
+/// 포트 스냅숏 (PRD H) — LISTENING TCP + 세션 귀속(Job pid 대조). 관측 전용.
+#[tauri::command]
+async fn ports_snapshot(app: AppHandle) -> Vec<ports::PortRow> {
+    let session_pids: HashMap<String, Vec<u32>> = {
+        let state: State<PtyState> = app.state();
+        let Ok(sessions) = state.0.lock() else {
+            return Vec::new();
+        };
+        sessions
+            .iter()
+            .filter_map(|(id, s)| s.job.as_ref().map(|j| (id.clone(), j.pids())))
+            .collect()
+    };
+    tauri::async_runtime::spawn_blocking(move || ports::snapshot(&session_pids))
+        .await
+        .unwrap_or_default()
+}
+
+/// 탐색기 파일 트리 (PRD H) — 깊이·개수 상한, 무거운 디렉터리 제외
+#[tauri::command]
+fn fs_tree(ws_path: String) -> Vec<fsx::FsNode> {
+    fsx::tree(&ws_path)
+}
+
+/// 텍스트 미리보기 — 경로 탈출 방지 + 64KB 상한
+#[tauri::command]
+fn fs_preview(ws_path: String, rel: String) -> Result<String, String> {
+    fsx::preview(&ws_path, &rel)
+}
+
 // ── 종료 시퀀스 (FR-C-60~63) — ①입력 차단(프런트) → ②flush → ③정상 종료 신호 → ④유예 후 트리 종료 ──
 
 /// ② 스크롤백·세션 매핑 flush — 2초 목표 (FR-C-63). true = 완료, false = 시한 초과(진행은 계속).
@@ -1133,6 +1165,9 @@ pub fn run() {
             clip_write_text,
             clip_save_image,
             sessions_memory,
+            ports_snapshot,
+            fs_tree,
+            fs_preview,
             shutdown_flush,
             app_exit,
             session_log_dir,

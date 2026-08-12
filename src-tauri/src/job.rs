@@ -69,6 +69,31 @@ mod win {
             }
         }
 
+        /// 잡에 속한 pid 목록 — 포트 귀속(H)·메모리 합산이 같은 원천을 쓴다
+        pub fn pids(&self) -> Vec<u32> {
+            unsafe {
+                const CAP: usize = 128;
+                #[repr(C)]
+                struct PidList {
+                    assigned: u32,
+                    in_list: u32,
+                    pids: [usize; CAP],
+                }
+                let mut list = PidList { assigned: 0, in_list: 0, pids: [0; CAP] };
+                if QueryInformationJobObject(
+                    self.0,
+                    JobObjectBasicProcessIdList,
+                    &mut list as *mut _ as *mut std::ffi::c_void,
+                    std::mem::size_of::<PidList>() as u32,
+                    std::ptr::null_mut(),
+                ) == 0
+                {
+                    return Vec::new();
+                }
+                (0..(list.in_list as usize).min(CAP)).map(|i| list.pids[i] as u32).collect()
+            }
+        }
+
         /// 프로세스 트리 메모리 (FR-C-09 · C11) — (현재 워킹셋 합, 잡 피크 커밋).
         /// 실패는 None — 호출부가 "측정 불가"로 보고한다. 정확한 척하지 않는다.
         pub fn memory_bytes(&self) -> Option<(u64, u64)> {
@@ -148,6 +173,9 @@ impl Job {
         false
     }
     pub fn terminate(&self) {}
+    pub fn pids(&self) -> Vec<u32> {
+        Vec::new()
+    }
     pub fn memory_bytes(&self) -> Option<(u64, u64)> {
         None
     }
