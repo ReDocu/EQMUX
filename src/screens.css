@@ -491,6 +491,18 @@
   overflow: hidden;
 }
 
+/* xterm.js 실터미널 호스트 — 페인·전체 화면 크기는 ResizeObserver + FitAddon이 따라간다 */
+.xterm-host {
+  flex: 1;
+  min-height: 100px;
+  padding: 4px 2px 4px 8px;
+  overflow: hidden;
+  background: var(--eq-terminal);
+}
+.xterm-host .xterm {
+  height: 100%;
+}
+
 /* ── 트랜스크립트 페인 (화면 #12) ── */
 .transcript {
   display: flex;

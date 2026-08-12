@@ -13,6 +13,7 @@ import {
   tick,
 } from "../state";
 import { Eyebrow, PersonaDot, StatusLabel } from "../components/ui";
+import { TerminalPane } from "../components/TerminalPane";
 import { SessionDetailPanel } from "./SessionDetailPanel";
 import { TranscriptPane } from "./TranscriptPane";
 import type { Session, Workspace } from "../types";
@@ -96,9 +97,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
               </span>
               <StatusLabel session={s} />
             </button>
-            <div class="terminal-body mono pane-body">
-              <For each={mockLines(s, persona(s.personaId)?.name ?? "?")}>{(l) => <div>{l}</div>}</For>
-            </div>
+            <TerminalPane sessionId={s.id} cwd={s.cwd} mockLines={mockLines(s, persona(s.personaId)?.name ?? "?")} />
           </div>
         )}
       </For>
