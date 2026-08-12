@@ -99,13 +99,27 @@ export function TerminalPane(props: { sessionId: string; cwd: string; wsId?: str
       cleanups.push(() => d.dispose());
     }
 
-    // 페인 크기 추적 — 배치 변경·줌·전체 화면 모두 여기서 흡수된다
+    // 페인 크기 추적 — 배치 변경·줌·전체 화면 모두 여기서 흡수된다.
+    // 디바운스 + 실제 변경시에만 PTY resize — ConPTY는 resize마다 전체 리페인트를 쏟아낸다.
+    let lastCols = term.cols;
+    let lastRows = term.rows;
+    let resizeTimer: ReturnType<typeof setTimeout> | undefined;
     const ro = new ResizeObserver(() => {
-      fit.fit();
-      if (isTauri()) resizePty(props.sessionId, term.cols, term.rows);
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => {
+        fit.fit();
+        if (isTauri() && (term.cols !== lastCols || term.rows !== lastRows)) {
+          lastCols = term.cols;
+          lastRows = term.rows;
+          resizePty(props.sessionId, term.cols, term.rows);
+        }
+      }, 120);
     });
     ro.observe(host);
-    cleanups.push(() => ro.disconnect());
+    cleanups.push(() => {
+      clearTimeout(resizeTimer);
+      ro.disconnect();
+    });
 
     onCleanup(() => {
       cleanups.forEach((c) => c());

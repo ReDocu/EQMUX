@@ -311,7 +311,9 @@ export function ControlCenter(props: { workspace: Workspace }) {
             </button>
           </div>
 
-          <Show when={centerTab() === "terminal"}>
+          {/* 전체 화면 중에는 일반 그리드를 언마운트한다 — 같은 PTY에 두 인스턴스가
+              서로 다른 크기로 resize 경합하면 ConPTY 리페인트가 폭증한다 */}
+          <Show when={centerTab() === "terminal" && !terminalFull()}>
             {paneGrid()}
             {statusBar()}
           </Show>
