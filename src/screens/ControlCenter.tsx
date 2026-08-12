@@ -15,7 +15,8 @@ import {
   tick,
 } from "../state";
 import { Eyebrow, PersonaDot, StatusLabel } from "../components/ui";
-import { killPty } from "../backend/pty";
+import { isTauri, killPty, storeUsageReal } from "../backend/pty";
+import type { StoreUsageReal } from "../backend/pty";
 import { TerminalPane } from "../components/TerminalPane";
 import { SessionDetailPanel } from "./SessionDetailPanel";
 import { TranscriptPane } from "./TranscriptPane";
@@ -53,6 +54,16 @@ export function ControlCenter(props: { workspace: Workspace }) {
 
   const [centerTab, setCenterTab] = createSignal<"terminal" | "transcript">("terminal");
   const [zoomed, setZoomed] = createSignal<string | undefined>(undefined); // B1 — 줌 토글
+
+  // 저장 사용량 실측 (FR-C-52) — Tauri에서만. 브라우저 목업은 mock 수치 유지.
+  const [realUsage, setRealUsage] = createSignal<StoreUsageReal | undefined>(undefined);
+  onMount(() => {
+    if (!isTauri()) return;
+    const load = () => void storeUsageReal(props.workspace.id).then(setRealUsage);
+    load();
+    const t = setInterval(load, 10_000);
+    onCleanup(() => clearInterval(t));
+  });
 
   // ESC = 전체 화면 종료 (줌 상태가 있으면 줌부터 해제)
   onMount(() => {
@@ -152,7 +163,12 @@ export function ControlCenter(props: { workspace: Workspace }) {
                 </span>
               </span>
             </button>
-            <TerminalPane sessionId={s.id} cwd={s.cwd} mockLines={mockLines(s, persona(s.personaId)?.name ?? "?")} />
+            <TerminalPane
+              sessionId={s.id}
+              cwd={s.cwd}
+              wsId={props.workspace.id}
+              mockLines={mockLines(s, persona(s.personaId)?.name ?? "?")}
+            />
           </div>
         )}
       </For>
@@ -306,13 +322,31 @@ export function ControlCenter(props: { workspace: Workspace }) {
 
           <div class="cc-strip">
             <div class="card strip-card">
-              <Eyebrow>저장 상태</Eyebrow>
-              <div class="mono" style={{ "margin-top": "6px" }}>
-                WAL · {usage().walLatencyMs}ms
-              </div>
-              <div class="mono muted">
-                {usage().dbFile} · {usage().dbSizeMb} MB · {usage().dbPercent}%
-              </div>
+              <Eyebrow>저장 상태 {realUsage() ? "(실측)" : "(목)"}</Eyebrow>
+              <Show
+                when={realUsage()}
+                fallback={
+                  <>
+                    <div class="mono" style={{ "margin-top": "6px" }}>
+                      WAL · {usage().walLatencyMs}ms
+                    </div>
+                    <div class="mono muted">
+                      {usage().dbFile} · {usage().dbSizeMb} MB · {usage().dbPercent}%
+                    </div>
+                  </>
+                }
+              >
+                {(u) => (
+                  <>
+                    <div class="mono" style={{ "margin-top": "6px" }}>
+                      WAL · {(u().db_size_bytes / 1024).toFixed(0)} KB · {u().total_lines.toLocaleString()} lines
+                    </div>
+                    <div class="mono muted" style={{ "font-size": "10px" }}>
+                      workspaces/{props.workspace.id}/session.db · 100ms 배치 · 30일/10만줄 보존
+                    </div>
+                  </>
+                )}
+              </Show>
             </div>
             <div class="card strip-card">
               <Eyebrow>SessionService 이벤트</Eyebrow>

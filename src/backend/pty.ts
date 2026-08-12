@@ -41,11 +41,36 @@ function ensureListeners(): Promise<void> {
   return listenerReady;
 }
 
-export async function spawnPty(id: string, cwd: string, cols: number, rows: number): Promise<void> {
+export async function spawnPty(
+  id: string,
+  cwd: string,
+  cols: number,
+  rows: number,
+  workspace?: string,
+): Promise<void> {
   if (!isTauri()) return;
   await ensureListeners();
-  await invoke("pty_spawn", { id, cwd, shell: null, cols, rows });
+  await invoke("pty_spawn", { id, cwd, shell: null, cols, rows, workspace: workspace ?? null });
   spawned.add(id);
+}
+
+/** 재시작 복구 (FR-C-31) — 스토어에서 세션의 마지막 N줄 */
+export async function scrollbackTail(workspace: string, session: string, count: number): Promise<string[]> {
+  if (!isTauri()) return [];
+  return invoke<string[]>("scrollback_tail", { workspace, session, count }).catch(() => []);
+}
+
+export interface StoreUsageReal {
+  db_file: string;
+  db_size_bytes: number;
+  total_lines: number;
+  sessions: { id: string; lines: number; bytes: number }[];
+}
+
+/** 저장 사용량 실측 (FR-C-52) */
+export async function storeUsageReal(workspace: string): Promise<StoreUsageReal | undefined> {
+  if (!isTauri()) return undefined;
+  return invoke<StoreUsageReal>("store_usage_real", { workspace }).catch(() => undefined);
 }
 
 export function writePty(id: string, data: string): void {

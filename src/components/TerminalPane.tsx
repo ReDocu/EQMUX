@@ -4,7 +4,16 @@ import { onCleanup, onMount } from "solid-js";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import { getScrollback, isTauri, onPtyExit, onPtyOutput, resizePty, spawnPty, writePty } from "../backend/pty";
+import {
+  getScrollback,
+  isTauri,
+  onPtyExit,
+  onPtyOutput,
+  resizePty,
+  scrollbackTail,
+  spawnPty,
+  writePty,
+} from "../backend/pty";
 
 const EQ_THEME = {
   background: "#080b10",
@@ -22,7 +31,7 @@ const EQ_THEME = {
   white: "#e8eef8",
 };
 
-export function TerminalPane(props: { sessionId: string; cwd: string; mockLines?: string[] }) {
+export function TerminalPane(props: { sessionId: string; cwd: string; wsId?: string; mockLines?: string[] }) {
   let host!: HTMLDivElement;
 
   onMount(() => {
@@ -42,18 +51,31 @@ export function TerminalPane(props: { sessionId: string; cwd: string; mockLines?
     const cleanups: (() => void)[] = [];
 
     if (isTauri()) {
-      // 실제 PTY — 재부착이면 버퍼를 복원하고 스트림을 이어 그린다
-      const backlog = getScrollback(props.sessionId);
-      if (backlog) term.write(backlog);
+      // 실제 PTY — 재부착이면 인메모리 버퍼 복원, 앱 재시작이면 스토어에서 재생 (FR-C-31)
       cleanups.push(onPtyOutput(props.sessionId, (data) => term.write(data)));
       cleanups.push(
         onPtyExit(props.sessionId, (code) => {
           term.write(`\r\n\x1b[31m프로세스 종료 · exit ${code ?? "?"}\x1b[0m\r\n`);
         }),
       );
-      void spawnPty(props.sessionId, props.cwd, term.cols, term.rows);
       const d = term.onData((data) => writePty(props.sessionId, data));
       cleanups.push(() => d.dispose());
+
+      void (async () => {
+        const backlog = getScrollback(props.sessionId);
+        if (backlog) {
+          term.write(backlog);
+        } else {
+          const tail = await scrollbackTail(props.wsId ?? "default", props.sessionId, 500);
+          if (tail.length > 0) {
+            // 재생과 새 출력 사이의 시각적 경계 (FR-C-32) — 살아있는 척하지 않는다
+            term.writeln(`\x1b[90m─── 이전 세션 스크롤백 · 마지막 ${tail.length}줄 재생 ───\x1b[0m`);
+            for (const line of tail) term.writeln(`\x1b[2m${line}\x1b[0m`);
+            term.writeln("\x1b[90m─── 새 세션 시작 ───\x1b[0m");
+          }
+        }
+        await spawnPty(props.sessionId, props.cwd, term.cols, term.rows, props.wsId);
+      })();
     } else {
       // 목 폴백 — 브라우저 dev에서는 정적 라인 + 로컬 에코
       const prompt = `\x1b[38;5;110mPS ${props.cwd}>\x1b[0m `;
