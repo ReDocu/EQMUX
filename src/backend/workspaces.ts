@@ -3,6 +3,7 @@
 // 브라우저 dev에서는 기존 목 데이터가 그대로 남는다.
 import { invoke } from "@tauri-apps/api/core";
 import { restoreLayout, startLayoutSync } from "./layout";
+import { loadSettings } from "./settings";
 import { refreshLibrary } from "./library";
 import { backend } from "./mock";
 import { refreshMissions } from "./missions";
@@ -64,7 +65,9 @@ export async function refreshWorkspaces(): Promise<void> {
       .map((w) => refreshMissions(w.id)),
   );
   // 레이아웃 복원 (FR-C-22·30) — 워크스페이스가 실재해야 탭을 열 수 있다.
+  // 설정을 먼저 로드해야 startView 옵션(FR-G-02)이 복원에 반영된다.
   // 동기화는 복원 뒤에 시작 — 부트스트랩 중간 상태로 저장본을 덮지 않는다.
+  await loadSettings();
   await restoreLayout();
   startLayoutSync();
 }

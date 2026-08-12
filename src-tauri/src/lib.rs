@@ -31,6 +31,16 @@ use workspace::{WsEntry, WsInfo};
 
 pub(crate) struct StoreState(pub(crate) Store);
 
+/// 설정 (PRD J) — 앱데이터 settings.json. 스키마는 프런트 소유(JSON 통과)이며
+/// Rust는 알림 게이트(FR-G-30 라우팅) 같은 즉시 참조를 위해 메모리 사본을 든다.
+pub(crate) struct SettingsState(pub(crate) Mutex<serde_json::Value>);
+
+pub(crate) fn setting_str(app: &AppHandle, key: &str) -> Option<String> {
+    let s: State<SettingsState> = app.state();
+    let v = s.0.lock().ok()?;
+    v.get(key).and_then(|x| x.as_str()).map(str::to_string)
+}
+
 struct PtySession {
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
@@ -1076,6 +1086,31 @@ async fn tokio_sleep(d: std::time::Duration) {
 // ── 레이아웃 영속 (FR-C-22·30) — 열린 탭·페인 배치·포커스를 앱데이터 layout.json에 ──
 // 스키마는 프런트 소유(JSON 통과) — 여기는 원자적 읽기·쓰기만 책임진다.
 
+// ── 설정 (PRD J) — settings.json 원자적 읽기·쓰기 + 메모리 사본 갱신 ──
+
+#[tauri::command]
+fn settings_load(settings: State<SettingsState>) -> serde_json::Value {
+    settings.0.lock().map(|v| v.clone()).unwrap_or(serde_json::Value::Null)
+}
+
+#[tauri::command]
+fn settings_save(
+    store_state: State<StoreState>,
+    settings: State<SettingsState>,
+    data: serde_json::Value,
+) -> Result<(), String> {
+    let root = store_state.0.root();
+    std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+    let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
+    let tmp = root.join("settings.json.tmp");
+    std::fs::write(&tmp, json).map_err(|e| e.to_string())?;
+    std::fs::rename(tmp, root.join("settings.json")).map_err(|e| e.to_string())?;
+    if let Ok(mut v) = settings.0.lock() {
+        *v = data;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn layout_load(store_state: State<StoreState>) -> Option<serde_json::Value> {
     let path = store_state.0.root().join("layout.json");
@@ -1157,6 +1192,12 @@ pub fn run() {
             // 스토어 루트 = 앱 데이터 (FR-C-20a — repo 안에 바이너리를 두지 않는다)
             let root = app.path().app_data_dir()?;
             library::seed(&root); // 역할 라이브러리 시드 (FR-E-27) — 디렉터리가 없을 때만
+            // 설정 로드 (PRD J) — 손상되면 Null로 시작 (프런트 기본값이 받친다)
+            let settings = std::fs::read_to_string(root.join("settings.json"))
+                .ok()
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or(serde_json::Value::Null);
+            app.manage(SettingsState(Mutex::new(settings)));
             app.manage(StoreState(Store::new(root)));
             // 에이전트 런타임 (PRD D) — 세션 레지스트리 watch 시작 (FR-D-11)
             app.manage(agent::AgentRt::default());
@@ -1210,6 +1251,8 @@ pub fn run() {
             app_exit,
             layout_load,
             layout_save,
+            settings_load,
+            settings_save,
             session_log_dir,
             open_log_dir
         ])

@@ -162,6 +162,12 @@ fn maybe_notify(app: &AppHandle, evt: &AgentStateEvt) {
     if evt.status != "waiting" && evt.status != "dead" {
         return;
     }
+    // 설정 라우팅 (PRD J · FR-G-30) — 꺼도 인앱 미확인 표시는 계속 동작한다 (FR-G-37)
+    match crate::setting_str(app, "notifications").as_deref() {
+        Some("off") => return,
+        Some("waiting") if evt.status == "dead" => return,
+        _ => {} // 기본값 waiting-dead
+    }
     let rt: tauri::State<AgentRt> = app.state();
     // 사용자가 의도한 종료(중지·제거)는 dead 알림 대상이 아니다
     if evt.status == "dead" {

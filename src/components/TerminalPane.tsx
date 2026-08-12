@@ -20,6 +20,7 @@ import {
   writePty,
 } from "../backend/pty";
 import { spawnAgent } from "../backend/agent";
+import { settings } from "../backend/settings";
 import type { Permissions } from "../types";
 
 const EQ_THEME = {
@@ -184,7 +185,7 @@ async function initSession(
       if (!t) return true;
       return ((t.match(BOXY) ?? []).length * 2) >= t.length;
     };
-    const tail = await scrollbackTail(props.wsId ?? "default", props.sessionId, 500);
+    const tail = await scrollbackTail(props.wsId ?? "default", props.sessionId, settings().scrollbackReplay);
     let prevLine = "";
     const cleaned = tail.filter((l) => {
       if (isNoise(l) || l === prevLine) return false;

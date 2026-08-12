@@ -6,6 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { createEffect, createRoot } from "solid-js";
 import { backend } from "./mock";
 import { isTauri } from "./pty";
+import { settings } from "./settings";
 import {
   defaultShell,
   paneLayout,
@@ -14,7 +15,9 @@ import {
   setDefaultShell,
   setPaneLayout,
   setSelectedSession,
+  setView,
   SHELLS,
+  view,
 } from "../state";
 import type { PaneLayout } from "../state";
 
@@ -23,6 +26,7 @@ interface LayoutData {
   paneLayout?: string;
   shell?: string;
   selectedSession?: string;
+  lastWorkspace?: string; // 마지막으로 보던 워크스페이스 탭 — startView="last"일 때만 복원
 }
 
 /** 저장본 복원 — refreshWorkspaces가 워크스페이스를 하이드레이트한 뒤에 불린다 */
@@ -39,9 +43,15 @@ export async function restoreLayout(): Promise<void> {
     backend.openWorkspace(id); // 경로 소실·10개 상한은 openWorkspace가 거른다
   }
   if (data.selectedSession) setSelectedSession(data.selectedSession);
+  // 시작 화면 옵션 (FR-G-02) — 기본은 관제 탭, 설정이 "last"일 때만 마지막 워크스페이스로
+  if (settings().startView === "last" && data.lastWorkspace) {
+    const ws = backend.listWorkspaces().find((w) => w.id === data.lastWorkspace && w.open);
+    if (ws) setView({ kind: "workspace", id: ws.id });
+  }
 }
 
 let syncStarted = false;
+let lastWs: string | undefined; // 관제 탭에 있을 때도 직전 워크스페이스를 기억한다
 
 /** 변경 감지 → 800ms 디바운스 저장. 반드시 restoreLayout 이후에 시작한다. */
 export function startLayoutSync(): void {
@@ -52,6 +62,7 @@ export function startLayoutSync(): void {
   const save = () => {
     clearTimeout(timer);
     timer = setTimeout(() => {
+      const v = view();
       const data: LayoutData = {
         openWorkspaces: backend
           .listWorkspaces()
@@ -60,7 +71,9 @@ export function startLayoutSync(): void {
         paneLayout: paneLayout(),
         shell: defaultShell().label,
         selectedSession: selectedSession(),
+        lastWorkspace: v.kind === "workspace" ? (v as { id: string }).id : lastWs,
       };
+      lastWs = data.lastWorkspace;
       const json = JSON.stringify(data);
       if (json === last) return;
       last = json;
@@ -73,6 +86,7 @@ export function startLayoutSync(): void {
       paneLayout();
       defaultShell();
       selectedSession();
+      view();
       save(); // 시그널 변경
     });
   });
