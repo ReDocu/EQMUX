@@ -30,6 +30,7 @@ import { disposeSessionTerminal, TerminalPane } from "../components/TerminalPane
 import { SessionDetailPanel } from "./SessionDetailPanel";
 import { TranscriptPane } from "./TranscriptPane";
 import type { Session, Workspace } from "../types";
+import { sessionDisplayName } from "../types";
 
 // 세션 상태별 목 터미널 출력 — 2×2 그리드 시각 검증용 (Tauri 밖 폴백 전용)
 function mockLines(s: Session, personaName: string): string[] {
@@ -197,7 +198,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
               }}
             >
               <span>
-                SLOT {s.slot} · {personaName(s.personaId)}
+                SLOT {s.slot} · {sessionDisplayName(s, personaName(s.personaId))}
               </span>
               <span style={{ display: "inline-flex", "align-items": "center", gap: "8px" }}>
                 <StatusLabel session={s} />
@@ -289,7 +290,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
               >
                 <div class="session-card-head">
                   <PersonaDot name={personaName(s.personaId)} color={persona(s.personaId)?.color ?? "blue"} />
-                  <span style={{ "font-weight": 700 }}>{personaName(s.personaId)}</span>
+                  <span style={{ "font-weight": 700 }}>{sessionDisplayName(s, personaName(s.personaId))}</span>
                   <span class="badge">{jobName(s.jobId)}</span>
                   <Show when={s.slot === 1 && !!persona(s.personaId)}>
                     <span class="badge blue">LEAD</span>

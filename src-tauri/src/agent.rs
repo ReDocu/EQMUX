@@ -30,6 +30,8 @@ pub struct Tracked {
     /// 훅 2차 소스가 채우는 것 (FR-D-15·18) — 현재 도구명·동시 서브에이전트 수
     pub activity: Option<String>,
     pub subagents: i64,
+    /// statusLine 채널 (FR-D-19 · §10.4) — 세션 누적 비용 USD
+    pub cost_usd: Option<f64>,
 }
 
 /// 세션당 알림 합침 상태 (FR-G-32) — 마지막 발신 시각 + 그 사이 억제된 건수
@@ -58,6 +60,8 @@ pub struct AgentStateEvt {
     pub activity: Option<String>,
     /// 동시 실행 서브에이전트 수 (FR-D-18) — SubagentStart/Stop 카운트
     pub subagents: i64,
+    /// statusLine 누적 비용 USD (FR-D-19) — 없으면 아직 보고 전
+    pub cost_usd: Option<f64>,
     pub resumable: bool,
     pub version: Option<String>,
     pub exit_code: Option<i64>,
@@ -181,6 +185,26 @@ fn maybe_notify(app: &AppHandle, evt: &AgentStateEvt) {
         Some("off") => return,
         Some("waiting") if evt.status == "dead" => return,
         _ => {} // 기본값 waiting-dead
+    }
+    // 음소거 (FR-G-35) — 세션·워크스페이스 단위. 역시 인앱 미확인은 유지된다
+    let settings_state: tauri::State<crate::SettingsState> = app.state();
+    let muted = settings_state
+        .0
+        .lock()
+        .map(|v| {
+            let ws = evt.session.split('@').nth(1).unwrap_or("");
+            v.get("muted")
+                .and_then(|m| m.as_array())
+                .map(|list| {
+                    list.iter()
+                        .filter_map(|x| x.as_str())
+                        .any(|m| m == evt.session || m == ws)
+                })
+                .unwrap_or(false)
+        })
+        .unwrap_or(false);
+    if muted {
+        return;
     }
     let rt: tauri::State<AgentRt> = app.state();
     // 사용자가 의도한 종료(중지·제거)는 dead 알림 대상이 아니다
@@ -326,6 +350,7 @@ pub fn apply_hook(app: &AppHandle, session: &str, event: &str, payload: &serde_j
                 waiting_for: t.last_waiting.clone(),
                 activity: t.activity.clone(),
                 subagents: t.subagents,
+                cost_usd: t.cost_usd,
                 resumable: resumable(&t.cwd, uuid),
                 version: None,
                 exit_code: None,
@@ -339,6 +364,52 @@ pub fn apply_hook(app: &AppHandle, session: &str, event: &str, payload: &serde_j
         } else {
             emit_state(app, &e);
         }
+    }
+}
+
+/// statusLine 채널 (FR-D-19 · §10.4) — 세션 누적 비용. 상태를 바꾸지 않는 부연이라
+/// activity와 같은 규칙으로 이벤트 기록 없이 방송만 한다. 1센트 단위 변화만 방송해
+/// 주기 호출(수 초 간격)이 방송 폭주가 되지 않게 한다.
+pub fn apply_statusline(app: &AppHandle, session: &str, payload: &serde_json::Value) {
+    let Some(cost) = payload
+        .get("cost")
+        .and_then(|c| c.get("total_cost_usd"))
+        .and_then(|v| v.as_f64())
+    else {
+        return;
+    };
+    let rt: tauri::State<AgentRt> = app.state();
+    let mut evt = None;
+    if let Ok(mut map) = rt.by_uuid.lock() {
+        for (uuid, t) in map.iter_mut() {
+            if t.app_session != session || t.last_status == "dead" {
+                continue;
+            }
+            let changed = match t.cost_usd {
+                Some(prev) => (cost - prev).abs() >= 0.01,
+                None => true,
+            };
+            if !changed {
+                break;
+            }
+            t.cost_usd = Some(cost);
+            evt = Some(AgentStateEvt {
+                session: session.to_string(),
+                agent_session: uuid.clone(),
+                status: t.last_status.clone(),
+                waiting_for: t.last_waiting.clone(),
+                activity: t.activity.clone(),
+                subagents: t.subagents,
+                cost_usd: t.cost_usd,
+                resumable: resumable(&t.cwd, uuid),
+                version: None,
+                exit_code: None,
+            });
+            break;
+        }
+    }
+    if let Some(e) = evt {
+        let _ = app.emit("agent-state", e);
     }
 }
 
@@ -359,6 +430,7 @@ pub fn on_pty_exit(app: &AppHandle, id: &str, code: Option<u32>, gen: u64) {
                     waiting_for: None,
                     activity: None,
                     subagents: 0,
+                    cost_usd: t.cost_usd, // 종료 후에도 마지막 비용은 남긴다
                     resumable: resumable(&t.cwd, uuid),
                     version: None,
                     exit_code: code.map(i64::from),
@@ -449,6 +521,7 @@ fn scan(app: &AppHandle) {
                         waiting_for: waiting,
                         activity: t.activity.clone(),
                         subagents: t.subagents,
+                        cost_usd: t.cost_usd,
                         resumable: resumable(&t.cwd, &uuid),
                         version: rec.version.clone(),
                         exit_code: None,

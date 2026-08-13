@@ -159,6 +159,12 @@ fn handle(app: &AppHandle, line: &str) -> Result<serde_json::Value, String> {
             crate::agent::apply_hook(app, session, event, &req["payload"]);
             Ok(json!({"ok": true}))
         }
+        "statusline" => {
+            // statusLine 채널 (FR-D-19) — 세션 누적 비용 수집. 실패도 ok (상태 줄 불가침)
+            let session = req["session"].as_str().ok_or("NO_SESSION")?;
+            crate::agent::apply_statusline(app, session, &req["payload"]);
+            Ok(json!({"ok": true}))
+        }
         _ => Err("BAD_CMD".into()),
     }
 }

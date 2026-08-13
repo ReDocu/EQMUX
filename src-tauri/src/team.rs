@@ -15,6 +15,9 @@ pub struct TeamSlot {
     pub persona_name: String,
     pub job: String,
     pub job_name: String,
+    /// 세션 표시 이름 (P5 · FR-E-36) — 페르소나 이름과 분리 가능. 없으면 페르소나 이름
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     /// 세션 격리 (FR-E-62 · E1′) — true면 `.eqmux/worktrees/<세션>`이 cwd다.
     /// 경로가 아니라 플래그를 저장한다 — team.json은 커밋 대상(W3)이라 절대 경로 금지
     #[serde(default)]

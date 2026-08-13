@@ -57,6 +57,8 @@ export interface Backend {
   reviveOrphan(id: string, wsId: string): void;
   /** 미확인 영속 복원 (G 잔여) — 캐시에 남은 세션 id들에 미확인 점을 되붙인다 */
   hydrateUnseen(wsId: string, ids: string[]): void;
+  /** 세션 표시 이름 변경 (P5 · FR-E-36) — 빈 값이면 페르소나 이름으로 복귀 */
+  renameSession(id: string, name?: string): void;
   /** 세션 메모리 실측 반영 (FR-C-09) — 최신값·피크만 유지, 이벤트 적재 없음 */
   applyMemory(samples: { id: string; mb: number; peakMb: number }[]): void;
   /** 실물 에이전트 상태 반영 (PRD D agent-state 이벤트) — Tauri에서만 호출된다 */
@@ -660,6 +662,7 @@ export class MockBackend implements Backend {
       SESSIONS.push(
         s(id, wsId, slot, sl.persona, sl.job, {
           status: "shell",
+          name: sl.name ?? undefined, // 분리된 세션 이름 (P5) — team.json이 원본
           cwd: sl.worktreePath ?? ws.path,
           worktree: !!sl.worktreePath,
           sinceMs: 0,
@@ -717,6 +720,16 @@ export class MockBackend implements Backend {
     this.broadcast();
   }
 
+  renameSession(id: string, name?: string) {
+    const sess = SESSIONS.find((x) => x.id === id);
+    if (!sess) return;
+    const next = name?.trim() || undefined;
+    if (sess.name === next) return;
+    sess.name = next;
+    this.logEvent("app", next ? `세션 이름 변경 · ${next}` : "세션 이름 해제 — 페르소나 이름으로", id);
+    this.broadcast();
+  }
+
   hydrateUnseen(wsId: string, ids: string[]) {
     const want = new Set(ids);
     let changed = false;
@@ -750,6 +763,7 @@ export class MockBackend implements Backend {
     sess.waitingFor = evt.waitingFor;
     sess.activity = evt.activity; // 훅 2차 소스 (FR-D-15) — 도구명, 없으면 지운다
     if (evt.subagents !== undefined) sess.subagents = evt.subagents; // FR-D-18
+    if (evt.costUsd !== undefined) sess.costUsd = evt.costUsd; // statusLine (FR-D-19)
     sess.resumable = evt.resumable;
     sess.resumeReason = evt.resumable ? "transcript + cwd 일치" : "transcript 없음";
     if (evt.version) sess.agentVersion = evt.version;

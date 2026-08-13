@@ -18,6 +18,7 @@ export interface AgentStateEvt {
   waitingFor: string | null;
   activity: string | null; // 훅 2차 소스 (FR-D-15) — 현재 도구명
   subagents: number; // 동시 실행 서브에이전트 수 (FR-D-18)
+  costUsd: number | null; // statusLine 누적 비용 (FR-D-19)
   resumable: boolean;
   version: string | null;
   exitCode: number | null;
@@ -27,9 +28,14 @@ const STATUSES: AgentStatus[] = ["starting", "busy", "waiting", "shell", "idle",
 
 /** Rust 이벤트(null 표기) → 목 백엔드 반영 페이로드(undefined 표기) — 수신부 공용 변환 */
 function applyEvt(p: AgentStateEvt): void {
-  // waiting 사운드 (FR-G-34) — 진입 전이에만, 설정이 켜져 있을 때만 (기본 꺼짐, G6)
-  const prev = backend.listSessions().find((x) => x.id === p.session)?.status;
-  if (p.status === "waiting" && prev !== "waiting" && settings().waitingSound) beepWaiting();
+  // waiting 사운드 (FR-G-34) — 진입 전이에만, 설정이 켜져 있을 때만 (기본 꺼짐, G6).
+  // 음소거(FR-G-35) 대상이면 내지 않는다 — 세션 id 또는 소속 워크스페이스 id
+  const prevSess = backend.listSessions().find((x) => x.id === p.session);
+  const mutedList = settings().muted;
+  const isMuted = mutedList.includes(p.session) || (prevSess && mutedList.includes(prevSess.workspaceId));
+  if (p.status === "waiting" && prevSess?.status !== "waiting" && settings().waitingSound && !isMuted) {
+    beepWaiting();
+  }
   backend.applyAgentState({
     session: p.session,
     agentSession: p.agentSession,
@@ -37,6 +43,7 @@ function applyEvt(p: AgentStateEvt): void {
     waitingFor: p.waitingFor ?? undefined,
     activity: p.activity ?? undefined,
     subagents: p.subagents,
+    costUsd: p.costUsd ?? undefined,
     resumable: p.resumable,
     version: p.version ?? undefined,
     exitCode: p.exitCode ?? undefined,

@@ -8,7 +8,7 @@ import { isTauri } from "../backend/pty";
 import { jumpToSession, tick } from "../state";
 import { StatusLabel } from "../components/ui";
 import type { Session } from "../types";
-import { ATTENTION_ORDER, fmtSince } from "../types";
+import { ATTENTION_ORDER, fmtSince, sessionDisplayName } from "../types";
 
 export function Dashboard() {
   const sessions = () => {
@@ -52,7 +52,7 @@ export function Dashboard() {
   const subagents = () => sessions().reduce((n, s) => n + s.subagents, 0);
   const waitingSession = () => sessions().find((s) => s.status === "waiting");
   const personaName = (s: Session) =>
-    backend.listPersonas().find((p) => p.id === s.personaId)?.name ?? (s.personaId || "기본 터미널");
+    sessionDisplayName(s, backend.listPersonas().find((p) => p.id === s.personaId)?.name ?? (s.personaId || "기본 터미널"));
   const missionName = (s: Session) => missions().find((m) => m.id === s.missionId)?.name;
   // 피드 행의 발신자 — 이미 사라진 세션의 이벤트도 남으므로 안전 조회
   const eventName = (sessionId?: string) => {

@@ -22,6 +22,9 @@ const MOCK_TREE: FsNode[] = [
 
 const parentOf = (rel: string) => (rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "");
 
+// 미저장 이탈 보호 — 오버레이(ESC 닫기)가 편집 중 여부를 알아야 한다
+export const [editorGuard, setEditorGuard] = createSignal(false);
+
 export function MissionExplorerTab() {
   const [sel, setSel] = createSignal<FsNode | undefined>(undefined);
   const [query, setQuery] = createSignal("");
@@ -71,11 +74,19 @@ export function MissionExplorerTab() {
   };
 
   const pick = (n: FsNode) => {
+    // 미저장 이탈 보호 — 편집 중 다른 파일 클릭은 1회 경고, 같은 파일 재클릭이 곧 확인
+    if (editing() !== undefined && dirty() && pendingSwitch() !== n.rel) {
+      setPendingSwitch(n.rel);
+      setFsErr("미저장 변경이 있습니다 — 한 번 더 클릭하면 버리고 이동합니다");
+      return;
+    }
+    setPendingSwitch(undefined);
     setSel(n);
     setFsErr(undefined);
     setConfirmDel(false);
     setNameMode(undefined);
     setEditing(undefined);
+    setDirty(false);
     if (n.dir) setPreview(undefined);
     else void loadPreview(n.rel);
   };
@@ -87,6 +98,10 @@ export function MissionExplorerTab() {
   const [confirmDel, setConfirmDel] = createSignal(false);
   const [editing, setEditing] = createSignal<string | undefined>(undefined);
   const [dirty, setDirty] = createSignal(false);
+  const [editMtime, setEditMtime] = createSignal<number | undefined>(undefined); // 충돌 감지 기준
+  const [pendingSwitch, setPendingSwitch] = createSignal<string | undefined>(undefined);
+  // 오버레이 ESC 가드 — 편집 중 + 미저장일 때만 닫기를 막는다
+  createEffect(() => setEditorGuard(editing() !== undefined && dirty()));
 
   // 생성 대상 폴더 — 폴더 선택 시 그 안, 파일 선택 시 그 옆, 없으면 루트
   const createDir = () => {
@@ -160,7 +175,9 @@ export function MissionExplorerTab() {
     setFsErr(undefined);
     try {
       // 편집은 전문 읽기 — 64KB 미리보기를 저장해 뒷부분을 날리지 않는다 (1MB 초과는 거부)
-      setEditing(await fsRead(target.path, s.rel));
+      const fc = await fsRead(target.path, s.rel);
+      setEditing(fc.text);
+      setEditMtime(fc.mtimeMs);
       setDirty(false);
     } catch (err) {
       setFsErr(String(err));
@@ -174,7 +191,9 @@ export function MissionExplorerTab() {
     if (!target || !s || content === undefined) return;
     setFsErr(undefined);
     try {
-      await fsWrite(target.path, s.rel, content);
+      // 충돌 감지 — 편집 시작 후 파일이 밖에서(에이전트 등) 바뀌었으면 거부된다
+      const next = await fsWrite(target.path, s.rel, content, editMtime());
+      setEditMtime(next);
       setEditing(undefined);
       setDirty(false);
       void loadPreview(s.rel);
@@ -412,6 +431,13 @@ export function MissionExplorerTab() {
               onInput={(e) => {
                 setEditing(e.currentTarget.value);
                 setDirty(true);
+              }}
+              onKeyDown={(e) => {
+                // Ctrl+S 저장 — 브라우저 저장 다이얼로그를 가로챈다
+                if (e.ctrlKey && e.key.toLowerCase() === "s") {
+                  e.preventDefault();
+                  void saveEdit();
+                }
               }}
             />
           </Show>

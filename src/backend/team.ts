@@ -13,6 +13,7 @@ export interface TeamSlotInfo {
   personaName: string;
   job: string;
   jobName: string;
+  name?: string | null; // 세션 표시 이름 (P5 · FR-E-36) — 페르소나 이름과 분리 가능
   worktree: boolean; // 격리 옵트인 (FR-E-62) — 경로가 아니라 플래그 (team.json은 커밋 대상)
   agentSessionId: string | null;
   resumable: boolean;
@@ -43,6 +44,7 @@ function slotsOf(wsId: string) {
       personaName: personas.find((p) => p.id === s.personaId)?.name ?? s.personaId,
       job: s.jobId,
       jobName: jobs.find((j) => j.id === s.jobId)?.name ?? s.jobId,
+      name: s.name ?? null, // 분리된 세션 이름 (P5) — 없으면 null (파일에는 생략)
       worktree: !!s.worktree,
     }));
 }
@@ -99,7 +101,7 @@ export async function restoreTeams(): Promise<void> {
     if (ws.pathMissing) continue;
     const slots = await loadTeam(ws.id, ws.path);
     if (slots.length > 0) {
-      lastSaved.set(ws.id, JSON.stringify(slots.map(({ slot, persona, personaName, job, jobName, worktree }) => ({ slot, persona, personaName, job, jobName, worktree }))));
+      lastSaved.set(ws.id, JSON.stringify(slots.map(({ slot, persona, personaName, job, jobName, name, worktree }) => ({ slot, persona, personaName, job, jobName, name: name ?? null, worktree }))));
       backend.hydrateTeam(ws.id, slots, alive);
     }
   }

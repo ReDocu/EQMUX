@@ -8,10 +8,11 @@ import { backend } from "../backend/mock";
 import { nudgeRoleReload, removeRoleFile, saveRoleFile } from "../backend/roles";
 import { isTauri, killPty, openLogDir } from "../backend/pty";
 import { sessionTermSize } from "../components/TerminalPane";
+import { settings, toggleMuted } from "../backend/settings";
 import { jumpToSession } from "../state";
 import { Eyebrow, KV, StatusLabel } from "../components/ui";
 import type { Session } from "../types";
-import { flagsToString, translatePermissions } from "../types";
+import { flagsToString, sessionDisplayName, translatePermissions } from "../types";
 
 export function SessionDetailPanel(props: { session: Session }) {
   const s = () => props.session;
@@ -84,6 +85,15 @@ export function SessionDetailPanel(props: { session: Session }) {
 
   const [actionErr, setActionErr] = createSignal<string | undefined>(undefined);
 
+  // 세션 이름 분리 (P5 · FR-E-36) — 빈 값 저장 = 페르소나 이름으로 복귀. team.json에 영속된다
+  const [nameDraft, setNameDraft] = createSignal(s().name ?? "");
+  createEffect(on(() => s().id, () => setNameDraft(s().name ?? "")));
+  const applyName = () => backend.renameSession(s().id, nameDraft());
+
+  // 음소거 (FR-G-35) — OS 알림·사운드만 막는다. 인앱 미확인 점은 유지 (FR-G-37)
+  const sessMuted = () => settings().muted.includes(s().id);
+  const wsMuted = () => settings().muted.includes(s().workspaceId);
+
   // 재개 (FR-D-21~23) — Tauri에서는 실제 --resume, 브라우저 목업에선 목 상태 전이
   const doResume = async () => {
     setActionErr(undefined);
@@ -131,7 +141,13 @@ export function SessionDetailPanel(props: { session: Session }) {
       <div class="detail-head">
         <div>
           <div style={{ "font-size": "15px", "font-weight": 800 }}>
-            {persona()?.name ?? "기본 터미널"} · {job()?.name ?? "셸"}
+            {sessionDisplayName(s(), persona()?.name ?? "기본 터미널")} · {job()?.name ?? "셸"}
+            <Show when={s().name && persona()}>
+              <span class="muted" style={{ "font-size": "11px", "font-weight": 400 }}>
+                {" "}
+                ({persona()!.name})
+              </span>
+            </Show>
           </div>
           <div class="mono muted" style={{ "font-size": "11px" }}>
             <Show when={s().agentVersion} fallback="에이전트 미기동">
@@ -159,6 +175,10 @@ export function SessionDetailPanel(props: { session: Session }) {
         <KV k="역할" v={`${persona()?.name ?? "—"} · ${job()?.name ?? "—"}`} />
         <KV k="서브에이전트" v={String(s().subagents)} />
         <KV k="활동 (훅 2차)" v={s().activity ?? "—"} />
+        <KV
+          k="비용 (statusLine)"
+          v={s().costUsd !== undefined ? `$${s().costUsd!.toFixed(2)} 누적` : "— (보고 전)"}
+        />
         <KV
           k="메모리"
           v={
@@ -189,6 +209,33 @@ export function SessionDetailPanel(props: { session: Session }) {
             }
           />
         </Show>
+        <KV
+          k="알림"
+          v={
+            <button
+              class="setting-v"
+              title="이 세션의 OS 알림·사운드 음소거 (FR-G-35) — 인앱 미확인 점은 유지"
+              onClick={() => toggleMuted(s().id)}
+            >
+              {sessMuted() ? "🔇 음소거 중 — 해제" : wsMuted() ? "🔇 워크스페이스 음소거 중" : "🔔 켜짐 — 음소거"}
+            </button>
+          }
+        />
+      </div>
+
+      {/* 세션 이름 분리 (P5 · FR-E-36) — 같은 페르소나를 여러 워크스페이스에 캐스팅할 때 구분한다 */}
+      <div class="card inset" style={{ padding: "6px 10px", "margin-top": "10px", display: "flex", gap: "6px", "align-items": "center" }}>
+        <span class="eyebrow" style={{ "white-space": "nowrap" }}>세션 이름</span>
+        <input
+          style={{ flex: 1, "min-width": 0, "font-size": "11px" }}
+          placeholder={persona()?.name ?? "기본 터미널"}
+          value={nameDraft()}
+          onInput={(e) => setNameDraft(e.currentTarget.value)}
+          onKeyDown={(e) => e.key === "Enter" && applyName()}
+        />
+        <button class="btn ghost" style={{ padding: "2px 8px", "font-size": "10px" }} onClick={applyName}>
+          적용
+        </button>
       </div>
 
       <div style={{ "margin-top": "10px" }}>

@@ -10,6 +10,8 @@ export interface AppSettings {
   notifications: "waiting-dead" | "waiting" | "off";
   waitingSound: boolean;
   scrollbackReplay: number; // 500 | 1000 | 2000
+  /** 음소거 (FR-G-35) — 세션 id 또는 워크스페이스 id. OS 알림·사운드만 막고 인앱 미확인은 유지 (FR-G-37) */
+  muted: string[];
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -17,6 +19,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   notifications: "waiting-dead", // G3
   waitingSound: false, // G6 — 기본 꺼짐
   scrollbackReplay: 500,
+  muted: [],
 };
 
 const [settings, setSettings] = createSignal<AppSettings>(DEFAULT_SETTINGS);
@@ -32,7 +35,14 @@ function sanitize(raw: unknown): AppSettings {
     scrollbackReplay: [500, 1000, 2000].includes(v.scrollbackReplay as number)
       ? (v.scrollbackReplay as number)
       : 500,
+    muted: Array.isArray(v.muted) ? v.muted.filter((x): x is string => typeof x === "string") : [],
   };
+}
+
+/** 음소거 토글 (FR-G-35) — id는 세션 id 또는 워크스페이스 id */
+export function toggleMuted(id: string): void {
+  const cur = settings().muted;
+  updateSettings({ muted: cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id] });
 }
 
 let loaded = false;

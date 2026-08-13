@@ -2,15 +2,16 @@
 // 앱 바(항상 보임)의 임무 버튼이 토글하므로 터미널 전체 화면 위에서도 열린다 (z 50 > 40).
 import { onCleanup, onMount } from "solid-js";
 import { setExplorerOpen } from "../state";
-import { MissionExplorerTab } from "./MissionExplorerTab";
+import { editorGuard, MissionExplorerTab } from "./MissionExplorerTab";
 
 export function ExplorerOverlay() {
   onMount(() => {
-    // 캡처 단계 + 전파 중단 — 아래 깔린 터미널 전체 화면의 ESC 핸들러가 함께 닫히지 않게
+    // 캡처 단계 + 전파 중단 — 아래 깔린 터미널 전체 화면의 ESC 핸들러가 함께 닫히지 않게.
+    // 편집 중(미저장)에는 닫지 않는다 — 저장 또는 취소가 먼저다 (유실 보호)
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.stopPropagation();
-        setExplorerOpen(false);
+        if (!editorGuard()) setExplorerOpen(false);
       }
     };
     window.addEventListener("keydown", onKey, true);

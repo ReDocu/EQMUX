@@ -116,9 +116,26 @@ fn valid_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn mtime_ms(path: &Path) -> i64 {
+    fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileContent {
+    pub text: String,
+    /// 편집 시작 시점의 파일 mtime — 저장 때 충돌 감지(외부 변경)에 쓴다
+    pub mtime_ms: i64,
+}
+
 /// 편집용 원문 읽기 — 1MB 초과는 거부한다 (64KB 미리보기를 저장하면 뒷부분이 날아가므로,
 /// 편집 경로는 전문을 읽거나 아예 거부하거나 둘 중 하나여야 한다)
-pub fn read_full(ws_path: &str, rel: &str) -> Result<String, String> {
+pub fn read_full(ws_path: &str, rel: &str) -> Result<FileContent, String> {
     let target = resolve_existing(ws_path, rel)?;
     let meta = fs::metadata(&target).map_err(|e| e.to_string())?;
     if !meta.is_file() {
@@ -128,11 +145,19 @@ pub fn read_full(ws_path: &str, rel: &str) -> Result<String, String> {
         return Err("1MB 초과 — 앱에서 편집할 수 없습니다".into());
     }
     let data = fs::read(&target).map_err(|e| e.to_string())?;
-    String::from_utf8(data).map_err(|_| "텍스트 파일이 아닙니다 (UTF-8 아님)".into())
+    let text = String::from_utf8(data).map_err(|_| "텍스트 파일이 아닙니다 (UTF-8 아님)")?;
+    Ok(FileContent { text, mtime_ms: mtime_ms(&target) })
 }
 
-/// 텍스트 저장 — 원자적 쓰기 (tmp → rename)
-pub fn write_file(ws_path: &str, rel: &str, content: &str) -> Result<(), String> {
+/// 텍스트 저장 — 원자적 쓰기 (tmp → rename). expected_mtime_ms를 주면 그 사이 파일이
+/// 밖에서(에이전트 등) 바뀌었는지 검사한다 — 마지막 저장이 조용히 이기는 사고 방지.
+/// 반환은 저장 후 mtime — 이어서 편집을 계속할 수 있게.
+pub fn write_file(
+    ws_path: &str,
+    rel: &str,
+    content: &str,
+    expected_mtime_ms: Option<i64>,
+) -> Result<i64, String> {
     if content.len() > EDIT_MAX_BYTES {
         return Err("1MB 초과 — 저장할 수 없습니다".into());
     }
@@ -140,9 +165,16 @@ pub fn write_file(ws_path: &str, rel: &str, content: &str) -> Result<(), String>
     if !target.is_file() {
         return Err("파일이 아닙니다".into());
     }
+    if let Some(exp) = expected_mtime_ms {
+        let cur = mtime_ms(&target);
+        if cur != exp {
+            return Err("파일이 밖에서 바뀌었습니다 — 편집을 취소하고 다시 열어 확인하세요".into());
+        }
+    }
     let tmp = target.with_extension("eqmux-tmp");
     fs::write(&tmp, content).map_err(|e| e.to_string())?;
-    fs::rename(&tmp, &target).map_err(|e| e.to_string())
+    fs::rename(&tmp, &target).map_err(|e| e.to_string())?;
+    Ok(mtime_ms(&target))
 }
 
 /// 생성 — rel_dir(빈 문자열 = 루트) 아래 name으로 파일 또는 폴더. 이미 있으면 거부.
@@ -208,13 +240,19 @@ pub fn fs_preview(ws_path: String, rel: String) -> Result<String, String> {
 
 /// 편집용 원문 (1MB 상한 — 미리보기 잘림을 저장해 뒷부분을 날리는 사고 방지)
 #[tauri::command]
-pub fn fs_read(ws_path: String, rel: String) -> Result<String, String> {
+pub fn fs_read(ws_path: String, rel: String) -> Result<FileContent, String> {
     read_full(&ws_path, &rel)
 }
 
+/// 저장 — expectedMtimeMs가 있으면 외부 변경 충돌을 검사한다. 반환은 저장 후 mtime
 #[tauri::command]
-pub fn fs_write(ws_path: String, rel: String, content: String) -> Result<(), String> {
-    write_file(&ws_path, &rel, &content)
+pub fn fs_write(
+    ws_path: String,
+    rel: String,
+    content: String,
+    expected_mtime_ms: Option<i64>,
+) -> Result<i64, String> {
+    write_file(&ws_path, &rel, &content, expected_mtime_ms)
 }
 
 /// relDir(빈 문자열 = 루트) 아래에 생성 — 반환은 새 항목의 상대 경로
@@ -251,14 +289,19 @@ mod tests {
         assert_eq!(create_entry(&ws, "", "docs", true).unwrap(), "docs");
         let rel = create_entry(&ws, "docs", "note.md", false).unwrap();
         assert_eq!(rel, "docs/note.md");
-        write_file(&ws, &rel, "# 메모").unwrap();
-        assert_eq!(read_full(&ws, &rel).unwrap(), "# 메모");
+        let saved_mtime = write_file(&ws, &rel, "# 메모", None).unwrap();
+        let fc = read_full(&ws, &rel).unwrap();
+        assert_eq!(fc.text, "# 메모");
+        assert_eq!(fc.mtime_ms, saved_mtime);
+        // 외부 변경 충돌 감지 — 기대 mtime이 어긋나면 거부한다 (마지막 저장 승리 방지)
+        assert!(write_file(&ws, &rel, "덮어쓰기", Some(saved_mtime - 1)).is_err());
+        assert!(write_file(&ws, &rel, "정상 저장", Some(saved_mtime)).is_ok());
         // 이름 변경은 같은 부모 안에서만
         let renamed = rename_entry(&ws, &rel, "note2.md").unwrap();
         assert_eq!(renamed, "docs/note2.md");
         assert!(read_full(&ws, "docs/note.md").is_err());
         // 가드 — .git 불가침 · 경로 탈출 · 구분자 이름 · 루트 조작 · 중복 생성
-        assert!(write_file(&ws, ".git/config", "x").is_err());
+        assert!(write_file(&ws, ".git/config", "x", None).is_err());
         assert!(delete_entry(&ws, ".git").is_err());
         assert!(read_full(&ws, "../outside.txt").is_err());
         assert!(create_entry(&ws, "", "a/b", false).is_err());

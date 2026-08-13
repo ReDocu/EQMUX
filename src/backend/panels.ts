@@ -34,13 +34,24 @@ export async function fsPreview(wsPath: string, rel: string): Promise<string | u
 
 // ── 탐색기 파일 CRUD (M24) — 오류는 삼키지 않고 던진다 (UI가 사유를 보여준다) ──
 
-/** 편집용 원문 — 1MB 초과·바이너리는 거부된다 (잘린 미리보기 저장 사고 방지) */
-export function fsRead(wsPath: string, rel: string): Promise<string> {
-  return invoke<string>("fs_read", { wsPath, rel });
+export interface FileContent {
+  text: string;
+  mtimeMs: number; // 편집 시작 시점 mtime — 저장 때 외부 변경 충돌 감지에 쓴다
 }
 
-export function fsWrite(wsPath: string, rel: string, content: string): Promise<void> {
-  return invoke("fs_write", { wsPath, rel, content });
+/** 편집용 원문 — 1MB 초과·바이너리는 거부된다 (잘린 미리보기 저장 사고 방지) */
+export function fsRead(wsPath: string, rel: string): Promise<FileContent> {
+  return invoke<FileContent>("fs_read", { wsPath, rel });
+}
+
+/** 저장 — expectedMtimeMs가 어긋나면 거부된다 (외부 변경 충돌). 반환은 저장 후 mtime */
+export function fsWrite(
+  wsPath: string,
+  rel: string,
+  content: string,
+  expectedMtimeMs?: number,
+): Promise<number> {
+  return invoke<number>("fs_write", { wsPath, rel, content, expectedMtimeMs: expectedMtimeMs ?? null });
 }
 
 /** relDir(빈 문자열 = 루트) 아래 생성 — 반환은 새 항목의 상대 경로 */

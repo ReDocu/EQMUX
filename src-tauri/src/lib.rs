@@ -677,6 +677,7 @@ fn agent_spawn_inner(
             waiting_for: None,
             activity: None,
             subagents: 0,
+            cost_usd: None,
             resumable: resume,
             version: None,
             exit_code: None,
@@ -1279,6 +1280,7 @@ fn agent_snapshot(app: AppHandle) -> Vec<agent::AgentStateEvt> {
             waiting_for: t.last_waiting.clone(),
             activity: t.activity.clone(),
             subagents: t.subagents,
+            cost_usd: t.cost_usd,
             resumable: agent::resumable(&t.cwd, uuid),
             version: None,
             exit_code: None,
@@ -1376,7 +1378,10 @@ fn write_hook_settings(root: &Path) {
             "PostToolUse": hook("PostToolUse"),
             "SubagentStart": hook("SubagentStart"),
             "SubagentStop": hook("SubagentStop"),
-        }
+        },
+        // statusLine 채널 (FR-D-19 · §10.4) — 주기 호출의 stdin JSON에서 비용을 수집하고,
+        // stdout 첫 줄로 Claude Code 상태 줄을 그린다 (eqmux _statusline)
+        "statusLine": { "type": "command", "command": "eqmux _statusline" }
     });
     let _ = std::fs::create_dir_all(root);
     let _ = std::fs::write(root.join("hook-settings.json"), v.to_string());

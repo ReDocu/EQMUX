@@ -14,6 +14,8 @@ pub enum Req {
     Send { session: String, to: String, kind: String, body: String },
     Report { session: String, body: String },
     Hook { session: String, event: String },
+    /// statusLine 채널 (FR-D-19 · §10.4) — Claude Code가 주기 호출, stdin JSON에 비용이 온다
+    StatusLine { session: String },
 }
 
 const USAGE: &str = "사용법:\n  eqmux send --type <ask|handoff|report|review|escalate> [--to @이름] \"내용\"\n  eqmux report \"진척 한 줄\"\n  eqmux ping";
@@ -68,6 +70,7 @@ pub fn parse(args: &[String], session: Option<&str>) -> Result<Req, String> {
             let event = args.get(1).cloned().ok_or("_hook <Event>가 필요합니다")?;
             Ok(Req::Hook { session: need_session()?, event })
         }
+        "_statusline" => Ok(Req::StatusLine { session: need_session()? }),
         _ => Err(USAGE.into()),
     }
 }
@@ -85,16 +88,41 @@ fn to_line(req: &Req) -> String {
         .to_string(),
         Req::Hook { session, event } => {
             // 훅 입력(JSON)은 stdin으로 온다 — 64KB 상한으로 읽어 payload로 동봉
-            let mut buf = String::new();
-            let _ = std::io::stdin().take(64 * 1024).read_to_string(&mut buf);
-            let payload: serde_json::Value =
-                serde_json::from_str(&buf).unwrap_or(serde_json::Value::Null);
+            let payload = read_stdin_json();
             serde_json::json!({
                 "cmd": "hook", "session": session, "event": event, "payload": payload
             })
             .to_string()
         }
+        Req::StatusLine { session } => {
+            // stdin JSON에 모델·비용이 온다 (§10.4). 첫 stdout 줄 = Claude Code 상태 줄 —
+            // 여기서 바로 찍는다 (앱 미실행이어도 상태 줄은 성립해야 한다)
+            let payload = read_stdin_json();
+            let model = payload
+                .get("model")
+                .and_then(|m| m.get("display_name"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("Claude");
+            match payload
+                .get("cost")
+                .and_then(|c| c.get("total_cost_usd"))
+                .and_then(|v| v.as_f64())
+            {
+                Some(cost) => println!("EQMUX · {model} · ${cost:.2}"),
+                None => println!("EQMUX · {model}"),
+            }
+            serde_json::json!({
+                "cmd": "statusline", "session": session, "payload": payload
+            })
+            .to_string()
+        }
     }
+}
+
+fn read_stdin_json() -> serde_json::Value {
+    let mut buf = String::new();
+    let _ = std::io::stdin().take(64 * 1024).read_to_string(&mut buf);
+    serde_json::from_str(&buf).unwrap_or(serde_json::Value::Null)
 }
 
 fn friendly(err: &str) -> String {
@@ -108,14 +136,15 @@ fn friendly(err: &str) -> String {
     }
 }
 
-/// CLI 모드 본체 — 종료 코드 반환. _hook은 어떤 실패에도 0 (에이전트 흐름을 깨지 않는다).
+/// CLI 모드 본체 — 종료 코드 반환. _hook·_statusline은 어떤 실패에도 0
+/// (에이전트 흐름·상태 줄을 깨지 않는다).
 pub fn run(args: Vec<String>) -> i32 {
     let session = std::env::var("EQMUX_SESSION").ok().filter(|s| !s.is_empty());
-    let is_hook = args.first().map(String::as_str) == Some("_hook");
+    let silent = matches!(args.first().map(String::as_str), Some("_hook") | Some("_statusline"));
     let req = match parse(&args, session.as_deref()) {
         Ok(r) => r,
         Err(e) => {
-            if is_hook {
+            if silent {
                 return 0;
             }
             eprintln!("{e}");
@@ -126,16 +155,16 @@ pub fn run(args: Vec<String>) -> i32 {
         Ok(resp) => {
             let v: serde_json::Value = serde_json::from_str(&resp).unwrap_or_default();
             if v["ok"].as_bool().unwrap_or(false) {
-                if !is_hook {
+                if !silent {
                     match &req {
                         Req::Ping => println!("EQMUX 응답 · v{}", v["version"].as_str().unwrap_or("?")),
                         Req::Send { .. } => println!("전송됨"),
                         Req::Report { .. } => println!("보고됨"),
-                        Req::Hook { .. } => {}
+                        Req::Hook { .. } | Req::StatusLine { .. } => {}
                     }
                 }
                 0
-            } else if is_hook {
+            } else if silent {
                 0
             } else {
                 eprintln!("{}", friendly(v["error"].as_str().unwrap_or("전송 실패")));
@@ -143,7 +172,7 @@ pub fn run(args: Vec<String>) -> i32 {
             }
         }
         Err(_) => {
-            if is_hook {
+            if silent {
                 return 0;
             }
             eprintln!("EQMUX 앱이 실행 중이 아닙니다 (파이프 연결 실패)");
@@ -158,6 +187,16 @@ mod tests {
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()
+    }
+
+    /// statusLine 채널 (FR-D-19) — 세션 필수, 인자 없음
+    #[test]
+    fn parses_statusline() {
+        assert_eq!(
+            parse(&s(&["_statusline"]), Some("kai@ws")).unwrap(),
+            Req::StatusLine { session: "kai@ws".into() }
+        );
+        assert!(parse(&s(&["_statusline"]), None).is_err()); // EQMUX_SESSION 없으면 거부 (run이 0으로 삼킨다)
     }
 
     #[test]

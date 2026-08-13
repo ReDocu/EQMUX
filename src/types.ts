@@ -39,6 +39,7 @@ export interface Session {
   slot: 1 | 2 | 3 | 4;
   personaId: string;
   jobId: string;
+  name?: string; // 세션 표시 이름 (P5 · FR-E-36) — 비우면 페르소나 이름을 쓴다
   agentSessionId?: string; // Claude sessionId (= 앱 발급 UUID, FR-D-01)
   agentVersion?: string;
   pid?: number;
@@ -47,6 +48,7 @@ export interface Session {
   status: AgentStatus;
   waitingFor?: string; // status=waiting 일 때만 (FR-D-14)
   activity?: string; // 훅 2차 소스 (FR-D-15)
+  costUsd?: number; // statusLine 누적 비용 USD (FR-D-19) — 미보고면 undefined
   subagents: number;
   resumable: boolean;
   resumeReason?: string; // "transcript + cwd 일치" | "transcript 없음" 등
@@ -73,6 +75,7 @@ export interface AgentStateApply {
   waitingFor?: string;
   activity?: string; // 훅 2차 소스 (FR-D-15)
   subagents?: number; // FR-D-18
+  costUsd?: number; // statusLine 누적 비용 (FR-D-19)
   resumable: boolean;
   version?: string;
   exitCode?: number;
@@ -83,11 +86,16 @@ export interface TeamSlotHydrate {
   slot: number;
   persona: string;
   job: string;
+  name?: string | null; // 세션 표시 이름 (P5) — 페르소나 이름과 분리 가능
   worktree?: boolean;
   agentSessionId: string | null;
   resumable: boolean;
   worktreePath?: string | null;
 }
+
+/** 세션 표시 이름 (P5 · FR-E-36) — 분리된 이름이 있으면 그것, 없으면 페르소나 이름 */
+export const sessionDisplayName = (s: Session, personaName: string): string =>
+  s.name?.trim() || personaName;
 
 export type MissionStatus = "todo" | "in-progress" | "in-review" | "done";
 
