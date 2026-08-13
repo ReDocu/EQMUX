@@ -12,7 +12,8 @@ use rusqlite::{params, Connection};
 pub enum StoreMsg {
     SessionStart { ws: String, id: String, cwd: String, shell: String },
     SessionExit { ws: String, id: String, code: Option<u32> },
-    Line { ws: String, id: String, text: String },
+    /// 확정 줄 — text는 평문(검색·FTS·노이즈 판정용), styled는 SGR 보존본 (FR-C-15, 켰을 때만)
+    Line { ws: String, id: String, text: String, styled: Option<String> },
     Event { ws: String, id: Option<String>, kind: String, message: String },
     /// 에이전트 재개 매핑 (FR-C-27 · FR-D-24)
     AgentSession { ws: String, id: String, agent_session_id: String, log_path: String, resumable: bool },
@@ -118,6 +119,8 @@ pub(crate) fn open_db(root: &Path, ws: &str) -> rusqlite::Result<Connection> {
     let _ = conn.pragma_update(None, "journal_mode", "WAL");
     let _ = conn.pragma_update(None, "synchronous", "NORMAL");
     conn.execute_batch(SCHEMA)?;
+    // SGR 보존 컬럼 (FR-C-15, M32) — 기존 DB 마이그레이션. 이미 있으면 조용히 실패한다
+    let _ = conn.execute("ALTER TABLE scrollback ADD COLUMN styled TEXT", []);
     // FTS5 인덱스 (FR-C-16) — 번들 SQLite에 FTS5가 없으면 조용히 넘어가고 검색은 LIKE 폴백
     let _ = conn.execute_batch(
         "CREATE VIRTUAL TABLE IF NOT EXISTS scrollback_fts USING fts5(text, session_id UNINDEXED, seq UNINDEXED, ts UNINDEXED)",
@@ -261,7 +264,7 @@ fn flush(
                         params![now, id, format!("{:?}", code)],
                     );
                 }
-                StoreMsg::Line { id, text, .. } => {
+                StoreMsg::Line { id, text, styled, .. } => {
                     let cur = cursors.entry(id.clone()).or_insert_with(|| {
                         let max: i64 = tx
                             .query_row(
@@ -276,8 +279,8 @@ fn flush(
                     cur.lines_since_cap += 1;
                     cur.bytes += text.len() as i64;
                     let _ = tx.execute(
-                        "INSERT OR IGNORE INTO scrollback (session_id, seq, ts, text) VALUES (?1, ?2, ?3, ?4)",
-                        params![id, cur.seq, now, text],
+                        "INSERT OR IGNORE INTO scrollback (session_id, seq, ts, text, styled) VALUES (?1, ?2, ?3, ?4, ?5)",
+                        params![id, cur.seq, now, text, styled],
                     );
                     // FTS 인덱스 동반 적재 (FR-C-16) — FTS5가 없으면 조용히 실패한다
                     let _ = tx.execute(
@@ -460,11 +463,22 @@ pub fn is_tui_noise(line: &str) -> bool {
 
 /// VT 시퀀스를 걸러 확정된 줄만 뽑아내는 조립기 (FR-C-11).
 /// CSI·OSC·단축 ESC를 제거하고, \r 덮어쓰기(진행 표시줄)는 마지막 내용만 남긴다.
+/// SGR(CSI …m)만은 병렬 빌더에 보존해 색 복원용 styled 줄을 함께 낸다 (FR-C-15, M32) —
+/// emit은 (평문, styled)를 받고 SGR이 없던 줄의 styled는 None이다.
 /// 완전한 VT 파서(PRD A)가 오면 그 확정 줄로 교체한다.
 pub struct LineAssembler {
     partial: String,
+    /// SGR 보존 빌더 — 문자와 SGR 시퀀스를 순서대로 쌓는다. 백스페이스는 마지막 문자만 지운다
+    styled: Vec<StyledChunk>,
+    has_sgr: bool,
     esc: EscState,
+    csi_buf: String,
     cr: bool,
+}
+
+enum StyledChunk {
+    Sgr(String),
+    Ch(char),
 }
 
 enum EscState {
@@ -477,42 +491,94 @@ enum EscState {
 
 impl LineAssembler {
     pub fn new() -> Self {
-        LineAssembler { partial: String::new(), esc: EscState::None, cr: false }
+        LineAssembler {
+            partial: String::new(),
+            styled: Vec::new(),
+            has_sgr: false,
+            esc: EscState::None,
+            csi_buf: String::new(),
+            cr: false,
+        }
     }
 
-    pub fn push(&mut self, data: &str, mut emit: impl FnMut(String)) {
+    /// 현재 줄 확정 — force가 아니면 공백뿐인 줄은 버린다
+    fn emit_line(&mut self, force: bool, emit: &mut impl FnMut(String, Option<String>)) {
+        let line = std::mem::take(&mut self.partial);
+        let styled = if self.has_sgr {
+            let mut s = String::new();
+            for c in self.styled.drain(..) {
+                match c {
+                    StyledChunk::Sgr(x) => s.push_str(&x),
+                    StyledChunk::Ch(ch) => s.push(ch),
+                }
+            }
+            s.push_str("\u{1b}[0m"); // 줄 경계에서 속성 리셋 — 다음 줄로 색이 새지 않게
+            Some(s)
+        } else {
+            self.styled.clear();
+            None
+        };
+        self.has_sgr = false;
+        if force || !line.trim().is_empty() {
+            emit(line, styled);
+        }
+    }
+
+    pub fn push(&mut self, data: &str, mut emit: impl FnMut(String, Option<String>)) {
         for c in data.chars() {
             match self.esc {
                 EscState::None => {
                     if self.cr && c != '\n' {
-                        self.partial.clear(); // \r 단독 = 줄 덮어쓰기
+                        // \r 단독 = 줄 덮어쓰기 — styled도 함께 버린다
+                        self.partial.clear();
+                        self.styled.clear();
+                        self.has_sgr = false;
                     }
                     self.cr = false;
                     match c {
                         '\u{1b}' => self.esc = EscState::Esc,
-                        '\n' => {
-                            let line = std::mem::take(&mut self.partial);
-                            if !line.trim().is_empty() {
-                                emit(line);
-                            }
-                        }
+                        '\n' => self.emit_line(false, &mut emit),
                         '\r' => self.cr = true,
                         '\u{8}' => {
-                            self.partial.pop();
+                            if self.partial.pop().is_some() {
+                                if let Some(pos) =
+                                    self.styled.iter().rposition(|x| matches!(x, StyledChunk::Ch(_)))
+                                {
+                                    self.styled.remove(pos);
+                                }
+                            }
                         }
-                        '\t' => self.partial.push('\t'),
+                        '\t' => {
+                            self.partial.push('\t');
+                            self.styled.push(StyledChunk::Ch('\t'));
+                        }
                         c if c.is_control() => {}
-                        c => self.partial.push(c),
+                        c => {
+                            self.partial.push(c);
+                            self.styled.push(StyledChunk::Ch(c));
+                        }
                     }
                 }
                 EscState::Esc => match c {
-                    '[' => self.esc = EscState::Csi,
+                    '[' => {
+                        self.esc = EscState::Csi;
+                        self.csi_buf.clear();
+                    }
                     ']' => self.esc = EscState::Osc,
                     _ => self.esc = EscState::None,
                 },
                 EscState::Csi => {
                     if ('\u{40}'..='\u{7e}').contains(&c) {
+                        // SGR(final 'm')만 보존한다 — 커서 이동·지우기는 색 복원과 무관하다
+                        if c == 'm' {
+                            self.styled
+                                .push(StyledChunk::Sgr(format!("\u{1b}[{}m", self.csi_buf)));
+                            self.has_sgr = true;
+                        }
+                        self.csi_buf.clear();
                         self.esc = EscState::None;
+                    } else {
+                        self.csi_buf.push(c);
                     }
                 }
                 EscState::Osc => match c {
@@ -524,15 +590,17 @@ impl LineAssembler {
             }
         }
         if self.partial.len() > 4000 {
-            let line = std::mem::take(&mut self.partial);
-            emit(line);
+            self.emit_line(true, &mut emit);
         }
     }
 
-    pub fn finish(&mut self, mut emit: impl FnMut(String)) {
-        let line = std::mem::take(&mut self.partial);
-        if !line.trim().is_empty() {
-            emit(line);
+    pub fn finish(&mut self, mut emit: impl FnMut(String, Option<String>)) {
+        if !self.partial.trim().is_empty() {
+            self.emit_line(true, &mut emit);
+        } else {
+            self.partial.clear();
+            self.styled.clear();
+            self.has_sgr = false;
         }
     }
 }
@@ -544,6 +612,38 @@ mod tests {
     #[test]
     fn fts_query_is_escaped_per_token() {
         assert_eq!(fts_escape(r#"foo "bar" NEAR"#), r#""foo" "bar" "NEAR""#);
+    }
+
+    /// SGR 보존 (FR-C-15, M32) — 색 시퀀스만 styled에 남고 평문은 그대로,
+    /// 색 없는 줄은 styled가 None, 커서 이동류(CSI K 등)는 보존하지 않는다
+    #[test]
+    fn assembler_preserves_sgr_only() {
+        let mut a = LineAssembler::new();
+        let mut out: Vec<(String, Option<String>)> = Vec::new();
+        a.push(
+            "\u{1b}[31mred\u{1b}[0m plain\n\u{1b}[2Kmoved\nno color\n",
+            |t, s| out.push((t, s)),
+        );
+        assert_eq!(out.len(), 3);
+        assert_eq!(out[0].0, "red plain");
+        assert_eq!(out[0].1.as_deref(), Some("\u{1b}[31mred\u{1b}[0m plain\u{1b}[0m"));
+        assert_eq!(out[1].0, "moved"); // CSI 2K는 버려진다
+        assert!(out[1].1.is_none());
+        assert!(out[2].1.is_none());
+
+        // \r 덮어쓰기 — styled도 함께 버려 마지막 내용만 남는다
+        let mut b = LineAssembler::new();
+        let mut out2: Vec<(String, Option<String>)> = Vec::new();
+        b.push("\u{1b}[32mold\rnew\u{1b}[33m!\n", |t, s| out2.push((t, s)));
+        assert_eq!(out2[0].0, "new!");
+        assert_eq!(out2[0].1.as_deref(), Some("new\u{1b}[33m!\u{1b}[0m"));
+
+        // 백스페이스 — 평문·styled 양쪽에서 마지막 문자만 지운다 (SGR은 남는다)
+        let mut c = LineAssembler::new();
+        let mut out3: Vec<(String, Option<String>)> = Vec::new();
+        c.push("\u{1b}[31mabc\u{8}\n", |t, s| out3.push((t, s)));
+        assert_eq!(out3[0].0, "ab");
+        assert_eq!(out3[0].1.as_deref(), Some("\u{1b}[31mab\u{1b}[0m"));
     }
 
     #[test]

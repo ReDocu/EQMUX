@@ -46,6 +46,14 @@ pub(crate) fn setting_str(app: &AppHandle, key: &str) -> Option<String> {
     v.get(key).and_then(|x| x.as_str()).map(str::to_string)
 }
 
+pub(crate) fn setting_bool(app: &AppHandle, key: &str, default: bool) -> bool {
+    let s: State<SettingsState> = app.state();
+    s.0.lock()
+        .ok()
+        .and_then(|v| v.get(key).and_then(|x| x.as_bool()))
+        .unwrap_or(default)
+}
+
 struct PtySession {
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
@@ -206,7 +214,9 @@ fn spawn_pty_session(
                         let _ = f.write_all(&buf[..n]);
                     }
                     let data = String::from_utf8_lossy(&buf[..n]).into_owned();
-                    assembler.push(&data, |line| {
+                    // SGR 저장 (FR-C-15) — 설정으로 끌 수 있다 (용량 절감). 평문 적재는 계속된다
+                    let sgr_on = setting_bool(&app, "sgrStore", true);
+                    assembler.push(&data, |line, styled| {
                         // TUI 프레임 잔해·연속 중복은 스필하지 않는다 (재생 오염 방지)
                         if store::is_tui_noise(&line) || line == last_spilled {
                             return;
@@ -216,6 +226,7 @@ fn spawn_pty_session(
                             ws: ws.clone(),
                             id: id.clone(),
                             text: line,
+                            styled: if sgr_on { styled } else { None },
                         });
                     });
                     let _ = app.emit("pty-output", PtyOutput { id: id.clone(), data });
@@ -238,8 +249,14 @@ fn spawn_pty_session(
         if let Some(f) = log_file.as_mut() {
             let _ = writeln!(f, "\n=== session exit · {} · code {:?} · epoch {} ===", id, code, epoch_secs());
         }
-        assembler.finish(|line| {
-            let _ = store_tx.send(StoreMsg::Line { ws: ws.clone(), id: id.clone(), text: line });
+        let sgr_on = setting_bool(&app, "sgrStore", true);
+        assembler.finish(|line, styled| {
+            let _ = store_tx.send(StoreMsg::Line {
+                ws: ws.clone(),
+                id: id.clone(),
+                text: line,
+                styled: if sgr_on { styled } else { None },
+            });
         });
         let _ = store_tx.send(StoreMsg::SessionExit { ws: ws.clone(), id: id.clone(), code });
         let _ = app.emit("pty-exit", PtyExit { id: id.clone(), code });
@@ -337,6 +354,14 @@ fn pty_list(state: State<PtyState>) -> Result<Vec<String>, String> {
     Ok(sessions.keys().cloned().collect())
 }
 
+/// 재생 줄 — text는 평문(노이즈 필터·중복 판정용), styled는 SGR 보존본 (FR-C-15, 있을 때만)
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TailLine {
+    text: String,
+    styled: Option<String>,
+}
+
 /// 재시작 복구 (FR-C-31) — 세션의 마지막 N줄. WAL이라 쓰기 스레드와 동시 읽기가 안전하다.
 #[tauri::command]
 fn scrollback_tail(
@@ -344,22 +369,40 @@ fn scrollback_tail(
     workspace: String,
     session: String,
     count: u32,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<TailLine>, String> {
     let path = store::db_path(&store_state.0.root(), &workspace);
     if !path.exists() {
         return Ok(Vec::new());
     }
     let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|e| e.to_string())?;
-    let mut stmt = conn
-        .prepare(
-            "SELECT text FROM (SELECT seq, text FROM scrollback WHERE session_id = ?1 ORDER BY seq DESC LIMIT ?2) ORDER BY seq ASC",
-        )
-        .map_err(|e| e.to_string())?;
-    let rows = stmt
-        .query_map(params![session, count], |r| r.get::<_, String>(0))
-        .map_err(|e| e.to_string())?;
-    Ok(rows.filter_map(|r| r.ok()).collect())
+    // styled 컬럼은 M32 마이그레이션(쓰기 열림 시 ALTER)이 추가한다 — 아직 없는 구 DB는 평문 폴백
+    let styled_q = conn.prepare(
+        "SELECT text, styled FROM (SELECT seq, text, styled FROM scrollback WHERE session_id = ?1 ORDER BY seq DESC LIMIT ?2) ORDER BY seq ASC",
+    );
+    match styled_q {
+        Ok(mut stmt) => {
+            let rows = stmt
+                .query_map(params![session, count], |r| {
+                    Ok(TailLine { text: r.get(0)?, styled: r.get(1)? })
+                })
+                .map_err(|e| e.to_string())?;
+            Ok(rows.filter_map(|r| r.ok()).collect())
+        }
+        Err(_) => {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT text FROM (SELECT seq, text FROM scrollback WHERE session_id = ?1 ORDER BY seq DESC LIMIT ?2) ORDER BY seq ASC",
+                )
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map(params![session, count], |r| {
+                    Ok(TailLine { text: r.get(0)?, styled: None })
+                })
+                .map_err(|e| e.to_string())?;
+            Ok(rows.filter_map(|r| r.ok()).collect())
+        }
+    }
 }
 
 #[derive(Serialize)]

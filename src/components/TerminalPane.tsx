@@ -223,13 +223,14 @@ async function initSession(
     const tail = await scrollbackTail(props.wsId ?? "default", props.sessionId, settings().scrollbackReplay);
     let prevLine = "";
     const cleaned = tail.filter((l) => {
-      if (isNoise(l) || l === prevLine) return false;
-      prevLine = l;
+      if (isNoise(l.text) || l.text === prevLine) return false;
+      prevLine = l.text;
       return true;
     });
     if (cleaned.length > 0) {
       term.writeln(`\x1b[90m─── 이전 세션 스크롤백 · 마지막 ${cleaned.length}줄 재생 ───\x1b[0m`);
-      for (const line of cleaned) term.writeln(`\x1b[2m${line}\x1b[0m`);
+      // SGR 보존본(FR-C-15)이 있으면 색 그대로, 없으면 흐리게 (FR-C-31)
+      for (const line of cleaned) term.writeln(line.styled ?? `\x1b[2m${line.text}\x1b[0m`);
       // FR-C-32 경계 — 복원 대기 중에는 "새 세션 시작"이 아니다 (아직 아무것도 안 떴다)
       term.writeln(
         props.revive

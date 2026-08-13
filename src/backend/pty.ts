@@ -62,10 +62,16 @@ export async function spawnPty(
   spawned.add(id);
 }
 
+/** 재생 줄 (FR-C-31) — text는 평문(필터·중복 판정), styled는 SGR 색 보존본 (FR-C-15, 있을 때만) */
+export interface TailLine {
+  text: string;
+  styled: string | null;
+}
+
 /** 재시작 복구 (FR-C-31) — 스토어에서 세션의 마지막 N줄 */
-export async function scrollbackTail(workspace: string, session: string, count: number): Promise<string[]> {
+export async function scrollbackTail(workspace: string, session: string, count: number): Promise<TailLine[]> {
   if (!isTauri()) return [];
-  return invoke<string[]>("scrollback_tail", { workspace, session, count }).catch(() => []);
+  return invoke<TailLine[]>("scrollback_tail", { workspace, session, count }).catch(() => []);
 }
 
 /** 살아 있는 PTY 세션 id 목록 (FR-C-06) — 웹뷰만 재시작했을 때 Rust 쪽 세션은 계속 돌고 있다 */

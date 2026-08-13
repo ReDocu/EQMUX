@@ -24,9 +24,9 @@ export function TranscriptPane(props: { session: Session }) {
       const d = await readTranscript(props.session);
       setData(d);
       if (!d) {
-        // 스크롤백 폴백 (FR-G-86) — 로그가 없거나 스키마 인식 불가
+        // 스크롤백 폴백 (FR-G-86) — 로그가 없거나 스키마 인식 불가. 여기는 평문만 쓴다
         const lines = await scrollbackTail(props.session.workspaceId, props.session.id, 200);
-        setFallback(lines);
+        setFallback(lines.map((l) => l.text));
       }
     };
     createEffect(on(() => props.session.id, () => void load()));

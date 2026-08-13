@@ -16,6 +16,8 @@ export interface AppSettings {
   theme: "dark" | "light" | "system";
   /** 세션 메모리 배너 임계값 MB (FR-G-67, M30) — 0 = 꺼짐(기본). 소프트 경고만, 강제 개입 없음 */
   memBannerMb: number;
+  /** SGR 색 저장 (FR-C-15, M32) — 스크롤백에 색 시퀀스 보존. 끄면 평문만 (용량 절감) */
+  sgrStore: boolean;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -26,6 +28,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   muted: [],
   theme: "dark", // terminal-first 기본
   memBannerMb: 0, // FR-G-67 — 기본 꺼짐
+  sgrStore: true, // FR-C-15 — 기본 켜짐, 끄면 용량 절감
 };
 
 const [settings, setSettings] = createSignal<AppSettings>(DEFAULT_SETTINGS);
@@ -44,6 +47,7 @@ function sanitize(raw: unknown): AppSettings {
     muted: Array.isArray(v.muted) ? v.muted.filter((x): x is string => typeof x === "string") : [],
     theme: v.theme === "light" || v.theme === "system" ? v.theme : "dark",
     memBannerMb: [0, 2048, 4096, 8192].includes(v.memBannerMb as number) ? (v.memBannerMb as number) : 0,
+    sgrStore: v.sgrStore !== false,
   };
 }
 

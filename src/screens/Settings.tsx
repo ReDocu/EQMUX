@@ -87,7 +87,15 @@ const SECTIONS: Section[] = [
   },
   {
     title: "저장소와 보존",
-    desc: "워크스페이스별 SQLite WAL — 고정 정책 (C4).",
+    desc: "워크스페이스별 SQLite WAL — 보존 상한은 고정 정책 (C4). SGR 저장은 끌 수 있습니다 (FR-C-15).",
+    wired: [
+      {
+        k: "SGR 색 저장",
+        labels: ["켜짐 (기본)", "꺼짐 — 용량 절감"],
+        current: () => (settings().sgrStore ? 0 : 1),
+        apply: (i) => updateSettings({ sgrStore: i === 0 }),
+      },
+    ],
     fixed: [
       { k: "세션당 상한", label: "100,000 lines" },
       { k: "보존 기간", label: "30 days" },
