@@ -16,7 +16,7 @@ export type View =
   | { kind: "gitdiff"; wsId?: string } // Git Diff & Editor (AXXhV) — wsId 없으면 활성 워크스페이스
   | { kind: "settings" };
 
-export type PanelTab = "conversation" | "git" | "ports" | "logs" | "missions" | "browser";
+export type PanelTab = "conversation" | "git" | "ports" | "logs" | "browser";
 
 export const [view, setView] = createSignal<View>({ kind: "control" });
 export const [selectedSession, setSelectedSession] = createSignal<string | undefined>(undefined);
@@ -47,6 +47,9 @@ export const [layoutPickerOpen, setLayoutPickerOpen] = createSignal(false);
 
 /** 터미널 전체 화면 (포커스 모드) — 앱 바는 유지되고 그 아래 영역만 덮는다 */
 export const [terminalFull, setTerminalFull] = createSignal(false);
+
+/** 임무 · 파일 탐색기 전체 화면 팝업 (M25) — 사이드 패널 탭에서 승격, 앱 바 임무 버튼이 토글 */
+export const [explorerOpen, setExplorerOpen] = createSignal(false);
 
 /** 새 터미널 셸 선택 — 실패 시 Rust 쪽 폴백 체인(pwsh → powershell → cmd)이 받친다 */
 export interface ShellChoice {

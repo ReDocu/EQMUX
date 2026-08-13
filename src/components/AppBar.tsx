@@ -3,7 +3,18 @@
 // 나머지 패널 도구(git·포트·로그·브라우저·임무)는 사이드 패널 탭과 화면 버튼으로만 접근한다.
 import { For, Show } from "solid-js";
 import { backend } from "../backend/mock";
-import { openPanel, panelOpen, panelTab, setExitOpen, setPanelOpen, setView, tick, view } from "../state";
+import {
+  explorerOpen,
+  openPanel,
+  panelOpen,
+  panelTab,
+  setExitOpen,
+  setExplorerOpen,
+  setPanelOpen,
+  setView,
+  tick,
+  view,
+} from "../state";
 import { ATTENTION_ORDER } from "../types";
 
 export function AppBar() {
@@ -90,6 +101,14 @@ export function AppBar() {
         </button>
       </div>
       <div class="tools">
+        <button
+          class="tool"
+          classList={{ active: explorerOpen() }}
+          title="임무 · 파일 탐색기 — 전체 화면 팝업 (M25)"
+          onClick={() => setExplorerOpen(!explorerOpen())}
+        >
+          임무
+        </button>
         <button
           class="tool"
           classList={{ active: panelOpen() && panelTab() === "conversation" }}

@@ -11,7 +11,8 @@ import type { CrashReport } from "./backend/recovery";
 import { performShutdown } from "./backend/shutdown";
 import { startTeamSync } from "./backend/team";
 import { refreshWorkspaces } from "./backend/workspaces";
-import { exitOpen, layoutPickerOpen, panelOpen, setExitOpen, setLayoutPickerOpen, terminalFull, view } from "./state";
+import { exitOpen, explorerOpen, layoutPickerOpen, panelOpen, setExitOpen, setLayoutPickerOpen, terminalFull, view } from "./state";
+import { ExplorerOverlay } from "./components/ExplorerOverlay";
 import { ControlCenter } from "./screens/ControlCenter";
 import { CrashRecovery } from "./screens/CrashRecovery";
 import { Dashboard } from "./screens/Dashboard";
@@ -125,6 +126,9 @@ export function App() {
           <SidePanel />
         </Show>
       </div>
+      <Show when={explorerOpen()}>
+        <ExplorerOverlay />
+      </Show>
       <Show when={exitOpen()}>
         <ExitDialog />
       </Show>

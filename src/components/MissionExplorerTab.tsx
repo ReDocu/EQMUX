@@ -7,7 +7,7 @@ import { fsCreate, fsDelete, fsPreview, fsRead, fsRename, fsTree, fsWrite } from
 import type { FsNode } from "../backend/panels";
 import { refreshMissions } from "../backend/missions";
 import { isTauri } from "../backend/pty";
-import { selectedSession, setPanelTab, setView, tick, view } from "../state";
+import { openPanel, selectedSession, setExplorerOpen, setView, tick, view } from "../state";
 
 // 브라우저 dev 폴백 트리 (기존 목)
 const MOCK_TREE: FsNode[] = [
@@ -202,7 +202,9 @@ export function MissionExplorerTab() {
       "handoff",
       `브리프 전달 · ${sel()?.rel ?? ".eqmux/missions/"}`,
     );
-    setPanelTab("conversation");
+    // 전체 화면 팝업(M25)에서 부르므로 — 팝업을 접고 대화 패널을 연다
+    setExplorerOpen(false);
+    openPanel("conversation");
   };
 
   return (
@@ -429,7 +431,11 @@ export function MissionExplorerTab() {
           <button
             class="btn"
             disabled={!ws()}
-            onClick={() => ws() && setView({ kind: "missions", wsId: ws()!.id })}
+            onClick={() => {
+              if (!ws()) return;
+              setExplorerOpen(false); // 팝업 아래로 이동하므로 접는다
+              setView({ kind: "missions", wsId: ws()!.id });
+            }}
           >
             임무 관리
           </button>

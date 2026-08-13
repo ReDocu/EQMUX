@@ -1896,6 +1896,21 @@
   gap: 8px;
   padding: 10px 14px 12px;
 }
+/* 임무 · 파일 탐색기 전체 화면 팝업 (M25) — 패널 탭에서 승격. 터미널 전체 화면(z 40) 위에도 뜬다 */
+.explorer-fullscreen {
+  position: fixed;
+  inset: 38px 0 0 0;
+  z-index: 50;
+  background: var(--eq-bg);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 14px 12px;
+}
+.explorer-fullscreen .msnp-content {
+  grid-template-columns: 320px minmax(0, 1fr); /* 패널의 168px 트리를 넓힌다 */
+}
+
 /* 전체 화면 본문 — 터미널 열 + (열려 있으면) 사이드 패널. 대화도 포커스 모드에서 보인다 */
 .tf-body {
   display: flex;
