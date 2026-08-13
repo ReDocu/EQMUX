@@ -157,6 +157,7 @@ export function SessionDetailPanel(props: { session: Session }) {
         <KV k="임무" v={mission()?.name ?? "미배정"} />
         <KV k="역할" v={`${persona()?.name ?? "—"} · ${job()?.name ?? "—"}`} />
         <KV k="서브에이전트" v={String(s().subagents)} />
+        <KV k="활동 (훅 2차)" v={s().activity ?? "—"} />
         <KV
           k="메모리"
           v={

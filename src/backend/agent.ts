@@ -14,6 +14,8 @@ export interface AgentStateEvt {
   agentSession: string;
   status: string;
   waitingFor: string | null;
+  activity: string | null; // 훅 2차 소스 (FR-D-15) — 현재 도구명
+  subagents: number; // 동시 실행 서브에이전트 수 (FR-D-18)
   resumable: boolean;
   version: string | null;
   exitCode: number | null;
@@ -34,6 +36,8 @@ export function ensureAgentListeners(): Promise<void> {
         agentSession: p.agentSession,
         status: STATUSES.includes(p.status as AgentStatus) ? (p.status as AgentStatus) : undefined,
         waitingFor: p.waitingFor ?? undefined,
+        activity: p.activity ?? undefined,
+        subagents: p.subagents,
         resumable: p.resumable,
         version: p.version ?? undefined,
         exitCode: p.exitCode ?? undefined,
@@ -56,6 +60,8 @@ export async function applyAgentSnapshot(): Promise<void> {
       agentSession: p.agentSession,
       status: STATUSES.includes(p.status as AgentStatus) ? (p.status as AgentStatus) : undefined,
       waitingFor: p.waitingFor ?? undefined,
+      activity: p.activity ?? undefined,
+      subagents: p.subagents,
       resumable: p.resumable,
       version: p.version ?? undefined,
       exitCode: p.exitCode ?? undefined,

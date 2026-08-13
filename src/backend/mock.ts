@@ -66,6 +66,8 @@ export interface Backend {
     agentSession: string;
     status?: AgentStatus;
     waitingFor?: string;
+    activity?: string;
+    subagents?: number;
     resumable: boolean;
     version?: string;
     exitCode?: number;
@@ -739,6 +741,8 @@ export class MockBackend implements Backend {
     agentSession: string;
     status?: AgentStatus;
     waitingFor?: string;
+    activity?: string;
+    subagents?: number;
     resumable: boolean;
     version?: string;
     exitCode?: number;
@@ -750,6 +754,8 @@ export class MockBackend implements Backend {
     sess.agentSessionId = evt.agentSession.slice(0, 8);
     if (evt.status) sess.status = evt.status;
     sess.waitingFor = evt.waitingFor;
+    sess.activity = evt.activity; // 훅 2차 소스 (FR-D-15) — 도구명, 없으면 지운다
+    if (evt.subagents !== undefined) sess.subagents = evt.subagents; // FR-D-18
     sess.resumable = evt.resumable;
     sess.resumeReason = evt.resumable ? "transcript + cwd 일치" : "transcript 없음";
     if (evt.version) sess.agentVersion = evt.version;
@@ -768,6 +774,10 @@ export class MockBackend implements Backend {
               ? "작업 중"
               : sess.lastOutput;
       this.logEvent("state", `${prev} → ${evt.status}`, sess.id);
+    }
+    // busy 중에는 카드 한 줄에 현재 도구를 부연한다 (FR-D-15) — 전이 없는 activity 갱신도 반영
+    if (sess.status === "busy") {
+      sess.lastOutput = sess.activity ? `작업 중 · ${sess.activity}` : "작업 중";
     }
     this.broadcast();
   }

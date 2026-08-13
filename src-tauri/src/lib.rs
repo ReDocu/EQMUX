@@ -658,6 +658,7 @@ fn agent_spawn_inner(
                 last_status: "starting".into(),
                 last_waiting: None,
                 pty_gen: gen,
+                ..Default::default()
             },
         );
     }
@@ -677,6 +678,8 @@ fn agent_spawn_inner(
             agent_session: uuid.clone(),
             status: "starting".into(),
             waiting_for: None,
+            activity: None,
+            subagents: 0,
             resumable: resume,
             version: None,
             exit_code: None,
@@ -793,6 +796,7 @@ fn agent_resume(
                     last_status: "dead".into(),
                     last_waiting: None,
                     pty_gen: 0,
+                    ..Default::default()
                 },
             )
         }
@@ -1300,6 +1304,8 @@ fn agent_snapshot(app: AppHandle) -> Vec<agent::AgentStateEvt> {
             agent_session: uuid.clone(),
             status: t.last_status.clone(),
             waiting_for: t.last_waiting.clone(),
+            activity: t.activity.clone(),
+            subagents: t.subagents,
             resumable: agent::resumable(&t.cwd, uuid),
             version: None,
             exit_code: None,
@@ -1457,6 +1463,11 @@ fn write_hook_settings(root: &Path) {
             "UserPromptSubmit": hook("UserPromptSubmit"),
             "Stop": hook("Stop"),
             "Notification": hook("Notification"),
+            // 2차 소스 부연 (FR-D-15·18) — 상태가 아니라 activity(도구명)·subagents를 채운다
+            "PreToolUse": hook("PreToolUse"),
+            "PostToolUse": hook("PostToolUse"),
+            "SubagentStart": hook("SubagentStart"),
+            "SubagentStop": hook("SubagentStop"),
         }
     });
     let _ = std::fs::create_dir_all(root);

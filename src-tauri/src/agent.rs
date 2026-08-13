@@ -16,7 +16,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
 
 /// 추적 중인 에이전트 — 앱 세션(페인) ↔ Claude sessionId(FR-D-01 발급 UUID) 매핑
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct Tracked {
     pub app_session: String,
     pub ws: String,
@@ -27,6 +27,9 @@ pub struct Tracked {
     pub last_status: String,
     pub last_waiting: Option<String>,
     pub pty_gen: u64,
+    /// 훅 2차 소스가 채우는 것 (FR-D-15·18) — 현재 도구명·동시 서브에이전트 수
+    pub activity: Option<String>,
+    pub subagents: i64,
 }
 
 /// 세션당 알림 합침 상태 (FR-G-32) — 마지막 발신 시각 + 그 사이 억제된 건수
@@ -43,7 +46,7 @@ pub struct AgentRt {
     notify_gate: Mutex<HashMap<String, NotifyGate>>,
 }
 
-/// §7.1 상태 신호 스키마 (M1 부분집합)
+/// §7.1 상태 신호 스키마
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentStateEvt {
@@ -51,6 +54,10 @@ pub struct AgentStateEvt {
     pub agent_session: String,
     pub status: String,
     pub waiting_for: Option<String>,
+    /// 훅 2차 소스 (FR-D-15) — 현재 사용 중인 도구명. 상태가 아니라 부연이다
+    pub activity: Option<String>,
+    /// 동시 실행 서브에이전트 수 (FR-D-18) — SubagentStart/Stop 카운트
+    pub subagents: i64,
     pub resumable: bool,
     pub version: Option<String>,
     pub exit_code: Option<i64>,
@@ -239,13 +246,41 @@ pub fn hook_status(event: &str) -> Option<&'static str> {
     }
 }
 
+/// 훅 이벤트의 효과 — 상태 전이 3종 외에 2차 소스가 채우는 것 (FR-D-15·18):
+/// activity(도구명)와 subagents(동시 실행 수). 상태를 바꾸지 않는 이벤트가 상태를
+/// 건드리지 않도록 효과를 분리해 둔다 (순수 함수 — 테스트 대상).
+pub enum HookEffect {
+    Status(&'static str),
+    Activity(Option<String>),
+    SubagentDelta(i64),
+    Ignore,
+}
+
+pub fn hook_effect(event: &str, payload: &serde_json::Value) -> HookEffect {
+    match event {
+        "PreToolUse" => HookEffect::Activity(
+            payload.get("tool_name").and_then(|v| v.as_str()).map(str::to_string),
+        ),
+        "PostToolUse" => HookEffect::Activity(None),
+        "SubagentStart" => HookEffect::SubagentDelta(1),
+        "SubagentStop" => HookEffect::SubagentDelta(-1),
+        e => match hook_status(e) {
+            Some(s) => HookEffect::Status(s),
+            None => HookEffect::Ignore,
+        },
+    }
+}
+
 /// 훅 2차 소스 — 레지스트리 스캔(1차)과 같은 diff 경로로 emit_state 한 곳에 합류한다.
 /// 레지스트리보다 빠르게 도착하므로 waiting 알림·인박스 전달의 지연이 줄어든다.
 pub fn apply_hook(app: &AppHandle, session: &str, event: &str, payload: &serde_json::Value) {
-    let Some(status) = hook_status(event) else { return };
-    let waiting = (status == "waiting")
-        .then(|| payload.get("message").and_then(|m| m.as_str()).map(str::to_string))
-        .flatten();
+    let effect = hook_effect(event, payload);
+    if matches!(effect, HookEffect::Ignore) {
+        return;
+    }
+    // 상태 전이만 이벤트 테이블·알림까지 간다 (FR-D-17) — activity·subagents 변경은
+    // 도구 호출마다 일어나므로 방송만 하고 기록하지 않는다 (피드는 전이의 기록이다)
+    let quiet = !matches!(effect, HookEffect::Status(_));
     let rt: tauri::State<AgentRt> = app.state();
     let mut evt = None;
     if let Ok(mut map) = rt.by_uuid.lock() {
@@ -253,16 +288,44 @@ pub fn apply_hook(app: &AppHandle, session: &str, event: &str, payload: &serde_j
             if t.app_session != session || t.last_status == "dead" {
                 continue;
             }
-            if t.last_status == status && t.last_waiting == waiting {
-                break; // 변화 없음 — 방송하지 않는다
+            match &effect {
+                HookEffect::Status(status) => {
+                    let waiting = (*status == "waiting")
+                        .then(|| payload.get("message").and_then(|m| m.as_str()).map(str::to_string))
+                        .flatten();
+                    if t.last_status == *status && t.last_waiting == waiting {
+                        break; // 변화 없음 — 방송하지 않는다
+                    }
+                    t.last_status = (*status).into();
+                    t.last_waiting = waiting;
+                    if *status == "idle" {
+                        // 턴 종료 — 도구·서브에이전트 부연도 함께 접는다 (FR-D-15)
+                        t.activity = None;
+                        t.subagents = 0;
+                    }
+                }
+                HookEffect::Activity(tool) => {
+                    if t.activity == *tool {
+                        break;
+                    }
+                    t.activity = tool.clone();
+                }
+                HookEffect::SubagentDelta(d) => {
+                    let next = (t.subagents + d).max(0);
+                    if t.subagents == next {
+                        break;
+                    }
+                    t.subagents = next;
+                }
+                HookEffect::Ignore => break,
             }
-            t.last_status = status.into();
-            t.last_waiting = waiting.clone();
             evt = Some(AgentStateEvt {
                 session: session.to_string(),
                 agent_session: uuid.clone(),
-                status: status.into(),
-                waiting_for: waiting,
+                status: t.last_status.clone(),
+                waiting_for: t.last_waiting.clone(),
+                activity: t.activity.clone(),
+                subagents: t.subagents,
                 resumable: resumable(&t.cwd, uuid),
                 version: None,
                 exit_code: None,
@@ -271,7 +334,11 @@ pub fn apply_hook(app: &AppHandle, session: &str, event: &str, payload: &serde_j
         }
     }
     if let Some(e) = evt {
-        emit_state(app, &e);
+        if quiet {
+            let _ = app.emit("agent-state", e);
+        } else {
+            emit_state(app, &e);
+        }
     }
 }
 
@@ -283,11 +350,15 @@ pub fn on_pty_exit(app: &AppHandle, id: &str, code: Option<u32>, gen: u64) {
         for (uuid, t) in map.iter_mut() {
             if t.app_session == id && t.pty_gen == gen && t.last_status != "dead" {
                 t.last_status = "dead".into();
+                t.activity = None;
+                t.subagents = 0;
                 evt = Some(AgentStateEvt {
                     session: id.to_string(),
                     agent_session: uuid.clone(),
                     status: "dead".into(),
                     waiting_for: None,
+                    activity: None,
+                    subagents: 0,
                     resumable: resumable(&t.cwd, uuid),
                     version: None,
                     exit_code: code.map(i64::from),
@@ -367,11 +438,17 @@ fn scan(app: &AppHandle) {
                 if status != t.last_status || waiting != t.last_waiting {
                     t.last_status = status.clone();
                     t.last_waiting = waiting.clone();
+                    if status == "idle" {
+                        t.activity = None; // 턴 종료 부연 정리 — 훅 경로(apply_hook)와 같은 규칙
+                        t.subagents = 0;
+                    }
                     updates.push(AgentStateEvt {
                         session: t.app_session.clone(),
                         agent_session: uuid.clone(),
                         status,
                         waiting_for: waiting,
+                        activity: t.activity.clone(),
+                        subagents: t.subagents,
                         resumable: resumable(&t.cwd, &uuid),
                         version: rec.version.clone(),
                         exit_code: None,
@@ -387,6 +464,8 @@ fn scan(app: &AppHandle) {
 
 #[cfg(test)]
 mod tests {
+    use super::HookEffect;
+
     #[test]
     fn hook_events_map_to_states() {
         assert_eq!(super::hook_status("Stop"), Some("idle"));
@@ -394,5 +473,35 @@ mod tests {
         assert_eq!(super::hook_status("Notification"), Some("waiting"));
         assert_eq!(super::hook_status("SubagentStop"), None); // 본체는 아직 busy
         assert_eq!(super::hook_status("PreToolUse"), None);
+    }
+
+    /// 훅 2차 소스의 효과 분리 (FR-D-15·18) — 상태를 바꾸지 않는 이벤트는 부연만 채운다
+    #[test]
+    fn hook_effects_fill_activity_and_subagents() {
+        let pre = serde_json::json!({ "tool_name": "Bash" });
+        assert!(matches!(
+            super::hook_effect("PreToolUse", &pre),
+            HookEffect::Activity(Some(ref t)) if t == "Bash"
+        ));
+        assert!(matches!(
+            super::hook_effect("PostToolUse", &serde_json::Value::Null),
+            HookEffect::Activity(None)
+        ));
+        assert!(matches!(
+            super::hook_effect("SubagentStart", &serde_json::Value::Null),
+            HookEffect::SubagentDelta(1)
+        ));
+        assert!(matches!(
+            super::hook_effect("SubagentStop", &serde_json::Value::Null),
+            HookEffect::SubagentDelta(-1)
+        ));
+        assert!(matches!(
+            super::hook_effect("Stop", &serde_json::Value::Null),
+            HookEffect::Status("idle")
+        ));
+        assert!(matches!(
+            super::hook_effect("PreCompact", &serde_json::Value::Null),
+            HookEffect::Ignore
+        ));
     }
 }
