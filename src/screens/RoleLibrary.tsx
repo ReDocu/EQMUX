@@ -1,7 +1,7 @@
 // 역할 라이브러리 (화면 #7) — 직무 / 페르소나 목록 · 편집 (FR-E-28: 생성·편집·복제·삭제).
 // 직무=책임, 페르소나=판단 성향 (P1 분리). 전역 라이브러리 + 워크스페이스 오버라이드 (P2).
 // Tauri에서는 앱데이터 jobs/*.md·personas/*.md 실파일이 원본이다 (FR-E-20~23).
-import { createSignal, For, Show } from "solid-js";
+import { createEffect, createSignal, For, on, Show } from "solid-js";
 import {
   addJobFile,
   addPersonaFile,
@@ -15,6 +15,7 @@ import {
 import type { LibSource, MergedLibrary } from "../backend/library";
 import { backend } from "../backend/mock";
 import { isTauri } from "../backend/pty";
+import { fileChangeTick } from "../backend/watch";
 import { tick } from "../state";
 import { Eyebrow, KV } from "../components/ui";
 import type { Job, Persona, Workspace } from "../types";
@@ -46,6 +47,8 @@ export function RoleLibrary() {
     const ws = scopeWs();
     if (ws) void loadScope(ws);
   };
+  // 외부 편집 감지 (FR-E-73) — .eqmux/jobs·personas가 밖에서 바뀌면 병합 뷰를 재실측한다
+  createEffect(on(fileChangeTick, reloadScope, { defer: true }));
 
   const jobs = (): SJob[] => {
     tick();

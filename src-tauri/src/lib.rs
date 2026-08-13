@@ -1087,6 +1087,63 @@ fn mission_assign(ws_path: String, session: String, mission_id: Option<String>) 
     }
 }
 
+// ── 외부 편집 watch (FR-E-73, M35) — 열린 워크스페이스의 .eqmux를 감시해 프런트에 알린다.
+// 파일이 원본이고 UI는 따라간다 (FR-E-74) — 감지는 알림일 뿐, 반영은 프런트의 재실측이 한다.
+
+pub(crate) struct WatchState(pub(crate) Mutex<HashMap<String, notify::RecommendedWatcher>>);
+
+/// 감시 등록 — 멱등이 아니라 **교체**다: 프런트가 변경 이벤트 후 다시 부르면 그 사이 새로 생긴
+/// 하위 디렉터리(missions/ 등)까지 다시 잡는다. worktrees/(에이전트 작업 폭주)·roles/(앱 산출)는
+/// 아예 감시 경로에 넣지 않는다 — 재귀 감시가 아니라 존재하는 디렉터리별 비재귀 감시라서다.
+#[tauri::command]
+fn ws_watch(
+    app: AppHandle,
+    watch: State<WatchState>,
+    workspace_id: String,
+    ws_path: String,
+) -> Result<(), String> {
+    use notify::{recommended_watcher, RecursiveMode, Watcher};
+    let eqmux = Path::new(&ws_path).join(".eqmux");
+    if !eqmux.exists() {
+        return Ok(()); // .eqmux가 아직 없다 — 편성이 저장되면 프런트가 다시 부른다
+    }
+    let app2 = app.clone();
+    let ws_id = workspace_id.clone();
+    let mut w = recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
+        let Ok(event) = res else { return };
+        // 원자적 쓰기 중간 산출(*.tmp)과 앱 전용 경로는 무시한다
+        let relevant = event.paths.iter().any(|p| {
+            let s = p.to_string_lossy().replace('\\', "/");
+            !s.ends_with(".tmp") && !s.contains("/.eqmux/roles/") && !s.contains("/.eqmux/worktrees/")
+        });
+        if relevant {
+            let _ = app2.emit(
+                "eqmux-file-change",
+                serde_json::json!({ "workspaceId": ws_id }),
+            );
+        }
+    })
+    .map_err(|e| e.to_string())?;
+    // .eqmux 직속(team.json·team.md·하위 디렉터리 생성) + 존재하는 원본 디렉터리들 — 전부 비재귀
+    w.watch(&eqmux, RecursiveMode::NonRecursive).map_err(|e| e.to_string())?;
+    for sub in ["missions", "jobs", "personas"] {
+        let dir = eqmux.join(sub);
+        if dir.is_dir() {
+            let _ = w.watch(&dir, RecursiveMode::NonRecursive);
+        }
+    }
+    let mut map = watch.0.lock().map_err(|e| e.to_string())?;
+    map.insert(workspace_id, w); // 기존 watcher는 drop = 감시 해제
+    Ok(())
+}
+
+#[tauri::command]
+fn ws_unwatch(watch: State<WatchState>, workspace_id: String) {
+    if let Ok(mut map) = watch.0.lock() {
+        map.remove(&workspace_id);
+    }
+}
+
 // ── 워크스페이스 레지스트리 (PRD E §4.1) ──
 
 #[tauri::command]
@@ -1482,6 +1539,7 @@ pub fn run() {
             app.manage(StoreState(Store::new(root)));
             // 에이전트 런타임 (PRD D) — 세션 레지스트리 watch 시작 (FR-D-11)
             app.manage(agent::AgentRt::default());
+            app.manage(WatchState(Mutex::new(HashMap::new()))); // 외부 편집 watch (FR-E-73)
             app.manage(MsgRate::default()); // 메시지 버스 발신 상한 (M6)
             agent::start_registry_watch(app.handle().clone());
             ipc::start_server(app.handle().clone()); // eqmux CLI 파이프 (PRD I)
@@ -1546,6 +1604,8 @@ pub fn run() {
             msg_send,
             msg_mark_read,
             ws_pick_folder,
+            ws_watch,
+            ws_unwatch,
             ws_registry,
             ws_register,
             ws_git_init,

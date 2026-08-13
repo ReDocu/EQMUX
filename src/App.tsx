@@ -10,6 +10,7 @@ import { crashRecovery } from "./backend/recovery";
 import type { CrashReport } from "./backend/recovery";
 import { performShutdown } from "./backend/shutdown";
 import { startTeamSync } from "./backend/team";
+import { startFileWatch } from "./backend/watch";
 import { refreshWorkspaces } from "./backend/workspaces";
 import { exitOpen, explorerOpen, layoutPickerOpen, panelOpen, setExitOpen, setLayoutPickerOpen, setView, terminalFull, view } from "./state";
 import { ExplorerOverlay } from "./components/ExplorerOverlay";
@@ -41,6 +42,8 @@ export function App() {
   onMount(() => void startMessageBus());
   // 세션 메모리 계측 (FR-C-09 · C11) — Job Object 10초 샘플링, 표시 전용
   onMount(() => startMemorySampling());
+  // 외부 편집 감지 (FR-E-73) — .eqmux 변화 → 임무·라이브러리 재실측 (파일이 이긴다, FR-E-74)
+  onMount(() => startFileWatch());
 
   // 비정상 종료 복구 (FR-C-35) — 직전 실행이 크래시였으면 직전 세션 목록을 1회 보여준다
   const [crash, setCrash] = createSignal<CrashReport | undefined>(undefined);
