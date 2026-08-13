@@ -198,63 +198,60 @@ export function SessionDetailPanel(props: { session: Session }) {
         </div>
       </Show>
 
-      <div class="card inset" style={{ padding: "4px 10px", "margin-top": "10px" }}>
-        <KV k="상태" v={s().status} vClass={s().status === "waiting" ? "st-waiting" : ""} />
-        {/* 낮은 신뢰 (FR-G-27) — 정확한 척하지 않는다 */}
-        <Show when={s().degraded}>
-          <KV k="관측" v="저하 — 레지스트리 접근 불가 · 훅 + 프로세스 생존으로 유지 (FR-D-63)" vClass="st-waiting" />
-        </Show>
-        <KV k="임무" v={mission()?.name ?? "미배정"} />
-        <KV k="역할" v={`${persona()?.name ?? "—"} · ${job()?.name ?? "—"}`} />
-        <KV k="서브에이전트" v={String(s().subagents)} />
-        <KV k="활동 (훅 2차)" v={s().activity ?? "—"} />
-        <KV
-          k="비용 (statusLine)"
-          v={s().costUsd !== undefined ? `$${s().costUsd!.toFixed(2)} 누적` : "— (보고 전)"}
-        />
-        <KV
-          k="메모리"
-          v={
-            s().memoryMb !== undefined
-              ? `${s().memoryMb} MB · peak ${s().memoryPeakMb ?? "—"} MB`
-              : "측정 불가"
-          }
-        />
-        <KV k="스크롤백" v={`${(s().scrollbackLines / 1000).toFixed(1)}K lines`} />
-        <KV
-          k="재개"
-          v={s().resumable ? `가능 · ${s().resumeReason ?? ""}` : `불가 · ${s().resumeReason ?? "transcript 없음"}`}
-        />
-        <Show when={s().pid}>
-          <KV k="PID · 셸" v={`${s().pid} · ${s().shell}`} />
-        </Show>
-        <Show when={s().personaId}>
-          <KV k="격리" v={s().worktree ? "워크트리 · 전용 브랜치 (E1′)" : "공유 · repo 루트 (FR-E-60)"} />
-        </Show>
-        <KV k="cwd" v={s().cwd} />
-        <Show when={isTauri()}>
+      {/* 아코디언 3그룹 (시안 §04) — 개요 / 실행 / 영속성. 14행 나열의 후신 */}
+      <details class="acc" open>
+        <summary>개요</summary>
+        <div class="card inset" style={{ padding: "4px 10px" }}>
+          <KV k="상태" v={s().status} vClass={s().status === "waiting" ? "st-waiting" : ""} />
+          {/* 낮은 신뢰 (FR-G-27) — 정확한 척하지 않는다 */}
+          <Show when={s().degraded}>
+            <KV k="관측" v="저하 — 레지스트리 접근 불가 · 훅 + 프로세스 생존으로 유지 (FR-D-63)" vClass="st-waiting" />
+          </Show>
+          <KV k="임무" v={mission()?.name ?? "미배정"} />
+          <KV k="역할" v={`${persona()?.name ?? "—"} · ${job()?.name ?? "—"}`} />
+          <KV k="서브에이전트" v={String(s().subagents)} />
+          <KV k="활동 (훅 2차)" v={s().activity ?? "—"} />
           <KV
-            k="세션 로그"
+            k="비용 (statusLine)"
+            v={s().costUsd !== undefined ? `$${s().costUsd!.toFixed(2)} 누적` : "— (보고 전)"}
+          />
+          <KV
+            k="메모리"
             v={
-              <button class="setting-v" title="로그 폴더 열기" onClick={openLogDir}>
-                ~/.eqmux/logs/{s().id}.log ↗
+              s().memoryMb !== undefined
+                ? `${s().memoryMb} MB · peak ${s().memoryPeakMb ?? "—"} MB`
+                : "측정 불가"
+            }
+          />
+          <KV
+            k="재개"
+            v={s().resumable ? `가능 · ${s().resumeReason ?? ""}` : `불가 · ${s().resumeReason ?? "transcript 없음"}`}
+          />
+          <Show when={s().pid}>
+            <KV k="PID · 셸" v={`${s().pid} · ${s().shell}`} />
+          </Show>
+          <Show when={s().personaId}>
+            <KV k="격리" v={s().worktree ? "워크트리 · 전용 브랜치 (E1′)" : "공유 · repo 루트 (FR-E-60)"} />
+          </Show>
+          <KV k="cwd" v={s().cwd} />
+          <KV
+            k="알림"
+            v={
+              <button
+                class="setting-v"
+                title="이 세션의 OS 알림·사운드 음소거 (FR-G-35) — 인앱 미확인 점은 유지"
+                onClick={() => toggleMuted(s().id)}
+              >
+                {sessMuted() ? "🔇 음소거 중 — 해제" : wsMuted() ? "🔇 워크스페이스 음소거 중" : "🔔 켜짐 — 음소거"}
               </button>
             }
           />
-        </Show>
-        <KV
-          k="알림"
-          v={
-            <button
-              class="setting-v"
-              title="이 세션의 OS 알림·사운드 음소거 (FR-G-35) — 인앱 미확인 점은 유지"
-              onClick={() => toggleMuted(s().id)}
-            >
-              {sessMuted() ? "🔇 음소거 중 — 해제" : wsMuted() ? "🔇 워크스페이스 음소거 중" : "🔔 켜짐 — 음소거"}
-            </button>
-          }
-        />
-      </div>
+        </div>
+      </details>
+
+      <details class="acc" open>
+        <summary>실행</summary>
+        <div class="acc-body">
 
       {/* 세션 이름 분리 (P5 · FR-E-36) — 같은 페르소나를 여러 워크스페이스에 캐스팅할 때 구분한다 */}
       <div class="card inset" style={{ padding: "6px 10px", "margin-top": "10px", display: "flex", gap: "6px", "align-items": "center" }}>
@@ -316,21 +313,6 @@ export function SessionDetailPanel(props: { session: Session }) {
           <div class="muted" style={{ "font-size": "10px" }}>
             직무 기본 — write {job()!.permissions.write ? "✓" : "—"} · commit {job()!.permissions.commit ? "✓" : "—"} ·
             push {job()!.permissions.push ? "✓" : "—"}. 유효 권한이 달라지면 재시작이 필요합니다 (E11′)
-          </div>
-        </div>
-      </Show>
-
-      <Show when={isTauri() && feed().length > 0}>
-        <div style={{ "margin-top": "10px" }}>
-          <Eyebrow>세션 이벤트 (FR-G-61)</Eyebrow>
-          <div class="card inset" style={{ padding: "6px 10px" }}>
-            <For each={feed()}>
-              {(e) => (
-                <div class="mono muted" style={{ "font-size": "11px", "line-height": 1.7 }}>
-                  {e.time} {e.message}
-                </div>
-              )}
-            </For>
           </div>
         </div>
       </Show>
@@ -397,6 +379,39 @@ export function SessionDetailPanel(props: { session: Session }) {
           </button>
         </div>
       </Show>
+        </div>
+      </details>
+
+      <details class="acc">
+        <summary>영속성</summary>
+        <div class="card inset" style={{ padding: "4px 10px" }}>
+          <KV k="스크롤백" v={`${(s().scrollbackLines / 1000).toFixed(1)}K lines`} />
+          <Show when={isTauri()}>
+            <KV
+              k="세션 로그"
+              v={
+                <button class="setting-v" title="로그 폴더 열기" onClick={openLogDir}>
+                  ~/.eqmux/logs/{s().id}.log ↗
+                </button>
+              }
+            />
+          </Show>
+        </div>
+        <Show when={isTauri() && feed().length > 0}>
+          <div style={{ "margin-top": "8px" }}>
+            <Eyebrow>세션 이벤트 (FR-G-61)</Eyebrow>
+            <div class="card inset" style={{ padding: "6px 10px" }}>
+              <For each={feed()}>
+                {(e) => (
+                  <div class="mono muted" style={{ "font-size": "11px", "line-height": 1.7 }}>
+                    {e.time} {e.message}
+                  </div>
+                )}
+              </For>
+            </div>
+          </div>
+        </Show>
+      </details>
 
       <Show when={actionErr()}>
         <div class="card conn-error mono" style={{ "margin-top": "8px" }}>

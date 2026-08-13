@@ -1,11 +1,16 @@
-/* EQMUX 디자인 토큰 — docs/design.pen ZwtYR (SYSTEM 1.0 · square · dense · terminal-first) */
+/* EQMUX 디자인 토큰 — SYSTEM 2.0 (UI 리파인 시안 · dense · terminal-first)
+   규칙: 표면 3단계(bg→surface→surface-2)로 위계를 만들고, 테두리는 상호작용·주의 상태에만.
+   surface-2는 "raised"다 — 버튼·칩·호버가 카드보다 밝게 떠오른다 (시안 §02) */
 :root {
-  --eq-bg: #0b0f14;
-  --eq-surface: #141a22;
-  --eq-surface-2: #10151c;
-  --eq-line: #263140;
-  --eq-text: #e8eef8;
-  --eq-muted: #7f90a8;
+  --eq-bg: #0a0e16;
+  --eq-surface: #0f1522;
+  --eq-surface-2: #141c2c;
+  --eq-line: #1d2739;
+  --eq-text: #e6ecf7;
+  --eq-muted: #8b98ae;
+  --eq-dim: #5c6a82;
+  --eq-r: 9px;
+  --eq-r-sm: 6px;
   --eq-blue: #6e9eff;
   --eq-blue-soft: #17253f;
   --eq-blue-mid: #233a61;
@@ -30,10 +35,11 @@
 :root[data-theme="light"] {
   --eq-bg: #f2f4f8;
   --eq-surface: #ffffff;
-  --eq-surface-2: #e9edf3;
-  --eq-line: #cdd6e1;
+  --eq-surface-2: #e7ecf3;
+  --eq-line: #d7dfe9;
   --eq-text: #1b2534;
   --eq-muted: #62748c;
+  --eq-dim: #8794a6;
   --eq-blue: #2a5fd6;
   --eq-blue-soft: #e2ebfb;
   --eq-blue-mid: #bfd3f4;
@@ -86,6 +92,7 @@ select {
   color: var(--eq-text);
   background: var(--eq-surface-2);
   border: 1px solid var(--eq-line);
+  border-radius: var(--eq-r-sm);
   padding: 6px 8px;
   outline: none;
 }
@@ -119,8 +126,9 @@ textarea:focus {
   align-items: center;
   gap: 6px;
   padding: 6px 12px;
-  border: 1px solid var(--eq-line);
-  background: var(--eq-surface);
+  border: 1px solid transparent;
+  border-radius: var(--eq-r-sm);
+  background: var(--eq-surface-2);
   font-size: 12px;
   font-weight: 600;
   white-space: nowrap;
@@ -155,48 +163,50 @@ textarea:focus {
   cursor: not-allowed;
 }
 
+/* 뱃지 — 시안 §02: 테두리 없이 조용하게. 줄당 1개 예산은 화면 코드가 지킨다 */
 .badge {
   font-family: var(--eq-mono);
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.06em;
-  padding: 2px 6px;
-  border: 1px solid var(--eq-line);
+  padding: 2px 7px;
+  border: none;
+  border-radius: 5px;
+  background: var(--eq-surface-2);
   color: var(--eq-muted);
   white-space: nowrap;
 }
 .badge.blue {
   color: var(--eq-blue);
-  border-color: var(--eq-blue-mid);
   background: var(--eq-blue-soft);
 }
 .badge.purple {
   color: var(--eq-purple);
-  border-color: var(--eq-purple);
   background: var(--eq-purple-soft);
 }
 .badge.green {
   color: var(--eq-green);
-  border-color: var(--eq-green);
   background: var(--eq-green-soft);
 }
 .badge.amber {
   color: var(--eq-amber);
-  border-color: var(--eq-amber);
   background: var(--eq-amber-soft);
 }
 .badge.red {
   color: var(--eq-red);
-  border-color: var(--eq-red);
   background: var(--eq-red-soft);
 }
 
+/* 카드 — 시안 §01 "상자 속 상자" 해소: 기본 테두리 없음, 표면 색으로만 뜬다.
+   주의 카드(waiting-card 등)는 border-color 지정으로 스트라이프·테두리를 되살린다 */
 .card {
   background: var(--eq-surface);
-  border: 1px solid var(--eq-line);
+  border: 1px solid transparent;
+  border-radius: var(--eq-r);
 }
 .card.inset {
   background: var(--eq-surface-2);
+  border-radius: var(--eq-r-sm);
 }
 
 .eyebrow {
@@ -252,7 +262,7 @@ textarea:focus {
 .appbar {
   display: flex;
   align-items: stretch;
-  background: var(--eq-surface-2);
+  background: var(--eq-bg);
   border-bottom: 1px solid var(--eq-line);
   height: 38px;
   flex-shrink: 0;
@@ -290,7 +300,7 @@ textarea:focus {
 }
 .appbar .tab.active {
   color: var(--eq-text);
-  background: var(--eq-bg);
+  background: var(--eq-surface);
   box-shadow: inset 0 2px 0 var(--eq-blue);
 }
 .appbar .tab .dot {
@@ -366,6 +376,117 @@ textarea:focus {
   color: var(--eq-muted);
 }
 
+/* 상태점 (시안 §02) — 색은 점이 나르고 텍스트는 조용히. busy만 blue, idle·shell은 무채색 */
+.sdot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--eq-dim);
+}
+.sdot.busy {
+  background: var(--eq-blue);
+}
+.sdot.waiting {
+  background: var(--eq-amber);
+}
+.sdot.dead {
+  background: var(--eq-red);
+}
+.sdot.ok {
+  background: var(--eq-green);
+}
+
+/* ── 공용 컨텍스트 메뉴 (UI 리파인 §06) ──────────────────────────── */
+.cmenu {
+  position: fixed;
+  z-index: 60;
+  width: 232px;
+  background: var(--eq-surface-2);
+  border: 1px solid var(--eq-line);
+  border-radius: var(--eq-r);
+  padding: 5px;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.5);
+}
+.cmenu-h {
+  padding: 5px 10px 4px;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--eq-dim);
+}
+.cmenu-hr {
+  border: none;
+  border-top: 1px solid var(--eq-line);
+  margin: 5px 6px;
+}
+.cmenu-it {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border-radius: var(--eq-r-sm);
+  font-size: 12px;
+  text-align: left;
+  position: relative;
+  color: var(--eq-text);
+  cursor: pointer;
+}
+.cmenu-it:hover:not(:disabled) {
+  background: var(--eq-blue-soft);
+}
+.cmenu-it:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.cmenu-it kbd {
+  margin-left: auto;
+  font-family: var(--eq-mono);
+  font-size: 10px;
+  color: var(--eq-dim);
+}
+.cmenu-it.danger {
+  color: var(--eq-red);
+}
+.cmenu-it.note {
+  color: var(--eq-dim);
+  font-family: var(--eq-mono);
+  font-size: 10px;
+  cursor: default;
+}
+.cmenu-it.note:hover {
+  background: none;
+}
+.cmenu-chk {
+  width: 12px;
+  font-size: 10px;
+  color: var(--eq-green);
+  flex-shrink: 0;
+}
+.cmenu-it.sub::after {
+  content: "▸";
+  margin-left: auto;
+  color: var(--eq-dim);
+  font-size: 10px;
+}
+.cmenu-sub {
+  display: none;
+  position: absolute;
+  left: calc(100% - 4px);
+  top: -6px;
+  width: 184px;
+  background: var(--eq-surface-2);
+  border: 1px solid var(--eq-line);
+  border-radius: var(--eq-r);
+  padding: 5px;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.5);
+}
+.cmenu-it.sub:hover .cmenu-sub,
+.cmenu-sub:hover {
+  display: block;
+}
+
 /* 다이얼로그 */
 .overlay {
   position: fixed;
@@ -381,5 +502,6 @@ textarea:focus {
   max-width: calc(100vw - 48px);
   background: var(--eq-surface);
   border: 1px solid var(--eq-line);
+  border-radius: var(--eq-r);
   box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
 }

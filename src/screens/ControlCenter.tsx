@@ -10,6 +10,7 @@ import {
   selectedSession,
   setDefaultShell,
   setLayoutPickerOpen,
+  setPaneLayout,
   setSelectedSession,
   setTerminalFull,
   setView,
@@ -17,7 +18,7 @@ import {
   terminalFull,
   tick,
 } from "../state";
-import { Eyebrow, PersonaDot, StatusLabel } from "../components/ui";
+import { ContextMenu, Eyebrow, PersonaDot, StatusLabel } from "../components/ui";
 import { queryEvents } from "../backend/events";
 import type { FeedEvent } from "../backend/events";
 import { autoAssignDefault, refreshMissions } from "../backend/missions";
@@ -63,6 +64,10 @@ export function ControlCenter(props: { workspace: Workspace }) {
 
   const [centerTab, setCenterTab] = createSignal<"terminal" | "transcript">("terminal");
   const [zoomed, setZoomed] = createSignal<string | undefined>(undefined); // B1 — 줌 토글
+  // 팀 도구 메뉴 (시안 §04) — 임무·캐스팅·팀 편성 버튼 3개의 후신
+  const [teamMenu, setTeamMenu] = createSignal<{ x: number; y: number } | undefined>(undefined);
+  // 상태바 이벤트 팝오버 (시안 §04) — 저장 상태·SessionService 카드 2장의 후신
+  const [evOpen, setEvOpen] = createSignal(false);
 
   // 저장 사용량 실측 (FR-C-52) — Tauri에서만. 브라우저 목업은 mock 수치 유지.
   const [realUsage, setRealUsage] = createSignal<StoreUsageReal | undefined>(undefined);
@@ -205,22 +210,10 @@ export function ControlCenter(props: { workspace: Workspace }) {
                 setZoomed(zoomed() === s.id ? undefined : s.id);
               }}
             >
-              <span>
-                SLOT {s.slot} · {sessionDisplayName(s, personaName(s.personaId))}
-              </span>
+              {/* 시안 §04·§06 — SLOT 라벨·✕ 제거, 헤더는 이름·상태만. 제거는 페인 우클릭 메뉴 */}
+              <span>{sessionDisplayName(s, personaName(s.personaId))}</span>
               <span style={{ display: "inline-flex", "align-items": "center", gap: "8px" }}>
                 <StatusLabel session={s} />
-                <span
-                  class="pane-close"
-                  classList={{ role: !!s.personaId }}
-                  title={s.personaId ? "역할 세션 제거 — 확인 필요" : "터미널 제거"}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    removeTerminal(s);
-                  }}
-                >
-                  ✕
-                </span>
               </span>
             </button>
             <TerminalPane
@@ -240,6 +233,34 @@ export function ControlCenter(props: { workspace: Workspace }) {
               restore={s.restored ? { resumable: s.resumable, reason: s.resumeReason } : undefined}
               revive={s.revived}
               mockLines={mockLines(s, persona(s.personaId)?.name ?? "?")}
+              extraMenu={() => [
+                // 보기 — 배치·줌·전체 화면 (페인 헤더에서 버튼을 내려놓는 자리, 시안 §06)
+                [
+                  {
+                    label: "배치",
+                    sub: PANE_LAYOUTS.map((l) => ({
+                      label: l.name,
+                      checked: paneLayout() === l.key,
+                      action: () => setPaneLayout(l.key),
+                    })),
+                  },
+                  { label: zoomed() === s.id ? "줌 해제" : "줌", action: () => setZoomed(zoomed() === s.id ? undefined : s.id) },
+                  { label: "전체 화면", kbd: "ESC 종료", action: () => setTerminalFull(true) },
+                ],
+                // 이동 — 인스펙터·트랜스크립트
+                [
+                  { label: "세션 상세", action: () => setSelectedSession(s.id) },
+                  {
+                    label: "트랜스크립트 열기",
+                    action: () => {
+                      setSelectedSession(s.id);
+                      setCenterTab("transcript");
+                    },
+                  },
+                ],
+                // 위험 — 컴포넌트가 마지막 그룹으로 강제한다
+                [{ label: s.personaId ? "역할 세션 제거…" : "터미널 제거", danger: true, action: () => removeTerminal(s) }],
+              ]}
             />
           </div>
         )}
@@ -258,153 +279,179 @@ export function ControlCenter(props: { workspace: Workspace }) {
     </div>
   );
 
+  // 상태바 한 줄 (시안 §04) — 저장 상태·SessionService 카드 2장을 흡수. 상세는 이벤트 팝오버로
   const statusBar = () => (
     <div class="terminal-statusbar mono">
       <span>
-        <span style={{ color: "var(--eq-green)" }}>◉</span> PTY{" "}
-        {sessions().filter((x) => x.status !== "dead").length} ONLINE{"   "}▦{" "}
-        {PANE_LAYOUTS.find((l) => l.key === paneLayout())?.name.toUpperCase()}
-        {"   "}OUTPUT {(sessions().reduce((a, x) => a + x.scrollbackLines, 0) / 1000).toFixed(1)}K LINES
+        <span style={{ color: "var(--eq-green)" }}>◉</span> PTY {sessions().filter((x) => x.status !== "dead").length}
       </span>
-      <span class="muted">{selected()?.cwd ?? props.workspace.path}</span>
+      <span>▦ {PANE_LAYOUTS.find((l) => l.key === paneLayout())?.name}</span>
+      <span>OUTPUT {(sessions().reduce((a, x) => a + x.scrollbackLines, 0) / 1000).toFixed(1)}K</span>
+      <span>
+        {realUsage()
+          ? `WAL ${(realUsage()!.db_size_bytes / 1024).toFixed(0)} KB · ${realUsage()!.total_lines.toLocaleString()} lines`
+          : `WAL ${usage().walLatencyMs}ms · DB ${usage().dbSizeMb} MB`}
+      </span>
+      <button
+        class="sb-ev"
+        title="SessionService 이벤트 · 저장 상태"
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={() => setEvOpen(!evOpen())}
+      >
+        이벤트 {evOpen() ? "▾" : "▸"}
+      </button>
+      <span class="muted" style={{ "margin-left": "auto" }}>
+        {selected()?.cwd ?? props.workspace.path}
+      </span>
+      <Show when={evOpen()}>
+        <div class="card sb-pop" onMouseDown={(e) => e.stopPropagation()}>
+          <Eyebrow>SessionService 이벤트 {isTauri() ? "(실측)" : "(목)"}</Eyebrow>
+          <For each={stripEvents()}>
+            {(e) => (
+              <div class="mono muted" style={{ "font-size": "11px", "line-height": 1.7 }}>
+                {e.time} {e.message}
+              </div>
+            )}
+          </For>
+          <div class="sb-pop-store mono muted">
+            저장 {realUsage() ? "(실측)" : "(목)"} ·{" "}
+            {realUsage()
+              ? `workspaces/${props.workspace.id}/session.db · 100ms 배치 · 30일/10만줄 보존`
+              : `${usage().dbFile} · ${usage().dbSizeMb} MB · ${usage().dbPercent}%`}
+          </div>
+        </div>
+      </Show>
     </div>
   );
 
   return (
     <div class="screen">
-      <div class="screen-head">
-        <div>
+      {/* 헤더 한 줄 병합 (시안 §04) — 타이틀 + 중앙 탭 + 도구. 임무·캐스팅·편성은 "팀 ▾" 메뉴로.
+          대화 버튼은 앱 바 전역 도구 (M1) — 전체 화면에서도 접근된다 */}
+      <div class="cc-top">
+        <div class="cc-title" title={props.workspace.path}>
           <h1>{props.workspace.name}</h1>
-          <div class="sub mono">
-            {props.workspace.path} · {props.workspace.branch ?? "—"} · {sessions().length}/4 sessions
-          </div>
+          <span class="mono muted">
+            {props.workspace.branch ?? "—"} · {sessions().length}/4
+          </span>
         </div>
-        <div style={{ display: "flex", gap: "8px" }}>
-          <button class="btn" onClick={() => setView({ kind: "missions", wsId: props.workspace.id })}>
-            임무
+        <div class="cc-seg">
+          <button classList={{ on: centerTab() === "terminal" }} onClick={() => setCenterTab("terminal")}>
+            터미널
           </button>
-          <button class="btn" onClick={() => setView({ kind: "casting", wsId: props.workspace.id })}>
-            캐스팅
+          <button
+            classList={{ on: centerTab() === "transcript" }}
+            disabled={!selected()}
+            onClick={() => setCenterTab("transcript")}
+          >
+            트랜스크립트
           </button>
-          <button class="btn" onClick={() => setView({ kind: "composition", wsId: props.workspace.id })}>
-            팀 편성
-          </button>
-          {/* 대화 버튼은 앱 바 전역 도구로 이동 — 전체 화면에서도 접근된다 (M1) */}
         </div>
+        <div style={{ flex: 1 }} />
+        {/* 셸 선택 — 새로 추가하는 터미널부터 적용된다 */}
+        <div class="shell-picker">
+          <button class="btn ghost mono" title="새 터미널 셸 선택" onClick={() => setShellMenuOpen(!shellMenuOpen())}>
+            &gt;_ {defaultShell().name} ▾
+          </button>
+          <Show when={shellMenuOpen()}>
+            <div class="card shell-menu">
+              <For each={SHELLS}>
+                {(sh) => (
+                  <button
+                    class="shell-menu-item"
+                    classList={{ active: defaultShell().label === sh.label }}
+                    onClick={() => {
+                      setDefaultShell(sh);
+                      setShellMenuOpen(false);
+                    }}
+                  >
+                    <span style={{ "font-weight": 600 }}>{sh.name}</span>
+                    <span class="mono muted" style={{ "font-size": "10px" }}>
+                      {sh.cmd}
+                    </span>
+                  </button>
+                )}
+              </For>
+              <div class="muted shell-menu-note">새로 추가하는 터미널부터 적용됩니다</div>
+            </div>
+          </Show>
+        </div>
+        <Show when={zoomed()}>
+          <button class="btn ghost" onClick={() => setZoomed(undefined)}>
+            ▦ 그리드로 복귀
+          </button>
+        </Show>
+        <Show when={!zoomed()}>
+          <button class="btn ghost mono" title="페인 배치 (srpYm)" onClick={() => setLayoutPickerOpen(true)}>
+            ▦ {PANE_LAYOUTS.find((l) => l.key === paneLayout())?.name}
+          </button>
+        </Show>
+        <button class="btn ghost" title="터미널 전체 화면 — ESC로 종료" onClick={() => setTerminalFull(true)}>
+          ⛶
+        </button>
+        <button
+          class="btn"
+          title="임무 · 캐스팅 · 팀 편성"
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            const r = e.currentTarget.getBoundingClientRect();
+            setTeamMenu(teamMenu() ? undefined : { x: r.right - 232, y: r.bottom + 4 });
+          }}
+        >
+          팀 ▾
+        </button>
       </div>
+      <Show when={teamMenu()}>
+        {(m) => (
+          <ContextMenu
+            x={m().x}
+            y={m().y}
+            onClose={() => setTeamMenu(undefined)}
+            groups={[
+              [
+                { label: "임무 배정…", action: () => setView({ kind: "missions", wsId: props.workspace.id }) },
+                { label: "팀 캐스팅…", action: () => setView({ kind: "casting", wsId: props.workspace.id }) },
+                { label: "팀 편성…", action: () => setView({ kind: "composition", wsId: props.workspace.id }) },
+              ],
+            ]}
+          />
+        )}
+      </Show>
 
       <div class="screen-body cc-body">
-        {/* 좌: 세션 카드 + 임무 */}
-        <div class="cc-left">
-          <Eyebrow>세션 · {sessions().length}/4</Eyebrow>
+        {/* 좌: 아바타 레일 (시안 §04) — 목록이 나르던 정보는 페인 헤더·인스펙터가 담당한다.
+            직책은 툴팁, 선택은 테두리, 상태는 점, LEAD는 slot 1 관례 */}
+        <div class="cc-rail">
           <For each={sessions()}>
             {(s) => (
               <button
-                class="card session-card"
-                classList={{ selected: selected()?.id === s.id }}
+                class="rail-av"
+                classList={{ sel: selected()?.id === s.id }}
+                title={`${sessionDisplayName(s, personaName(s.personaId))} · ${jobName(s.jobId)} — ${s.status}${s.slot === 1 && persona(s.personaId) ? " · LEAD" : ""}`}
                 onClick={() => setSelectedSession(s.id)}
               >
-                <div class="session-card-head">
-                  <PersonaDot name={personaName(s.personaId)} color={persona(s.personaId)?.color ?? "blue"} />
-                  <span style={{ "font-weight": 700 }}>{sessionDisplayName(s, personaName(s.personaId))}</span>
-                  <span class="badge">{jobName(s.jobId)}</span>
-                  <Show when={s.slot === 1 && !!persona(s.personaId)}>
-                    <span class="badge blue">LEAD</span>
-                  </Show>
-                </div>
-                <StatusLabel session={s} />
-                <div class="muted" style={{ "font-size": "11px" }}>
-                  {s.lastOutput} · {(s.scrollbackLines / 1000).toFixed(1)}K lines
-                </div>
+                <PersonaDot name={sessionDisplayName(s, personaName(s.personaId))} color={persona(s.personaId)?.color ?? "blue"} />
+                <span class={`sdot ${s.status}`} />
+                <Show when={s.unseen}>
+                  <span class="unread-dot rail-unread" title="미확인" />
+                </Show>
               </button>
             )}
           </For>
           <Show when={sessions().length < 4}>
-            <button class="card session-card empty" onClick={openAdd}>
-              <span class="muted">+ 세션 추가 — 기본 터미널 또는 역할 세션</span>
+            <button class="rail-av add mono" title="빈 슬롯에 세션 추가 — 기본 터미널 또는 역할 세션" onClick={openAdd}>
+              +
             </button>
           </Show>
-
-          <div style={{ "margin-top": "14px" }}>
-            <div class="conn-list-head">
-              <Eyebrow>임무 / 프로젝트</Eyebrow>
-              <button class="btn ghost" onClick={() => setView({ kind: "missions", wsId: props.workspace.id })}>
-                관리 →
-              </button>
-            </div>
-            <For each={missions()}>
-              {(m) => (
-                <div class="card mission-row">
-                  <span style={{ "font-weight": 600 }}>{m.name}</span>
-                  <span class="badge" classList={{ blue: m.status === "in-progress", purple: m.status === "in-review", green: m.status === "done" }}>
-                    {m.status.toUpperCase()}
-                  </span>
-                  <div class="mono muted" style={{ "font-size": "10px", width: "100%" }}>
-                    {m.file}
-                  </div>
-                </div>
-              )}
-            </For>
-          </div>
+          <div class="rail-sep" />
+          <button class="rail-ms" title="임무 관리" onClick={() => setView({ kind: "missions", wsId: props.workspace.id })}>
+            <span class="eyebrow">임무</span>
+            <b class="mono">{missions().length}</b>
+          </button>
         </div>
 
-        {/* 중: 터미널 2×2 그리드 / 트랜스크립트 + 저장 상태 + SessionService 이벤트 */}
+        {/* 중: 터미널 2×2 그리드 / 트랜스크립트 — 탭·도구는 상단 바에 병합됐다 (시안 §04) */}
         <div class="cc-center">
-          <div style={{ display: "flex", gap: "6px", "margin-bottom": "8px" }}>
-            <button class="btn" classList={{ primary: centerTab() === "terminal" }} onClick={() => setCenterTab("terminal")}>
-              터미널
-            </button>
-            <button
-              class="btn"
-              classList={{ primary: centerTab() === "transcript" }}
-              onClick={() => setCenterTab("transcript")}
-              disabled={!selected()}
-            >
-              트랜스크립트
-            </button>
-            {/* 셸 선택 — 그리드(배치) 버튼 왼쪽. 새로 추가하는 터미널부터 적용된다. */}
-            <div class="shell-picker">
-              <button class="btn ghost mono" title="새 터미널 셸 선택" onClick={() => setShellMenuOpen(!shellMenuOpen())}>
-                &gt;_ {defaultShell().name} ▾
-              </button>
-              <Show when={shellMenuOpen()}>
-                <div class="card shell-menu">
-                  <For each={SHELLS}>
-                    {(sh) => (
-                      <button
-                        class="shell-menu-item"
-                        classList={{ active: defaultShell().label === sh.label }}
-                        onClick={() => {
-                          setDefaultShell(sh);
-                          setShellMenuOpen(false);
-                        }}
-                      >
-                        <span style={{ "font-weight": 600 }}>{sh.name}</span>
-                        <span class="mono muted" style={{ "font-size": "10px" }}>
-                          {sh.cmd}
-                        </span>
-                      </button>
-                    )}
-                  </For>
-                  <div class="muted shell-menu-note">새로 추가하는 터미널부터 적용됩니다</div>
-                </div>
-              </Show>
-            </div>
-            <Show when={zoomed()}>
-              <button class="btn ghost" onClick={() => setZoomed(undefined)}>
-                ▦ 그리드로 복귀
-              </button>
-            </Show>
-            <Show when={!zoomed()}>
-              <button class="btn ghost mono" title="페인 배치 (srpYm)" onClick={() => setLayoutPickerOpen(true)}>
-                ▦ {PANE_LAYOUTS.find((l) => l.key === paneLayout())?.name}
-              </button>
-            </Show>
-            <button class="btn ghost" title="터미널 전체 화면 — ESC로 종료" onClick={() => setTerminalFull(true)}>
-              ⛶ 전체 화면
-            </button>
-          </div>
-
           {/* 전체 화면 중에는 일반 그리드를 언마운트한다 — 같은 PTY에 두 인스턴스가
               서로 다른 크기로 resize 경합하면 ConPTY 리페인트가 폭증한다 */}
           <Show when={centerTab() === "terminal" && !terminalFull()}>
@@ -415,46 +462,6 @@ export function ControlCenter(props: { workspace: Workspace }) {
           <Show when={centerTab() === "transcript" && selected()}>
             {(s) => <TranscriptPane session={s()} />}
           </Show>
-
-          <div class="cc-strip">
-            <div class="card strip-card">
-              <Eyebrow>저장 상태 {realUsage() ? "(실측)" : "(목)"}</Eyebrow>
-              <Show
-                when={realUsage()}
-                fallback={
-                  <>
-                    <div class="mono" style={{ "margin-top": "6px" }}>
-                      WAL · {usage().walLatencyMs}ms
-                    </div>
-                    <div class="mono muted">
-                      {usage().dbFile} · {usage().dbSizeMb} MB · {usage().dbPercent}%
-                    </div>
-                  </>
-                }
-              >
-                {(u) => (
-                  <>
-                    <div class="mono" style={{ "margin-top": "6px" }}>
-                      WAL · {(u().db_size_bytes / 1024).toFixed(0)} KB · {u().total_lines.toLocaleString()} lines
-                    </div>
-                    <div class="mono muted" style={{ "font-size": "10px" }}>
-                      workspaces/{props.workspace.id}/session.db · 100ms 배치 · 30일/10만줄 보존
-                    </div>
-                  </>
-                )}
-              </Show>
-            </div>
-            <div class="card strip-card">
-              <Eyebrow>SessionService 이벤트 {isTauri() ? "(실측)" : "(목)"}</Eyebrow>
-              <For each={stripEvents()}>
-                {(e) => (
-                  <div class="mono muted" style={{ "font-size": "11px" }}>
-                    {e.time} {e.message}
-                  </div>
-                )}
-              </For>
-            </div>
-          </div>
         </div>
 
         {/* 우: 인스펙터 */}
