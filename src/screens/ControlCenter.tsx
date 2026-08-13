@@ -25,6 +25,7 @@ import { isTauri, killPty, storeUsageReal } from "../backend/pty";
 import type { StoreUsageReal } from "../backend/pty";
 import { removeRoleFile } from "../backend/roles";
 import { ensureWorktree } from "../backend/team";
+import { gridTemplateStyle, PaneDividers } from "../components/PaneDividers";
 import { SidePanel } from "../components/SidePanel";
 import { disposeSessionTerminal, TerminalPane } from "../components/TerminalPane";
 import { SessionDetailPanel } from "./SessionDetailPanel";
@@ -178,9 +179,14 @@ export function ControlCenter(props: { workspace: Workspace }) {
     return sessions();
   };
 
-  // 터미널 그리드 + 상태 바 — 일반 배치와 전체 화면 오버레이 양쪽에서 사용
+  // 터미널 그리드 + 상태 바 — 일반 배치와 전체 화면 오버레이 양쪽에서 사용.
+  // 트랙 비율은 인라인 fr 템플릿(M30 분할선 드래그) — 줌은 .zoomed !important가 이긴다.
   const paneGrid = () => (
-    <div class={`terminal-grid layout-${paneLayout()}`} classList={{ zoomed: !!zoomed() }}>
+    <div
+      class={`terminal-grid layout-${paneLayout()}`}
+      classList={{ zoomed: !!zoomed() }}
+      style={zoomed() ? undefined : gridTemplateStyle(paneLayout())}
+    >
       <For each={gridSessions()}>
         {(s) => (
           <div
@@ -239,6 +245,10 @@ export function ControlCenter(props: { workspace: Workspace }) {
           </button>
         )}
       </For>
+      {/* 분할선 드래그 (M30) — gap 위 핸들. 줌 중에는 트랙이 하나라 의미가 없다 */}
+      <Show when={!zoomed()}>
+        <PaneDividers />
+      </Show>
     </div>
   );
 

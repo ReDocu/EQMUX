@@ -488,6 +488,41 @@
   min-height: 0;
   min-width: 0;
   overflow: hidden;
+  position: relative; /* 분할선 핸들(M30)의 기준 */
+}
+/* 분할선 드래그 (PRD B 잔여, M30) — 8px gap 위에 앉는 out-of-flow 핸들 */
+.pane-divider {
+  position: absolute;
+  z-index: 15;
+}
+.pane-divider.v {
+  width: 8px;
+  top: 0;
+  bottom: 0;
+  cursor: col-resize;
+}
+.pane-divider.h {
+  height: 8px;
+  left: 0;
+  right: 0;
+  cursor: row-resize;
+}
+.pane-divider::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  background: transparent;
+}
+.pane-divider.v::after {
+  width: 2px;
+}
+.pane-divider.h::after {
+  height: 2px;
+}
+.pane-divider:hover::after,
+.pane-divider:active::after {
+  background: var(--eq-blue);
 }
 /* .terminal-grid.zoomed 규칙은 배치 6종 섹션 끝에 통합돼 있다 (열·행 템플릿 동시 해제) */
 .terminal-pane {
@@ -681,6 +716,26 @@
   outline-offset: -1px;
   background: var(--eq-blue-soft);
 }
+/* 터미널 내 검색 (PRD A, M30) — Ctrl+F 바. 페인 우상단, 오버레이(z 21)보다 위 */
+.term-search {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  z-index: 22;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px 4px;
+}
+.term-search input {
+  width: 190px;
+  font-size: 11px;
+  padding: 2px 6px;
+}
+.term-search .btn {
+  padding: 1px 6px;
+}
+
 /* 디스크 스크롤백 (FR-C-13·14) — 링버퍼 꼭대기에서 칩 → 페이징 오버레이 */
 .term-history-chip {
   position: absolute;

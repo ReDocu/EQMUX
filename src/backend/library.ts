@@ -91,6 +91,35 @@ export async function deleteJobFile(id: string): Promise<void> {
   await refreshLibrary();
 }
 
+// ── 워크스페이스 오버라이드 화면 반영 (FR-E-21, M30) — 병합 목록 + 출처 마킹 ──
+
+export type LibSource = "global" | "ws";
+export interface MergedLibrary {
+  jobs: (Job & { source: LibSource })[];
+  personas: (Persona & { source: LibSource })[];
+}
+
+/** 전역과 병합본을 나란히 실측해 오버라이드(같은 id 교체 · ws 전용 추가)를 표시용으로 마킹한다.
+ *  내용까지 동일한 오버라이드는 구분할 수 없다 — 표시가 목적이므로 전역으로 취급한다. */
+export async function listMergedLibrary(wsPath: string): Promise<MergedLibrary | undefined> {
+  if (!isTauri()) return undefined;
+  const [globalLib, merged] = await Promise.all([
+    invoke<LibraryData>("library_list", { wsPath: null }).catch(() => undefined),
+    invoke<LibraryData>("library_list", { wsPath }).catch(() => undefined),
+  ]);
+  if (!merged) return undefined;
+  const mark = <T extends { id: string }>(items: T[], base: T[]): (T & { source: LibSource })[] =>
+    items.map((it) => {
+      const b = base.find((x) => x.id === it.id);
+      return { ...it, source: b && JSON.stringify(b) === JSON.stringify(it) ? "global" : "ws" };
+    });
+  const g = globalLib ?? { jobs: [], personas: [] };
+  return {
+    jobs: mark(merged.jobs, g.jobs),
+    personas: mark(merged.personas.map(toPersona), g.personas.map(toPersona)),
+  };
+}
+
 /** 편성 프리셋 (FR-E-26) — 앱데이터 presets/*.json 실측. 직무 구성만 담는다 */
 export interface CastingPreset {
   id: string;

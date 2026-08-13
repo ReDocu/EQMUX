@@ -3,9 +3,11 @@
 // 페인이 리마운트되면(줌·전체 화면·탭 전환) DOM 요소만 재부착한다 — 버퍼를 다시 쓰지 않으므로
 // ConPTY 리페인트가 중복 재생되지 않고 스크롤백이 온전히 이어진다.
 // 링버퍼 꼭대기(FR-C-13)에서는 디스크 기록 칩이 떠서 스토어 스크롤백을 조각 로드한다 (FR-C-14).
-import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { SearchAddon } from "@xterm/addon-search";
+import { WebLinksAddon } from "@xterm/addon-web-links";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import "@xterm/xterm/css/xterm.css";
 import { pageScrollback } from "../backend/panels";
@@ -17,6 +19,7 @@ import {
   isTauri,
   onPtyExit,
   onPtyOutput,
+  openExternal,
   resizePty,
   scrollbackTail,
   spawnPty,
@@ -47,6 +50,7 @@ const EQ_THEME = {
 interface TermEntry {
   term: Terminal;
   fit: FitAddon;
+  search: SearchAddon;
   opened: boolean;
   initialized: boolean;
   lastCols: number;
@@ -63,6 +67,10 @@ function setPendingRestore(entry: TermEntry, v: TermEntry["pendingRestore"]) {
   entry.pendingRestore = v;
   setRestoreTick((t) => t + 1);
 }
+
+// 터미널 내 검색 (PRD A, M30) — Ctrl+F로 연다. 한 번에 한 페인만 검색 바를 띄운다.
+// 상태는 모듈 시그널에 둔다 — 키 핸들러는 initSession(1회)에 등록되고 페인 컴포넌트는 리마운트되기 때문.
+const [searchSession, setSearchSession] = createSignal<string | undefined>(undefined);
 
 /** 세션의 현재 터미널 크기 — 재개/재시작 커맨드가 PTY 크기를 맞추는 데 쓴다 */
 export function sessionTermSize(id: string): { cols: number; rows: number } {
@@ -150,7 +158,11 @@ function createEntry(): TermEntry {
   });
   const fit = new FitAddon();
   term.loadAddon(fit);
-  return { term, fit, opened: false, initialized: false, lastCols: 0, lastRows: 0 };
+  const search = new SearchAddon();
+  term.loadAddon(search);
+  // 링크 감지 (PRD A, M30) — URL 클릭은 기본 브라우저로 보낸다 (브라우저 패널은 localhost 전용)
+  term.loadAddon(new WebLinksAddon((_ev, uri) => openExternal(uri)));
+  return { term, fit, search, opened: false, initialized: false, lastCols: 0, lastRows: 0 };
 }
 
 /** 최초 1회 — 스트림 구독·재생·스폰. 리마운트에서는 다시 실행되지 않는다.
@@ -182,6 +194,11 @@ async function initSession(
       }
       if (k === "v" && (ev.shiftKey || isTauri())) {
         void pasteFromClipboard(props.sessionId, term);
+        return false;
+      }
+      // 터미널 내 검색 (M30) — TUI로 Ctrl+F를 흘리지 않고 검색 바를 연다
+      if (k === "f" && !ev.shiftKey && !ev.altKey) {
+        setSearchSession(props.sessionId);
         return false;
       }
     }
@@ -363,6 +380,28 @@ export function TerminalPane(props: {
     e.term.focus();
   };
 
+  // ── 터미널 내 검색 (PRD A, M30) — Enter 다음 · Shift+Enter 이전 · ESC 닫기 ──
+  let searchInput: HTMLInputElement | undefined;
+  const [query, setQuery] = createSignal("");
+  const searchOpen = () => searchSession() === props.sessionId;
+  const closeSearch = () => {
+    if (searchSession() === props.sessionId) setSearchSession(undefined);
+    const e = REGISTRY.get(props.sessionId);
+    e?.term.clearSelection();
+    e?.term.focus();
+  };
+  const findNext = (incremental = false) => {
+    const e = REGISTRY.get(props.sessionId);
+    if (e && query()) e.search.findNext(query(), { incremental });
+  };
+  const findPrev = () => {
+    const e = REGISTRY.get(props.sessionId);
+    if (e && query()) e.search.findPrevious(query());
+  };
+  createEffect(() => {
+    if (searchOpen()) requestAnimationFrame(() => searchInput?.focus());
+  });
+
   // ── 디스크 스크롤백 (FR-C-13·14) — 링버퍼 최상단에서만 칩이 뜬다 ──
   const [atTop, setAtTop] = createSignal(false);
   const [history, setHistory] = createSignal<ScrollbackHit[] | null>(null);
@@ -495,6 +534,41 @@ export function TerminalPane(props: {
   return (
     <>
       <div class="xterm-host" data-session-id={props.sessionId} ref={host}>
+        {/* 터미널 내 검색 (M30) — Ctrl+F. 링버퍼(5,000줄) 범위 검색, 디스크 기록은 로그 패널 FTS가 담당 */}
+        <Show when={searchOpen()}>
+          <div class="card term-search mono" onMouseDown={(ev) => ev.stopPropagation()}>
+            <input
+              ref={searchInput}
+              value={query()}
+              placeholder="터미널 검색"
+              spellcheck={false}
+              onInput={(ev) => {
+                setQuery(ev.currentTarget.value);
+                findNext(true);
+              }}
+              onKeyDown={(ev) => {
+                if (ev.key === "Enter") {
+                  ev.preventDefault();
+                  if (ev.shiftKey) findPrev();
+                  else findNext();
+                } else if (ev.key === "Escape") {
+                  ev.preventDefault();
+                  ev.stopPropagation(); // 전체 화면 ESC 핸들러로 새지 않게
+                  closeSearch();
+                }
+              }}
+            />
+            <button class="btn ghost" title="이전 일치 (Shift+Enter)" onClick={findPrev}>
+              ↑
+            </button>
+            <button class="btn ghost" title="다음 일치 (Enter)" onClick={() => findNext()}>
+              ↓
+            </button>
+            <button class="btn ghost" title="닫기 (ESC)" onClick={closeSearch}>
+              ✕
+            </button>
+          </div>
+        </Show>
         <Show when={isTauri() && atTop() && !history()}>
           <button class="btn term-history-chip" onClick={() => void openHistory()}>
             ▲ 디스크 기록 보기 — 링버퍼 위 기록 (FR-C-13)
@@ -587,6 +661,9 @@ export function TerminalPane(props: {
             </button>
             <button class="term-menu-item" onClick={() => menuAction((t) => t.selectAll())}>
               모두 선택
+            </button>
+            <button class="term-menu-item" onClick={() => menuAction(() => setSearchSession(props.sessionId))}>
+              검색 <span class="mono muted">Ctrl+F</span>
             </button>
             <button class="term-menu-item" onClick={() => menuAction((t) => t.clear())}>
               화면 지우기

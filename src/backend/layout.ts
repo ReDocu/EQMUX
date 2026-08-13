@@ -8,18 +8,21 @@ import { backend } from "./mock";
 import { isTauri } from "./pty";
 import { settings } from "./settings";
 import {
+  DEFAULT_RATIOS,
   defaultShell,
   paneLayout,
   PANE_LAYOUTS,
+  paneRatios,
   selectedSession,
   setDefaultShell,
   setPaneLayout,
+  setPaneRatios,
   setSelectedSession,
   setView,
   SHELLS,
   view,
 } from "../state";
-import type { PaneLayout } from "../state";
+import type { PaneLayout, PaneRatio } from "../state";
 
 interface LayoutData {
   openWorkspaces?: string[];
@@ -27,6 +30,25 @@ interface LayoutData {
   shell?: string;
   selectedSession?: string;
   lastWorkspace?: string; // 마지막으로 보던 워크스페이스 탭 — startView="last"일 때만 복원
+  paneRatios?: Record<string, PaneRatio>; // 분할선 드래그 비율 (M30) — 배치별
+}
+
+/** 저장본 비율 검증 — 길이·합·범위가 맞는 축만 받는다. 깨진 값은 기본 비율로 조용히 폴백 */
+function sanitizeRatio(layout: PaneLayout, raw: unknown): PaneRatio | undefined {
+  const d = DEFAULT_RATIOS[layout];
+  const v = (raw ?? {}) as PaneRatio;
+  const axis = (def: number[] | undefined, got: unknown): number[] | undefined =>
+    def &&
+    Array.isArray(got) &&
+    got.length === def.length &&
+    got.every((x) => typeof x === "number" && x >= 0.05 && x <= 0.95) &&
+    Math.abs(got.reduce((a, b) => a + b, 0) - 1) < 0.01
+      ? got
+      : undefined;
+  const cols = axis(d.cols, v.cols);
+  const rows = axis(d.rows, v.rows);
+  if (!cols && !rows) return undefined;
+  return { ...(cols ? { cols } : {}), ...(rows ? { rows } : {}) };
 }
 
 /** 저장본 복원 — refreshWorkspaces가 워크스페이스를 하이드레이트한 뒤에 불린다 */
@@ -36,6 +58,15 @@ export async function restoreLayout(): Promise<void> {
   if (!data) return;
   if (data.paneLayout && PANE_LAYOUTS.some((l) => l.key === data.paneLayout)) {
     setPaneLayout(data.paneLayout as PaneLayout);
+  }
+  // 분할선 비율 복원 (M30) — 배치별로 검증해 통과한 것만
+  if (data.paneRatios && typeof data.paneRatios === "object") {
+    const restored: Partial<Record<PaneLayout, PaneRatio>> = {};
+    for (const l of PANE_LAYOUTS) {
+      const r = sanitizeRatio(l.key, data.paneRatios[l.key]);
+      if (r) restored[l.key] = r;
+    }
+    if (Object.keys(restored).length > 0) setPaneRatios(restored);
   }
   const sh = SHELLS.find((s) => s.label === data.shell);
   if (sh) setDefaultShell(sh);
@@ -72,6 +103,7 @@ export function startLayoutSync(): void {
         shell: defaultShell().label,
         selectedSession: selectedSession(),
         lastWorkspace: v.kind === "workspace" ? (v as { id: string }).id : lastWs,
+        paneRatios: paneRatios(),
       };
       lastWs = data.lastWorkspace;
       const json = JSON.stringify(data);
@@ -84,6 +116,7 @@ export function startLayoutSync(): void {
   createRoot(() => {
     createEffect(() => {
       paneLayout();
+      paneRatios(); // 분할선 드래그 (M30)
       defaultShell();
       selectedSession();
       view();

@@ -5,6 +5,7 @@ import { queryGlobalEvents } from "../backend/events";
 import type { FeedEvent } from "../backend/events";
 import { backend } from "../backend/mock";
 import { isTauri } from "../backend/pty";
+import { settings } from "../backend/settings";
 import { jumpToSession, tick } from "../state";
 import { StatusLabel } from "../components/ui";
 import type { Session } from "../types";
@@ -78,6 +79,15 @@ export function Dashboard() {
   const BUSY_SOFT_LIMIT = 6;
   const busyCount = () => count("busy");
 
+  // FR-G-67 (M30) — 세션 메모리 임계 배너. 설정 임계값(기본 꺼짐), FR-G-36과 같은 채널.
+  // 계측은 C11(Job Object 10초 샘플링)이 이미 한다 — 여기는 표시만, 강제 개입 없음.
+  const memLimitMb = () => settings().memBannerMb;
+  // dead는 제외 — 프로세스가 없는데 마지막 샘플 값이 남아 있을 수 있다 (applyMemory는 최신값 유지)
+  const memOffenders = () =>
+    memLimitMb() > 0
+      ? sessions().filter((s) => s.status !== "dead" && (s.memoryMb ?? 0) >= memLimitMb())
+      : [];
+
   return (
     <div class="screen">
       <div class="screen-head">
@@ -94,6 +104,16 @@ export function Dashboard() {
         <div class="card inset dash-overload mono">
           ⚠ 동시 작업 중 에이전트 {busyCount()}개 — 소프트 경고 (D11 · 임계값 {BUSY_SOFT_LIMIT}, 실측 전 잠정).
           시스템이 느려지면 일부 세션을 중지하세요.
+        </div>
+      </Show>
+      {/* 세션 메모리 임계 배너 (FR-G-67, M30) — 설정 임계값 초과 세션 나열. 강제 종료·자동 개입 없음 */}
+      <Show when={memOffenders().length > 0}>
+        <div class="card inset dash-overload mono">
+          ⚠ 세션 메모리 임계 초과 —{" "}
+          {memOffenders()
+            .map((s) => `${personaName(s)} ${((s.memoryMb ?? 0) / 1024).toFixed(1)}GB`)
+            .join(" · ")}{" "}
+          (임계 {(memLimitMb() / 1024).toFixed(0)}GB · 소프트 경고). 세션 상세에서 현재·피크를 확인하세요.
         </div>
       </Show>
       <div class="screen-body dash-body">

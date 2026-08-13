@@ -1354,6 +1354,22 @@ fn open_log_dir() -> Result<(), String> {
     Ok(())
 }
 
+/// 터미널 링크 열기 (PRD A 링크 감지, M30) — http/https만 기본 브라우저로.
+/// rundll32는 인자를 셸 재파싱 없이 받으므로 URL의 `&`가 명령 분리로 새지 않는다.
+#[tauri::command]
+fn open_external(url: String) -> Result<(), String> {
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err("http/https URL만 열 수 있습니다".into());
+    }
+    use std::os::windows::process::CommandExt;
+    std::process::Command::new("rundll32")
+        .args(["url.dll,FileProtocolHandler", &url])
+        .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 // 네이티브 클립보드 커맨드는 clip.rs가 소유한다 (리팩토링으로 이동)
 
 #[tauri::command]
@@ -1509,7 +1525,8 @@ pub fn run() {
             settings_load,
             settings_save,
             session_log_dir,
-            open_log_dir
+            open_log_dir,
+            open_external
         ])
         .run(tauri::generate_context!())
         .expect("EQMUX 실행 실패");

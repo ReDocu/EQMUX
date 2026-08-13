@@ -14,6 +14,8 @@ export interface AppSettings {
   muted: string[];
   /** 테마 (M29) — 토큰 교체. 터미널 페인은 어느 테마에서든 다크 (TUI·ANSI 가독성) */
   theme: "dark" | "light" | "system";
+  /** 세션 메모리 배너 임계값 MB (FR-G-67, M30) — 0 = 꺼짐(기본). 소프트 경고만, 강제 개입 없음 */
+  memBannerMb: number;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -23,6 +25,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   scrollbackReplay: 500,
   muted: [],
   theme: "dark", // terminal-first 기본
+  memBannerMb: 0, // FR-G-67 — 기본 꺼짐
 };
 
 const [settings, setSettings] = createSignal<AppSettings>(DEFAULT_SETTINGS);
@@ -40,6 +43,7 @@ function sanitize(raw: unknown): AppSettings {
       : 500,
     muted: Array.isArray(v.muted) ? v.muted.filter((x): x is string => typeof x === "string") : [],
     theme: v.theme === "light" || v.theme === "system" ? v.theme : "dark",
+    memBannerMb: [0, 2048, 4096, 8192].includes(v.memBannerMb as number) ? (v.memBannerMb as number) : 0,
   };
 }
 

@@ -25,6 +25,7 @@ const START_VIEWS: AppSettings["startView"][] = ["control", "last"];
 const NOTI: AppSettings["notifications"][] = ["waiting-dead", "waiting", "off"];
 const REPLAY = [500, 1000, 2000];
 const THEMES: AppSettings["theme"][] = ["dark", "light", "system"];
+const MEM_BANNER = [0, 2048, 4096, 8192]; // FR-G-67 — 0 = 꺼짐 (기본)
 
 const SECTIONS: Section[] = [
   {
@@ -74,6 +75,12 @@ const SECTIONS: Section[] = [
         labels: ["꺼짐", "켜짐 (예약 — OS 알림 기본음)"],
         current: () => (settings().waitingSound ? 1 : 0),
         apply: (i) => updateSettings({ waitingSound: i === 1 }),
+      },
+      {
+        k: "메모리 배너",
+        labels: ["꺼짐 (기본)", "세션 2 GB↑", "세션 4 GB↑", "세션 8 GB↑"],
+        current: () => pick(MEM_BANNER, settings().memBannerMb),
+        apply: (i) => updateSettings({ memBannerMb: MEM_BANNER[i] }),
       },
     ],
     fixed: [{ k: "창 포커스 시", label: "억제 (FR-G-31)" }],

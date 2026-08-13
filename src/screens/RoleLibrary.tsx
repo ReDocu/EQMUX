@@ -8,35 +8,65 @@ import {
   deleteJobFile,
   deletePersonaFile,
   duplicateJobFile,
+  listMergedLibrary,
   saveJobFile,
   savePersonaFile,
 } from "../backend/library";
+import type { LibSource, MergedLibrary } from "../backend/library";
 import { backend } from "../backend/mock";
 import { isTauri } from "../backend/pty";
 import { tick } from "../state";
 import { Eyebrow, KV } from "../components/ui";
-import type { Job, Persona } from "../types";
+import type { Job, Persona, Workspace } from "../types";
 
 const COLORS: Persona["color"][] = ["blue", "purple", "green", "amber"];
 const HINT_BUDGET = 10; // P3 — 페르소나 본문 5~10줄, 초과 시 경고 (FR-E-24)
 
+type SJob = Job & { source?: LibSource };
+type SPersona = Persona & { source?: LibSource };
+
 export function RoleLibrary() {
-  const jobs = () => {
+  // ── 스코프 (FR-E-21, M30) — 전역 / 워크스페이스 병합. 병합에서 같은 id는 ws가 이긴다 (P2) ──
+  const [scopeWs, setScopeWs] = createSignal<Workspace | undefined>(undefined);
+  const [mergedLib, setMergedLib] = createSignal<MergedLibrary | undefined>(undefined);
+  const openWorkspaces = () => {
     tick();
-    return backend.listJobs();
+    return backend.listWorkspaces().filter((w) => w.open && !w.pathMissing);
   };
-  const personas = () => {
+  const loadScope = async (ws: Workspace) => setMergedLib(await listMergedLibrary(ws.path));
+  const pickScope = (ws: Workspace | undefined) => {
+    setSelId(undefined);
+    setSelJobId(undefined);
+    setScopeWs(ws);
+    setMergedLib(undefined);
+    if (ws) void loadScope(ws);
+  };
+  /** 전역 CRUD 뒤 — 스코프 중이면 병합본도 따라잡는다 */
+  const reloadScope = () => {
+    const ws = scopeWs();
+    if (ws) void loadScope(ws);
+  };
+
+  const jobs = (): SJob[] => {
     tick();
-    return backend.listPersonas();
+    const m = scopeWs() && mergedLib();
+    return m ? m.jobs : backend.listJobs();
+  };
+  const personas = (): SPersona[] => {
+    tick();
+    const m = scopeWs() && mergedLib();
+    return m ? m.personas : backend.listPersonas();
   };
   const [selId, setSelId] = createSignal<string | undefined>(undefined);
   const [saved, setSaved] = createSignal(false);
   const sel = () => personas().find((p) => p.id === selId());
+  // 오버라이드 항목은 여기서 편집하지 않는다 — 원본이 .eqmux 파일이고 편집 커맨드는 전역에 쓴다 (FR-E-28)
+  const selIsWs = () => sel()?.source === "ws";
   const [draftName, setDraftName] = createSignal("");
   const [draftHint, setDraftHint] = createSignal("");
   const [draftColor, setDraftColor] = createSignal<Persona["color"]>("blue");
 
-  const select = (p: Persona) => {
+  const select = (p: SPersona) => {
     setSelJobId(undefined);
     setSelId(p.id);
     setDraftName(p.name);
@@ -45,26 +75,29 @@ export function RoleLibrary() {
     setSaved(false);
   };
 
-  const save = () => {
+  const save = async () => {
     const p = sel();
-    if (!p) return;
-    void savePersonaFile({ ...p, name: draftName(), hint: draftHint(), color: draftColor() });
+    if (!p || selIsWs()) return;
+    await savePersonaFile({ id: p.id, name: draftName(), hint: draftHint(), color: draftColor() });
+    reloadScope();
     setSaved(true);
   };
 
   const hintLines = () => draftHint().split("\n").filter((l) => l.trim()).length;
   // 캐스팅된 페르소나는 삭제를 막는다 — 역할 파일 합성이 이 항목을 참조한다
   const inUse = () => backend.listSessions().some((s) => s.personaId === selId());
-  const remove = () => {
+  const remove = async () => {
     const id = selId();
-    if (!id || inUse()) return;
-    void deletePersonaFile(id);
+    if (!id || inUse() || selIsWs()) return;
+    await deletePersonaFile(id);
+    reloadScope();
     setSelId(undefined);
   };
 
   // ── 직무 편집 (FR-E-28) — 권한은 곧 실행 플래그의 원천이라 편집 화면에서도 정직하게 보여준다 ──
   const [selJobId, setSelJobId] = createSignal<string | undefined>(undefined);
   const selJob = () => jobs().find((j) => j.id === selJobId());
+  const selJobIsWs = () => selJob()?.source === "ws";
   const [jobSaved, setJobSaved] = createSignal(false);
   const [jDraft, setJDraft] = createSignal({
     name: "",
@@ -75,7 +108,7 @@ export function RoleLibrary() {
     forbidden: "",
   });
 
-  const selectJob = (j: Job) => {
+  const selectJob = (j: SJob) => {
     setSelId(undefined);
     setSelJobId(j.id);
     setJDraft({
@@ -89,26 +122,28 @@ export function RoleLibrary() {
     setJobSaved(false);
   };
 
-  const saveJob = () => {
+  const saveJob = async () => {
     const j = selJob();
-    if (!j) return;
+    if (!j || selJobIsWs()) return;
     const d = jDraft();
-    void saveJobFile({
-      ...j,
+    await saveJobFile({
+      id: j.id,
       name: d.name,
       permissions: { write: d.write, commit: d.commit, push: d.push },
       responsibility: d.responsibility,
       forbidden: d.forbidden,
     });
+    reloadScope();
     setJobSaved(true);
   };
 
   // 캐스팅된 직무는 삭제를 막는다 — 세션의 실행 권한 번역(§4.5.1)이 이 항목을 참조한다
   const jobInUse = () => backend.listSessions().some((s) => s.jobId === selJobId());
-  const removeJob = () => {
+  const removeJob = async () => {
     const id = selJobId();
-    if (!id || jobInUse()) return;
-    void deleteJobFile(id);
+    if (!id || jobInUse() || selJobIsWs()) return;
+    await deleteJobFile(id);
+    reloadScope();
     setSelJobId(undefined);
   };
 
@@ -121,12 +156,33 @@ export function RoleLibrary() {
             직무=책임 · 페르소나=판단 성향 — {isTauri() ? "앱데이터 jobs/·personas/ 실파일" : "전역 라이브러리 (목)"} ·
             워크스페이스 오버라이드는 .eqmux/jobs·personas (P2)
           </div>
+          {/* 스코프 (FR-E-21, M30) — 병합 보기. 같은 id는 워크스페이스가 이긴다 */}
+          <Show when={isTauri() && openWorkspaces().length > 0}>
+            <div style={{ display: "flex", gap: "6px", "margin-top": "8px", "flex-wrap": "wrap", "align-items": "center" }}>
+              <span class="eyebrow">스코프</span>
+              <button class="btn ghost" classList={{ primary: !scopeWs() }} onClick={() => pickScope(undefined)}>
+                전역
+              </button>
+              <For each={openWorkspaces()}>
+                {(w) => (
+                  <button class="btn ghost" classList={{ primary: scopeWs()?.id === w.id }} onClick={() => pickScope(w)}>
+                    {w.name}
+                  </button>
+                )}
+              </For>
+              <Show when={scopeWs()}>
+                <span class="mono muted" style={{ "font-size": "10px" }}>
+                  전역 + .eqmux 병합 — WS 뱃지가 오버라이드
+                </span>
+              </Show>
+            </div>
+          </Show>
         </div>
         <div style={{ display: "flex", gap: "8px" }}>
-          <button class="btn" onClick={() => void addJobFile()}>
+          <button class="btn" title="전역 라이브러리에 추가" onClick={() => void addJobFile().then(reloadScope)}>
             + 직무 추가
           </button>
-          <button class="btn primary" onClick={() => void addPersonaFile()}>
+          <button class="btn primary" title="전역 라이브러리에 추가" onClick={() => void addPersonaFile().then(reloadScope)}>
             + 페르소나 추가
           </button>
         </div>
@@ -148,6 +204,11 @@ export function RoleLibrary() {
                     <span class="mono muted" style={{ "font-size": "10px" }}>
                       {j.id}
                     </span>
+                    <Show when={j.source === "ws"}>
+                      <span class="badge purple" title="워크스페이스 오버라이드 — .eqmux/jobs가 원본 (P2)">
+                        WS
+                      </span>
+                    </Show>
                   </div>
                   <div class="muted" style={{ "font-size": "11px", margin: "4px 0 6px" }}>
                     {j.responsibility}
@@ -172,7 +233,14 @@ export function RoleLibrary() {
                   <button class="card cast-persona role-persona" classList={{ selected: selId() === p.id }} onClick={() => select(p)}>
                     <span class={`persona-dot ${p.color}`}>{p.name.slice(0, 1)}</span>
                     <div style={{ "min-width": 0 }}>
-                      <div style={{ "font-weight": 700 }}>{p.name}</div>
+                      <div style={{ "font-weight": 700, display: "flex", gap: "6px", "align-items": "center" }}>
+                        {p.name}
+                        <Show when={p.source === "ws"}>
+                          <span class="badge purple" title="워크스페이스 오버라이드 — .eqmux/personas가 원본 (P2)">
+                            WS
+                          </span>
+                        </Show>
+                      </div>
                       <div class="muted" style={{ "font-size": "11px" }}>
                         {p.hint}
                       </div>
@@ -234,20 +302,32 @@ export function RoleLibrary() {
                     onInput={(e) => setJDraft({ ...jDraft(), forbidden: e.currentTarget.value })}
                   />
                   <div class="card inset" style={{ padding: "4px 10px" }}>
-                    <KV k="원본" v="앱 데이터 jobs/*.md" />
+                    <KV k="원본" v={selJobIsWs() ? ".eqmux/jobs/*.md (WS 오버라이드)" : "앱 데이터 jobs/*.md"} />
                     <KV k="권한 반영" v="캐스팅 세션은 재시작 때 (E11′)" />
                   </div>
-                  <button class="btn primary" onClick={saveJob}>
+                  <Show when={selJobIsWs()}>
+                    <div class="mono st-waiting" style={{ "font-size": "10px" }}>
+                      오버라이드 항목 — 원본은 워크스페이스 .eqmux/jobs/{j().id}.md 파일입니다. 편집 커맨드는
+                      전역에만 씁니다 (FR-E-28) — 파일을 직접 고치거나 탐색기에서 편집하세요
+                    </div>
+                  </Show>
+                  <button class="btn primary" disabled={selJobIsWs()} onClick={() => void saveJob()}>
                     {jobSaved() ? "저장됨 ✓" : "저장"}
                   </button>
-                  <button class="btn" title="새 id로 복제 — jobs/<id>-copy-*.md" onClick={() => void duplicateJobFile(j())}>
-                    복제
+                  <button class="btn" title="전역에 새 id로 복제 — jobs/<id>-copy-*.md" onClick={() => void duplicateJobFile(j())}>
+                    복제 {selJobIsWs() ? "(전역으로)" : ""}
                   </button>
                   <button
                     class="btn danger"
-                    disabled={jobInUse()}
-                    title={jobInUse() ? "캐스팅된 직무는 삭제할 수 없습니다" : "jobs/<id>.md 파일 삭제"}
-                    onClick={removeJob}
+                    disabled={jobInUse() || selJobIsWs()}
+                    title={
+                      selJobIsWs()
+                        ? "오버라이드는 .eqmux 파일에서 지웁니다"
+                        : jobInUse()
+                          ? "캐스팅된 직무는 삭제할 수 없습니다"
+                          : "jobs/<id>.md 파일 삭제"
+                    }
+                    onClick={() => void removeJob()}
                   >
                     삭제 {jobInUse() ? "(캐스팅 중)" : ""}
                   </button>
@@ -291,17 +371,29 @@ export function RoleLibrary() {
                 </For>
               </div>
               <div class="card inset" style={{ padding: "4px 10px" }}>
-                <KV k="원본" v="앱 데이터 personas/*.md" />
+                <KV k="원본" v={selIsWs() ? ".eqmux/personas/*.md (WS 오버라이드)" : "앱 데이터 personas/*.md"} />
                 <KV k="주입" v=".eqmux/roles/<세션>.md 합성" />
               </div>
-              <button class="btn primary" onClick={save}>
+              <Show when={selIsWs()}>
+                <div class="mono st-waiting" style={{ "font-size": "10px" }}>
+                  오버라이드 항목 — 원본은 워크스페이스 .eqmux/personas/{sel()!.id}.md 파일입니다. 편집 커맨드는
+                  전역에만 씁니다 (FR-E-28) — 파일을 직접 고치거나 탐색기에서 편집하세요
+                </div>
+              </Show>
+              <button class="btn primary" disabled={selIsWs()} onClick={() => void save()}>
                 {saved() ? "저장됨 ✓" : "저장"}
               </button>
               <button
                 class="btn danger"
-                disabled={inUse()}
-                title={inUse() ? "캐스팅된 페르소나는 삭제할 수 없습니다" : "personas/<id>.md 파일 삭제"}
-                onClick={remove}
+                disabled={inUse() || selIsWs()}
+                title={
+                  selIsWs()
+                    ? "오버라이드는 .eqmux 파일에서 지웁니다"
+                    : inUse()
+                      ? "캐스팅된 페르소나는 삭제할 수 없습니다"
+                      : "personas/<id>.md 파일 삭제"
+                }
+                onClick={() => void remove()}
               >
                 삭제 {inUse() ? "(캐스팅 중)" : ""}
               </button>

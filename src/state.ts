@@ -45,6 +45,32 @@ export const PANE_LAYOUTS: { key: PaneLayout; name: string; desc: string }[] = [
 export const [paneLayout, setPaneLayout] = createSignal<PaneLayout>("grid-row");
 export const [layoutPickerOpen, setLayoutPickerOpen] = createSignal(false);
 
+/** 분할선 드래그 (PRD B 잔여, M30) — 배치별 트랙 비율. 축이 있는 배치만 해당 축을 갖는다.
+ *  합은 1, 트랙당 최소 0.08. layout.json에 배치별로 영속된다 (FR-C-22와 같은 파일). */
+export interface PaneRatio {
+  cols?: number[];
+  rows?: number[];
+}
+export const DEFAULT_RATIOS: Record<PaneLayout, PaneRatio> = {
+  "grid-col": { cols: [0.5, 0.5], rows: [0.5, 0.5] },
+  "grid-row": { cols: [0.5, 0.5], rows: [0.5, 0.5] },
+  "stack-v": { rows: [0.25, 0.25, 0.25, 0.25] },
+  "row-h": { cols: [0.25, 0.25, 0.25, 0.25] },
+  "main-right": { cols: [2 / 3, 1 / 3] },
+  "main-bottom": { rows: [2 / 3, 1 / 3] },
+};
+export const [paneRatios, setPaneRatios] = createSignal<Partial<Record<PaneLayout, PaneRatio>>>({});
+/** 현재 배치의 유효 비율 — 저장본이 없으면 기본값 */
+export function ratioFor(layout: PaneLayout): PaneRatio {
+  const d = DEFAULT_RATIOS[layout];
+  const o = paneRatios()[layout];
+  return { cols: o?.cols ?? d.cols, rows: o?.rows ?? d.rows };
+}
+/** 한 축 갱신 — 분할선 드래그가 부른다 */
+export function setRatioAxis(layout: PaneLayout, axis: "cols" | "rows", fractions: number[]): void {
+  setPaneRatios({ ...paneRatios(), [layout]: { ...ratioFor(layout), [axis]: fractions } });
+}
+
 /** 터미널 전체 화면 (포커스 모드) — 앱 바는 유지되고 그 아래 영역만 덮는다 */
 export const [terminalFull, setTerminalFull] = createSignal(false);
 
