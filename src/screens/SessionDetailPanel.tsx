@@ -11,8 +11,10 @@ import { sessionTermSize } from "../components/TerminalPane";
 import { settings, toggleMuted } from "../backend/settings";
 import { jumpToSession } from "../state";
 import { Eyebrow, KV, StatusLabel } from "../components/ui";
-import type { Session } from "../types";
+import type { Permissions, Session } from "../types";
 import { flagsToString, sessionDisplayName, translatePermissions } from "../types";
+
+const PERM_KEYS: (keyof Permissions)[] = ["write", "commit", "push"];
 
 export function SessionDetailPanel(props: { session: Session }) {
   const s = () => props.session;
@@ -40,9 +42,32 @@ export function SessionDetailPanel(props: { session: Session }) {
   const persona = () => backend.listPersonas().find((p) => p.id === s().personaId);
   const job = () => backend.listJobs().find((j) => j.id === s().jobId);
   const mission = () => backend.listMissions().find((m) => m.id === s().missionId);
+  // 유효 권한 (FR-E-34) — 슬롯 오버라이드가 있으면 그것, 없으면 직무 기본값
+  const effPerms = () => s().permOverride ?? job()?.permissions;
   const flags = () => {
-    const j = job();
-    return j ? flagsToString(translatePermissions(j.permissions), s().agentSessionId) : "—";
+    const p = effPerms();
+    return p ? flagsToString(translatePermissions(p), s().agentSessionId) : "—";
+  };
+
+  // ── 슬롯 권한 오버라이드 편집 (FR-E-34, M31) — 적용은 재시작(E11′), 파일에도 반영 ──
+  const [permDraft, setPermDraft] = createSignal<Permissions>({ write: false, commit: false, push: false });
+  createEffect(
+    on(
+      () => `${s().id}:${s().jobId}:${JSON.stringify(s().permOverride)}`,
+      () => {
+        const p = effPerms();
+        if (p) setPermDraft({ ...p });
+      },
+    ),
+  );
+  const permChanged = () => JSON.stringify(permDraft()) !== JSON.stringify(effPerms());
+  const applyPerms = () => {
+    backend.setPermissionOverride(s().id, permDraft());
+    void saveRoleFile(s().id); // 역할 파일 frontmatter permissions 반영 (FR-E-33)
+  };
+  const resetPerms = () => {
+    backend.setPermissionOverride(s().id, undefined);
+    void saveRoleFile(s().id);
   };
 
   // 역할 부여/변경/해제 — 직무(권한) 변경은 재시작 필요(E11′)로 이어진다
@@ -98,8 +123,8 @@ export function SessionDetailPanel(props: { session: Session }) {
   const doResume = async () => {
     setActionErr(undefined);
     if (isTauri() && s().personaId) {
-      const j = job();
-      if (!j) return;
+      const p = effPerms();
+      if (!p) return;
       const size = sessionTermSize(s().id);
       try {
         await resumeAgent(
@@ -107,7 +132,7 @@ export function SessionDetailPanel(props: { session: Session }) {
           s().workspaceId,
           s().cwd,
           persona()?.name ?? s().personaId,
-          j.permissions,
+          p,
           size.cols,
           size.rows,
         );
@@ -123,10 +148,10 @@ export function SessionDetailPanel(props: { session: Session }) {
   const doRestart = async () => {
     setActionErr(undefined);
     if (isTauri() && s().personaId) {
-      const j = job();
+      const p = effPerms();
       const size = sessionTermSize(s().id);
       try {
-        if (j) await restartAgent(s().id, j.permissions, size.cols, size.rows);
+        if (p) await restartAgent(s().id, p, size.cols, size.rows);
       } catch (err) {
         setActionErr(String(err));
         return;
@@ -242,6 +267,50 @@ export function SessionDetailPanel(props: { session: Session }) {
         <Eyebrow>실제 실행 플래그 (FR-D-41)</Eyebrow>
         <div class="card inset flags mono">{flags()}</div>
       </div>
+
+      {/* 슬롯 권한 오버라이드 (FR-E-34, M31) — 직무 기본값을 이 세션에서만 덮어쓴다 */}
+      <Show when={s().personaId && job()}>
+        <div class="card inset" style={{ padding: "8px 10px", "margin-top": "10px" }}>
+          <div style={{ display: "flex", "align-items": "center", gap: "8px" }}>
+            <Eyebrow>슬롯 권한 (FR-E-34)</Eyebrow>
+            <Show when={s().permOverride}>
+              <span class="badge purple" title="직무 기본값과 다른 슬롯 오버라이드 — team.json·역할 파일에 영속">
+                오버라이드
+              </span>
+            </Show>
+          </div>
+          <div style={{ display: "flex", gap: "12px", "align-items": "center", margin: "6px 0" }}>
+            <For each={PERM_KEYS}>
+              {(key) => (
+                <label class="mono" style={{ "font-size": "11px", display: "flex", gap: "4px", "align-items": "center", cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={permDraft()[key]}
+                    onChange={(e) => setPermDraft({ ...permDraft(), [key]: e.currentTarget.checked })}
+                  />
+                  {key}
+                </label>
+              )}
+            </For>
+            <button class="btn ghost" style={{ padding: "2px 8px", "font-size": "10px" }} disabled={!permChanged()} onClick={applyPerms}>
+              적용
+            </button>
+            <button
+              class="btn ghost"
+              style={{ padding: "2px 8px", "font-size": "10px" }}
+              disabled={!s().permOverride}
+              title="오버라이드 해제 — 직무 기본값으로"
+              onClick={resetPerms}
+            >
+              기본값
+            </button>
+          </div>
+          <div class="muted" style={{ "font-size": "10px" }}>
+            직무 기본 — write {job()!.permissions.write ? "✓" : "—"} · commit {job()!.permissions.commit ? "✓" : "—"} ·
+            push {job()!.permissions.push ? "✓" : "—"}. 유효 권한이 달라지면 재시작이 필요합니다 (E11′)
+          </div>
+        </div>
+      </Show>
 
       <Show when={isTauri() && feed().length > 0}>
         <div style={{ "margin-top": "10px" }}>

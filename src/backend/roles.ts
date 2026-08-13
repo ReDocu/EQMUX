@@ -43,7 +43,7 @@ export function buildRolePayload(s: Session): RolePayload | undefined {
     hint: persona.hint,
     job: job.id,
     jobName: job.name,
-    permissions: job.permissions,
+    permissions: s.permOverride ?? job.permissions, // 유효 권한 (FR-E-34) — frontmatter에 반영
     responsibility: job.responsibility,
     forbidden: job.forbidden,
     teammates,

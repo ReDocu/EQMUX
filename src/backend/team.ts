@@ -15,6 +15,7 @@ export interface TeamSlotInfo {
   jobName: string;
   name?: string | null; // 세션 표시 이름 (P5 · FR-E-36) — 페르소나 이름과 분리 가능
   worktree: boolean; // 격리 옵트인 (FR-E-62) — 경로가 아니라 플래그 (team.json은 커밋 대상)
+  permissions?: { write: boolean; commit: boolean; push: boolean } | null; // 슬롯 권한 오버라이드 (FR-E-34)
   agentSessionId: string | null;
   resumable: boolean;
   worktreePath: string | null; // 이 머신에 워크트리가 실재할 때만 — 없으면 repo 루트 폴백
@@ -46,6 +47,7 @@ function slotsOf(wsId: string) {
       jobName: jobs.find((j) => j.id === s.jobId)?.name ?? s.jobId,
       name: s.name ?? null, // 분리된 세션 이름 (P5) — 없으면 null (파일에는 생략)
       worktree: !!s.worktree,
+      permissions: s.permOverride ?? null, // 슬롯 권한 오버라이드 (FR-E-34) — 없으면 생략
     }));
 }
 
@@ -101,7 +103,7 @@ export async function restoreTeams(): Promise<void> {
     if (ws.pathMissing) continue;
     const slots = await loadTeam(ws.id, ws.path);
     if (slots.length > 0) {
-      lastSaved.set(ws.id, JSON.stringify(slots.map(({ slot, persona, personaName, job, jobName, name, worktree }) => ({ slot, persona, personaName, job, jobName, name: name ?? null, worktree }))));
+      lastSaved.set(ws.id, JSON.stringify(slots.map(({ slot, persona, personaName, job, jobName, name, worktree, permissions }) => ({ slot, persona, personaName, job, jobName, name: name ?? null, worktree, permissions: permissions ?? null }))));
       backend.hydrateTeam(ws.id, slots, alive);
     }
   }

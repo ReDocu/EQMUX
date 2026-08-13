@@ -22,6 +22,9 @@ pub struct TeamSlot {
     /// 경로가 아니라 플래그를 저장한다 — team.json은 커밋 대상(W3)이라 절대 경로 금지
     #[serde(default)]
     pub worktree: bool,
+    /// 슬롯 권한 오버라이드 (FR-E-34, M31) — 직무 기본값을 이 슬롯에서만 덮어쓴다. 없으면 생략
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<crate::roles::RolePermissions>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -59,7 +62,8 @@ pub fn save(ws_path: &str, slots: &[TeamSlot]) -> Result<(), String> {
         match slots.iter().find(|s| s.slot == n) {
             Some(s) => {
                 let iso = if s.worktree { " · 워크트리" } else { "" };
-                md.push_str(&format!("| {} | {} | {}{} |\n", n, s.persona_name, s.job_name, iso));
+                let ovr = if s.permissions.is_some() { " · 권한 오버라이드" } else { "" };
+                md.push_str(&format!("| {} | {} | {}{}{} |\n", n, s.persona_name, s.job_name, iso, ovr));
             }
             None => md.push_str(&format!("| {} | — | (비어 있음) |\n", n)),
         }

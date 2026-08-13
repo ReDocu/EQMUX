@@ -6,6 +6,7 @@ import type {
   EventRecord,
   Job,
   Mission,
+  Permissions,
   Persona,
   Session,
   StoreUsage,
@@ -50,6 +51,9 @@ export interface Backend {
   removeTerminal(id: string): void;
   /** 역할 세션의 페르소나·직무 변경 — 직무가 바뀌면 권한 변경이므로 재시작 필요(E11′) */
   updateSessionRole(id: string, personaId: string, jobId: string): void;
+  /** 슬롯 권한 오버라이드 (FR-E-34, M31) — undefined = 해제(직무 기본값 복귀).
+   *  유효 권한이 실제로 달라지면 재시작 필요(E11′)로 이어진다 */
+  setPermissionOverride(id: string, perms?: Permissions): void;
   /** team.json에서 복원된 슬롯을 세션으로 채운다 — 에이전트는 자동 실행하지 않는다 (S3).
    *  aliveIds에 든 세션은 PTY가 살아 있는 것(웹뷰 재시작, FR-C-06)이라 재개 대기가 아니라 재부착 대상이다 */
   hydrateTeam(wsId: string, slots: TeamSlotHydrate[], aliveIds?: Set<string>): void;
@@ -663,6 +667,7 @@ export class MockBackend implements Backend {
         s(id, wsId, slot, sl.persona, sl.job, {
           status: "shell",
           name: sl.name ?? undefined, // 분리된 세션 이름 (P5) — team.json이 원본
+          permOverride: sl.permissions ?? undefined, // 슬롯 권한 오버라이드 (FR-E-34)
           cwd: sl.worktreePath ?? ws.path,
           worktree: !!sl.worktreePath,
           sinceMs: 0,
@@ -790,6 +795,24 @@ export class MockBackend implements Backend {
     this.broadcast();
   }
 
+  setPermissionOverride(id: string, perms?: Permissions) {
+    const sess = SESSIONS.find((x) => x.id === id);
+    if (!sess || !sess.personaId) return;
+    const jobPerms = JOBS.find((j) => j.id === sess.jobId)?.permissions;
+    const prevEffective = JSON.stringify(sess.permOverride ?? jobPerms);
+    // 직무 기본값과 같은 오버라이드는 저장하지 않는다 — team.json에 무의미한 항목을 남기지 않기 위해
+    const next = perms && jobPerms && JSON.stringify(perms) === JSON.stringify(jobPerms) ? undefined : perms;
+    if (JSON.stringify(sess.permOverride) === JSON.stringify(next)) return;
+    sess.permOverride = next;
+    // 유효 권한이 달라졌으면 실행 플래그가 어긋난다 — 재시작 필요 (E11′)
+    if (prevEffective !== JSON.stringify(sess.permOverride ?? jobPerms)) sess.restartNeeded = true;
+    const desc = next
+      ? `write ${next.write ? "✓" : "—"} · commit ${next.commit ? "✓" : "—"} · push ${next.push ? "✓" : "—"}`
+      : "해제 — 직무 기본값";
+    this.logEvent("agent", `슬롯 권한 오버라이드 · ${desc}${sess.restartNeeded ? " · 재시작 필요" : ""}`, id);
+    this.broadcast();
+  }
+
   updateSessionRole(id: string, personaId: string, jobId: string) {
     const sess = SESSIONS.find((x) => x.id === id);
     if (!sess) return;
@@ -798,6 +821,7 @@ export class MockBackend implements Backend {
     sess.personaId = personaId;
     sess.jobId = jobId;
     if (permChanged) sess.restartNeeded = true;
+    if (permChanged) sess.permOverride = undefined; // 직무가 바뀌면 이전 직무 기준 오버라이드는 무의미하다
     const pName = PERSONAS.find((x) => x.id === personaId)?.name ?? personaId;
     const jName = JOBS.find((x) => x.id === jobId)?.name ?? jobId;
     const suffix = permChanged ? " · 권한 변경 → 재시작 필요" : "";

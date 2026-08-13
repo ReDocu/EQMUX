@@ -55,6 +55,9 @@ export interface Session {
   degraded: boolean;
   exitCode?: number;
   missionId?: string;
+  /** 슬롯 단위 권한 오버라이드 (FR-E-34, M31) — 직무 기본값을 이 세션에서만 덮어쓴다.
+   *  없으면 직무 기본값. team.json에 영속되고 역할 파일 frontmatter에 반영된다 */
+  permOverride?: Permissions;
   restartNeeded: boolean; // 권한 변경 감지 (E11′)
   restored?: boolean; // team.json에서 복원됨 — 에이전트 자동 실행 없음, 재개 칩만 (S3)
   revived?: boolean; // 웹뷰 재시작 복구 (FR-C-06) — PTY가 살아 있어 재부착만 한다 (restored와 배타)
@@ -88,9 +91,15 @@ export interface TeamSlotHydrate {
   job: string;
   name?: string | null; // 세션 표시 이름 (P5) — 페르소나 이름과 분리 가능
   worktree?: boolean;
+  permissions?: Permissions | null; // 슬롯 권한 오버라이드 (FR-E-34) — 없으면 직무 기본값
   agentSessionId: string | null;
   resumable: boolean;
   worktreePath?: string | null;
+}
+
+/** 유효 권한 (FR-E-34) — 슬롯 오버라이드가 있으면 그것, 없으면 직무 기본값 */
+export function effectivePermissions(s: Session, job: Job | undefined): Permissions | undefined {
+  return s.permOverride ?? job?.permissions;
 }
 
 /** 세션 표시 이름 (P5 · FR-E-36) — 분리된 이름이 있으면 그것, 없으면 페르소나 이름 */

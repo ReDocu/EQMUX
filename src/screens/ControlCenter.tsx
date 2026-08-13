@@ -228,7 +228,11 @@ export function ControlCenter(props: { workspace: Workspace }) {
               shell={shellCmdFor(s)}
               agent={
                 s.personaId && job(s.jobId)
-                  ? { name: persona(s.personaId)?.name ?? s.personaId, permissions: job(s.jobId)!.permissions }
+                  ? {
+                      name: persona(s.personaId)?.name ?? s.personaId,
+                      // 유효 권한 (FR-E-34) — 슬롯 오버라이드가 있으면 그것으로 스폰한다
+                      permissions: s.permOverride ?? job(s.jobId)!.permissions,
+                    }
                   : undefined
               }
               restore={s.restored ? { resumable: s.resumable, reason: s.resumeReason } : undefined}
