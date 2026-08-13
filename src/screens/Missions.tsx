@@ -2,7 +2,7 @@
 // Tauri에서는 .eqmux/missions/*.md 실파일이 원본이다 (FR-E-51) — 화면은 브리지를 통해서만 쓴다.
 import { createSignal, For, onMount, Show } from "solid-js";
 import { backend } from "../backend/mock";
-import { createMission, cycleMissionStatus, refreshMissions, toggleAssign } from "../backend/missions";
+import { createMission, cycleMissionStatus, refreshMissions, setDefaultMission, toggleAssign } from "../backend/missions";
 import { isTauri } from "../backend/pty";
 import { checkoutBranch } from "../backend/workspaces";
 import { setView, tick } from "../state";
@@ -83,6 +83,20 @@ export function Missions(props: { wsId: string }) {
                     onClick={() => void cycleMissionStatus(props.wsId, m.id)}
                   >
                     {m.status.toUpperCase()}
+                  </button>
+                  {/* 기본 임무 (FR-E-56, M33) — 워크스페이스당 1개. 새 역할 세션이 자동 배정받는다 */}
+                  <button
+                    class="badge"
+                    classList={{ amber: !!m.isDefault }}
+                    style={{ cursor: "pointer" }}
+                    title={
+                      m.isDefault
+                        ? "기본 임무 해제 (FR-E-56)"
+                        : "기본 임무로 지정 — 임무 없는 새 역할 세션이 자동 배정받습니다"
+                    }
+                    onClick={() => void setDefaultMission(props.wsId, m.id, !m.isDefault)}
+                  >
+                    {m.isDefault ? "★ 기본" : "☆"}
                   </button>
                   <span class="mono muted" style={{ "margin-left": "auto", "font-size": "10px" }}>
                     {m.branch ?? "브랜치 미연결"}

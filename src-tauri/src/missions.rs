@@ -23,6 +23,8 @@ pub struct MissionInfo {
     pub outputs: Vec<String>,
     pub file: String,
     pub assigned: Vec<String>,
+    /// 워크스페이스 기본 임무 (FR-E-56, M33) — frontmatter `default: true`. 워크스페이스당 1개
+    pub is_default: bool,
 }
 
 fn missions_dir(ws_path: &str) -> PathBuf {
@@ -121,6 +123,7 @@ fn parse_file(path: &Path) -> Option<(String, MissionInfo)> {
             outputs,
             file: format!(".eqmux/missions/{stem}.md"),
             assigned: Vec::new(),
+            is_default: roles::fm_value(&fm, "default").map(|v| v == "true").unwrap_or(false),
         },
     ))
 }
@@ -132,6 +135,9 @@ fn render(m: &MissionInfo) -> String {
     s.push_str(&format!("status: {}\n", m.status));
     if let Some(b) = &m.branch {
         s.push_str(&format!("branch: {b}\n"));
+    }
+    if m.is_default {
+        s.push_str("default: true\n");
     }
     s.push_str(&format!("updated: {}\n", now_stamp()));
     s.push_str("---\n");
@@ -193,6 +199,7 @@ pub fn create(ws_path: &str, name: &str, goal: &str, branch: Option<String>) -> 
         outputs: Vec::new(),
         file: format!(".eqmux/missions/{id}.md"),
         assigned: Vec::new(),
+        is_default: false,
     };
     atomic_write(&mission_path(ws_path, &id), &render(&m))?;
     Ok(m)
@@ -222,6 +229,48 @@ pub fn set_status(ws_path: &str, id: &str, status: &str) -> Result<(), String> {
 /// 단건 조회 — 배정 토글이 임무 블록을 만들 때 쓴다
 pub fn get(ws_path: &str, id: &str) -> Option<MissionInfo> {
     parse_file(&mission_path(ws_path, id)).map(|(_, m)| m)
+}
+
+/// frontmatter의 default 키만 고쳐 쓴다 — 본문·다른 키는 보존 (FR-E-74와 같은 원칙)
+fn write_default_flag(path: &Path, on: bool) -> Result<(), String> {
+    let text = fs::read_to_string(path).map_err(|_| "임무 파일을 찾을 수 없습니다".to_string())?;
+    let (mut fm, body) = split_frontmatter(&text);
+    let has = fm.iter().any(|l| l.trim() == "default: true");
+    if has == on {
+        return Ok(()); // 변화 없음 — 파일을 다시 쓰지 않는다 (외부 편집 보존)
+    }
+    fm.retain(|l| !l.starts_with("default:") && !l.starts_with("updated:"));
+    if on {
+        fm.push("default: true".into());
+    }
+    fm.push(format!("updated: {}", now_stamp()));
+    let mut out = String::from("---\n");
+    for l in &fm {
+        out.push_str(l);
+        out.push('\n');
+    }
+    out.push_str("---\n");
+    out.push_str(&body);
+    atomic_write(path, &out)
+}
+
+/// 워크스페이스 기본 임무 지정 (FR-E-56, M33) — 켜면 다른 임무의 default는 걷어낸다 (1개 규칙).
+/// 임무 없는 세션의 자동 배정은 프런트가 세션 생성 시점에 이 플래그를 보고 수행한다.
+pub fn set_default(ws_path: &str, id: &str, on: bool) -> Result<(), String> {
+    if on {
+        let Ok(entries) = fs::read_dir(missions_dir(ws_path)) else {
+            return Err("임무 디렉터리가 없습니다".into());
+        };
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.extension().map(|x| x == "md").unwrap_or(false)
+                && p.file_stem().map(|s| s.to_string_lossy() != id).unwrap_or(true)
+            {
+                let _ = write_default_flag(&p, false); // 깨진 파일은 건너뛴다 (부분 파싱 원칙)
+            }
+        }
+    }
+    write_default_flag(&mission_path(ws_path, id), on)
 }
 
 #[cfg(test)]
@@ -263,6 +312,29 @@ mod tests {
         set_status(&ws, &m.id, "in-review").unwrap();
         assert_eq!(get(&ws, &m.id).unwrap().status, "in-review");
         assert!(set_status(&ws, &m.id, "잘못된값").is_err());
+        fs::remove_dir_all(&ws).ok();
+    }
+
+    /// 기본 임무 (FR-E-56, M33) — 워크스페이스당 1개. 켜면 다른 임무의 default가 걷힌다.
+    /// frontmatter만 갱신되고 본문·상태는 보존된다.
+    #[test]
+    fn default_mission_is_exclusive_and_preserves_body() {
+        let ws = temp_ws("default");
+        let a = create(&ws, "임무 A", "목표 A", None).unwrap();
+        let b = create(&ws, "임무 B", "목표 B", Some("feat/b".into())).unwrap();
+        set_default(&ws, &a.id, true).unwrap();
+        assert!(get(&ws, &a.id).unwrap().is_default);
+        assert!(!get(&ws, &b.id).unwrap().is_default);
+        // 다른 임무를 기본으로 — A의 플래그가 걷힌다 (1개 규칙)
+        set_default(&ws, &b.id, true).unwrap();
+        assert!(!get(&ws, &a.id).unwrap().is_default);
+        let b2 = get(&ws, &b.id).unwrap();
+        assert!(b2.is_default);
+        assert_eq!(b2.goal, "목표 B"); // 본문 보존
+        assert_eq!(b2.branch.as_deref(), Some("feat/b")); // 다른 frontmatter 키 보존
+        // 해제 — 아무도 기본이 아니다
+        set_default(&ws, &b.id, false).unwrap();
+        assert!(list(&ws).iter().all(|m| !m.is_default));
         fs::remove_dir_all(&ws).ok();
     }
 

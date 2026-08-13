@@ -1024,6 +1024,12 @@ fn mission_set_status(ws_path: String, id: String, status: String) -> Result<(),
     missions::set_status(&ws_path, &id, &status)
 }
 
+/// 워크스페이스 기본 임무 (FR-E-56, M33) — frontmatter `default: true`, 워크스페이스당 1개
+#[tauri::command]
+fn mission_set_default(ws_path: String, id: String, on: bool) -> Result<(), String> {
+    missions::set_default(&ws_path, &id, on)
+}
+
 // ── 역할 라이브러리 (PRD E §4.3) — 전역 앱데이터 + 워크스페이스 오버라이드 2단 ──
 
 /// 라이브러리 목록 (FR-E-20·21) — ws_path를 주면 오버라이드가 병합된다
@@ -1527,6 +1533,7 @@ pub fn run() {
             mission_list,
             mission_create,
             mission_set_status,
+            mission_set_default,
             mission_assign,
             scrollback_tail,
             scrollback_search,

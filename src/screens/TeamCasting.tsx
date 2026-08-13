@@ -4,6 +4,7 @@
 import { createSignal, For, onMount } from "solid-js";
 import { listPresets } from "../backend/library";
 import type { CastingPreset } from "../backend/library";
+import { autoAssignDefault } from "../backend/missions";
 import { backend } from "../backend/mock";
 import { isTauri } from "../backend/pty";
 import { setView } from "../state";
@@ -94,6 +95,10 @@ export function TeamCasting(props: { wsId: string }) {
 
   const save = () => {
     backend.applyCasting(props.wsId, slots());
+    // 기본 임무 자동 배정 (FR-E-56) — 캐스팅으로 생긴 임무 없는 역할 세션에만
+    for (const sl of slots()) {
+      if (sl.personaId) void autoAssignDefault(props.wsId, `${sl.personaId}@${props.wsId}`);
+    }
     setSaved(true);
   };
 

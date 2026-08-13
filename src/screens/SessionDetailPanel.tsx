@@ -4,6 +4,7 @@ import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from "s
 import { restartAgent, resumeAgent } from "../backend/agent";
 import { queryEvents } from "../backend/events";
 import type { FeedEvent } from "../backend/events";
+import { autoAssignDefault } from "../backend/missions";
 import { backend } from "../backend/mock";
 import { nudgeRoleReload, removeRoleFile, saveRoleFile } from "../backend/roles";
 import { isTauri, killPty, openLogDir } from "../backend/pty";
@@ -96,9 +97,12 @@ export function SessionDetailPanel(props: { session: Session }) {
   // 권한 변경(직무 교체)은 재시작 배지(E11′)가 담당한다.
   const applyRole = () => {
     const permissionChange = pendJob() !== s().jobId;
+    const wasRoleless = !s().personaId;
     backend.updateSessionRole(s().id, pendPersona(), pendJob());
     void saveRoleFile(s().id).then((path) => {
       if (path && !permissionChange) nudgeRoleReload(s().id, path);
+      // 역할이 새로 부여된 세션 — 기본 임무 자동 배정 (FR-E-56)
+      if (wasRoleless) void autoAssignDefault(s().workspaceId, s().id);
     });
   };
   const detachRole = () => {

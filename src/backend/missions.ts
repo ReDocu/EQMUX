@@ -15,6 +15,7 @@ interface MissionFile {
   outputs: string[];
   file: string;
   assigned: string[];
+  isDefault: boolean; // 기본 임무 (FR-E-56)
 }
 
 function wsPath(wsId: string): string | undefined {
@@ -99,4 +100,25 @@ function sendBrief(sessionId: string, m: Mission): void {
   if (!s?.personaId || !s.agentSessionId || s.status === "dead" || s.restored) return;
   const goal = m.goal ? ` — ${m.goal}` : "";
   writePty(sessionId, `[EQMUX] 임무 배정: ${m.name}${goal} · 정의 ${m.file}\r`);
+}
+
+/** 기본 임무 지정·해제 (FR-E-56, M33) — frontmatter default: true, 워크스페이스당 1개 */
+export async function setDefaultMission(wsId: string, missionId: string, on: boolean): Promise<void> {
+  const path = wsPath(wsId);
+  if (!isTauri() || !path) return;
+  await invoke("mission_set_default", { wsPath: path, id: missionId, on }).catch(() => {});
+  await refreshMissions(wsId);
+}
+
+/** 임무 없는 세션의 기본 임무 자동 배정 (FR-E-56) — 세션 생성·역할 부여 시점에 부른다.
+ *  수동 해제와 싸우지 않도록 여기 말고는 자동 경로가 없다 (배정 화면 재실측이 재배정하지 않는다). */
+export async function autoAssignDefault(wsId: string, sessionId: string): Promise<void> {
+  if (!isTauri() || !wsPath(wsId)) return;
+  await refreshMissions(wsId); // 파일 실측 — 기본 임무·기존 배정을 최신으로
+  const s = backend.listSessions().find((x) => x.id === sessionId);
+  if (!s?.personaId || s.missionId) return;
+  const def = backend
+    .listMissions()
+    .find((m) => m.workspaceId === wsId && m.isDefault && m.status !== "done");
+  if (def) await toggleAssign(wsId, def.id, sessionId); // 같은 경로 — 임무 블록 + 브리프
 }

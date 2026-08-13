@@ -118,6 +118,7 @@ export interface Mission {
   outputs: string[];
   branch?: string; // 선택 연결 (E12)
   assigned: string[]; // session ids
+  isDefault?: boolean; // 워크스페이스 기본 임무 (FR-E-56, M33) — frontmatter default: true
 }
 
 export interface Workspace {

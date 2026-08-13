@@ -20,7 +20,7 @@ import {
 import { Eyebrow, PersonaDot, StatusLabel } from "../components/ui";
 import { queryEvents } from "../backend/events";
 import type { FeedEvent } from "../backend/events";
-import { refreshMissions } from "../backend/missions";
+import { autoAssignDefault, refreshMissions } from "../backend/missions";
 import { isTauri, killPty, storeUsageReal } from "../backend/pty";
 import type { StoreUsageReal } from "../backend/pty";
 import { removeRoleFile } from "../backend/roles";
@@ -151,6 +151,8 @@ export function ControlCenter(props: { workspace: Workspace }) {
       }
     }
     backend.addRoleSession(props.workspace.id, addPersona(), addJob(), opts);
+    // 기본 임무 자동 배정 (FR-E-56) — 임무 없는 새 역할 세션에만
+    void autoAssignDefault(props.workspace.id, `${addPersona()}@${props.workspace.id}`);
     setAddOpen(false);
   };
   const [removeTarget, setRemoveTarget] = createSignal<Session | undefined>(undefined);
