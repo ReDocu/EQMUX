@@ -46,6 +46,15 @@ export function TranscriptPane(props: { session: Session }) {
     return backend.listTurns(props.session.id);
   };
 
+  // 트랜스크립트 검색 (FR-G-87) — 로드된 창(끝 2MB) 안에서 클라이언트 필터.
+  // 도구 턴은 요약 줄과 상세를 함께 검색한다.
+  const [query, setQuery] = createSignal("");
+  const hit = (...texts: (string | null | undefined)[]) => {
+    const q = query().trim().toLowerCase();
+    if (!q) return true;
+    return texts.some((t) => t?.toLowerCase().includes(q));
+  };
+
   const [draft, setDraft] = createSignal("");
   const send = () => {
     const text = draft().trim();
@@ -78,15 +87,23 @@ export function TranscriptPane(props: { session: Session }) {
         <span>
           ☰ TRANSCRIPT · {persona()?.name ?? props.session.id} · 참조만 저장 (V2) · {sourceLabel()}
         </span>
-        <span class="muted">
-          {isTauri() ? (data()?.turns.length ?? fallback()?.length ?? 0) : mockTurns().length} {data() || !isTauri() ? "turns" : "lines"}
+        <span style={{ display: "inline-flex", "align-items": "center", gap: "8px" }}>
+          <input
+            class="transcript-search mono"
+            placeholder="검색 (FR-G-87)"
+            value={query()}
+            onInput={(e) => setQuery(e.currentTarget.value)}
+          />
+          <span class="muted">
+            {isTauri() ? (data()?.turns.length ?? fallback()?.length ?? 0) : mockTurns().length} {data() || !isTauri() ? "turns" : "lines"}
+          </span>
         </span>
       </div>
       <div class="terminal-body transcript-body">
         {/* Tauri — 실측 턴 */}
         <Show when={isTauri() && data()}>
           {(d) => (
-            <For each={d().turns}>
+            <For each={d().turns.filter((t) => hit(t.text, t.detail))}>
               {(t, i) => (
                 <div class="turn" classList={{ user: t.role === "user" }}>
                   <div class="mono muted" style={{ "font-size": "10px" }}>
@@ -142,7 +159,7 @@ export function TranscriptPane(props: { session: Session }) {
             <div class="mono st-waiting" style={{ "font-size": "10px", "margin-bottom": "6px" }}>
               트랜스크립트를 인식할 수 없어 스크롤백으로 표시합니다 (FR-G-86)
             </div>
-            <For each={fallback()}>
+            <For each={fallback()!.filter((l) => hit(l))}>
               {(line) => (
                 <div class="mono muted" style={{ "font-size": "11px", "white-space": "pre-wrap" }}>
                   {line}
@@ -155,7 +172,7 @@ export function TranscriptPane(props: { session: Session }) {
         {/* 브라우저 dev — 목 턴 */}
         <Show when={!isTauri()}>
           <Show when={mockTurns().length > 0} fallback={<div class="muted">트랜스크립트 없음 (목)</div>}>
-            <For each={mockTurns()}>
+            <For each={mockTurns().filter((t) => hit(t.text))}>
               {(t) => (
                 <div class="turn" classList={{ user: t.role === "user" }}>
                   <div class="mono muted" style={{ "font-size": "10px" }}>

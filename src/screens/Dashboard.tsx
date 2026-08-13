@@ -74,6 +74,10 @@ export function Dashboard() {
     return missionName(s) ?? "미배정";
   };
 
+  // D11 소프트 총량 경고 — 동시 busy 기준. 임계값은 실측 전 잠정 6. 막지 않는다 (FR-G-36)
+  const BUSY_SOFT_LIMIT = 6;
+  const busyCount = () => count("busy");
+
   return (
     <div class="screen">
       <div class="screen-head">
@@ -85,6 +89,13 @@ export function Dashboard() {
         </div>
         <span class="badge">폴링 없음 · 상태 스트림 구독 (FR-G-09)</span>
       </div>
+      {/* 과부하 소프트 경고 (D11 · FR-G-36) — 상단 배너, 알림이 아니며 아무것도 막지 않는다 */}
+      <Show when={busyCount() >= BUSY_SOFT_LIMIT}>
+        <div class="card inset dash-overload mono">
+          ⚠ 동시 작업 중 에이전트 {busyCount()}개 — 소프트 경고 (D11 · 임계값 {BUSY_SOFT_LIMIT}, 실측 전 잠정).
+          시스템이 느려지면 일부 세션을 중지하세요.
+        </div>
+      </Show>
       <div class="screen-body dash-body">
         <div class="dash-main">
           {/* 요약 타일 4종 (FR-G-06) — waiting이 0이면 시각적으로 눌러 둔다 */}

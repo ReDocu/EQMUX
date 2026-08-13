@@ -3,12 +3,37 @@
 import { createSignal, For, onMount, Show } from "solid-js";
 import { backend } from "../backend/mock";
 import { createMission, cycleMissionStatus, refreshMissions, toggleAssign } from "../backend/missions";
+import { isTauri } from "../backend/pty";
+import { checkoutBranch } from "../backend/workspaces";
 import { setView, tick } from "../state";
 import { Eyebrow, PersonaDot } from "../components/ui";
 
 export function Missions(props: { wsId: string }) {
   onMount(() => void refreshMissions(props.wsId));
   const ws = () => backend.listWorkspaces().find((w) => w.id === props.wsId);
+
+  // 임무-브랜치 체크아웃 (FR-E-52) — 공유 repo 전체(E1′ 공유 기본)에 영향이 있어 2단 확인.
+  // 워크트리 세션은 자기 브랜치를 따로 가지므로 영향받지 않는다.
+  const [coConfirm, setCoConfirm] = createSignal<string | undefined>(undefined);
+  const [coNote, setCoNote] = createSignal<{ id: string; text: string } | undefined>(undefined);
+  const doCheckout = async (missionId: string, branch: string) => {
+    if (coConfirm() !== missionId) {
+      setCoConfirm(missionId);
+      setCoNote(undefined);
+      return;
+    }
+    setCoConfirm(undefined);
+    if (!isTauri() || !ws()) {
+      setCoNote({ id: missionId, text: "브라우저 dev — 실제 체크아웃 없음" });
+      return;
+    }
+    try {
+      await checkoutBranch(ws()!.path, branch);
+      setCoNote({ id: missionId, text: `⎇ ${branch} 체크아웃 완료 — 공유 세션 전체에 적용됨` });
+    } catch (err) {
+      setCoNote({ id: missionId, text: `체크아웃 실패 — ${String(err)}` });
+    }
+  };
   const missions = () => {
     tick();
     return backend.listMissions().filter((m) => m.workspaceId === props.wsId);
@@ -62,7 +87,23 @@ export function Missions(props: { wsId: string }) {
                   <span class="mono muted" style={{ "margin-left": "auto", "font-size": "10px" }}>
                     {m.branch ?? "브랜치 미연결"}
                   </span>
+                  <Show when={m.branch}>
+                    <button
+                      class="btn ghost"
+                      classList={{ danger: coConfirm() === m.id }}
+                      style={{ "font-size": "10px", padding: "1px 8px" }}
+                      title="공유 repo의 현재 브랜치를 바꿉니다 — 워크트리 세션은 영향 없음 (FR-E-52)"
+                      onClick={() => void doCheckout(m.id, m.branch!)}
+                    >
+                      {coConfirm() === m.id ? "공유 repo 전환 확정?" : "⎇ 체크아웃"}
+                    </button>
+                  </Show>
                 </div>
+                <Show when={coNote()?.id === m.id}>
+                  <div class="mono muted" style={{ "font-size": "10px", "margin-top": "4px" }}>
+                    {coNote()!.text}
+                  </div>
+                </Show>
                 <div class="muted" style={{ "font-size": "12px", margin: "6px 0" }}>
                   {m.goal}
                 </div>

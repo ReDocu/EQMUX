@@ -51,6 +51,7 @@ export async function refreshConversation(wsId: string): Promise<void> {
     limit: 200,
   }).catch(() => [] as MsgRow[]);
   backend.hydrateMessages(wsId, rows.map((r) => toMsg(wsId, r)));
+  await restoreInbox(wsId); // 인박스 영속 (F) — 재시작 전 대기분을 되살린다
 }
 
 export function ensureConversation(wsId: string): void {
@@ -93,6 +94,58 @@ export function markConversationRead(wsId: string | undefined): void {
 const inbox = new Map<string, ConversationMessage[]>(); // 세션 id → 대기 메시지
 const [inboxTick, setInboxTick] = createSignal(0);
 
+// 인박스 영속 (F 잔여) — 재시작해도 대기분이 남게 워크스페이스 KV에 캐시한다.
+// 저장 형태: { [세션id]: ConversationMessage[] } — 복원 시 세션이 살아 있는 것만 되살린다.
+const INBOX_KEY = "inbox";
+const lastInboxSaved = new Map<string, string>();
+let inboxSaveTimer: ReturnType<typeof setTimeout> | undefined;
+
+function scheduleInboxSave(): void {
+  if (!isTauri()) return;
+  clearTimeout(inboxSaveTimer);
+  inboxSaveTimer = setTimeout(() => {
+    const byWs = new Map<string, Record<string, ConversationMessage[]>>();
+    for (const [sid, q] of inbox) {
+      const wsId = q[0]?.workspaceId ?? backend.listSessions().find((s) => s.id === sid)?.workspaceId;
+      if (!wsId || q.length === 0) continue;
+      const m = byWs.get(wsId) ?? {};
+      m[sid] = q;
+      byWs.set(wsId, m);
+    }
+    for (const ws of backend.listWorkspaces()) {
+      if (ws.pathMissing) continue;
+      const json = JSON.stringify(byWs.get(ws.id) ?? {});
+      if (lastInboxSaved.get(ws.id) === json) continue;
+      lastInboxSaved.set(ws.id, json);
+      void invoke("cache_set", { workspace: ws.id, key: INBOX_KEY, value: json }).catch(() => {});
+    }
+  }, 500);
+}
+
+const inboxRestored = new Set<string>();
+
+/** 재시작 복원 — 세션이 하이드레이트된 뒤(refreshConversation 시점) 워크스페이스별 1회 */
+async function restoreInbox(wsId: string): Promise<void> {
+  if (!isTauri() || inboxRestored.has(wsId)) return;
+  inboxRestored.add(wsId);
+  const raw = await invoke<string | null>("cache_get", { workspace: wsId, key: INBOX_KEY }).catch(() => null);
+  if (!raw) return;
+  lastInboxSaved.set(wsId, raw);
+  try {
+    const saved = JSON.parse(raw) as Record<string, ConversationMessage[]>;
+    const alive = new Set(backend.listSessions().map((s) => s.id));
+    let changed = false;
+    for (const [sid, msgs] of Object.entries(saved)) {
+      if (!alive.has(sid) || msgs.length === 0) continue;
+      inbox.set(sid, [...(inbox.get(sid) ?? []), ...msgs]);
+      changed = true;
+    }
+    if (changed) setInboxTick((t) => t + 1);
+  } catch {
+    /* 손상 캐시 — 무시하고 다음 저장이 덮는다 */
+  }
+}
+
 /** 인박스 대기 현황 — 대화 탭이 "누가 몇 건 대기"를 보여주는 데 쓴다 */
 export function pendingInbox(): { sessionId: string; count: number }[] {
   inboxTick();
@@ -132,6 +185,7 @@ function deliver(wsId: string, m: ConversationMessage): void {
       q.push(m);
       inbox.set(s.id, q);
       setInboxTick((t) => t + 1);
+      scheduleInboxSave(); // 인박스 영속 — 대기분은 재시작을 넘긴다
     }
   }
 }
@@ -143,6 +197,7 @@ export function flushInboxOnState(sessionId: string, status: string | undefined)
   if (!q?.length) return;
   inbox.delete(sessionId);
   setInboxTick((t) => t + 1);
+  scheduleInboxSave(); // 전달 완료 — 캐시의 대기분도 비운다
   for (const m of q) writePty(sessionId, fmt(m));
 }
 

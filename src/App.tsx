@@ -1,4 +1,4 @@
-import { createSignal, Match, onCleanup, onMount, Show, Switch } from "solid-js";
+import { createEffect, createSignal, Match, onCleanup, onMount, Show, Switch } from "solid-js";
 import { AppBar } from "./components/AppBar";
 import { SidePanel } from "./components/SidePanel";
 import { ensureAgentListeners } from "./backend/agent";
@@ -11,7 +11,7 @@ import type { CrashReport } from "./backend/recovery";
 import { performShutdown } from "./backend/shutdown";
 import { startTeamSync } from "./backend/team";
 import { refreshWorkspaces } from "./backend/workspaces";
-import { exitOpen, explorerOpen, layoutPickerOpen, panelOpen, setExitOpen, setLayoutPickerOpen, terminalFull, view } from "./state";
+import { exitOpen, explorerOpen, layoutPickerOpen, panelOpen, setExitOpen, setLayoutPickerOpen, setView, terminalFull, view } from "./state";
 import { ExplorerOverlay } from "./components/ExplorerOverlay";
 import { ControlCenter } from "./screens/ControlCenter";
 import { CrashRecovery } from "./screens/CrashRecovery";
@@ -70,6 +70,29 @@ export function App() {
       if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "l") {
         e.preventDefault();
         setLayoutPickerOpen((o) => !o);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    onCleanup(() => window.removeEventListener("keydown", onKey));
+  });
+
+  // 관제 탭 토글 (FR-G-03) — CTRL + SHIFT + D: 관제로, 다시 누르면 직전 워크스페이스 탭으로
+  onMount(() => {
+    let lastWsTab: string | undefined;
+    createEffect(() => {
+      const cur = view();
+      if (cur.kind === "workspace") lastWsTab = (cur as { id: string }).id;
+    });
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "d") {
+        e.preventDefault();
+        if (view().kind === "control") {
+          const all = backend.listWorkspaces();
+          const ws = all.find((w) => w.id === lastWsTab && w.open) ?? all.find((w) => w.open);
+          if (ws) setView({ kind: "workspace", id: ws.id });
+        } else {
+          setView({ kind: "control" });
+        }
       }
     };
     window.addEventListener("keydown", onKey);

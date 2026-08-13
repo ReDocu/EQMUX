@@ -904,6 +904,48 @@ async fn worktree_ensure(ws_path: String, session: String) -> Result<String, Str
         .map_err(|e| e.to_string())?
 }
 
+/// 임무-브랜치 체크아웃 (FR-E-52) — 있으면 checkout, 없으면 -b 생성. E1′ 공유 기본에서는
+/// repo 전체(모든 공유 세션)에 영향이 있으므로 호출은 화면의 2단 확인 뒤에만 온다.
+#[tauri::command]
+async fn ws_checkout(ws_path: String, branch: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if workspace::git(&["checkout", &branch], &ws_path).is_ok() {
+            return Ok(branch);
+        }
+        workspace::git(&["checkout", "-b", &branch], &ws_path).map(|_| branch)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+// ── 경량 KV (assignment_cache 테이블, FR-C-23) — 미확인·인박스 같은 파생 상태의 영속 캐시.
+// 파일이 원본인 것(팀·역할·임무)은 여기 넣지 않는다 — DB는 어디까지나 캐시다.
+
+#[tauri::command]
+fn cache_get(store_state: State<StoreState>, workspace: String, key: String) -> Option<String> {
+    let path = store::db_path(&store_state.0.root(), &workspace);
+    let conn = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY).ok()?;
+    conn.query_row(
+        "SELECT value FROM assignment_cache WHERE key = ?1",
+        params![key],
+        |r| r.get(0),
+    )
+    .ok()
+}
+
+#[tauri::command]
+fn cache_set(store_state: State<StoreState>, workspace: String, key: String, value: String) -> Result<(), String> {
+    let conn = store::open_db(&store_state.0.root(), &workspace).map_err(|e| e.to_string())?;
+    // 스토어 쓰기 스레드와 짧게 경합할 수 있다 — WAL + busy 대기로 흡수한다
+    let _ = conn.busy_timeout(std::time::Duration::from_millis(500));
+    conn.execute(
+        "INSERT OR REPLACE INTO assignment_cache (key, value) VALUES (?1, ?2)",
+        params![key, value],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 // ── 역할 파일 합성 & 임무 (PRD E §4.4~4.6) — 원본은 전부 .eqmux/ 아래 텍스트 파일 ──
 
 /// 역할 파일 합성 저장 (FR-E-31) — 반환값은 절대 경로 (에이전트 주입에 쓰인다)
@@ -1407,6 +1449,9 @@ pub fn run() {
             team_load,
             team_save,
             worktree_ensure,
+            ws_checkout,
+            cache_get,
+            cache_set,
             role_save,
             role_remove,
             library_list,

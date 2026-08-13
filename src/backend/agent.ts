@@ -6,6 +6,8 @@ import { flushInboxOnState } from "./conversation";
 import { backend } from "./mock";
 import { isTauri } from "./pty";
 import { saveRoleFile } from "./roles";
+import { settings } from "./settings";
+import { beepWaiting } from "./sound";
 import type { AgentStatus, Permissions } from "../types";
 import { translatePermissions } from "../types";
 
@@ -25,6 +27,9 @@ const STATUSES: AgentStatus[] = ["starting", "busy", "waiting", "shell", "idle",
 
 /** Rust 이벤트(null 표기) → 목 백엔드 반영 페이로드(undefined 표기) — 수신부 공용 변환 */
 function applyEvt(p: AgentStateEvt): void {
+  // waiting 사운드 (FR-G-34) — 진입 전이에만, 설정이 켜져 있을 때만 (기본 꺼짐, G6)
+  const prev = backend.listSessions().find((x) => x.id === p.session)?.status;
+  if (p.status === "waiting" && prev !== "waiting" && settings().waitingSound) beepWaiting();
   backend.applyAgentState({
     session: p.session,
     agentSession: p.agentSession,

@@ -734,6 +734,25 @@
   padding: 3px 10px;
 }
 
+/* 과부하 소프트 경고 배너 (D11 · FR-G-36) — 알림이 아니라 상단 배너, 막지 않는다 */
+.dash-overload {
+  margin: 0 0 10px;
+  padding: 6px 12px;
+  font-size: 11px;
+  color: var(--eq-amber);
+  border-color: var(--eq-amber);
+}
+
+/* 트랜스크립트 검색 (FR-G-87) — 로드된 창 안 클라이언트 필터 */
+.transcript-search {
+  width: 150px;
+  font-size: 10px;
+  padding: 1px 6px;
+  background: var(--eq-surface);
+  border: 1px solid var(--eq-line);
+  color: var(--eq-text);
+}
+
 /* ── 트랜스크립트 페인 (화면 #12) ── */
 .transcript {
   display: flex;

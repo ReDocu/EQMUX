@@ -55,6 +55,8 @@ export interface Backend {
   hydrateTeam(wsId: string, slots: TeamSlotHydrate[], aliveIds?: Set<string>): void;
   /** 웹뷰 재시작 복구 (FR-C-06) — 팀 파일에 없는 살아 있는 PTY(기본 터미널)를 화면에 되살린다 */
   reviveOrphan(id: string, wsId: string): void;
+  /** 미확인 영속 복원 (G 잔여) — 캐시에 남은 세션 id들에 미확인 점을 되붙인다 */
+  hydrateUnseen(wsId: string, ids: string[]): void;
   /** 세션 메모리 실측 반영 (FR-C-09) — 최신값·피크만 유지, 이벤트 적재 없음 */
   applyMemory(samples: { id: string; mb: number; peakMb: number }[]): void;
   /** 실물 에이전트 상태 반영 (PRD D agent-state 이벤트) — Tauri에서만 호출된다 */
@@ -713,6 +715,17 @@ export class MockBackend implements Backend {
     );
     this.logEvent("state", `웹뷰 재시작 · 기본 터미널 재부착 · SLOT ${slot}`, id);
     this.broadcast();
+  }
+
+  hydrateUnseen(wsId: string, ids: string[]) {
+    const want = new Set(ids);
+    let changed = false;
+    for (const sess of SESSIONS) {
+      if (sess.workspaceId !== wsId || !want.has(sess.id) || sess.unseen) continue;
+      sess.unseen = true;
+      changed = true;
+    }
+    if (changed) this.broadcast();
   }
 
   applyMemory(samples: { id: string; mb: number; peakMb: number }[]) {

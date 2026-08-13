@@ -3,6 +3,7 @@
 // 브라우저 dev에서는 기존 목 데이터가 그대로 남는다.
 import { invoke } from "@tauri-apps/api/core";
 import { refreshConversation } from "./conversation";
+import { restoreUnseen, startUnseenSync } from "./flags";
 import { restoreLayout, startLayoutSync } from "./layout";
 import { loadSettings } from "./settings";
 import { refreshLibrary } from "./library";
@@ -58,6 +59,8 @@ export async function refreshWorkspaces(): Promise<void> {
   backend.hydrateWorkspaces(list.map(toWorkspace));
   await refreshLibrary(); // 라이브러리 실파일 (FR-E-20~23) — 팀 복원이 이름·색을 참조하므로 먼저
   await restoreTeams(); // team.json → 슬롯 복원 (에이전트 자동 실행 없음, S3)
+  await restoreUnseen(); // 미확인 영속 (G) — 세션이 존재해야 점이 붙는다. 동기화는 복원 뒤 시작
+  startUnseenSync();
   // 임무 실측 (FR-E-59) — 슬롯 복원 뒤에 돌아야 배정이 세션 missionId에 얹힌다.
   // 대화 원장(PRD F)도 같은 타이밍에 읽는다 — 목 시드를 걷어내고 실물 스트림으로.
   await Promise.all(
@@ -102,4 +105,10 @@ export function repathWorkspace(id: string, path: string): Promise<WsInfo> {
 export function touchWorkspace(id: string): void {
   if (!isTauri()) return;
   void invoke("ws_touch", { id }).catch(() => {});
+}
+
+/** 임무-브랜치 체크아웃 (FR-E-52) — 있으면 checkout, 없으면 -b 생성. 공유 repo 전체에
+ *  영향이 있으므로(E1′ 공유 기본) 호출부는 반드시 2단 확인을 거친다. */
+export function checkoutBranch(wsPath: string, branch: string): Promise<string> {
+  return invoke<string>("ws_checkout", { wsPath, branch });
 }
