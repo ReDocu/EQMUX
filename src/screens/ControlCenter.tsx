@@ -204,10 +204,11 @@ export function ControlCenter(props: { workspace: Workspace }) {
               wsId={props.workspace.id}
               shell={shellCmdFor(s)}
               agent={
-                s.personaId && job(s.jobId) && !s.restored
+                s.personaId && job(s.jobId)
                   ? { name: persona(s.personaId)?.name ?? s.personaId, permissions: job(s.jobId)!.permissions }
                   : undefined
               }
+              restore={s.restored ? { resumable: s.resumable, reason: s.resumeReason } : undefined}
               mockLines={mockLines(s, persona(s.personaId)?.name ?? "?")}
             />
           </div>

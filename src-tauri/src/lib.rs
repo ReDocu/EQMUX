@@ -34,6 +34,10 @@ use workspace::{WsEntry, WsInfo};
 
 pub(crate) struct StoreState(pub(crate) Store);
 
+/// 비정상 종료 감지 (FR-C-35) — 시작 시 running.flag가 이미 있으면 직전 실행이
+/// 정상 종료(app_exit의 표식 제거)를 거치지 못한 것이다. 이번 실행 동안 값은 불변.
+struct DirtyStart(bool);
+
 /// 설정 (PRD J) — 앱데이터 settings.json. 스키마는 프런트 소유(JSON 통과)이며
 /// Rust는 알림 게이트(FR-G-30 라우팅) 같은 즉시 참조를 위해 메모리 사본을 든다.
 pub(crate) struct SettingsState(pub(crate) Mutex<serde_json::Value>);
@@ -1178,7 +1182,112 @@ async fn app_exit(app: AppHandle) {
     if store.0.sender().send(StoreMsg::Flush(ack_tx)).is_ok() {
         let _ = ack_rx.recv_timeout(std::time::Duration::from_secs(1));
     }
+    // 클린 종료 표식 제거 (FR-C-35) — 이 줄에 도달했다는 것이 곧 정상 종료의 정의다
+    let _ = std::fs::remove_file(store.0.root().join("running.flag"));
     app.exit(0);
+}
+
+// ── 비정상 종료 복구 (FR-C-35) — 첫 실행에서 직전 세션 목록 + 마지막 활동 시각 ──
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CrashSession {
+    workspace: String,
+    id: String,
+    cwd: String,
+    shell: Option<String>,
+    last_output_at: Option<i64>,
+    resumable: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CrashReport {
+    dirty: bool,
+    sessions: Vec<CrashSession>,
+}
+
+/// 크래시 시점에 살아 있었을 세션 스캔 — 각 워크스페이스 DB에서 exit 기록 없이 끝난
+/// 세션을 최근 활동순으로 모은다. 재개 가능 여부는 agent_session 매핑 +
+/// 트랜스크립트 실측 (FR-D-20)으로 다시 판정한다.
+fn crash_scan(root: &Path) -> Vec<CrashSession> {
+    let mut out = Vec::new();
+    let ws_root = root.join("workspaces");
+    if let Ok(entries) = std::fs::read_dir(&ws_root) {
+        for entry in entries.flatten() {
+            let ws = entry.file_name().to_string_lossy().into_owned();
+            let db = entry.path().join("session.db");
+            let Ok(conn) = Connection::open_with_flags(&db, OpenFlags::SQLITE_OPEN_READ_ONLY) else {
+                continue;
+            };
+            let Ok(mut stmt) = conn.prepare(
+                "SELECT s.id, s.cwd, s.shell, s.last_output_at, a.agent_session_id
+                 FROM session s LEFT JOIN agent_session a ON a.session_id = s.id
+                 WHERE s.exit_code IS NULL AND s.last_output_at IS NOT NULL
+                 ORDER BY s.last_output_at DESC LIMIT 8",
+            ) else {
+                continue;
+            };
+            let rows = stmt.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                    r.get::<_, Option<i64>>(3)?,
+                    r.get::<_, Option<String>>(4)?,
+                ))
+            });
+            let Ok(rows) = rows else { continue };
+            for (id, cwd, shell, last_output_at, uuid) in rows.flatten() {
+                let cwd = cwd.unwrap_or_default();
+                let resumable = uuid.as_deref().map(|u| agent::resumable(&cwd, u)).unwrap_or(false);
+                out.push(CrashSession { workspace: ws.clone(), id, cwd, shell, last_output_at, resumable });
+            }
+        }
+    }
+    out.sort_by_key(|s| std::cmp::Reverse(s.last_output_at));
+    out.truncate(16);
+    out
+}
+
+/// 직전 실행이 비정상 종료였을 때만 dirty=true + 직전 세션 목록 (FR-C-35)
+#[tauri::command]
+fn crash_recovery(store_state: State<StoreState>, dirty: State<DirtyStart>) -> CrashReport {
+    if !dirty.0 {
+        return CrashReport { dirty: false, sessions: Vec::new() };
+    }
+    CrashReport { dirty: true, sessions: crash_scan(&store_state.0.root()) }
+}
+
+#[cfg(test)]
+mod crash_tests {
+    use super::*;
+
+    /// exit 기록이 없는 세션만, 최근 활동순으로 잡힌다 (FR-C-35)
+    #[test]
+    fn crash_scan_finds_unexited_sessions_only() {
+        let root = std::env::temp_dir().join(format!("eqmux-crash-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let conn = store::open_db(&root, "ws1").expect("db open");
+        conn.execute(
+            "INSERT INTO session (id, workspace, cwd, shell, created_at, last_output_at, exit_code)
+             VALUES ('alive@ws1', 'ws1', 'C:\\w', 'claude', 1, 2000, NULL),
+                    ('older@ws1', 'ws1', 'C:\\w', 'pwsh', 1, 1000, NULL),
+                    ('exited@ws1', 'ws1', 'C:\\w', 'pwsh', 1, 3000, 0),
+                    ('silent@ws1', 'ws1', 'C:\\w', 'pwsh', 1, NULL, NULL)",
+            [],
+        )
+        .expect("seed");
+        drop(conn);
+
+        let found = crash_scan(&root);
+        let ids: Vec<&str> = found.iter().map(|s| s.id.as_str()).collect();
+        // exit 0 기록·활동 전무 세션은 제외, 최근 활동이 위
+        assert_eq!(ids, vec!["alive@ws1", "older@ws1"]);
+        assert_eq!(found[0].last_output_at, Some(2000));
+        assert!(!found[0].resumable); // agent_session 매핑 없음 = 재개 불가
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
 
 async fn tokio_sleep(d: std::time::Duration) {
@@ -1320,6 +1429,11 @@ pub fn run() {
             let root = app.path().app_data_dir()?;
             library::seed(&root); // 역할 라이브러리 시드 (FR-E-27) — 디렉터리가 없을 때만
             write_hook_settings(&root); // --settings 주입용 훅 합성 파일 (D3)
+            // 비정상 종료 감지 (FR-C-35) — 표식이 남아 있으면 직전 실행이 크래시였다.
+            // 정상 종료는 app_exit 끝에서 표식을 지운다.
+            let dirty = root.join("running.flag").exists();
+            let _ = std::fs::write(root.join("running.flag"), b"1");
+            app.manage(DirtyStart(dirty));
             // 설정 로드 (PRD J) — 손상되면 Null로 시작 (프런트 기본값이 받친다)
             let settings = std::fs::read_to_string(root.join("settings.json"))
                 .ok()
@@ -1384,6 +1498,7 @@ pub fn run() {
             diff_file,
             shutdown_flush,
             app_exit,
+            crash_recovery,
             layout_load,
             layout_save,
             settings_load,

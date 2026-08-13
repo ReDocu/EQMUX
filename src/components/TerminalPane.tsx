@@ -22,8 +22,10 @@ import {
   spawnPty,
   writePty,
 } from "../backend/pty";
-import { spawnAgent } from "../backend/agent";
+import { resumeAgent, spawnAgent } from "../backend/agent";
+import { backend } from "../backend/mock";
 import { settings } from "../backend/settings";
+import { tick } from "../state";
 import type { Permissions } from "../types";
 
 const EQ_THEME = {
@@ -49,9 +51,18 @@ interface TermEntry {
   initialized: boolean;
   lastCols: number;
   lastRows: number;
+  /** 재개 제안 대기 (FR-C-33·34) — 복원된 역할 세션. 사용자가 선택할 때까지 아무것도 스폰하지 않는다 */
+  pendingRestore?: { resumable: boolean; reason?: string };
 }
 
 const REGISTRY = new Map<string, TermEntry>();
+
+// pendingRestore는 REGISTRY(비반응형)에 살므로, 변경을 화면에 알리는 전용 틱을 둔다
+const [restoreTick, setRestoreTick] = createSignal(0);
+function setPendingRestore(entry: TermEntry, v: TermEntry["pendingRestore"]) {
+  entry.pendingRestore = v;
+  setRestoreTick((t) => t + 1);
+}
 
 /** 세션의 현재 터미널 크기 — 재개/재시작 커맨드가 PTY 크기를 맞추는 데 쓴다 */
 export function sessionTermSize(id: string): { cols: number; rows: number } {
@@ -142,7 +153,8 @@ function createEntry(): TermEntry {
   return { term, fit, opened: false, initialized: false, lastCols: 0, lastRows: 0 };
 }
 
-/** 최초 1회 — 스트림 구독·재생·스폰. 리마운트에서는 다시 실행되지 않는다. */
+/** 최초 1회 — 스트림 구독·재생·스폰. 리마운트에서는 다시 실행되지 않는다.
+ *  복원 세션(restore)은 스폰하지 않고 재개 제안을 띄운다 (FR-C-33 — 자동 실행 없음). */
 async function initSession(
   entry: TermEntry,
   props: {
@@ -151,6 +163,7 @@ async function initSession(
     wsId?: string;
     shell?: string;
     agent?: { name: string; permissions: Permissions };
+    restore?: { resumable: boolean; reason?: string };
     mockLines?: string[];
   },
 ) {
@@ -198,7 +211,26 @@ async function initSession(
     if (cleaned.length > 0) {
       term.writeln(`\x1b[90m─── 이전 세션 스크롤백 · 마지막 ${cleaned.length}줄 재생 ───\x1b[0m`);
       for (const line of cleaned) term.writeln(`\x1b[2m${line}\x1b[0m`);
-      term.writeln("\x1b[90m─── 새 세션 시작 ───\x1b[0m");
+      // FR-C-32 경계 — 복원 대기 중에는 "새 세션 시작"이 아니다 (아직 아무것도 안 떴다)
+      term.writeln(
+        props.restore
+          ? "\x1b[90m─── 재개 대기 — 이전 PTY는 종료되었습니다 (자동 실행 안 함) ───\x1b[0m"
+          : "\x1b[90m─── 새 세션 시작 ───\x1b[0m",
+      );
+    }
+    // 복원된 역할 세션 (FR-C-33) — 재개 가능 여부를 판별해 제안만 하고, 실행은 사용자 몫이다 (C5)
+    if (props.restore && props.agent) {
+      if (props.restore.resumable) {
+        term.writeln("\x1b[90m이전 에이전트 세션이 있습니다 — 아래 제안에서 재개하거나 새로 시작하세요\x1b[0m");
+      } else {
+        // 재개 불가는 페인에 명시한다 (FR-C-34)
+        term.writeln(`\x1b[33m재개 불가 — ${props.restore.reason ?? "트랜스크립트 없음"}\x1b[0m`);
+        term.writeln("\x1b[90m새 대화로 시작하거나 셸로 시작할 수 있습니다\x1b[0m");
+      }
+      entry.lastCols = term.cols;
+      entry.lastRows = term.rows;
+      setPendingRestore(entry, props.restore);
+      return;
     }
     // 역할 세션 = Claude Code 에이전트 기동 (PRD D) / 기본 터미널 = 일반 셸
     if (props.agent) {
@@ -251,11 +283,68 @@ export function TerminalPane(props: {
   wsId?: string;
   shell?: string;
   agent?: { name: string; permissions: Permissions };
+  restore?: { resumable: boolean; reason?: string };
   mockLines?: string[];
 }) {
   let host!: HTMLDivElement;
   let historyEl: HTMLDivElement | undefined;
   const [menu, setMenu] = createSignal<{ x: number; y: number; hasSel: boolean } | undefined>(undefined);
+
+  // ── 재개 제안 (FR-C-33·34) — 복원된 역할 세션은 사용자가 고를 때까지 아무것도 뜨지 않는다 ──
+  const [restoreErr, setRestoreErr] = createSignal<string | undefined>(undefined);
+  const pendingRestore = () => {
+    restoreTick();
+    return REGISTRY.get(props.sessionId)?.pendingRestore;
+  };
+  // 다른 표면(세션 상세 패널)에서 재개했으면 제안을 접는다 — restored 해제가 그 신호다
+  const stillRestored = () => {
+    tick();
+    return backend.listSessions().find((x) => x.id === props.sessionId)?.restored !== false;
+  };
+  const clearRestore = () => {
+    const e = REGISTRY.get(props.sessionId);
+    if (e) setPendingRestore(e, undefined);
+  };
+  const restoreAction = async (kind: "resume" | "fresh" | "shell") => {
+    const e = REGISTRY.get(props.sessionId);
+    if (!e) return;
+    setRestoreErr(undefined);
+    try {
+      if (kind === "resume" && props.agent) {
+        await resumeAgent(
+          props.sessionId,
+          props.wsId ?? "default",
+          props.cwd,
+          props.agent.name,
+          props.agent.permissions,
+          e.term.cols,
+          e.term.rows,
+        );
+        backend.resumeSession(props.sessionId);
+      } else if (kind === "fresh" && props.agent) {
+        await spawnAgent(
+          props.sessionId,
+          props.wsId ?? "default",
+          props.cwd,
+          props.agent.name,
+          props.agent.permissions,
+          e.term.cols,
+          e.term.rows,
+        );
+      } else {
+        await spawnPty(props.sessionId, props.cwd, e.term.cols, e.term.rows, props.wsId, props.shell);
+      }
+    } catch (err) {
+      // 실패 이유를 페인에 정직하게 표시 (FR-D-08) — 제안은 남겨 다시 시도할 수 있게 한다
+      setRestoreErr(String(err));
+      e.term.writeln(`\r\n\x1b[31m${kind === "resume" ? "재개" : "기동"} 실패 — ${String(err)}\x1b[0m`);
+      return;
+    }
+    e.lastCols = e.term.cols;
+    e.lastRows = e.term.rows;
+    clearRestore();
+    e.term.focus();
+  };
 
   // ── 디스크 스크롤백 (FR-C-13·14) — 링버퍼 최상단에서만 칩이 뜬다 ──
   const [atTop, setAtTop] = createSignal(false);
@@ -393,6 +482,47 @@ export function TerminalPane(props: {
           <button class="btn term-history-chip" onClick={() => void openHistory()}>
             ▲ 디스크 기록 보기 — 링버퍼 위 기록 (FR-C-13)
           </button>
+        </Show>
+        {/* 재개 제안 (FR-C-33) — 자동 실행 없음. 재개 불가는 명시한다 (FR-C-34) */}
+        <Show when={pendingRestore() && stillRestored()}>
+          {(_) => {
+            const r = () => pendingRestore()!;
+            return (
+              <div class="card pane-restore" onMouseDown={(ev) => ev.stopPropagation()}>
+                <div class="mono" style={{ "font-size": "11px", "font-weight": 700 }}>
+                  <Show
+                    when={r().resumable}
+                    fallback={<span class="st-dead">재개 불가 — {r().reason ?? "트랜스크립트 없음"}</span>}
+                  >
+                    <span class="st-busy">이전 에이전트 세션 발견 — 재개 대기</span>
+                  </Show>
+                </div>
+                <div class="muted" style={{ "font-size": "10px" }}>
+                  {r().resumable
+                    ? "같은 대화를 --resume으로 이어갑니다. 자동 실행하지 않습니다 (C5)."
+                    : "이전 대화를 이어갈 수 없습니다 — 새 대화 또는 셸로 시작하세요."}
+                </div>
+                <div class="pane-restore-actions">
+                  <Show when={r().resumable}>
+                    <button class="btn primary" onClick={() => void restoreAction("resume")}>
+                      ▶ 이전 대화 재개
+                    </button>
+                  </Show>
+                  <button class="btn" classList={{ primary: !r().resumable }} onClick={() => void restoreAction("fresh")}>
+                    새 대화 시작
+                  </button>
+                  <button class="btn ghost" onClick={() => void restoreAction("shell")}>
+                    셸로 시작
+                  </button>
+                </div>
+                <Show when={restoreErr()}>
+                  <div class="mono st-dead" style={{ "font-size": "10px" }}>
+                    {restoreErr()}
+                  </div>
+                </Show>
+              </div>
+            );
+          }}
         </Show>
         <Show when={history()}>
           {(h) => (

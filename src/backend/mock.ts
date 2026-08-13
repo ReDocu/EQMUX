@@ -510,6 +510,7 @@ export class MockBackend implements Backend {
   resumeSession(id: string) {
     const sess = SESSIONS.find((x) => x.id === id);
     if (!sess || !sess.resumable) return;
+    sess.restored = false; // 재개 제안(FR-C-33)을 접는다 — 어느 표면에서 재개했든 동일
     sess.status = "busy";
     sess.sinceMs = 0;
     sess.exitCode = undefined;

@@ -1,4 +1,4 @@
-import { Match, onCleanup, onMount, Show, Switch } from "solid-js";
+import { createSignal, Match, onCleanup, onMount, Show, Switch } from "solid-js";
 import { AppBar } from "./components/AppBar";
 import { SidePanel } from "./components/SidePanel";
 import { ensureAgentListeners } from "./backend/agent";
@@ -6,11 +6,14 @@ import { startMessageBus } from "./backend/conversation";
 import { backend } from "./backend/mock";
 import { startMemorySampling } from "./backend/memory";
 import { isTauri } from "./backend/pty";
+import { crashRecovery } from "./backend/recovery";
+import type { CrashReport } from "./backend/recovery";
 import { performShutdown } from "./backend/shutdown";
 import { startTeamSync } from "./backend/team";
 import { refreshWorkspaces } from "./backend/workspaces";
 import { exitOpen, layoutPickerOpen, panelOpen, setExitOpen, setLayoutPickerOpen, view } from "./state";
 import { ControlCenter } from "./screens/ControlCenter";
+import { CrashRecovery } from "./screens/CrashRecovery";
 import { Dashboard } from "./screens/Dashboard";
 import { DefaultTerminalSetup } from "./screens/DefaultTerminalSetup";
 import { ExitDialog } from "./screens/ExitDialog";
@@ -37,6 +40,14 @@ export function App() {
   onMount(() => void startMessageBus());
   // 세션 메모리 계측 (FR-C-09 · C11) — Job Object 10초 샘플링, 표시 전용
   onMount(() => startMemorySampling());
+
+  // 비정상 종료 복구 (FR-C-35) — 직전 실행이 크래시였으면 직전 세션 목록을 1회 보여준다
+  const [crash, setCrash] = createSignal<CrashReport | undefined>(undefined);
+  onMount(() =>
+    void crashRecovery().then((r) => {
+      if (r?.dirty && r.sessions.length > 0) setCrash(r);
+    }),
+  );
 
   // 창 닫기 = 앱 완전 종료 (FR-C-60) — 실행 중 세션이 있으면 확인 다이얼로그 (FR-C-61),
   // 없으면 flush 시퀀스만 돌고 조용히 종료된다.
@@ -115,6 +126,9 @@ export function App() {
       </div>
       <Show when={exitOpen()}>
         <ExitDialog />
+      </Show>
+      <Show when={crash()}>
+        {(r) => <CrashRecovery report={r()} onClose={() => setCrash(undefined)} />}
       </Show>
       <Show when={layoutPickerOpen()}>
         <LayoutPicker />
