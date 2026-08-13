@@ -6,7 +6,7 @@ EQMUX는 터미널 멀티플렉서(MUX)에 에이전트 팀 관제를 얹은 Win
 워크스페이스(= git repo 1개 = 팀 1개 = 탭 1개)마다 최대 4개의 Claude Code 세션을 병렬로 띄우고,
 관제 대시보드에서 상태를 보고, 임무를 배정하고, 필요할 때 개입합니다.
 
-![관제 대시보드](docs/screenshots/01-dashboard-overview.png)
+![관제 대시보드](docs/screenshots/readme/dashboard.png)
 
 ## 핵심 원칙
 
@@ -42,7 +42,29 @@ EQMUX는 터미널 멀티플렉서(MUX)에 에이전트 팀 관제를 얹은 Win
 - **외부 인터페이스** — `eqmux send · report · ping` CLI + 명명 파이프, statusLine 비용 수집
 - **설정·테마** — 다크/라이트/시스템 테마, 알림 라우팅, 재생 줄 수 등 settings.json 실저장
 
-![터미널 워크스페이스](docs/screenshots/18-terminal-view.png)
+## 화면 둘러보기
+
+> 스크린샷은 현재 UI를 데모 데이터로 렌더링한 것입니다.
+
+**워크스페이스** — 터미널 4분할이 작업 공간입니다. 왼쪽에 세션·임무 목록, 오른쪽 인스펙터에서
+선택 세션의 상태·실행 플래그·메모리·재개 가능 여부를 확인하고 슬롯 권한을 조정합니다.
+
+![워크스페이스](docs/screenshots/readme/workspace.png)
+
+**대화 패널** — 에이전트 간 메시지는 타입(ASK / HANDOFF / REPORT / REVIEW / ESCALATE)이 강제되고,
+사람도 `@세션`·`@all`로 같은 스트림에 참여합니다. 터미널 전체 화면에서도 앱 바로 열립니다.
+
+![대화 패널](docs/screenshots/readme/conversation.png)
+
+**Git Diff & 에디터** — 에이전트가 만든 변경을 커밋 시점과 워크트리로 나눠 검토합니다.
+읽기 전용이 기본이고, 스테이지·커밋은 터미널에서 수행합니다.
+
+![Git Diff & 에디터](docs/screenshots/readme/gitdiff.png)
+
+**팀 캐스팅** — 프리셋(표준 / 집중구현 / 리뷰중심 / 탐색)으로 4개 슬롯에 직무 + 페르소나를
+배정합니다. 슬롯마다 실행 권한(write / commit / push) 미리보기가 붙습니다.
+
+![팀 캐스팅](docs/screenshots/readme/casting.png)
 
 ## 기술 스택
 
