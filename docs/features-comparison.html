@@ -1,0 +1,866 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EQMUX 기능 비교 · 기술 스택 권장</title>
+<style>
+:root{
+  --bg:#fbfbfa; --elev:#ffffff; --sunken:#f2f2f0; --line:#e3e2de; --line-2:#d3d2cd;
+  --fg:#1a1a18; --dim:#55544f; --mute:#8b8a83;
+  --accent:#b5502a; --accent-soft:#f6e9e3;
+  --yes:#2f7d4f; --yes-soft:#e5f2e9;
+  --part:#9a6a12; --part-soft:#f7eeda;
+  --no:#a3a29b;  --no-soft:#f0efec;
+  --p0:#b5502a; --p1:#5c6ac4; --p2:#8b8a83;
+  --shadow:0 1px 2px rgba(0,0,0,.05), 0 8px 24px -16px rgba(0,0,0,.25);
+  --mono:"Cascadia Mono","JetBrains Mono","SF Mono",Consolas,"DejaVu Sans Mono",monospace;
+  --sans:system-ui,-apple-system,"Segoe UI Variable Text","Segoe UI","Malgun Gothic",sans-serif;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#131312; --elev:#1b1b1a; --sunken:#0e0e0d; --line:#2b2b29; --line-2:#3a3a37;
+    --fg:#eceae4; --dim:#a5a39b; --mute:#6f6e68;
+    --accent:#e08a5f; --accent-soft:#2e211a;
+    --yes:#63b183; --yes-soft:#18251d;
+    --part:#d3a445; --part-soft:#282112;
+    --no:#5e5d58;  --no-soft:#1e1e1c;
+    --p0:#e08a5f; --p1:#8f9ae8; --p2:#6f6e68;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.8);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#131312; --elev:#1b1b1a; --sunken:#0e0e0d; --line:#2b2b29; --line-2:#3a3a37;
+  --fg:#eceae4; --dim:#a5a39b; --mute:#6f6e68;
+  --accent:#e08a5f; --accent-soft:#2e211a;
+  --yes:#63b183; --yes-soft:#18251d;
+  --part:#d3a445; --part-soft:#282112;
+  --no:#5e5d58;  --no-soft:#1e1e1c;
+  --p0:#e08a5f; --p1:#8f9ae8; --p2:#6f6e68;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px -16px rgba(0,0,0,.8);
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:1.5rem}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);
+  font-size:15px;line-height:1.65;-webkit-font-smoothing:antialiased}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+code,kbd{font-family:var(--mono);font-size:.87em;background:var(--sunken);
+  border:1px solid var(--line);border-radius:4px;padding:.08em .36em}
+h1,h2,h3,h4{line-height:1.25;letter-spacing:-.01em;margin:0}
+.wrap{max-width:1240px;margin:0 auto;padding:0 24px}
+
+/* ---------- header ---------- */
+header.top{border-bottom:1px solid var(--line);background:var(--elev);padding:44px 0 34px}
+.eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--accent);margin-bottom:12px}
+header.top h1{font-size:34px;font-weight:650}
+header.top p.sub{color:var(--dim);margin:12px 0 0;max-width:70ch}
+.metabar{display:flex;flex-wrap:wrap;gap:8px;margin-top:20px}
+.pill{font-family:var(--mono);font-size:11.5px;color:var(--dim);background:var(--sunken);
+  border:1px solid var(--line);border-radius:999px;padding:4px 11px}
+#themeBtn{position:fixed;top:16px;right:16px;z-index:60;font:inherit;font-size:12px;
+  background:var(--elev);color:var(--dim);border:1px solid var(--line-2);border-radius:8px;
+  padding:7px 12px;cursor:pointer;box-shadow:var(--shadow)}
+#themeBtn:hover{color:var(--fg);border-color:var(--accent)}
+
+/* ---------- layout ---------- */
+.cols{display:grid;grid-template-columns:1fr;gap:40px;padding:40px 0 80px}
+@media(min-width:1080px){.cols{grid-template-columns:200px 1fr;gap:48px}}
+nav.toc{display:none}
+@media(min-width:1080px){
+  nav.toc{display:block;position:sticky;top:24px;align-self:start;max-height:calc(100vh - 48px);overflow:auto}
+}
+nav.toc ol{list-style:none;margin:0;padding:0;font-size:13px}
+nav.toc li{margin:0 0 2px}
+nav.toc a{display:block;color:var(--mute);padding:5px 10px;border-left:2px solid var(--line);border-radius:0 4px 4px 0}
+nav.toc a:hover{color:var(--fg);background:var(--sunken);text-decoration:none}
+nav.toc a.on{color:var(--accent);border-left-color:var(--accent);background:var(--accent-soft);font-weight:600}
+
+section{margin:0 0 64px;scroll-margin-top:24px}
+.sec-h{display:flex;align-items:baseline;gap:12px;padding-bottom:10px;margin-bottom:20px;
+  border-bottom:1px solid var(--line)}
+.sec-n{font-family:var(--mono);font-size:12px;color:var(--accent);font-weight:600;flex:none}
+.sec-h h2{font-size:21px;font-weight:640}
+.sec-h .hint{margin-left:auto;font-size:12.5px;color:var(--mute);flex:none}
+h3{font-size:16px;font-weight:640;margin:30px 0 10px}
+h4{font-size:13.5px;font-weight:650;margin:20px 0 8px;color:var(--dim);
+  font-family:var(--mono);letter-spacing:.02em}
+p{margin:0 0 12px}
+ul{margin:0 0 12px;padding-left:20px}
+li{margin:0 0 5px}
+
+/* ---------- cards ---------- */
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px}
+.card{background:var(--elev);border:1px solid var(--line);border-radius:11px;padding:16px 17px;
+  box-shadow:var(--shadow)}
+.card h4{margin:0 0 3px;font-family:var(--sans);font-size:15px;color:var(--fg);letter-spacing:-.01em}
+.card .role{font-family:var(--mono);font-size:11px;color:var(--accent);margin-bottom:9px}
+.card p{font-size:13px;color:var(--dim);margin:0 0 10px;line-height:1.55}
+.card dl{margin:0;font-size:12px;display:grid;grid-template-columns:auto 1fr;gap:3px 10px}
+.card dt{color:var(--mute);font-family:var(--mono);font-size:11px}
+.card dd{margin:0;color:var(--dim)}
+
+.tldr{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:14px;margin-bottom:8px}
+.tl{background:var(--elev);border:1px solid var(--line);border-left:3px solid var(--accent);
+  border-radius:8px;padding:15px 17px}
+.tl .k{font-family:var(--mono);font-size:11px;color:var(--mute);text-transform:uppercase;
+  letter-spacing:.1em;margin-bottom:7px}
+.tl .v{font-size:15.5px;font-weight:640;margin-bottom:7px;letter-spacing:-.01em}
+.tl .w{font-size:12.5px;color:var(--dim);line-height:1.55}
+
+/* ---------- tables ---------- */
+.tbox{overflow-x:auto;border:1px solid var(--line);border-radius:10px;background:var(--elev)}
+table{border-collapse:collapse;width:100%;font-size:13px;min-width:720px}
+th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+thead th{position:sticky;top:0;z-index:2;background:var(--sunken);font-size:11.5px;
+  font-weight:650;color:var(--dim);text-transform:uppercase;letter-spacing:.06em;
+  border-bottom:1px solid var(--line-2);white-space:nowrap}
+tbody tr:last-child td{border-bottom:0}
+tbody tr:hover{background:var(--sunken)}
+td.feat{font-weight:600;white-space:nowrap}
+td.note{color:var(--dim)}
+.cat{display:inline-block;font-family:var(--mono);font-size:10px;color:var(--mute);
+  border:1px solid var(--line-2);border-radius:4px;padding:1px 5px;margin-right:7px;
+  vertical-align:1px}
+table.cmp td:not(.feat):not(.note){white-space:nowrap;font-size:12.5px}
+.mk{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:11.5px}
+.mk::before{content:"";width:7px;height:7px;border-radius:2px;flex:none}
+.yes{color:var(--yes)} .yes::before{background:var(--yes)}
+.part{color:var(--part)} .part::before{background:var(--part)}
+.no{color:var(--no)} .no::before{background:var(--no)}
+.prio{font-family:var(--mono);font-size:11px;font-weight:700;border-radius:4px;padding:2px 7px;
+  display:inline-block}
+.P0{color:#fff;background:var(--p0)}
+.P1{color:var(--p1);background:transparent;border:1px solid var(--p1)}
+.P2{color:var(--p2);border:1px solid var(--line-2)}
+.PX{color:var(--mute)}
+
+/* ---------- filter bar ---------- */
+.filters{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:14px}
+.filters input{font:inherit;font-size:13px;background:var(--elev);color:var(--fg);
+  border:1px solid var(--line-2);border-radius:8px;padding:7px 12px;min-width:190px}
+.filters input:focus{outline:2px solid var(--accent);outline-offset:-1px;border-color:transparent}
+.chip{font:inherit;font-size:12px;background:var(--elev);color:var(--dim);cursor:pointer;
+  border:1px solid var(--line-2);border-radius:999px;padding:6px 13px}
+.chip:hover{color:var(--fg)}
+.chip.on{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+.count{margin-left:auto;font-family:var(--mono);font-size:11.5px;color:var(--mute)}
+.legend{display:flex;flex-wrap:wrap;gap:16px;margin-top:11px;font-size:12px;color:var(--mute)}
+
+/* ---------- callouts ---------- */
+.call{border-radius:9px;padding:13px 16px;margin:16px 0;font-size:13.5px;line-height:1.6;
+  border:1px solid var(--line);background:var(--elev)}
+.call strong{display:block;margin-bottom:4px;font-size:13px}
+.call.good{border-left:3px solid var(--yes);background:var(--yes-soft)}
+.call.good strong{color:var(--yes)}
+.call.warn{border-left:3px solid var(--part);background:var(--part-soft)}
+.call.warn strong{color:var(--part)}
+.call.key{border-left:3px solid var(--accent);background:var(--accent-soft)}
+.call.key strong{color:var(--accent)}
+.call ul{margin:6px 0 0}
+
+/* ---------- diagram ---------- */
+figure{margin:18px 0;background:var(--elev);border:1px solid var(--line);border-radius:11px;
+  padding:20px;overflow-x:auto}
+figure svg{display:block;width:100%;min-width:660px;height:auto}
+figcaption{font-size:12px;color:var(--mute);margin-top:12px;text-align:center}
+.svg-box{fill:var(--sunken);stroke:var(--line-2)}
+.svg-box-a{fill:var(--accent-soft);stroke:var(--accent)}
+.svg-inner{fill:var(--elev);stroke:var(--line-2)}
+.svg-t{fill:var(--fg);font-family:var(--sans);font-size:12.5px;font-weight:600}
+.svg-s{fill:var(--dim);font-family:var(--mono);font-size:10.5px}
+.svg-l{fill:var(--mute);font-family:var(--mono);font-size:10px}
+.svg-line{stroke:var(--line-2);stroke-width:1.5;fill:none}
+.svg-flow{stroke:var(--accent);stroke-width:1.8;fill:none}
+
+/* ---------- misc ---------- */
+.stack-layer{font-family:var(--mono);font-size:11.5px;color:var(--accent);white-space:nowrap}
+.pick{font-weight:650}
+.alt{color:var(--dim);font-size:12.5px}
+.dont{list-style:none;padding:0}
+.dont li{position:relative;padding-left:26px;margin-bottom:11px;font-size:13.5px}
+.dont li::before{content:"✕";position:absolute;left:4px;top:0;color:var(--accent);font-weight:700}
+.dont b{display:block;font-weight:640}
+.dont span{color:var(--dim);font-size:13px}
+ol.steps{counter-reset:s;list-style:none;padding:0;margin:0}
+ol.steps li{counter-increment:s;position:relative;padding-left:40px;margin-bottom:16px}
+ol.steps li::before{content:"M" counter(s);position:absolute;left:0;top:1px;font-family:var(--mono);
+  font-size:11px;font-weight:700;color:var(--accent);background:var(--accent-soft);
+  border-radius:5px;padding:2px 7px}
+ol.steps b{display:block;font-size:14px;font-weight:640;margin-bottom:2px}
+ol.steps span{font-size:13px;color:var(--dim)}
+footer{border-top:1px solid var(--line);padding:26px 0 60px;font-size:12.5px;color:var(--mute)}
+@media print{
+  #themeBtn,nav.toc,.filters{display:none}
+  .cols{grid-template-columns:1fr}
+  section{break-inside:avoid}
+  thead th{position:static}
+}
+</style>
+</head>
+<body>
+<button id="themeBtn" type="button">◐ 테마</button>
+
+<header class="top">
+  <div class="wrap">
+    <div class="eyebrow">EQMUX · Technical Brief</div>
+    <h1>멀티 에이전트 MUX 기능 비교 &amp; 기술 스택 권장</h1>
+    <p class="sub">
+      <code>docs/</code>에 정리된 5개 제품(Ghostty · Orca · bbarit-agent-oss · Terax · AgentCommender)의
+      기능을 한 축에 놓고 비교한 뒤, <strong>성능 · 메모리 최소화 · 기능 편의성</strong> 세 기준으로
+      EQMUX가 채택할 기술 스택을 도출한다.
+    </p>
+    <div class="metabar">
+      <span class="pill">기준일 2026-08-10</span>
+      <span class="pill">대상 문서 5종</span>
+      <span class="pill">타깃: Windows 우선 · 크로스플랫폼 확장</span>
+      <span class="pill">상태: 그린필드 (커밋 1개)</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap cols">
+
+<nav class="toc" aria-label="목차">
+  <ol>
+    <li><a href="#s0">0 · 결론 먼저</a></li>
+    <li><a href="#s1">1 · 비교 대상</a></li>
+    <li><a href="#s2">2 · 기능 매트릭스</a></li>
+    <li><a href="#s3">3 · 축별 심층 비교</a></li>
+    <li><a href="#s4">4 · 권장 기술 스택</a></li>
+    <li><a href="#s5">5 · 아키텍처</a></li>
+    <li><a href="#s6">6 · 성능·메모리 예산</a></li>
+    <li><a href="#s7">7 · 안티패턴</a></li>
+    <li><a href="#s8">8 · 도입 순서</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<!-- ══════════ 0 ══════════ -->
+<section id="s0">
+  <div class="sec-h"><span class="sec-n">00</span><h2>결론 먼저</h2>
+    <span class="hint">세 줄 요약</span></div>
+
+  <div class="tldr">
+    <div class="tl">
+      <div class="k">Shell</div>
+      <div class="v">Tauri 2 + Rust</div>
+      <div class="w">Terax가 터미널·에디터·git·프리뷰·AI를 전부 넣고 <b>7~8MB</b>를 달성했다.
+        Electron으로 같은 기능을 만들면 설치 용량과 상주 메모리가 한 자릿수 배 커진다.
+        AgentCommender(Electron)의 기능 셋을 그대로 옮겨도 이득이 크다.</div>
+    </div>
+    <div class="tl">
+      <div class="k">Core</div>
+      <div class="v">헤드리스 VT · 데몬 소유</div>
+      <div class="w">PTY와 터미널 상태를 <b>Rust 데몬</b>이 소유하고, 웹뷰는 <b>보이는 페인만</b> 그린다.
+        멀티 에이전트 MUX에서 N개 페인이 동시에 쏟아내는 출력을 감당하는 유일한 구조다.</div>
+    </div>
+    <div class="tl">
+      <div class="k">Render</div>
+      <div class="v">xterm.js WebGL · 가시 페인 한정</div>
+      <div class="w">WebGL 컨텍스트는 브라우저당 상한(대략 16개)이 있어 페인 수에 비례해 늘릴 수 없다.
+        가시 페인만 WebGL, 나머지는 스냅샷 이미지로 대체한다.</div>
+    </div>
+  </div>
+
+  <div class="call key">
+    <strong>이 문서가 답하는 질문</strong>
+    "멀티 에이전트 MUX를 만들 때, 5개 레퍼런스 중 무엇을 가져오고 무엇을 버릴 것인가."
+    §2 매트릭스의 마지막 열이 EQMUX 우선순위(P0/P1/P2)이고, §4가 그것을 구현할 스택이다.
+  </div>
+</section>
+
+<!-- ══════════ 1 ══════════ -->
+<section id="s1">
+  <div class="sec-h"><span class="sec-n">01</span><h2>비교 대상</h2>
+    <span class="hint">각 제품이 증명한 것</span></div>
+
+  <div class="cards">
+    <div class="card">
+      <h4>Ghostty</h4><div class="role">터미널 에뮬레이터 · Zig · MIT</div>
+      <p>네이티브 성능의 상한선. GPU 가속 + 터미널별 읽기/쓰기/렌더 전용 스레드 + 파서 SIMD.
+        AI 기능은 <b>없다</b> — 순수 터미널이 어디까지 빨라지는지의 기준선.</p>
+      <dl><dt>배울 것</dt><dd>스레드 분리 · OSC 확장 · libghostty식 코어 분리</dd>
+          <dt>버릴 것</dt><dd>에이전트 레이어 전무</dd></dl>
+    </div>
+    <div class="card">
+      <h4>Orca</h4><div class="role">멀티 에이전트 IDE · 워크트리 기반</div>
+      <p>기능 최대주의. 30+ 에이전트 통합, 오케스트레이션(Run/Task/Gate), 데몬 PTY 소유,
+        원격·모바일까지. <b>기능 편의성 축의 사실상 상한</b>.</p>
+      <dl><dt>배울 것</dt><dd>데몬 PTY 소유 · 상태 인디케이터 · 오케스트레이션 프로토콜</dd>
+          <dt>버릴 것</dt><dd>초기 스코프엔 과대 (워크트리·모바일·클라우드VM)</dd></dl>
+    </div>
+    <div class="card">
+      <h4>bbarit-agent-oss</h4><div class="role">CLI 에이전트 · Rust 단일 바이너리</div>
+      <p>런타임 의존성 0의 정적 바이너리. 자율 툴 루프, 295 페르소나, 크로스 세션 메모리,
+        <code>--orchestrate</code> 병렬 서브에이전트.</p>
+      <dl><dt>배울 것</dt><dd>메모리/위키 파일 규약 · NDJSON 이벤트 스트림 · 툴 허용목록</dd>
+          <dt>버릴 것</dt><dd>GUI 없음 (TUI 전용)</dd></dl>
+    </div>
+    <div class="card">
+      <h4>Terax</h4><div class="role">AI 워크스페이스 · Tauri 2 + React 19</div>
+      <p><b>7~8MB에 전부 담은 증거</b>. portable-pty + xterm.js WebGL, CodeMirror 6,
+        OSC 133/777 에이전트 감지, 키체인 키 저장, 시크릿 deny-list.</p>
+      <dl><dt>배울 것</dt><dd>Tauri 2 구조 · OSC 777 상태 규약 · 승인 게이트 · deny-list</dd>
+          <dt>버릴 것</dt><dd>탭마다 xterm 영속 마운트(페인 수 확장에 불리)</dd></dl>
+    </div>
+    <div class="card">
+      <h4>AgentCommender</h4><div class="role">팀·임무 관제 MUX · Electron</div>
+      <p>EQMUX의 직계 선행 제품. 팀=탭 / 세션=페인, 임무(MISSION.md) 배정, 팀 편성 관계도,
+        acmux CLI 제어, git·포트·브라우저 패널.</p>
+      <dl><dt>배울 것</dt><dd>도메인 모델 전체(팀·임무·배정) · CLI 프로토콜 · Job Object</dd>
+          <dt>버릴 것</dt><dd>Electron 런타임 · Windows 전용 가정</dd></dl>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════ 2 ══════════ -->
+<section id="s2">
+  <div class="sec-h"><span class="sec-n">02</span><h2>기능 매트릭스</h2>
+    <span class="hint">29개 축 · 마지막 열이 EQMUX 우선순위</span></div>
+
+  <div class="filters">
+    <input id="q" type="search" placeholder="기능 검색…" aria-label="기능 검색">
+    <button class="chip on" data-c="all" type="button">전체</button>
+    <button class="chip" data-c="term" type="button">터미널</button>
+    <button class="chip" data-c="agent" type="button">에이전트</button>
+    <button class="chip" data-c="dev" type="button">개발도구</button>
+    <button class="chip" data-c="infra" type="button">인프라</button>
+    <span class="count" id="cnt"></span>
+  </div>
+
+  <div class="tbox">
+  <table class="cmp" id="matrix">
+    <thead><tr>
+      <th style="min-width:190px">기능 축</th>
+      <th>Ghostty</th><th>Orca</th><th>bbarit</th><th>Terax</th><th>AgentCommender</th>
+      <th style="min-width:74px">EQMUX</th>
+    </tr></thead>
+    <tbody>
+      <tr data-c="term"><td class="feat"><span class="cat">TERM</span>터미널 에뮬레이션 코어</td>
+        <td><span class="mk yes">자체 Zig</span></td><td><span class="mk yes">xterm.js</span></td>
+        <td><span class="mk part">자체 TUI</span></td><td><span class="mk yes">xterm.js</span></td>
+        <td><span class="mk yes">xterm.js 6</span></td><td><span class="prio P0">P0</span></td></tr>
+      <tr data-c="term"><td class="feat"><span class="cat">TERM</span>GPU 렌더링</td>
+        <td><span class="mk yes">Metal/GL</span></td><td><span class="mk no">미명시</span></td>
+        <td><span class="mk no">—</span></td><td><span class="mk yes">WebGL</span></td>
+        <td><span class="mk yes">WebGL</span></td><td><span class="prio P0">P0</span></td></tr>
+      <tr data-c="term"><td class="feat"><span class="cat">TERM</span>탭 · 스플릿 페인</td>
+        <td><span class="mk yes">네이티브</span></td><td><span class="mk yes">4방향</span></td>
+        <td><span class="mk no">—</span></td><td><span class="mk yes">2방향</span></td>
+        <td><span class="mk yes">4×2 그리드</span></td><td><span class="prio P0">P0</span></td></tr>
+      <tr data-c="term"><td class="feat"><span class="cat">TERM</span>셸 통합 (OSC 7/133)</td>
+        <td><span class="mk yes">5개 셸</span></td><td><span class="mk part">OSC 타이틀·52</span></td>
+        <td><span class="mk no">—</span></td><td><span class="mk yes">4개 셸</span></td>
+        <td><span class="mk no">—</span></td><td><span class="prio P0">P0</span></td></tr>
+      <tr data-c="term"><td class="feat"><span class="cat">TERM</span>스크롤백 · 세션 영속</td>
+        <td><span class="mk no">—</span></td><td><span class="mk yes">데몬 PTY</span></td>
+        <td><span class="mk part">JSONL 세션</span></td><td><span class="mk no">앱 수명</span></td>
+        <td><span class="mk part">session.log</span></td><td><span class="prio P0">P0</span></td></tr>
+      <tr data-c="term"><td class="feat"><span class="cat">TERM</span>터미널 내 검색</td>
+        <td><span class="mk no">—</span></td><td><span class="mk yes">정규식</span></td>
+        <td><span class="mk no">—</span></td><td><span class="mk yes">대소문자</span></td>
+        <td><span class="mk yes">SearchAddon</span></td><td><span class="prio P1">P1</span></td></tr>
+
+      <tr data-c="agent"><td class="feat"><span class="cat">AGENT</span>내장 AI 루프 (자체 에이전트)</td>
+        <td><span class="mk no">—</span></td><td><span class="mk no">—</span></td>
+        <td><span class="mk yes">자율 툴루프</span></td><td><span class="mk yes">AI SDK v6</span></td>
+        <td><span class="mk no">—</span></td><td><span class="prio P2">P2</span></td></tr>
+      <tr data-c="agent"><td class="feat"><span class="cat">AGENT</span>외부 CLI 에이전트 실행</td>
+        <td><span class="mk no">—</span></td><td><span class="mk yes">30+</span></td>
+        <td><span class="mk part">설정 상호운용</span></td><td><span class="mk part">감지만</span></td>
+        <td><span class="mk yes">3종</span></td><td><span class="prio P0">P0</span></td></tr>
+      <tr data-c="agent"><td class="feat"><span class="cat">AGENT</span>에이전트 상태 감지</td>
+        <td><span class="mk no">—</span></td><td><span class="mk yes">OSC+훅</span></td>
+        <td><span class="mk no">—</span></td><td><span class="mk yes">OSC 133/777</span></td>
+        <td><span class="mk part">출력 시각 기반</span></td><td><span class="prio P0">P0</span></td></tr>
+      <tr data-c="agent"><td class="feat"><span class="cat">AGENT</span>멀티 에이전트 오케스트레이션</td>
+        <td><span class="mk no">—</span></td><td><span class="mk yes">Run/Task/Gate</span></td>
+        <td><span class="mk yes">--orchestrate</span></td><td><span class="mk part">서브에이전트</span></td>
+        <td><span class="mk part">팀·일괄명령</span></td><td><span class="prio P0">P0</span></td></tr>
+      <tr data-c="agent"><td class="feat"><span class="cat">AGENT</span>승인 · 권한 게이트</td>
+        <td><span class="mk no">—</span></td><td><span class="mk part">Yolo 기본</span></td>
+        <td><span class="mk yes">--approve</span></td><td><span class="mk yes">툴 티어링</span></td>
+        <td><span class="mk no">—</span></td><td><span class="prio P1">P1</span></td></tr>
+      <tr data-c="agent"><td class="feat"><span class="cat">AGENT</span>세션 히스토리 · 재개</td>
+        <td><span class="mk no">—</span></td><td><span class="mk yes">12개 CLI</span></td>
+        <td><span class="mk yes">fork/resume</span></td><td><span class="mk yes">JSON 세션</span></td>
+        <td><span class="mk part">state.json</span></td><td><span class="prio P1">P1</span></td></tr>
+      <tr data-c="agent"><td class="feat"><span class="cat">AGENT</span>프로젝트 메모리 파일</td>
+        <td><span class="mk no">—</span></td><td><span class="mk yes">CLAUDE/AGENTS.md</span></td>
+        <td><span class="mk yes">메모리+위키</span></td><td><span class="mk yes">TERAX.md</span></td>
+        <td><span class="mk yes">MISSION/TEAM.md</span></td><td><span class="prio P0">P0</span></td></tr>
+      <tr data-c="agent"><td class="feat"><span class="cat">AGENT</span>사용량 · 비용 추적</td>
+        <td><span class="mk no">—</span></td><td><span class="mk yes">플랜·리셋·비용</span></td>
+        <td><span class="mk part">토큰 카운트</span></td><td><span class="mk no">—</span></td>
+        <td><span class="mk no">—</span></td><td><span class="prio P1">P1</span></td></tr>
+      <tr data-c="agent"><td class="feat"><span class="cat">AGENT</span>팀 · 역할 편성</td>
+        <td><span class="mk no">—</span></td><td><span class="mk no">—</span></td>
+        <td><span class="mk part">페르소나 295</span></td><td><span class="mk no">—</span></td>
+        <td><span class="mk yes">직책·관계도</span></td><td><span class="prio P0">P0</span></td></tr>
+
+      <tr data-c="dev"><td class="feat"><span class="cat">DEV</span>코드 에디터</td>
+        <td><span class="mk no">—</span></td><td><span class="mk yes">Monaco</span></td>
+        <td><span class="mk no">—</span></td><td><span class="mk yes">CodeMirror 6</span></td>
+        <td><span class="mk no">—</span></td><td><span class="prio P1">P1</span></td></tr>
+      <tr data-c="dev"><td class="feat"><span class="cat">DEV</span>git UI</td>
+        <td><span class="mk no">—</span></td><td><span class="mk yes">PR·이슈까지</span></td>
+        <td><span class="mk no">—</span></td><td><span class="mk yes">헝크·그래프</span></td>
+        <td><span class="mk yes">그래프·diff</span></td><td><span class="prio P1">P1</span></td></tr>
+      <tr data-c="dev"><td class="feat"><span class="cat">DEV</span>파일 탐색기 · 코드 검색</td>
+        <td><span class="mk no">—</span></td><td><span class="mk yes">실시간 동기화</span></td>
+        <td><span class="mk part">툴 경유</span></td><td><span class="mk yes">ripgrep</span></td>
+        <td><span class="mk part">임무 트리</span></td><td><span class="prio P1">P1</span></td></tr>
+      <tr data-c="dev"><td class="feat"><span class="cat">DEV</span>브라우저 · 웹 프리뷰</td>
+        <td><span class="mk no">—</span></td><td><span class="mk yes">+Design Mode</span></td>
+        <td><span class="mk part">web_fetch</span></td><td><span class="mk yes">자식 웹뷰</span></td>
+        <td><span class="mk yes">WebContentsView</span></td><td><span class="prio P1">P1</span></td></tr>
+      <tr data-c="dev"><td class="feat"><span class="cat">DEV</span>워크트리 격리</td>
+        <td><span class="mk no">—</span></td><td><span class="mk yes">코어 모델</span></td>
+        <td><span class="mk no">—</span></td><td><span class="mk no">—</span></td>
+        <td><span class="mk no">—</span></td><td><span class="prio P2">P2</span></td></tr>
+      <tr data-c="dev"><td class="feat"><span class="cat">DEV</span>diff 리뷰 · AI 주석</td>
+        <td><span class="mk no">—</span></td><td><span class="mk yes">Send to agent</span></td>
+        <td><span class="mk no">—</span></td><td><span class="mk yes">ai-diff 헝크</span></td>
+        <td><span class="mk part">3분할 diff</span></td><td><span class="prio P1">P1</span></td></tr>
+
+      <tr data-c="infra"><td class="feat"><span class="cat">INFRA</span>외부 CLI로 앱 제어</td>
+        <td><span class="mk part">+액션</span></td><td><span class="mk yes">orca</span></td>
+        <td><span class="mk no">자체가 CLI</span></td><td><span class="mk no">—</span></td>
+        <td><span class="mk yes">acmux 파이프</span></td><td><span class="prio P0">P0</span></td></tr>
+      <tr data-c="infra"><td class="feat"><span class="cat">INFRA</span>원격 · SSH 실행</td>
+        <td><span class="mk yes">+ssh 래퍼</span></td><td><span class="mk yes">4종 방식</span></td>
+        <td><span class="mk no">—</span></td><td><span class="mk no">—</span></td>
+        <td><span class="mk no">—</span></td><td><span class="prio P2">P2</span></td></tr>
+      <tr data-c="infra"><td class="feat"><span class="cat">INFRA</span>모바일 클라이언트</td>
+        <td><span class="mk no">—</span></td><td><span class="mk yes">iOS/Android</span></td>
+        <td><span class="mk no">—</span></td><td><span class="mk no">—</span></td>
+        <td><span class="mk no">—</span></td><td><span class="prio P2">P2</span></td></tr>
+      <tr data-c="infra"><td class="feat"><span class="cat">INFRA</span>플러그인 · MCP</td>
+        <td><span class="mk part">libghostty</span></td><td><span class="mk yes">플러그인+MCP</span></td>
+        <td><span class="mk yes">MCP·스킬·JS</span></td><td><span class="mk part">커스텀 에이전트</span></td>
+        <td><span class="mk no">예정</span></td><td><span class="prio P1">P1</span></td></tr>
+      <tr data-c="infra"><td class="feat"><span class="cat">INFRA</span>테마 커스터마이즈</td>
+        <td><span class="mk yes">수백 개</span></td><td><span class="mk yes">임포트</span></td>
+        <td><span class="mk yes">/themes</span></td><td><span class="mk yes">10+커스텀</span></td>
+        <td><span class="mk no">고정 다크</span></td><td><span class="prio P2">P2</span></td></tr>
+      <tr data-c="infra"><td class="feat"><span class="cat">INFRA</span>알림 시스템</td>
+        <td><span class="mk no">—</span></td><td><span class="mk yes">벨·배지·사운드</span></td>
+        <td><span class="mk no">—</span></td><td><span class="mk yes">3단 라우팅</span></td>
+        <td><span class="mk no">—</span></td><td><span class="prio P0">P0</span></td></tr>
+      <tr data-c="infra"><td class="feat"><span class="cat">INFRA</span>번들 크기</td>
+        <td><span class="mk yes">네이티브</span></td><td><span class="mk no">미상</span></td>
+        <td><span class="mk yes">단일 바이너리</span></td><td><span class="mk yes">7~8MB</span></td>
+        <td><span class="mk no">Electron급</span></td><td><span class="prio P0">P0</span></td></tr>
+      <tr data-c="infra"><td class="feat"><span class="cat">INFRA</span>지원 플랫폼</td>
+        <td><span class="mk part">mac·Linux</span></td><td><span class="mk yes">3종</span></td>
+        <td><span class="mk yes">3종</span></td><td><span class="mk yes">3종</span></td>
+        <td><span class="mk part">Windows</span></td><td><span class="prio P1">P1</span></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="legend">
+    <span class="mk yes">완전 지원</span>
+    <span class="mk part">부분 / 우회</span>
+    <span class="mk no">없음</span>
+    <span><b class="prio P0">P0</b> 1차 출시 필수</span>
+    <span><b class="prio P1">P1</b> 2차</span>
+    <span><b class="prio P2">P2</b> 보류</span>
+  </div>
+</section>
+
+<!-- ══════════ 3 ══════════ -->
+<section id="s3">
+  <div class="sec-h"><span class="sec-n">03</span><h2>축별 심층 비교</h2>
+    <span class="hint">무엇을 가져오고 무엇을 버릴 것인가</span></div>
+
+  <h3>3.1 터미널 코어 — 페인 수가 늘어날 때 무너지는 지점</h3>
+  <div class="tbox"><table>
+    <thead><tr><th style="min-width:150px">설계 선택</th><th style="min-width:180px">채택 제품</th>
+      <th>N개 페인 동시 스트리밍 시</th></tr></thead>
+    <tbody>
+      <tr><td class="feat">전용 스레드 분리</td><td>Ghostty (읽기/쓰기/렌더)</td>
+        <td class="note">터미널당 스레드 3개. 페인 8개면 스레드 24개 — 네이티브라 감당되지만
+          웹뷰 구조에선 불가. <b>Rust 데몬에서 async 태스크로 축소 구현</b>이 현실적.</td></tr>
+      <tr><td class="feat">탭마다 xterm 영속 마운트</td><td>Terax · AgentCommender</td>
+        <td class="note">숨겨진 탭도 파싱·버퍼 유지 비용을 계속 낸다. 세션 4개면 활성 탭은 무해하지만,
+          EQMUX는 <b>워크스페이스 탭을 최대 10개까지 열어 총 40세션</b>이 될 수 있다.
+          비활성 탭의 36세션이 여기에 해당한다.</td></tr>
+      <tr><td class="feat">데몬이 PTY 소유</td><td>Orca</td>
+        <td class="note">앱을 닫아도 에이전트가 계속 돈다. 앱이 죽어도 세션이 살아남는 건
+          <b>장시간 도는 에이전트에겐 기능이 아니라 요구사항</b>. EQMUX 필수 채택.</td></tr>
+      <tr><td class="feat">Job Object 프로세스 트리 정리</td><td>Terax · AgentCommender</td>
+        <td class="note">Windows에서 에이전트가 띄운 손자 프로세스(node·python·docker)가
+          고아로 남는 문제를 원천 차단. <b>둘 다 독립적으로 같은 결론에 도달</b>했다는 게 근거.</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="call warn">
+    <strong>확인이 필요한 제약 — WebGL 컨텍스트 상한</strong>
+    Chromium 계열은 살아있는 WebGL 컨텍스트 수에 상한(대략 16개)이 있고, 초과하면 오래된 컨텍스트부터
+    강제 소실된다. 페인마다 xterm WebGL 렌더러를 붙이는 구조는 페인 8~16개 구간에서
+    "배경 터미널이 검게 변하는" 버그로 나타난다.
+    <b>가시 페인만 WebGL, 비가시 페인은 정지 스냅샷</b>으로 설계하고, 실제 상한은 타깃 WebView2에서 실측할 것.
+  </div>
+
+  <h3>3.2 에이전트 레이어 — 상태를 어떻게 알아내는가</h3>
+  <div class="tbox"><table>
+    <thead><tr><th style="min-width:150px">감지 방식</th><th style="min-width:110px">출처</th>
+      <th>정확도 / 비용</th></tr></thead>
+    <tbody>
+      <tr><td class="feat">출력 시각 휴리스틱</td><td>AgentCommender</td>
+        <td class="note">마지막 출력 &lt;3초=활성, &lt;60초=진행. 구현이 가장 싸지만
+          <b>"입력 대기"와 "생각 중"을 구분 못 한다</b> — 멀티 에이전트에선 이 구분이 전부다.</td></tr>
+      <tr><td class="feat">OSC 133 + OSC 777</td><td>Terax</td>
+        <td class="note">셸 통합 마커로 무장 후 명시적 시퀀스에서만 상태 전이.
+          셸·tmux 무관, TUI 리페인트 오탐 없음, <b>에이전트 미실행 시 비용 0</b>. 최적해.</td></tr>
+      <tr><td class="feat">에이전트 훅</td><td>Terax · Orca</td>
+        <td class="note">Claude Code 훅 3종(UserPromptSubmit/Notification/Stop)이 OSC를 되돌려준다.
+          OSC를 못 뱉는 에이전트의 <b>보강 수단</b>이지 대체재가 아니다.</td></tr>
+      <tr><td class="feat">NDJSON 이벤트 스트림</td><td>bbarit</td>
+        <td class="note">에이전트가 <code>--mode json</code>을 지원하면 가장 정확.
+          지원 에이전트가 소수라 <b>1급 경로로 삼되 폴백 필요</b>.</td></tr>
+    </tbody>
+  </table></div>
+  <div class="call good">
+    <strong>EQMUX 채택</strong>
+    3계층 폴백 — ① NDJSON 스트림(지원 시) → ② OSC 777 훅 → ③ OSC 133 + 출력 휴리스틱.
+    감지 로직은 <b>전부 Rust 데몬의 PTY 리더 안</b>에 두어 프런트엔드가 관여하지 않게 한다.
+  </div>
+
+  <h3>3.3 도메인 모델 — EQMUX만의 자산</h3>
+  <p>5개 중 <b>팀 · 직책 · 관계 · 임무 배정</b> 모델을 가진 것은 AgentCommender뿐이다.
+    Orca는 워크트리를, bbarit은 페르소나를 단위로 삼는다. 세 모델의 성격이 다르다.</p>
+  <div class="tbox"><table>
+    <thead><tr><th>단위</th><th>제품</th><th>강점</th><th>약점</th></tr></thead>
+    <tbody>
+      <tr><td class="feat">워크트리</td><td>Orca</td><td class="note">코드 충돌 원천 차단, git 네이티브</td>
+        <td class="note">디스크 사용량, 의존성 재설치, 팀 개념 없음</td></tr>
+      <tr><td class="feat">페르소나</td><td>bbarit</td><td class="note">역할별 프롬프트 자산 295개, 읽기전용 모드</td>
+        <td class="note">에이전트 간 관계·보고 체계 없음</td></tr>
+      <tr><td class="feat">팀 + 임무</td><td>AgentCommender</td>
+        <td class="note">보고 관계·직책·일괄 명령, MISSION.md가 파일로 남는 원본</td>
+        <td class="note">코드 격리 없음(같은 폴더 동시 편집 위험)</td></tr>
+    </tbody>
+  </table></div>
+  <div class="call key">
+    <strong>합성 제안</strong>
+    <b>팀·임무 모델(AgentCommender)을 코어</b>로 두고, 임무 단위에 <b>선택적 워크트리 격리(Orca)</b>를
+    옵션으로 얹는다. 페르소나는 팀원의 직책 필드에 프롬프트 프리셋으로 매핑한다.
+    파일 원본 규약(MISSION.md · TEAM.md · CLAUDE.md 블록)은 그대로 유지 — 에이전트가 읽을 수 있는
+    유일한 공용 상태이기 때문.
+  </div>
+</section>
+
+<!-- ══════════ 4 ══════════ -->
+<section id="s4">
+  <div class="sec-h"><span class="sec-n">04</span><h2>권장 기술 스택</h2>
+    <span class="hint">선택 · 대안 · 근거 · 리스크</span></div>
+
+  <div class="tbox"><table>
+    <thead><tr>
+      <th style="min-width:100px">레이어</th><th style="min-width:150px">권장</th>
+      <th style="min-width:120px">대안</th><th>근거 / 리스크</th></tr></thead>
+    <tbody>
+      <tr><td class="stack-layer">앱 셸</td>
+        <td class="pick">Tauri 2 (Rust)</td><td class="alt">Electron · Wails</td>
+        <td class="note">Terax가 동급 기능으로 7~8MB 달성. WebView2는 Win11에 기본 탑재, 오프라인 번들도 가능.
+          <b>리스크</b>: Linux WebKitGTK 렌더 편차 — 1차는 Windows 타깃이라 유예 가능.</td></tr>
+      <tr><td class="stack-layer">PTY</td>
+        <td class="pick">portable-pty (wezterm)</td><td class="alt">conpty-rs · node-pty</td>
+        <td class="note">Terax 채택, ConPTY/Unix 추상화 완비. node-pty는 Node 런타임을 끌고 오므로 탈락.</td></tr>
+      <tr><td class="stack-layer">VT 파서</td>
+        <td class="pick">vte (alacritty) 또는 termwiz</td><td class="alt">프런트 xterm.js 단독</td>
+        <td class="note"><b>핵심 결정</b>. Rust에 헤드리스 터미널 상태를 두면 비가시 페인의 렌더러 비용이 0이 되고,
+          스크롤백·검색·OSC 감지를 전부 백엔드에서 처리할 수 있다.</td></tr>
+      <tr><td class="stack-layer">터미널 렌더</td>
+        <td class="pick">xterm.js + WebGL (가시 페인만)</td><td class="alt">자체 canvas 렌더러</td>
+        <td class="note">직접 구현은 리가처·이모지·IME·그래핌 클러스터에서 1년을 잃는다.
+          <b>WebGL 컨텍스트 상한</b>을 페인 수 상한으로 삼고 초과분은 스냅샷 처리.</td></tr>
+      <tr><td class="stack-layer">프런트</td>
+        <td class="pick">SolidJS + Vite</td><td class="alt">React 19 (Terax) · Svelte 5</td>
+        <td class="note">VDOM 없는 세밀 반응성. 8개 페인의 상태 점·타이머·바이트 카운터가 초당 수십 번
+          갱신되는 대시보드에서 리렌더 비용 차이가 그대로 드러난다.
+          <b>리스크</b>: 생태계가 React보다 얇다 — 팀 숙련도 우선이면 React도 합리적.</td></tr>
+      <tr><td class="stack-layer">에디터</td>
+        <td class="pick">CodeMirror 6</td><td class="alt">Monaco</td>
+        <td class="note">Monaco는 수 MB 단위라 "7MB 앱" 목표와 양립 불가. Terax도 CM6.</td></tr>
+      <tr><td class="stack-layer">상태 저장</td>
+        <td class="pick">SQLite(rusqlite) + JSON 설정</td><td class="alt">전부 JSON</td>
+        <td class="note">스크롤백·세션 로그·이벤트는 append 중심 + 검색 필요 → SQLite.
+          사용자 설정만 사람이 읽는 JSON으로. AgentCommender의 state.json 전체 재작성 방식은
+          세션이 늘수록 불리.</td></tr>
+      <tr><td class="stack-layer">git</td>
+        <td class="pick">git CLI + gix(읽기 경로)</td><td class="alt">libgit2 · 전부 CLI</td>
+        <td class="note">자격증명 헬퍼·훅·서브모듈 호환은 CLI가 정답. 커밋 그래프·status 같은
+          고빈도 읽기만 gix로 가속. <code>GIT_OPTIONAL_LOCKS=0</code> 필수(AgentCommender 선례).</td></tr>
+      <tr><td class="stack-layer">코드 검색</td>
+        <td class="pick">ignore + grep 크레이트</td><td class="alt">ripgrep 바이너리 동봉</td>
+        <td class="note">ripgrep의 엔진을 라이브러리로 링크 — 외부 바이너리 없이 동일 성능.
+          Terax가 <code>fs_grep</code>으로 같은 선택.</td></tr>
+      <tr><td class="stack-layer">브라우저 패널</td>
+        <td class="pick">Tauri 2 자식 웹뷰</td><td class="alt">iframe · 외부 브라우저</td>
+        <td class="note">iframe은 X-Frame-Options에 막힌다(AgentCommender가 WebContentsView로 우회한 이유).
+          <b>리스크</b>: Tauri 멀티 웹뷰는 unstable 플래그 — 채택 전 타깃 버전에서 검증 필요.</td></tr>
+      <tr><td class="stack-layer">IPC</td>
+        <td class="pick">Tauri Channel + 바이너리 프레임</td><td class="alt">로컬 WebSocket</td>
+        <td class="note">PTY 출력을 JSON 문자열/base64로 보내면 인코딩 비용이 렌더 비용을 넘어선다.
+          <b>Uint8Array 그대로</b> 보낼 것.</td></tr>
+      <tr><td class="stack-layer">외부 제어</td>
+        <td class="pick">named pipe / UDS + NDJSON</td><td class="alt">HTTP 로컬 서버</td>
+        <td class="note">acmux 프로토콜을 그대로 계승. 포트를 열지 않아 방화벽·보안 경고가 없다.</td></tr>
+      <tr><td class="stack-layer">빌드</td>
+        <td class="pick">opt-level="z" · LTO · strip</td><td class="alt">기본 release</td>
+        <td class="note"><code>codegen-units=1</code>, <code>panic="abort"</code> 병행.
+          UPX 압축은 <b>비권장</b> — 백신 오탐을 부른다.</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="call good">
+    <strong>세 기준별 최대 기여 항목</strong>
+    <ul>
+      <li><b>성능</b> — 헤드리스 VT(비가시 페인 비용 0) &gt; 프레임 코얼레싱 &gt; 바이너리 IPC</li>
+      <li><b>메모리·용량</b> — Tauri(런타임 미포함) &gt; 스크롤백 디스크 스필 &gt; CM6 &gt; Solid</li>
+      <li><b>기능 편의성</b> — 데몬 PTY 소유(세션 생존) &gt; OSC 상태 감지 &gt; CLI 제어 &gt; 자식 웹뷰</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ══════════ 5 ══════════ -->
+<section id="s5">
+  <div class="sec-h"><span class="sec-n">05</span><h2>아키텍처</h2>
+    <span class="hint">3 프로세스 · 데몬이 진실의 원천</span></div>
+
+  <figure>
+  <svg viewBox="0 0 920 430" role="img" aria-label="EQMUX 3-프로세스 아키텍처">
+    <rect x="8" y="60" width="176" height="150" rx="10" class="svg-box"/>
+    <text x="24" y="86" class="svg-t">클라이언트</text>
+    <rect x="24" y="98" width="144" height="34" rx="6" class="svg-inner"/>
+    <text x="36" y="119" class="svg-s">eqmux GUI (Tauri 2)</text>
+    <rect x="24" y="138" width="144" height="30" rx="6" class="svg-inner"/>
+    <text x="36" y="157" class="svg-s">eqmux CLI (pipe)</text>
+    <rect x="24" y="174" width="144" height="26" rx="6" class="svg-inner"/>
+    <text x="36" y="191" class="svg-l">향후: 모바일 · 원격</text>
+
+    <rect x="290" y="20" width="330" height="290" rx="10" class="svg-box-a"/>
+    <text x="308" y="46" class="svg-t">eqmuxd — Rust 데몬 (진실의 원천)</text>
+    <rect x="308" y="58" width="294" height="42" rx="6" class="svg-inner"/>
+    <text x="320" y="76" class="svg-s">PTY 풀 · portable-pty</text>
+    <text x="320" y="92" class="svg-l">Job Object · 프로세스 트리 정리</text>
+    <rect x="308" y="106" width="294" height="42" rx="6" class="svg-inner"/>
+    <text x="320" y="124" class="svg-s">헤드리스 VT · vte</text>
+    <text x="320" y="140" class="svg-l">전 페인 상태 보유 · 가시 페인만 송출</text>
+    <rect x="308" y="154" width="294" height="42" rx="6" class="svg-inner"/>
+    <text x="320" y="172" class="svg-s">에이전트 상태 머신</text>
+    <text x="320" y="188" class="svg-l">NDJSON → OSC 777 → OSC 133 폴백</text>
+    <rect x="308" y="202" width="294" height="42" rx="6" class="svg-inner"/>
+    <text x="320" y="220" class="svg-s">세션 스토어 · SQLite</text>
+    <text x="320" y="236" class="svg-l">스크롤백 스필 · 이벤트 로그 · 검색</text>
+    <rect x="308" y="250" width="294" height="42" rx="6" class="svg-inner"/>
+    <text x="320" y="268" class="svg-s">임무 · 팀 오케스트레이터</text>
+    <text x="320" y="284" class="svg-l">MISSION.md · TEAM.md · 게이트</text>
+
+    <rect x="726" y="60" width="186" height="150" rx="10" class="svg-box"/>
+    <text x="742" y="86" class="svg-t">에이전트 프로세스</text>
+    <rect x="742" y="98" width="154" height="26" rx="6" class="svg-inner"/>
+    <text x="754" y="115" class="svg-s">Claude Code</text>
+    <rect x="742" y="130" width="154" height="26" rx="6" class="svg-inner"/>
+    <text x="754" y="147" class="svg-s">Codex CLI</text>
+    <rect x="742" y="162" width="154" height="26" rx="6" class="svg-inner"/>
+    <text x="754" y="179" class="svg-s">Gemini · 커스텀</text>
+
+    <rect x="8" y="330" width="904" height="76" rx="10" class="svg-box"/>
+    <text x="24" y="356" class="svg-t">워크스페이스 (파일 = 에이전트와의 공용 상태)</text>
+    <text x="24" y="378" class="svg-s">&lt;팀&gt;/team.json · TEAM.md</text>
+    <text x="250" y="378" class="svg-s">&lt;세션&gt;/CLAUDE.md · MISSION.md</text>
+    <text x="530" y="378" class="svg-s">project/&lt;임무&gt;/</text>
+    <text x="710" y="378" class="svg-s">session.db (SQLite)</text>
+    <text x="24" y="396" class="svg-l">앱이 죽어도 남는 원본 — 캐시는 데몬에만 둔다</text>
+
+    <path d="M184 128 H 290" class="svg-flow" marker-end="url(#a)"/>
+    <text x="196" y="120" class="svg-l">바이너리 프레임 8~16ms</text>
+    <path d="M620 140 H 726" class="svg-flow" marker-end="url(#a)"/>
+    <text x="634" y="132" class="svg-l">PTY read/write</text>
+    <path d="M455 310 V 330" class="svg-line" marker-end="url(#a)"/>
+
+    <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6"
+      orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="currentColor" opacity=".55"/></marker></defs>
+  </svg>
+  <figcaption>GUI는 얇은 뷰어다. 앱을 닫아도 데몬과 에이전트는 계속 돈다 — Orca가 검증한 구조.</figcaption>
+  </figure>
+
+  <h4>데이터 흐름 3가지</h4>
+  <ul>
+    <li><b>가시 페인</b> — PTY 바이트 → 데몬 VT 갱신 → 8~16ms 단위로 묶어 <code>Uint8Array</code> 전송 →
+      xterm.js WebGL 렌더</li>
+    <li><b>비가시 페인</b> — PTY 바이트 → 데몬 VT 갱신 <b>후 종료</b>. 전송 없음.
+      페인이 보이는 순간 화면 스냅샷 1회만 전송</li>
+    <li><b>상태 이벤트</b> — OSC 감지 → 상태 머신 → 대시보드·알림·탭 배지에 소량 JSON 이벤트</li>
+  </ul>
+</section>
+
+<!-- ══════════ 6 ══════════ -->
+<section id="s6">
+  <div class="sec-h"><span class="sec-n">06</span><h2>성능 · 메모리 예산</h2>
+    <span class="hint">목표치 — 측정으로 검증할 것</span></div>
+
+  <div class="call warn">
+    <strong>아래 숫자는 측정값이 아니라 설계 예산이다</strong>
+    5개 문서에서 확인된 사실은 <b>Terax 번들 7~8MB</b>와 <b>AgentCommender 스크롤백 10,000줄 / 팀당 8세션</b>뿐이다.
+    나머지는 구조에서 역산한 목표치이므로, M1 프로토타입에서 실측해 교정할 것.
+  </div>
+
+  <div class="tbox"><table>
+    <thead><tr><th style="min-width:170px">항목</th><th style="min-width:110px">목표</th>
+      <th>산출 근거 / 달성 수단</th></tr></thead>
+    <tbody>
+      <tr><td class="feat">설치 용량</td><td class="pick">≤ 15 MB</td>
+        <td class="note">Terax 7~8MB가 실증한 상한. git·검색 엔진을 링크하면 증가하므로 15MB를 상한으로 잡는다.
+          WebView2는 시스템 공유(Win11 기본 탑재).</td></tr>
+      <tr><td class="feat">빈 창 상주 메모리</td><td class="pick">≤ 120 MB</td>
+        <td class="note">WebView2 프로세스군 + Rust 데몬. Electron 대비 절감분이 여기서 나온다.</td></tr>
+      <tr><td class="feat">세션당 메모리 (활성 탭)</td><td class="pick">≤ 32 MB</td>
+        <td class="note">xterm.js 셀 버퍼는 셀당 uint32 3개(≈12B). 200열 × 5,000줄 ≈ 12MB + WebGL 텍스처 아틀라스.
+          활성 탭은 4세션 전부 가시이므로 <b>인메모리 스크롤백을 5,000줄까지 올릴 여유가 생겼다</b>.</td></tr>
+      <tr><td class="feat">세션당 메모리 (비활성 탭)</td><td class="pick">≤ 4 MB</td>
+        <td class="note">Rust VT 상태만 유지. 렌더러 객체·WebGL 컨텍스트·JS 힙 모두 0.
+          <b>이 항목이 헤드리스 VT를 채택하는 이유 전부</b>이며, 세션 상한이 4로 내려간 뒤
+          절약 지점이 "숨은 페인"에서 <b>"비활성 워크스페이스 탭"</b>으로 이동했다.</td></tr>
+      <tr><td class="feat">최대 규모 총합</td><td class="pick">≤ 400 MB</td>
+        <td class="note">워크스페이스 10개 × 세션 4개 = 40세션.
+          120 + (활성 4 × 32) + (비활성 36 × 4) ≈ 392MB.
+          <b>에이전트 CLI 프로세스 자체는 별도</b>이며, 실질 제약은 앱이 아니라 그쪽이다.</td></tr>
+      <tr><td class="feat">스크롤백 보존량</td><td class="pick">무제한 (디스크)</td>
+        <td class="note">인메모리 링버퍼 5,000줄 + SQLite 스필(워크스페이스별 DB). 위로 스크롤할 때만 페이징.
+          AgentCommender의 10,000줄 × 8페인을 전부 램에 두는 방식과 대비.</td></tr>
+      <tr><td class="feat">PTY → 화면 지연</td><td class="pick">≤ 32 ms</td>
+        <td class="note">코얼레싱 프레임 16ms + 렌더 1프레임. 사람이 인지하는 하한 근처.</td></tr>
+      <tr><td class="feat">폭주 출력 처리</td><td class="pick">드롭 허용</td>
+        <td class="note">가시 페인도 프레임당 바이트 상한을 두고 초과분은 VT에만 반영하고 전송은 생략.
+          <code>yes</code>·대형 빌드 로그에서 UI가 멈추지 않는 조건.</td></tr>
+      <tr><td class="feat">콜드 스타트</td><td class="pick">≤ 400 ms</td>
+        <td class="note">데몬 상주 시 GUI는 뷰 복원만. 세션 복원은 스냅샷 1회 전송으로 끝난다.</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- ══════════ 7 ══════════ -->
+<section id="s7">
+  <div class="sec-h"><span class="sec-n">07</span><h2>안티패턴</h2>
+    <span class="hint">레퍼런스에서 관찰된 함정</span></div>
+
+  <ul class="dont">
+    <li><b>모든 페인에 살아있는 WebGL 렌더러를 붙이지 말 것</b>
+      <span>컨텍스트 상한을 넘기면 배경 페인이 소실된다. 가시 페인 수를 상한으로 설계하고
+        나머지는 스냅샷으로 대체.</span></li>
+    <li><b>PTY 바이트를 JSON 문자열이나 base64로 IPC 하지 말 것</b>
+      <span>인코딩 비용이 렌더 비용을 넘는다. 바이너리 채널 + 프레임 코얼레싱이 기본값이어야 한다.</span></li>
+    <li><b>비가시 페인에 출력을 계속 전송하지 말 것</b>
+      <span>8개 에이전트가 동시에 빌드 로그를 뿜으면 화면에 없는 7개가 프레임 예산을 다 먹는다.</span></li>
+    <li><b>대용량 스크롤백을 렌더러 힙에 두지 말 것</b>
+      <span>10,000줄 × 8페인은 곧 수백 MB다. 인메모리는 짧게, 나머지는 디스크에.</span></li>
+    <li><b>상태 파일 전체를 매번 다시 쓰지 말 것</b>
+      <span>세션·이벤트가 누적되면 디바운스로도 못 막는다. append 구조(SQLite)로 분리.</span></li>
+    <li><b>에이전트 상태를 출력 시각만으로 판정하지 말 것</b>
+      <span>"입력 대기"와 "생각 중"이 구분되지 않으면 관제 대시보드의 존재 이유가 사라진다.</span></li>
+    <li><b>프런트엔드에서 시크릿 접근을 막지 말 것</b>
+      <span>deny-list는 경로 정규화 이후 Rust에서 강제해야 우회 불가능하다 — Terax의 설계.</span></li>
+    <li><b>Monaco·무거운 UI 킷·런타임 CSS-in-JS를 넣지 말 것</b>
+      <span>"작은 앱" 목표는 의존성 하나로 무너진다. CM6 + 컴파일타임 CSS.</span></li>
+    <li><b>1차 출시에 워크트리·모바일·클라우드 VM을 넣지 말 것</b>
+      <span>Orca의 표면적은 수년치다. P0 열에 없는 것은 넣지 않는다.</span></li>
+  </ul>
+</section>
+
+<!-- ══════════ 8 ══════════ -->
+<section id="s8">
+  <div class="sec-h"><span class="sec-n">08</span><h2>도입 순서</h2>
+    <span class="hint">각 단계에서 검증할 가설</span></div>
+
+  <ol class="steps">
+    <li><b>데몬 + PTY + 헤드리스 VT 스파이크</b>
+      <span>GUI 없이 8개 PTY를 붙여 폭주 출력 시 CPU·메모리를 실측한다.
+        <b>검증 가설</b>: 비가시 페인 4MB / 총 400MB 예산이 성립하는가.</span></li>
+    <li><b>Tauri 셸 + xterm.js 브리지</b>
+      <span>바이너리 채널로 코얼레싱 프레임 전송, 가시/비가시 전환과 스냅샷 복원.
+        <b>검증 가설</b>: WebGL 컨텍스트 상한과 전환 지연이 수용 가능한가.</span></li>
+    <li><b>탭·스플릿 · 그리드 · 세션 영속</b>
+      <span>AgentCommender 레이아웃 모델(분할 트리 + 4×2 그리드 + 8세션)을 이식.
+        앱 재시작 후 세션 생존과 스크롤백 페이징까지.</span></li>
+    <li><b>에이전트 실행 · OSC 상태 머신 · 알림</b>
+      <span>Claude Code·Codex·Gemini 실행, 3계층 상태 폴백, Terax식 3단 알림 라우팅.
+        여기까지가 "멀티 에이전트 MUX"의 최소 정의.</span></li>
+    <li><b>팀 · 임무 · 관제 대시보드</b>
+      <span>team.json·TEAM.md·MISSION.md 규약과 배정 로직, 관계도, 일괄 명령.
+        EQMUX의 차별점이 처음 드러나는 단계.</span></li>
+    <li><b>CLI 제어 · git 패널 · 브라우저 패널</b>
+      <span>acmux 프로토콜 계승, gix 커밋 그래프, 자식 웹뷰.
+        여기서부터 P1 — 앞 단계가 안정된 뒤에 착수.</span></li>
+  </ol>
+</section>
+
+</main>
+</div>
+
+<footer><div class="wrap">
+  출처 — <code>docs/ghostty-features.md</code> · <code>docs/orca-features.md</code> ·
+  <code>docs/bbarit-agent-oss-features.md</code> · <code>docs/terax-features.md</code> ·
+  <code>docs/agentManager-features.md</code> · 통합 트리 <code>docs/features-tree.md</code><br>
+  기능 표기는 각 문서에 기술된 범위에 한정한다. §4~§6의 스택·예산은 그 사실에서 도출한 권장안이며 측정값이 아니다.
+</div></footer>
+
+<script>
+(function(){
+  var root=document.documentElement, btn=document.getElementById('themeBtn');
+  var saved=null; try{saved=localStorage.getItem('eqmux-theme')}catch(e){}
+  if(saved) root.setAttribute('data-theme',saved);
+  btn.addEventListener('click',function(){
+    var cur=root.getAttribute('data-theme');
+    if(!cur) cur=matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';
+    var next=cur==='dark'?'light':'dark';
+    root.setAttribute('data-theme',next);
+    try{localStorage.setItem('eqmux-theme',next)}catch(e){}
+  });
+
+  var rows=[].slice.call(document.querySelectorAll('#matrix tbody tr'));
+  var q=document.getElementById('q'), cnt=document.getElementById('cnt');
+  var chips=[].slice.call(document.querySelectorAll('.chip')), cat='all';
+  function apply(){
+    var t=q.value.trim().toLowerCase(), n=0;
+    rows.forEach(function(r){
+      var okC = cat==='all' || r.dataset.c===cat;
+      var okQ = !t || r.textContent.toLowerCase().indexOf(t)>-1;
+      var show = okC && okQ;
+      r.style.display = show?'':'none';
+      if(show) n++;
+    });
+    cnt.textContent = n + ' / ' + rows.length + ' 항목';
+  }
+  q.addEventListener('input',apply);
+  chips.forEach(function(c){
+    c.addEventListener('click',function(){
+      chips.forEach(function(x){x.classList.remove('on')});
+      c.classList.add('on'); cat=c.dataset.c; apply();
+    });
+  });
+  apply();
+
+  var links=[].slice.call(document.querySelectorAll('nav.toc a'));
+  var secs=links.map(function(a){return document.querySelector(a.getAttribute('href'))});
+  if('IntersectionObserver' in window){
+    var io=new IntersectionObserver(function(es){
+      es.forEach(function(e){
+        if(!e.isIntersecting) return;
+        var i=secs.indexOf(e.target);
+        links.forEach(function(l){l.classList.remove('on')});
+        if(i>-1) links[i].classList.add('on');
+      });
+    },{rootMargin:'-10% 0px -75% 0px'});
+    secs.forEach(function(s){ if(s) io.observe(s) });
+  }
+})();
+</script>
+</body>
+</html>
