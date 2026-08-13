@@ -43,8 +43,9 @@ export interface Backend {
   applyCasting(wsId: string, slots: { personaId: string; jobId: string }[]): void;
   /** 기본 터미널 (S9u2S) — 역할 없는 셸 세션을 빈 슬롯에 시작한다. 이미 있으면 재사용. */
   startDefaultTerminal(wsId: string): void;
-  /** 슬롯에 터미널 추가 — 페르소나·직무 없이 빈 슬롯 하나를 셸 세션으로 채운다 */
-  addTerminal(wsId: string, shell?: string): void;
+  /** 슬롯에 터미널 추가 — 페르소나·직무 없이 빈 슬롯 하나를 셸 세션으로 채운다.
+   *  cwd를 주면 그 경로에서 시작한다 (M36 — git 패널의 워크트리 셸 열기) */
+  addTerminal(wsId: string, shell?: string, cwd?: string): void;
   /** 슬롯에 역할 세션 추가 — 스폰 시점에 권한 플래그가 결정되므로 재시작이 필요 없다 */
   addRoleSession(wsId: string, personaId: string, jobId: string, opts?: { cwd?: string; worktree?: boolean }): void;
   /** 슬롯에서 터미널 제거 — 세션을 삭제하고 임무 배정도 해제한다 */
@@ -583,7 +584,7 @@ export class MockBackend implements Backend {
     this.addTerminal(wsId);
   }
 
-  addTerminal(wsId: string, shell?: string) {
+  addTerminal(wsId: string, shell?: string, cwd?: string) {
     const ws = WORKSPACES.find((x) => x.id === wsId);
     if (!ws) return;
     const used = new Set(SESSIONS.filter((x) => x.workspaceId === wsId).map((x) => x.slot));
@@ -597,13 +598,13 @@ export class MockBackend implements Backend {
       s(`shell${slot}@${wsId}`, wsId, slot, "", "", {
         status: "shell",
         shell: shell ?? "pwsh",
-        cwd: ws.path,
+        cwd: cwd ?? ws.path, // 워크트리 셸 열기 (M36) — 지정 경로에서 시작
         sinceMs: 0,
         resumeReason: "일반 셸 · cwd 유지",
-        lastOutput: "기본 터미널",
+        lastOutput: cwd ? "워크트리 셸" : "기본 터미널",
       }),
     );
-    this.logEvent("app", `터미널 추가 · ${ws.name} SLOT ${slot} · ${shell ?? "pwsh"}`);
+    this.logEvent("app", `터미널 추가 · ${ws.name} SLOT ${slot} · ${shell ?? "pwsh"}${cwd ? ` · ${cwd}` : ""}`);
     this.broadcast();
   }
 

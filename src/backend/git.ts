@@ -28,6 +28,39 @@ export async function gitOverview(wsPath: string): Promise<GitOverview | undefin
   return invoke<GitOverview>("git_overview", { wsPath }).catch(() => undefined);
 }
 
+// ── 워크트리·브랜치 (M36 — orca식 안전 범위) ──
+// 커밋 이력을 바꾸지 않는 작업 트리 조작만: 목록·생성·체크아웃·열기.
+// 삭제(FR-E-64 — 정리는 사람 몫)와 commit·push·stage(G7)는 계속 제공하지 않는다.
+
+export interface WorktreeInfo {
+  path: string;
+  branch: string | null; // detached HEAD면 null
+  head: string;
+  isMain: boolean;
+  isSession: boolean; // .eqmux/worktrees/ 아래 — 앱이 만든 것
+}
+
+export interface BranchInfo {
+  name: string;
+  current: boolean;
+  remote: boolean; // 원격에만 있는 이름 — checkout 시 추적 브랜치가 만들어진다
+}
+
+export async function worktreeList(wsPath: string): Promise<WorktreeInfo[] | undefined> {
+  if (!isTauri()) return undefined;
+  return invoke<WorktreeInfo[]>("git_worktrees", { wsPath }).catch(() => undefined);
+}
+
+export async function branchList(wsPath: string): Promise<BranchInfo[] | undefined> {
+  if (!isTauri()) return undefined;
+  return invoke<BranchInfo[]>("git_branches", { wsPath }).catch(() => undefined);
+}
+
+/** 이름 있는 워크트리 생성 — base ref에서 분기. 반환은 절대 경로. 실패는 throw */
+export function worktreeAdd(wsPath: string, name: string, base?: string): Promise<string> {
+  return invoke<string>("worktree_add", { wsPath, name, base: base ?? null });
+}
+
 // ── diff 에디터 (PRD H) — HEAD ↔ 워크트리, 읽기 전용 ──
 
 export interface ChangedFile {

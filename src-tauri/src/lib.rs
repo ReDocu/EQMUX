@@ -963,6 +963,31 @@ async fn ws_checkout(ws_path: String, branch: String) -> Result<String, String> 
     .map_err(|e| e.to_string())?
 }
 
+// ── git 패널 워크트리·브랜치 (M36 — orca식 안전 범위) — 커밋 이력을 바꾸지 않는
+// 작업 트리 조작만 개방한다: 목록·생성·체크아웃·열기. 삭제(FR-E-64)와
+// commit·push·stage(G7 — 실행은 터미널에서 사람이)는 계속 제공하지 않는다.
+
+#[tauri::command]
+fn git_worktrees(ws_path: String) -> Result<Vec<workspace::WorktreeInfo>, String> {
+    workspace::worktree_list(&ws_path)
+}
+
+#[tauri::command]
+fn git_branches(ws_path: String) -> Result<Vec<workspace::BranchInfo>, String> {
+    workspace::branch_list(&ws_path)
+}
+
+/// 이름 있는 워크트리 생성 — base ref(브랜치·커밋)에서 분기. 큰 저장소의 체크아웃이
+/// 느릴 수 있어 blocking 스레드에서 돈다. 반환은 절대 경로.
+#[tauri::command]
+async fn worktree_add(ws_path: String, name: String, base: Option<String>) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        workspace::worktree_create(&ws_path, &name, base.as_deref())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 // ── 경량 KV (assignment_cache 테이블, FR-C-23) — 미확인·인박스 같은 파생 상태의 영속 캐시.
 // 파일이 원본인 것(팀·역할·임무)은 여기 넣지 않는다 — DB는 어디까지나 캐시다.
 
@@ -1579,6 +1604,9 @@ pub fn run() {
             team_load,
             team_save,
             worktree_ensure,
+            worktree_add,
+            git_worktrees,
+            git_branches,
             ws_checkout,
             cache_get,
             cache_set,

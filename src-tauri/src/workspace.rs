@@ -92,10 +92,11 @@ pub fn worktree_dir(ws_path: &str, session: &str) -> PathBuf {
         .join(path_component(session))
 }
 
-/// 워크트리 보장 — 멱등: 이미 유효하면 그대로 반환. 삭제·정리는 하지 않는다
-/// (FR-E-64 정책 — 커밋 안 된 작업이 있을 수 있어 사람이 정리한다).
-pub fn worktree_ensure(ws_path: &str, session: &str) -> Result<String, String> {
-    let path = worktree_dir(ws_path, session);
+/// 워크트리 생성 공통 — `.eqmux/worktrees/<이름>` + 브랜치 `eqmux/<이름>`. 멱등: 이미 연결돼
+/// 있으면 그대로 반환. base가 있으면 그 ref(브랜치·커밋·원격)에서 분기한다 (M36 — orca식
+/// start-from). 삭제·정리는 하지 않는다 (FR-E-64 정책 — 커밋 안 된 작업은 사람이 정리한다).
+pub fn worktree_create(ws_path: &str, name: &str, base: Option<&str>) -> Result<String, String> {
+    let path = worktree_dir(ws_path, name);
     let p = path.to_string_lossy().into_owned();
     // 워크트리의 .git은 gitdir 포인터 "파일"이다 — 존재하면 이미 연결된 것
     if path.join(".git").exists() {
@@ -105,17 +106,99 @@ pub fn worktree_ensure(ws_path: &str, session: &str) -> Result<String, String> {
     let _ = git(&["worktree", "prune"], ws_path); // 디렉터리만 지워진 잔재 등록 정리
     let branch: String = format!(
         "eqmux/{}",
-        session
-            .chars()
+        name.chars()
             .map(|c| if c.is_alphanumeric() || matches!(c, '-' | '_') { c } else { '-' })
             .collect::<String>()
     );
-    // 새 브랜치로 시도 → 브랜치가 이미 있으면(이전 세션의 흔적) 그 브랜치를 다시 연결
-    if let Err(first) = git(&["worktree", "add", &p, "-b", &branch], ws_path) {
+    // 새 브랜치로 시도(+base ref) → 브랜치가 이미 있으면(이전 흔적) 그 브랜치를 다시 연결
+    let mut add_new: Vec<&str> = vec!["worktree", "add", &p, "-b", &branch];
+    if let Some(b) = base.filter(|b| !b.trim().is_empty()) {
+        add_new.push(b);
+    }
+    if let Err(first) = git(&add_new, ws_path) {
         git(&["worktree", "add", &p, &branch], ws_path)
             .map_err(|second| format!("워크트리 생성 실패 — {first} / {second}"))?;
     }
     Ok(p)
+}
+
+/// 세션 워크트리 보장 (FR-E-62) — HEAD에서 분기하는 기존 계약 유지
+pub fn worktree_ensure(ws_path: &str, session: &str) -> Result<String, String> {
+    worktree_create(ws_path, session, None)
+}
+
+/// 워크트리 목록 항목 (M36) — 외부에서 만든 워크트리도 잡힌다 (순수 git 호환)
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeInfo {
+    pub path: String,
+    pub branch: Option<String>, // detached HEAD면 None
+    pub head: String,           // 짧은 해시
+    pub is_main: bool,          // 저장소 본체 (porcelain 첫 항목)
+    pub is_session: bool,       // .eqmux/worktrees/ 아래 — 앱이 만든 것
+}
+
+/// `git worktree list --porcelain` 파싱 (M36) — 항목은 빈 줄로 구분되고
+/// worktree/HEAD/branch(또는 detached) 줄이 이어진다
+pub fn worktree_list(ws_path: &str) -> Result<Vec<WorktreeInfo>, String> {
+    let out = git(&["worktree", "list", "--porcelain"], ws_path)?;
+    let mut items: Vec<WorktreeInfo> = Vec::new();
+    let mut cur: Option<WorktreeInfo> = None;
+    for line in out.lines() {
+        if let Some(p) = line.strip_prefix("worktree ") {
+            if let Some(w) = cur.take() {
+                items.push(w);
+            }
+            cur = Some(WorktreeInfo {
+                path: p.to_string(),
+                branch: None,
+                head: String::new(),
+                is_main: items.is_empty(),
+                is_session: p.replace('\\', "/").contains("/.eqmux/worktrees/"),
+            });
+        } else if let Some(h) = line.strip_prefix("HEAD ") {
+            if let Some(w) = cur.as_mut() {
+                w.head = h.chars().take(8).collect();
+            }
+        } else if let Some(b) = line.strip_prefix("branch ") {
+            if let Some(w) = cur.as_mut() {
+                w.branch = Some(b.trim_start_matches("refs/heads/").to_string());
+            }
+        }
+    }
+    if let Some(w) = cur.take() {
+        items.push(w);
+    }
+    Ok(items)
+}
+
+/// 체크아웃 후보 브랜치 (M36) — 로컬 + 원격 전용 이름. 원격 전용은 checkout 시
+/// git의 DWIM이 추적 브랜치를 만들므로 ws_checkout 경로가 그대로 성립한다.
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct BranchInfo {
+    pub name: String,
+    pub current: bool,
+    pub remote: bool, // 로컬에 없고 원격에만 있는 이름
+}
+
+pub fn branch_list(ws_path: &str) -> Result<Vec<BranchInfo>, String> {
+    let current = git(&["rev-parse", "--abbrev-ref", "HEAD"], ws_path).unwrap_or_default();
+    let locals = git(&["for-each-ref", "--format=%(refname:short)", "refs/heads"], ws_path)?;
+    let remotes =
+        git(&["for-each-ref", "--format=%(refname:short)", "refs/remotes"], ws_path).unwrap_or_default();
+    let mut out: Vec<BranchInfo> = Vec::new();
+    for l in locals.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        out.push(BranchInfo { name: l.to_string(), current: l == current, remote: false });
+    }
+    for r in remotes.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        let Some((_, name)) = r.split_once('/') else { continue };
+        if name == "HEAD" || name.is_empty() || out.iter().any(|b| b.name == name) {
+            continue;
+        }
+        out.push(BranchInfo { name: name.to_string(), current: false, remote: true });
+    }
+    Ok(out)
 }
 
 /// 등록 항목의 현재 상태 실측 — 존재 여부·브랜치·원격 (FR-E-03·08)
@@ -293,6 +376,46 @@ mod tests {
         fs::remove_dir_all(&wt).unwrap();
         let again = worktree_ensure(&path, "kai@ws1").unwrap();
         assert!(Path::new(&again).join("a.txt").exists());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// M36 — base ref 분기 생성 + 목록·브랜치 실측 (git 패널 안전 범위의 원천)
+    #[test]
+    fn worktree_create_with_base_and_lists() {
+        let dir = std::env::temp_dir().join(format!("eqmux-wtl-{}", now_ms()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.to_string_lossy().into_owned();
+        git(&["init"], &path).unwrap();
+        git(&["config", "user.email", "t@t"], &path).unwrap();
+        git(&["config", "user.name", "t"], &path).unwrap();
+        fs::write(dir.join("a.txt"), "1").unwrap();
+        git(&["add", "."], &path).unwrap();
+        git(&["commit", "-m", "first"], &path).unwrap();
+        // base 브랜치를 만들고 한 커밋 더 — 워크트리가 여기서 분기해야 한다
+        git(&["checkout", "-b", "base-b"], &path).unwrap();
+        fs::write(dir.join("b.txt"), "2").unwrap();
+        git(&["add", "."], &path).unwrap();
+        git(&["commit", "-m", "second"], &path).unwrap();
+        let base_tip = git(&["rev-parse", "HEAD"], &path).unwrap();
+        let default_branch = "base-b"; // 현재 브랜치
+
+        let wt = worktree_create(&path, "feat-x", Some("base-b")).unwrap();
+        assert_eq!(git(&["rev-parse", "HEAD"], &wt).unwrap(), base_tip); // base에서 분기
+        assert!(Path::new(&wt).join("b.txt").exists());
+
+        // 목록 — 본체 + 세션 워크트리, porcelain 파싱
+        let listed = worktree_list(&path).unwrap();
+        assert_eq!(listed.len(), 2);
+        assert!(listed[0].is_main && !listed[0].is_session);
+        assert!(!listed[1].is_main && listed[1].is_session);
+        assert_eq!(listed[1].branch.as_deref(), Some("eqmux/feat-x"));
+        assert!(!listed[1].head.is_empty());
+
+        // 브랜치 후보 — 현재 표시 + 워크트리 브랜치 포함, 원격 없음이므로 remote 항목 없음
+        let branches = branch_list(&path).unwrap();
+        assert!(branches.iter().any(|b| b.name == default_branch && b.current));
+        assert!(branches.iter().any(|b| b.name == "eqmux/feat-x" && !b.current));
+        assert!(branches.iter().all(|b| !b.remote));
         fs::remove_dir_all(&dir).ok();
     }
 }
