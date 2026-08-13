@@ -1,7 +1,7 @@
 // MockBackend — SessionService(PRD C §7.1)의 프런트 소비 표면을 흉내 낸다.
 // M1에서 TauriBackend(invoke/Channel)로 교체하며, 화면은 Backend 인터페이스만 안다 (C9 모듈 경계).
 import type {
-  AgentStatus,
+  AgentStateApply,
   ConversationMessage,
   EventRecord,
   Job,
@@ -9,6 +9,7 @@ import type {
   Persona,
   Session,
   StoreUsage,
+  TeamSlotHydrate,
   Workspace,
 } from "../types";
 
@@ -51,27 +52,13 @@ export interface Backend {
   updateSessionRole(id: string, personaId: string, jobId: string): void;
   /** team.json에서 복원된 슬롯을 세션으로 채운다 — 에이전트는 자동 실행하지 않는다 (S3).
    *  aliveIds에 든 세션은 PTY가 살아 있는 것(웹뷰 재시작, FR-C-06)이라 재개 대기가 아니라 재부착 대상이다 */
-  hydrateTeam(
-    wsId: string,
-    slots: { slot: number; persona: string; job: string; agentSessionId: string | null; resumable: boolean }[],
-    aliveIds?: Set<string>,
-  ): void;
+  hydrateTeam(wsId: string, slots: TeamSlotHydrate[], aliveIds?: Set<string>): void;
   /** 웹뷰 재시작 복구 (FR-C-06) — 팀 파일에 없는 살아 있는 PTY(기본 터미널)를 화면에 되살린다 */
   reviveOrphan(id: string, wsId: string): void;
   /** 세션 메모리 실측 반영 (FR-C-09) — 최신값·피크만 유지, 이벤트 적재 없음 */
   applyMemory(samples: { id: string; mb: number; peakMb: number }[]): void;
   /** 실물 에이전트 상태 반영 (PRD D agent-state 이벤트) — Tauri에서만 호출된다 */
-  applyAgentState(evt: {
-    session: string;
-    agentSession: string;
-    status?: AgentStatus;
-    waitingFor?: string;
-    activity?: string;
-    subagents?: number;
-    resumable: boolean;
-    version?: string;
-    exitCode?: number;
-  }): void;
+  applyAgentState(evt: AgentStateApply): void;
   createMission(wsId: string, name: string, goal: string, branch?: string): void;
   cycleMissionStatus(id: string): void;
   toggleAssign(missionId: string, sessionId: string): void;
@@ -651,19 +638,7 @@ export class MockBackend implements Backend {
     this.broadcast();
   }
 
-  hydrateTeam(
-    wsId: string,
-    slots: {
-      slot: number;
-      persona: string;
-      job: string;
-      worktree?: boolean;
-      agentSessionId: string | null;
-      resumable: boolean;
-      worktreePath?: string | null;
-    }[],
-    aliveIds?: Set<string>,
-  ) {
+  hydrateTeam(wsId: string, slots: TeamSlotHydrate[], aliveIds?: Set<string>) {
     const ws = WORKSPACES.find((x) => x.id === wsId);
     if (!ws) return;
     let added = 0;
@@ -752,17 +727,7 @@ export class MockBackend implements Backend {
     if (changed) this.broadcast();
   }
 
-  applyAgentState(evt: {
-    session: string;
-    agentSession: string;
-    status?: AgentStatus;
-    waitingFor?: string;
-    activity?: string;
-    subagents?: number;
-    resumable: boolean;
-    version?: string;
-    exitCode?: number;
-  }) {
+  applyAgentState(evt: AgentStateApply) {
     const sess = SESSIONS.find((x) => x.id === evt.session);
     if (!sess) return;
     sess.restored = false; // 실물 에이전트가 붙었다 — 복원 대기 상태 해제

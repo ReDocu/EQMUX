@@ -16,6 +16,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 pub(crate) mod agent;
 mod cli;
+mod clip;
 mod diff;
 mod fsx;
 pub(crate) mod ipc;
@@ -24,6 +25,7 @@ pub(crate) mod library;
 pub(crate) mod messages;
 mod missions;
 mod ports;
+mod recovery;
 mod roles;
 pub(crate) mod store;
 mod team;
@@ -33,11 +35,6 @@ use store::{LineAssembler, Store, StoreMsg};
 use workspace::{WsEntry, WsInfo};
 
 pub(crate) struct StoreState(pub(crate) Store);
-
-/// 비정상 종료 감지 (FR-C-35) — 시작 시 running.flag가 이미 있으면 직전 실행이
-/// 정상 종료(app_exit의 표식 제거)를 거치지 못한 것이다. 첫 crash_recovery 호출이
-/// 값을 소비한다 — 웹뷰만 재시작(FR-C-06)했을 때 안내가 다시 뜨지 않게.
-struct DirtyStart(Mutex<bool>);
 
 /// 설정 (PRD J) — 앱데이터 settings.json. 스키마는 프런트 소유(JSON 통과)이며
 /// Rust는 알림 게이트(FR-G-30 라우팅) 같은 즉시 참조를 위해 메모리 사본을 든다.
@@ -1170,49 +1167,7 @@ async fn diff_file(ws_path: String, path: String) -> Result<diff::FileDiff, Stri
         .map_err(|e| e.to_string())?
 }
 
-/// 탐색기 파일 트리 (PRD H) — 깊이·개수 상한, 무거운 디렉터리 제외
-#[tauri::command]
-fn fs_tree(ws_path: String) -> Vec<fsx::FsNode> {
-    fsx::tree(&ws_path)
-}
-
-/// 텍스트 미리보기 — 경로 탈출 방지 + 64KB 상한
-#[tauri::command]
-fn fs_preview(ws_path: String, rel: String) -> Result<String, String> {
-    fsx::preview(&ws_path, &rel)
-}
-
-// ── 탐색기 파일 CRUD (M24) — 같은 탈출 가드 · .git 불가침 · 삭제는 휴지통 ──
-
-/// 편집용 원문 (1MB 상한 — 미리보기 잘림을 저장해 뒷부분을 날리는 사고 방지)
-#[tauri::command]
-fn fs_read(ws_path: String, rel: String) -> Result<String, String> {
-    fsx::read_full(&ws_path, &rel)
-}
-
-#[tauri::command]
-fn fs_write(ws_path: String, rel: String, content: String) -> Result<(), String> {
-    fsx::write_file(&ws_path, &rel, &content)
-}
-
-/// relDir(빈 문자열 = 루트) 아래에 생성 — 반환은 새 항목의 상대 경로
-#[tauri::command]
-fn fs_create(ws_path: String, rel_dir: String, name: String, dir: bool) -> Result<String, String> {
-    fsx::create_entry(&ws_path, &rel_dir, &name, dir)
-}
-
-#[tauri::command]
-fn fs_rename(ws_path: String, rel: String, new_name: String) -> Result<String, String> {
-    fsx::rename_entry(&ws_path, &rel, &new_name)
-}
-
-/// 휴지통으로 이동 — 영구 삭제 폴백 없음
-#[tauri::command]
-async fn fs_delete(ws_path: String, rel: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || fsx::delete_entry(&ws_path, &rel))
-        .await
-        .map_err(|e| e.to_string())?
-}
+// 탐색기 트리·미리보기·파일 CRUD 커맨드는 fsx.rs가 소유한다 (M24 · 리팩토링으로 이동)
 
 // ── 종료 시퀀스 (FR-C-60~63) — ①입력 차단(프런트) → ②flush → ③정상 종료 신호 → ④유예 후 트리 종료 ──
 
@@ -1259,80 +1214,6 @@ async fn app_exit(app: AppHandle) {
     app.exit(0);
 }
 
-// ── 비정상 종료 복구 (FR-C-35) — 첫 실행에서 직전 세션 목록 + 마지막 활동 시각 ──
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CrashSession {
-    workspace: String,
-    id: String,
-    cwd: String,
-    shell: Option<String>,
-    last_output_at: Option<i64>,
-    resumable: bool,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CrashReport {
-    dirty: bool,
-    sessions: Vec<CrashSession>,
-}
-
-/// 크래시 시점에 살아 있었을 세션 스캔 — 각 워크스페이스 DB에서 exit 기록 없이 끝난
-/// 세션을 최근 활동순으로 모은다. 재개 가능 여부는 agent_session 매핑 +
-/// 트랜스크립트 실측 (FR-D-20)으로 다시 판정한다.
-fn crash_scan(root: &Path) -> Vec<CrashSession> {
-    let mut out = Vec::new();
-    let ws_root = root.join("workspaces");
-    if let Ok(entries) = std::fs::read_dir(&ws_root) {
-        for entry in entries.flatten() {
-            let ws = entry.file_name().to_string_lossy().into_owned();
-            let db = entry.path().join("session.db");
-            let Ok(conn) = Connection::open_with_flags(&db, OpenFlags::SQLITE_OPEN_READ_ONLY) else {
-                continue;
-            };
-            let Ok(mut stmt) = conn.prepare(
-                "SELECT s.id, s.cwd, s.shell, s.last_output_at, a.agent_session_id
-                 FROM session s LEFT JOIN agent_session a ON a.session_id = s.id
-                 WHERE s.exit_code IS NULL AND s.last_output_at IS NOT NULL
-                 ORDER BY s.last_output_at DESC LIMIT 8",
-            ) else {
-                continue;
-            };
-            let rows = stmt.query_map([], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, Option<String>>(1)?,
-                    r.get::<_, Option<String>>(2)?,
-                    r.get::<_, Option<i64>>(3)?,
-                    r.get::<_, Option<String>>(4)?,
-                ))
-            });
-            let Ok(rows) = rows else { continue };
-            for (id, cwd, shell, last_output_at, uuid) in rows.flatten() {
-                let cwd = cwd.unwrap_or_default();
-                let resumable = uuid.as_deref().map(|u| agent::resumable(&cwd, u)).unwrap_or(false);
-                out.push(CrashSession { workspace: ws.clone(), id, cwd, shell, last_output_at, resumable });
-            }
-        }
-    }
-    out.sort_by_key(|s| std::cmp::Reverse(s.last_output_at));
-    out.truncate(16);
-    out
-}
-
-/// 직전 실행이 비정상 종료였을 때만 dirty=true + 직전 세션 목록 (FR-C-35).
-/// 값은 1회 소비 — 웹뷰 재시작 후 재호출에는 dirty=false를 준다 (FR-C-06).
-#[tauri::command]
-fn crash_recovery(store_state: State<StoreState>, dirty: State<DirtyStart>) -> CrashReport {
-    let was_dirty = dirty.0.lock().map(|mut d| std::mem::take(&mut *d)).unwrap_or(false);
-    if !was_dirty {
-        return CrashReport { dirty: false, sessions: Vec::new() };
-    }
-    CrashReport { dirty: true, sessions: crash_scan(&store_state.0.root()) }
-}
-
 /// 웹뷰 재시작 복구 (FR-C-06) — 추적 중인 에이전트 상태의 현재 스냅숏.
 /// **살아 있는 PTY가 있는 세션만** 준다 — 죽은 세션은 재개 제안(FR-C-33)의 몫이라
 /// 스냅숏이 restored 상태를 덮어 제안 카드를 지워버리면 안 된다.
@@ -1361,37 +1242,6 @@ fn agent_snapshot(app: AppHandle) -> Vec<agent::AgentStateEvt> {
             exit_code: None,
         })
         .collect()
-}
-
-#[cfg(test)]
-mod crash_tests {
-    use super::*;
-
-    /// exit 기록이 없는 세션만, 최근 활동순으로 잡힌다 (FR-C-35)
-    #[test]
-    fn crash_scan_finds_unexited_sessions_only() {
-        let root = std::env::temp_dir().join(format!("eqmux-crash-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        let conn = store::open_db(&root, "ws1").expect("db open");
-        conn.execute(
-            "INSERT INTO session (id, workspace, cwd, shell, created_at, last_output_at, exit_code)
-             VALUES ('alive@ws1', 'ws1', 'C:\\w', 'claude', 1, 2000, NULL),
-                    ('older@ws1', 'ws1', 'C:\\w', 'pwsh', 1, 1000, NULL),
-                    ('exited@ws1', 'ws1', 'C:\\w', 'pwsh', 1, 3000, 0),
-                    ('silent@ws1', 'ws1', 'C:\\w', 'pwsh', 1, NULL, NULL)",
-            [],
-        )
-        .expect("seed");
-        drop(conn);
-
-        let found = crash_scan(&root);
-        let ids: Vec<&str> = found.iter().map(|s| s.id.as_str()).collect();
-        // exit 0 기록·활동 전무 세션은 제외, 최근 활동이 위
-        assert_eq!(ids, vec!["alive@ws1", "older@ws1"]);
-        assert_eq!(found[0].last_output_at, Some(2000));
-        assert!(!found[0].resumable); // agent_session 매핑 없음 = 재개 불가
-        let _ = std::fs::remove_dir_all(&root);
-    }
 }
 
 async fn tokio_sleep(d: std::time::Duration) {
@@ -1460,41 +1310,7 @@ fn open_log_dir() -> Result<(), String> {
     Ok(())
 }
 
-// ── 네이티브 클립보드 (arboard) — WebView2의 웹 Clipboard API는 권한 문제로 조용히 실패한다 ──
-
-#[tauri::command]
-fn clip_read_text() -> String {
-    let mut cb = match arboard::Clipboard::new() {
-        Ok(c) => c,
-        Err(_) => return String::new(),
-    };
-    cb.get_text().unwrap_or_default()
-}
-
-#[tauri::command]
-fn clip_write_text(text: String) -> Result<(), String> {
-    let mut cb = arboard::Clipboard::new().map_err(|e| e.to_string())?;
-    cb.set_text(text).map_err(|e| e.to_string())
-}
-
-/// 클립보드 이미지 → %TEMP%\eqmux-pastes\*.png 저장 후 경로 반환. 이미지가 없으면 None.
-/// 터미널에는 파일 경로가 삽입된다 (Claude Code 멀티모달 입력용).
-#[tauri::command]
-fn clip_save_image() -> Result<Option<String>, String> {
-    let mut cb = arboard::Clipboard::new().map_err(|e| e.to_string())?;
-    let img = match cb.get_image() {
-        Ok(i) => i,
-        Err(_) => return Ok(None),
-    };
-    let (w, h) = (img.width as u32, img.height as u32);
-    let rgba = image::RgbaImage::from_raw(w, h, img.bytes.into_owned())
-        .ok_or("클립보드 이미지 변환 실패")?;
-    let dir = std::env::temp_dir().join("eqmux-pastes");
-    create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let path = dir.join(format!("paste-{}.png", workspace::now_ms()));
-    rgba.save(&path).map_err(|e| e.to_string())?;
-    Ok(Some(path.to_string_lossy().into_owned()))
-}
+// 네이티브 클립보드 커맨드는 clip.rs가 소유한다 (리팩토링으로 이동)
 
 #[tauri::command]
 fn app_version() -> &'static str {
@@ -1542,7 +1358,7 @@ pub fn run() {
             // 정상 종료는 app_exit 끝에서 표식을 지운다.
             let dirty = root.join("running.flag").exists();
             let _ = std::fs::write(root.join("running.flag"), b"1");
-            app.manage(DirtyStart(Mutex::new(dirty)));
+            app.manage(recovery::DirtyStart(Mutex::new(dirty)));
             // 설정 로드 (PRD J) — 손상되면 Null로 시작 (프런트 기본값이 받친다)
             let settings = std::fs::read_to_string(root.join("settings.json"))
                 .ok()
@@ -1620,23 +1436,23 @@ pub fn run() {
             ws_unregister,
             ws_repath,
             ws_touch,
-            clip_read_text,
-            clip_write_text,
-            clip_save_image,
+            clip::clip_read_text,
+            clip::clip_write_text,
+            clip::clip_save_image,
             sessions_memory,
             ports_snapshot,
-            fs_tree,
-            fs_preview,
-            fs_read,
-            fs_write,
-            fs_create,
-            fs_rename,
-            fs_delete,
+            fsx::fs_tree,
+            fsx::fs_preview,
+            fsx::fs_read,
+            fsx::fs_write,
+            fsx::fs_create,
+            fsx::fs_rename,
+            fsx::fs_delete,
             diff_changed_files,
             diff_file,
             shutdown_flush,
             app_exit,
-            crash_recovery,
+            recovery::crash_recovery,
             agent_snapshot,
             layout_load,
             layout_save,

@@ -65,6 +65,30 @@ export interface Session {
   lastOutput: string;
 }
 
+/** agent-state 이벤트·스냅숏의 반영 페이로드 (PRD D §7.1) — 인터페이스·구현·수신부가 공유한다 */
+export interface AgentStateApply {
+  session: string;
+  agentSession: string;
+  status?: AgentStatus;
+  waitingFor?: string;
+  activity?: string; // 훅 2차 소스 (FR-D-15)
+  subagents?: number; // FR-D-18
+  resumable: boolean;
+  version?: string;
+  exitCode?: number;
+}
+
+/** team.json 복원 슬롯 + 재개·워크트리 결합 정보 (team_load 반환의 소비 형태) */
+export interface TeamSlotHydrate {
+  slot: number;
+  persona: string;
+  job: string;
+  worktree?: boolean;
+  agentSessionId: string | null;
+  resumable: boolean;
+  worktreePath?: string | null;
+}
+
 export type MissionStatus = "todo" | "in-progress" | "in-review" | "done";
 
 export interface Mission {

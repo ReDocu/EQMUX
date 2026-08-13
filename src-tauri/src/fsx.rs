@@ -192,6 +192,50 @@ pub fn delete_entry(ws_path: &str, rel: &str) -> Result<(), String> {
     trash::delete(&target).map_err(|e| format!("휴지통 이동 실패 — {e}"))
 }
 
+// ── Tauri 커맨드 표면 — 로직은 위의 순수 함수들, 여기는 이름과 시그니처만 소유한다 ──
+
+/// 탐색기 파일 트리 (PRD H) — 깊이·개수 상한, 무거운 디렉터리 제외
+#[tauri::command]
+pub fn fs_tree(ws_path: String) -> Vec<FsNode> {
+    tree(&ws_path)
+}
+
+/// 텍스트 미리보기 — 경로 탈출 방지 + 64KB 상한
+#[tauri::command]
+pub fn fs_preview(ws_path: String, rel: String) -> Result<String, String> {
+    preview(&ws_path, &rel)
+}
+
+/// 편집용 원문 (1MB 상한 — 미리보기 잘림을 저장해 뒷부분을 날리는 사고 방지)
+#[tauri::command]
+pub fn fs_read(ws_path: String, rel: String) -> Result<String, String> {
+    read_full(&ws_path, &rel)
+}
+
+#[tauri::command]
+pub fn fs_write(ws_path: String, rel: String, content: String) -> Result<(), String> {
+    write_file(&ws_path, &rel, &content)
+}
+
+/// relDir(빈 문자열 = 루트) 아래에 생성 — 반환은 새 항목의 상대 경로
+#[tauri::command]
+pub fn fs_create(ws_path: String, rel_dir: String, name: String, dir: bool) -> Result<String, String> {
+    create_entry(&ws_path, &rel_dir, &name, dir)
+}
+
+#[tauri::command]
+pub fn fs_rename(ws_path: String, rel: String, new_name: String) -> Result<String, String> {
+    rename_entry(&ws_path, &rel, &new_name)
+}
+
+/// 휴지통으로 이동 — 영구 삭제 폴백 없음
+#[tauri::command]
+pub async fn fs_delete(ws_path: String, rel: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || delete_entry(&ws_path, &rel))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

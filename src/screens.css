@@ -489,9 +489,7 @@
   min-width: 0;
   overflow: hidden;
 }
-.terminal-grid.zoomed {
-  grid-template-columns: minmax(0, 1fr);
-}
+/* .terminal-grid.zoomed 규칙은 배치 6종 섹션 끝에 통합돼 있다 (열·행 템플릿 동시 해제) */
 .terminal-pane {
   background: var(--eq-terminal);
   border: 1px solid var(--eq-line);

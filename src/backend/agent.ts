@@ -23,6 +23,21 @@ export interface AgentStateEvt {
 
 const STATUSES: AgentStatus[] = ["starting", "busy", "waiting", "shell", "idle", "dead"];
 
+/** Rust 이벤트(null 표기) → 목 백엔드 반영 페이로드(undefined 표기) — 수신부 공용 변환 */
+function applyEvt(p: AgentStateEvt): void {
+  backend.applyAgentState({
+    session: p.session,
+    agentSession: p.agentSession,
+    status: STATUSES.includes(p.status as AgentStatus) ? (p.status as AgentStatus) : undefined,
+    waitingFor: p.waitingFor ?? undefined,
+    activity: p.activity ?? undefined,
+    subagents: p.subagents,
+    resumable: p.resumable,
+    version: p.version ?? undefined,
+    exitCode: p.exitCode ?? undefined,
+  });
+}
+
 let ready: Promise<void> | undefined;
 
 /** agent-state 이벤트 → 목 백엔드 세션 갱신 → 전 화면(대시보드·셀·뱃지) 자동 반영 */
@@ -30,20 +45,9 @@ export function ensureAgentListeners(): Promise<void> {
   if (!isTauri()) return Promise.resolve();
   if (!ready) {
     ready = listen<AgentStateEvt>("agent-state", (e) => {
-      const p = e.payload;
-      backend.applyAgentState({
-        session: p.session,
-        agentSession: p.agentSession,
-        status: STATUSES.includes(p.status as AgentStatus) ? (p.status as AgentStatus) : undefined,
-        waitingFor: p.waitingFor ?? undefined,
-        activity: p.activity ?? undefined,
-        subagents: p.subagents,
-        resumable: p.resumable,
-        version: p.version ?? undefined,
-        exitCode: p.exitCode ?? undefined,
-      });
+      applyEvt(e.payload);
       // 인박스 전달 (M3) — idle 전이가 곧 턴 종료 신호다
-      flushInboxOnState(p.session, p.status);
+      flushInboxOnState(e.payload.session, e.payload.status);
     }).then(() => {});
   }
   return ready;
@@ -54,19 +58,7 @@ export function ensureAgentListeners(): Promise<void> {
 export async function applyAgentSnapshot(): Promise<void> {
   if (!isTauri()) return;
   const states = await invoke<AgentStateEvt[]>("agent_snapshot").catch(() => [] as AgentStateEvt[]);
-  for (const p of states) {
-    backend.applyAgentState({
-      session: p.session,
-      agentSession: p.agentSession,
-      status: STATUSES.includes(p.status as AgentStatus) ? (p.status as AgentStatus) : undefined,
-      waitingFor: p.waitingFor ?? undefined,
-      activity: p.activity ?? undefined,
-      subagents: p.subagents,
-      resumable: p.resumable,
-      version: p.version ?? undefined,
-      exitCode: p.exitCode ?? undefined,
-    });
-  }
+  for (const p of states) applyEvt(p);
 }
 
 /** 에이전트 기동 (FR-D-01·02·40) — UUID는 Rust가 발급하고 반환한다.
