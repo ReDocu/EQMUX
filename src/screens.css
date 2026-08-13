@@ -1825,6 +1825,9 @@
 }
 .terminal-grid.zoomed {
   grid-template-columns: 1fr !important;
+  /* 행 템플릿도 지운다 — grid-col(2행)·main-bottom(2fr/1fr)의 빈 행 트랙이 남으면
+     줌한 페인이 위쪽 일부만 차지한다. 한 페인 = grid-auto-rows 1fr 한 행이 전부다 */
+  grid-template-rows: none !important;
   grid-auto-flow: row !important;
 }
 .terminal-grid.zoomed .terminal-pane:first-child {
