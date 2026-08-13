@@ -1207,6 +1207,43 @@
 .msnp-tree .panel-search {
   margin-bottom: 6px;
 }
+/* 파일 CRUD (M24) — 대상은 선택 폴더 안/선택 파일 옆/루트. 삭제는 휴지통 2단 확인 */
+.msnp-crud {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.msnp-crud .btn {
+  font-size: 10px;
+  padding: 2px 8px;
+}
+.msnp-crud .btn.danger {
+  color: var(--eq-red);
+  border-color: var(--eq-red);
+}
+.msnp-name-row {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.msnp-name-row input {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+}
+.msnp-edit {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  resize: none;
+  border: none;
+  outline: none;
+  background: var(--eq-surface);
+  color: var(--eq-text);
+  font-size: 11px;
+  line-height: 1.6;
+  padding: 10px;
+}
 .msnp-tree-rows {
   flex: 1;
   min-height: 0;

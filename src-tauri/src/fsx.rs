@@ -1,5 +1,6 @@
-// 탐색기 패널 실측 (PRD H) — 워크스페이스 파일 트리 + 텍스트 미리보기.
-// 읽기 전용이며, 미리보기는 경로 탈출을 막고 크기를 상한한다 (FR-E-71과 같은 보수성).
+// 탐색기 패널 실측 (PRD H) — 워크스페이스 파일 트리 + 텍스트 미리보기 + 파일 CRUD (M24).
+// 모든 쓰기는 읽기와 같은 경로 탈출 가드를 지나고, .git은 불가침이며, 삭제는 휴지통으로 보낸다.
+// (PRD H의 읽기 전용 선언은 M24에서 사용자 확정으로 개정 — git 쓰기·프로세스 kill은 여전히 없다)
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -10,6 +11,7 @@ const SKIP_DIRS: [&str; 5] = [".git", "node_modules", "target", "dist", ".vite"]
 const MAX_ENTRIES: usize = 400;
 const MAX_DEPTH: u32 = 3;
 const PREVIEW_BYTES: usize = 64 * 1024;
+const EDIT_MAX_BYTES: usize = 1024 * 1024; // 앱 내 편집 상한 — 초과분은 잘리는 대신 거부한다
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -77,9 +79,150 @@ pub fn preview(ws_path: &str, rel: &str) -> Result<String, String> {
     Ok(text)
 }
 
+// ── 파일 CRUD (M24) — 공통 가드: 워크스페이스 밖 거부 · .git 불가침 · 루트 자체 조작 금지 ──
+
+/// 존재하는 대상의 절대 경로 해석 — canonicalize로 탈출을 막는다 (preview와 같은 규칙)
+fn resolve_existing(ws_path: &str, rel: &str) -> Result<PathBuf, String> {
+    if rel.trim().is_empty() {
+        return Err("워크스페이스 루트는 조작할 수 없습니다".into());
+    }
+    guard_git(rel)?;
+    let base = fs::canonicalize(ws_path).map_err(|_| "워크스페이스 경로 없음".to_string())?;
+    let target = fs::canonicalize(base.join(rel)).map_err(|_| "대상 없음".to_string())?;
+    if !target.starts_with(&base) {
+        return Err("워크스페이스 밖 경로".into());
+    }
+    Ok(target)
+}
+
+/// .git 불가침 — 탐색기 CRUD가 저장소 자체를 부술 수 없게 한다
+fn guard_git(rel: &str) -> Result<(), String> {
+    let norm = rel.replace('\\', "/");
+    if norm == ".git" || norm.starts_with(".git/") || norm.contains("/.git/") || norm.ends_with("/.git") {
+        return Err(".git은 탐색기에서 조작할 수 없습니다".into());
+    }
+    Ok(())
+}
+
+/// 파일·폴더 이름 검증 — 구분자·예약 문자가 들어간 이름은 이동·탈출 수단이 된다
+fn valid_name(name: &str) -> Result<(), String> {
+    let n = name.trim();
+    if n.is_empty() || n == "." || n == ".." || n == ".git" {
+        return Err("사용할 수 없는 이름입니다".into());
+    }
+    if n.chars().any(|c| matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|')) {
+        return Err("이름에 경로 구분자·예약 문자를 쓸 수 없습니다".into());
+    }
+    Ok(())
+}
+
+/// 편집용 원문 읽기 — 1MB 초과는 거부한다 (64KB 미리보기를 저장하면 뒷부분이 날아가므로,
+/// 편집 경로는 전문을 읽거나 아예 거부하거나 둘 중 하나여야 한다)
+pub fn read_full(ws_path: &str, rel: &str) -> Result<String, String> {
+    let target = resolve_existing(ws_path, rel)?;
+    let meta = fs::metadata(&target).map_err(|e| e.to_string())?;
+    if !meta.is_file() {
+        return Err("파일이 아닙니다".into());
+    }
+    if meta.len() as usize > EDIT_MAX_BYTES {
+        return Err("1MB 초과 — 앱에서 편집할 수 없습니다".into());
+    }
+    let data = fs::read(&target).map_err(|e| e.to_string())?;
+    String::from_utf8(data).map_err(|_| "텍스트 파일이 아닙니다 (UTF-8 아님)".into())
+}
+
+/// 텍스트 저장 — 원자적 쓰기 (tmp → rename)
+pub fn write_file(ws_path: &str, rel: &str, content: &str) -> Result<(), String> {
+    if content.len() > EDIT_MAX_BYTES {
+        return Err("1MB 초과 — 저장할 수 없습니다".into());
+    }
+    let target = resolve_existing(ws_path, rel)?;
+    if !target.is_file() {
+        return Err("파일이 아닙니다".into());
+    }
+    let tmp = target.with_extension("eqmux-tmp");
+    fs::write(&tmp, content).map_err(|e| e.to_string())?;
+    fs::rename(&tmp, &target).map_err(|e| e.to_string())
+}
+
+/// 생성 — rel_dir(빈 문자열 = 루트) 아래 name으로 파일 또는 폴더. 이미 있으면 거부.
+pub fn create_entry(ws_path: &str, rel_dir: &str, name: &str, dir: bool) -> Result<String, String> {
+    valid_name(name)?;
+    let base = fs::canonicalize(ws_path).map_err(|_| "워크스페이스 경로 없음".to_string())?;
+    let parent = if rel_dir.trim().is_empty() { base.clone() } else { resolve_existing(ws_path, rel_dir)? };
+    if !parent.is_dir() {
+        return Err("폴더가 아닙니다".into());
+    }
+    let target = parent.join(name.trim());
+    guard_git(&target.strip_prefix(&base).unwrap_or(&target).to_string_lossy().replace('\\', "/"))?;
+    if target.exists() {
+        return Err("같은 이름이 이미 있습니다".into());
+    }
+    if dir {
+        fs::create_dir(&target).map_err(|e| e.to_string())?;
+    } else {
+        fs::write(&target, "").map_err(|e| e.to_string())?;
+    }
+    Ok(target
+        .strip_prefix(&base)
+        .map(|r| r.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_default())
+}
+
+/// 이름 변경 — 같은 부모 안에서만 (이동은 제공하지 않는다 — 탈출 수단 차단)
+pub fn rename_entry(ws_path: &str, rel: &str, new_name: &str) -> Result<String, String> {
+    valid_name(new_name)?;
+    let target = resolve_existing(ws_path, rel)?;
+    let parent = target.parent().ok_or("부모 폴더 없음")?;
+    let next = parent.join(new_name.trim());
+    if next.exists() {
+        return Err("같은 이름이 이미 있습니다".into());
+    }
+    fs::rename(&target, &next).map_err(|e| e.to_string())?;
+    let base = fs::canonicalize(ws_path).map_err(|_| "워크스페이스 경로 없음".to_string())?;
+    Ok(next
+        .strip_prefix(&base)
+        .map(|r| r.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_default())
+}
+
+/// 삭제 — 영구 삭제가 아니라 휴지통으로 보낸다. 실패 시 영구 삭제로 폴백하지 않는다.
+pub fn delete_entry(ws_path: &str, rel: &str) -> Result<(), String> {
+    let target = resolve_existing(ws_path, rel)?;
+    trash::delete(&target).map_err(|e| format!("휴지통 이동 실패 — {e}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 탐색기 CRUD (M24) — 생성·저장·이름변경 왕복과 가드 (.git 불가침 · 탈출 거부 · 이름 검증)
+    #[test]
+    fn crud_roundtrip_and_guards() {
+        let dir = std::env::temp_dir().join(format!("eqmux-fscrud-{}", crate::workspace::now_ms()));
+        fs::create_dir_all(dir.join(".git")).unwrap();
+        let ws = dir.to_string_lossy().into_owned();
+
+        // 생성 → 저장 → 원문 읽기 왕복
+        assert_eq!(create_entry(&ws, "", "docs", true).unwrap(), "docs");
+        let rel = create_entry(&ws, "docs", "note.md", false).unwrap();
+        assert_eq!(rel, "docs/note.md");
+        write_file(&ws, &rel, "# 메모").unwrap();
+        assert_eq!(read_full(&ws, &rel).unwrap(), "# 메모");
+        // 이름 변경은 같은 부모 안에서만
+        let renamed = rename_entry(&ws, &rel, "note2.md").unwrap();
+        assert_eq!(renamed, "docs/note2.md");
+        assert!(read_full(&ws, "docs/note.md").is_err());
+        // 가드 — .git 불가침 · 경로 탈출 · 구분자 이름 · 루트 조작 · 중복 생성
+        assert!(write_file(&ws, ".git/config", "x").is_err());
+        assert!(delete_entry(&ws, ".git").is_err());
+        assert!(read_full(&ws, "../outside.txt").is_err());
+        assert!(create_entry(&ws, "", "a/b", false).is_err());
+        assert!(rename_entry(&ws, "docs", "..").is_err());
+        assert!(delete_entry(&ws, "").is_err());
+        assert!(create_entry(&ws, "docs", "note2.md", false).is_err());
+        fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn tree_skips_heavy_dirs_and_preview_guards_escape() {

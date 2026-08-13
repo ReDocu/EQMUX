@@ -32,6 +32,31 @@ export async function fsPreview(wsPath: string, rel: string): Promise<string | u
   return invoke<string>("fs_preview", { wsPath, rel }).catch(() => undefined);
 }
 
+// ── 탐색기 파일 CRUD (M24) — 오류는 삼키지 않고 던진다 (UI가 사유를 보여준다) ──
+
+/** 편집용 원문 — 1MB 초과·바이너리는 거부된다 (잘린 미리보기 저장 사고 방지) */
+export function fsRead(wsPath: string, rel: string): Promise<string> {
+  return invoke<string>("fs_read", { wsPath, rel });
+}
+
+export function fsWrite(wsPath: string, rel: string, content: string): Promise<void> {
+  return invoke("fs_write", { wsPath, rel, content });
+}
+
+/** relDir(빈 문자열 = 루트) 아래 생성 — 반환은 새 항목의 상대 경로 */
+export function fsCreate(wsPath: string, relDir: string, name: string, dir: boolean): Promise<string> {
+  return invoke<string>("fs_create", { wsPath, relDir, name, dir });
+}
+
+export function fsRename(wsPath: string, rel: string, newName: string): Promise<string> {
+  return invoke<string>("fs_rename", { wsPath, rel, newName });
+}
+
+/** 휴지통으로 이동 — 영구 삭제 아님 */
+export function fsDelete(wsPath: string, rel: string): Promise<void> {
+  return invoke("fs_delete", { wsPath, rel });
+}
+
 // ── 스크롤백 검색·디스크 페이징 (FR-C-13·14·16) ──
 
 export interface ScrollbackHit {

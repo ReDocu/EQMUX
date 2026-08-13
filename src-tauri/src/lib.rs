@@ -1182,6 +1182,38 @@ fn fs_preview(ws_path: String, rel: String) -> Result<String, String> {
     fsx::preview(&ws_path, &rel)
 }
 
+// ── 탐색기 파일 CRUD (M24) — 같은 탈출 가드 · .git 불가침 · 삭제는 휴지통 ──
+
+/// 편집용 원문 (1MB 상한 — 미리보기 잘림을 저장해 뒷부분을 날리는 사고 방지)
+#[tauri::command]
+fn fs_read(ws_path: String, rel: String) -> Result<String, String> {
+    fsx::read_full(&ws_path, &rel)
+}
+
+#[tauri::command]
+fn fs_write(ws_path: String, rel: String, content: String) -> Result<(), String> {
+    fsx::write_file(&ws_path, &rel, &content)
+}
+
+/// relDir(빈 문자열 = 루트) 아래에 생성 — 반환은 새 항목의 상대 경로
+#[tauri::command]
+fn fs_create(ws_path: String, rel_dir: String, name: String, dir: bool) -> Result<String, String> {
+    fsx::create_entry(&ws_path, &rel_dir, &name, dir)
+}
+
+#[tauri::command]
+fn fs_rename(ws_path: String, rel: String, new_name: String) -> Result<String, String> {
+    fsx::rename_entry(&ws_path, &rel, &new_name)
+}
+
+/// 휴지통으로 이동 — 영구 삭제 폴백 없음
+#[tauri::command]
+async fn fs_delete(ws_path: String, rel: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || fsx::delete_entry(&ws_path, &rel))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 // ── 종료 시퀀스 (FR-C-60~63) — ①입력 차단(프런트) → ②flush → ③정상 종료 신호 → ④유예 후 트리 종료 ──
 
 /// ② 스크롤백·세션 매핑 flush — 2초 목표 (FR-C-63). true = 완료, false = 시한 초과(진행은 계속).
@@ -1595,6 +1627,11 @@ pub fn run() {
             ports_snapshot,
             fs_tree,
             fs_preview,
+            fs_read,
+            fs_write,
+            fs_create,
+            fs_rename,
+            fs_delete,
             diff_changed_files,
             diff_file,
             shutdown_flush,

@@ -20,6 +20,7 @@ uuid = { version = "1", features = ["v4"] }
 notify = "6"
 chrono = "0.4"
 tauri-plugin-notification = "2"
+trash = "5" # 탐색기 삭제(M24)는 영구 삭제가 아니라 휴지통으로 보낸다
 
 [target.'cfg(windows)'.dependencies]
 # 웹뷰 렌더러 크래시 생존 (FR-C-06) — wry가 쓰는 것과 같은 버전으로 고정해 COM 타입을 공유한다

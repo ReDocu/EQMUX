@@ -1,10 +1,11 @@
-// 임무 · 파일 탐색기 패널 (ehpqx) — 워크스페이스 파일 트리 + 미리보기.
-// Tauri에서는 실제 FS를 읽는다 (PRD H — 깊이·개수 상한, 읽기 전용). 파일이 원본이라는 계약 그대로:
-// 임무 파일은 backend의 실측 임무 데이터로, 그 외 텍스트는 원문으로 보여준다.
+// 임무 · 파일 탐색기 패널 (ehpqx) — 워크스페이스 파일 트리 + 미리보기 + 파일 CRUD (M24).
+// Tauri에서는 실제 FS를 읽고 쓴다 (깊이·개수 상한 · .git 불가침 · 삭제는 휴지통).
+// 파일이 원본이라는 계약 그대로: 임무 파일은 backend의 실측 임무 데이터로, 그 외 텍스트는 원문으로.
 import { createEffect, createSignal, For, on, onMount, Show } from "solid-js";
 import { backend } from "../backend/mock";
-import { fsPreview, fsTree } from "../backend/panels";
+import { fsCreate, fsDelete, fsPreview, fsRead, fsRename, fsTree, fsWrite } from "../backend/panels";
 import type { FsNode } from "../backend/panels";
+import { refreshMissions } from "../backend/missions";
 import { isTauri } from "../backend/pty";
 import { selectedSession, setPanelTab, setView, tick, view } from "../state";
 
@@ -19,8 +20,10 @@ const MOCK_TREE: FsNode[] = [
   { name: "README.md", rel: "README.md", depth: 0, dir: false },
 ];
 
+const parentOf = (rel: string) => (rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "");
+
 export function MissionExplorerTab() {
-  const [selected, setSelected] = createSignal<string | undefined>(undefined);
+  const [sel, setSel] = createSignal<FsNode | undefined>(undefined);
   const [query, setQuery] = createSignal("");
   const [nodes, setNodes] = createSignal<FsNode[] | undefined>(undefined);
   const [preview, setPreview] = createSignal<string | undefined>(undefined);
@@ -61,12 +64,124 @@ export function MissionExplorerTab() {
     return q ? list.filter((n) => n.name.includes(q)) : list;
   };
 
-  const pickFile = async (n: FsNode) => {
-    if (n.dir) return;
-    setSelected(n.rel);
+  const loadPreview = async (rel: string) => {
     setPreview(undefined);
     const target = ws();
-    if (isTauri() && target) setPreview(await fsPreview(target.path, n.rel));
+    if (isTauri() && target) setPreview(await fsPreview(target.path, rel));
+  };
+
+  const pick = (n: FsNode) => {
+    setSel(n);
+    setFsErr(undefined);
+    setConfirmDel(false);
+    setNameMode(undefined);
+    setEditing(undefined);
+    if (n.dir) setPreview(undefined);
+    else void loadPreview(n.rel);
+  };
+
+  // ── 파일 CRUD (M24) — .git 불가침·탈출 거부는 Rust 가드가, 사유 표시는 여기가 맡는다 ──
+  const [nameMode, setNameMode] = createSignal<"file" | "dir" | "rename" | undefined>(undefined);
+  const [nameVal, setNameVal] = createSignal("");
+  const [fsErr, setFsErr] = createSignal<string | undefined>(undefined);
+  const [confirmDel, setConfirmDel] = createSignal(false);
+  const [editing, setEditing] = createSignal<string | undefined>(undefined);
+  const [dirty, setDirty] = createSignal(false);
+
+  // 생성 대상 폴더 — 폴더 선택 시 그 안, 파일 선택 시 그 옆, 없으면 루트
+  const createDir = () => {
+    const s = sel();
+    if (!s) return "";
+    return s.dir ? s.rel : parentOf(s.rel);
+  };
+
+  const openName = (kind: "file" | "dir" | "rename") => {
+    setFsErr(undefined);
+    setNameVal(kind === "rename" ? (sel()?.name ?? "") : "");
+    setNameMode(kind);
+  };
+
+  const isMissionFile = (rel: string) => rel.startsWith(".eqmux/missions/");
+
+  const submitName = async () => {
+    const target = ws();
+    const kind = nameMode();
+    const name = nameVal().trim();
+    if (!target || !kind || !name) return;
+    setFsErr(undefined);
+    try {
+      if (kind === "rename") {
+        const s = sel();
+        if (!s) return;
+        const next = await fsRename(target.path, s.rel, name);
+        setSel({ ...s, rel: next, name });
+        if (!s.dir) void loadPreview(next);
+        if (isMissionFile(s.rel) || isMissionFile(next)) void refreshMissions(target.id);
+      } else {
+        const rel = await fsCreate(target.path, createDir(), name, kind === "dir");
+        if (kind === "file") {
+          setSel({ name, rel, depth: 0, dir: false });
+          setPreview("");
+        }
+      }
+      setNameMode(undefined);
+      await loadTree();
+    } catch (err) {
+      setFsErr(String(err));
+    }
+  };
+
+  const doDelete = async () => {
+    const target = ws();
+    const s = sel();
+    if (!target || !s) return;
+    if (!confirmDel()) {
+      setConfirmDel(true); // 2단 확인 — 실수 클릭 방지. 그래도 영구 삭제가 아니라 휴지통이다
+      return;
+    }
+    setConfirmDel(false);
+    setFsErr(undefined);
+    try {
+      await fsDelete(target.path, s.rel);
+      setSel(undefined);
+      setPreview(undefined);
+      setEditing(undefined);
+      if (isMissionFile(s.rel)) void refreshMissions(target.id);
+      await loadTree();
+    } catch (err) {
+      setFsErr(String(err));
+    }
+  };
+
+  const startEdit = async () => {
+    const target = ws();
+    const s = sel();
+    if (!target || !s || s.dir) return;
+    setFsErr(undefined);
+    try {
+      // 편집은 전문 읽기 — 64KB 미리보기를 저장해 뒷부분을 날리지 않는다 (1MB 초과는 거부)
+      setEditing(await fsRead(target.path, s.rel));
+      setDirty(false);
+    } catch (err) {
+      setFsErr(String(err));
+    }
+  };
+
+  const saveEdit = async () => {
+    const target = ws();
+    const s = sel();
+    const content = editing();
+    if (!target || !s || content === undefined) return;
+    setFsErr(undefined);
+    try {
+      await fsWrite(target.path, s.rel, content);
+      setEditing(undefined);
+      setDirty(false);
+      void loadPreview(s.rel);
+      if (isMissionFile(s.rel)) void refreshMissions(target.id); // 임무는 파일이 원본 (FR-E-74)
+    } catch (err) {
+      setFsErr(String(err));
+    }
   };
 
   // 임무 파일이면 실측 임무 데이터로 구조화 미리보기 (파일이 원본 — 목록도 파일 실측이다)
@@ -85,7 +200,7 @@ export function MissionExplorerTab() {
       persona()?.name ?? "리드",
       "@all",
       "handoff",
-      `브리프 전달 · ${selected() ?? ".eqmux/missions/"}`,
+      `브리프 전달 · ${sel()?.rel ?? ".eqmux/missions/"}`,
     );
     setPanelTab("conversation");
   };
@@ -95,7 +210,7 @@ export function MissionExplorerTab() {
       <div class="panel-head-row">
         <span class="panel-title">임무 · 파일 탐색기</span>
         <span class="mono muted" style={{ "font-size": "9px", "letter-spacing": "0.06em" }}>
-          {isTauri() ? "FS 실측 · 읽기 전용" : "목 데이터"}
+          {isTauri() ? "FS 실측 · CRUD" : "목 데이터"}
         </span>
       </div>
 
@@ -120,14 +235,61 @@ export function MissionExplorerTab() {
             value={query()}
             onInput={(e) => setQuery(e.currentTarget.value)}
           />
+          {/* 파일 CRUD (M24) — 대상: 선택 폴더 안 / 선택 파일 옆 / 루트 */}
+          <div class="msnp-crud">
+            <button class="btn ghost" disabled={!isTauri() || !ws()} title={`새 파일 — ${createDir() || "루트"}`} onClick={() => openName("file")}>
+              +파일
+            </button>
+            <button class="btn ghost" disabled={!isTauri() || !ws()} title={`새 폴더 — ${createDir() || "루트"}`} onClick={() => openName("dir")}>
+              +폴더
+            </button>
+            <button class="btn ghost" disabled={!isTauri() || !sel()} title="이름 변경 (같은 폴더 안)" onClick={() => openName("rename")}>
+              이름
+            </button>
+            <button
+              class="btn ghost"
+              classList={{ danger: confirmDel() }}
+              disabled={!isTauri() || !sel()}
+              title="휴지통으로 이동 — 영구 삭제 아님"
+              onClick={() => void doDelete()}
+            >
+              {confirmDel() ? "휴지통 확정?" : "삭제"}
+            </button>
+          </div>
+          <Show when={nameMode()}>
+            <div class="msnp-name-row">
+              <input
+                class="mono"
+                placeholder={nameMode() === "rename" ? "새 이름" : nameMode() === "dir" ? "폴더 이름" : "파일 이름"}
+                value={nameVal()}
+                onInput={(e) => setNameVal(e.currentTarget.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void submitName();
+                  if (e.key === "Escape") setNameMode(undefined);
+                }}
+                ref={(el) => setTimeout(() => el.focus())}
+              />
+              <button class="btn primary" style={{ padding: "2px 8px" }} onClick={() => void submitName()}>
+                확인
+              </button>
+              <button class="btn ghost" style={{ padding: "2px 6px" }} onClick={() => setNameMode(undefined)}>
+                ✕
+              </button>
+            </div>
+          </Show>
+          <Show when={fsErr()}>
+            <div class="mono st-dead" style={{ "font-size": "10px", padding: "2px 4px" }}>
+              {fsErr()}
+            </div>
+          </Show>
           <div class="msnp-tree-rows">
             <For each={tree()}>
               {(n) => (
                 <button
                   class="msnp-tree-row mono"
-                  classList={{ selected: selected() === n.rel, folder: n.dir }}
+                  classList={{ selected: sel()?.rel === n.rel, folder: n.dir }}
                   style={{ "padding-left": `${8 + n.depth * 12}px` }}
-                  onClick={() => void pickFile(n)}
+                  onClick={() => pick(n)}
                 >
                   <span class="msnp-tree-icon">
                     {n.dir ? "▸" : n.name.endsWith(".json") ? "{}" : n.name.endsWith(".md") ? "≡" : "·"}
@@ -148,74 +310,108 @@ export function MissionExplorerTab() {
           <div class="msnp-preview-head">
             <div style={{ "min-width": 0 }}>
               <div class="mono" style={{ "font-weight": 700, "font-size": "11px" }}>
-                {selected()?.split("/").pop() ?? "파일을 선택하세요"}
+                {sel()?.name ?? "파일을 선택하세요"}
+                <Show when={editing() !== undefined}>
+                  <span class="st-waiting"> · 편집 중{dirty() ? " *" : ""}</span>
+                </Show>
               </div>
               <div class="mono muted" style={{ "font-size": "10px" }}>
-                {selected() ?? "—"}
+                {sel()?.rel ?? "—"}
               </div>
             </div>
-            <button class="btn ghost" title="트리 새로 읽기" style={{ padding: "2px 6px" }} onClick={() => void loadTree()}>
-              ⟳
-            </button>
+            <div style={{ display: "flex", gap: "4px" }}>
+              <Show when={isTauri() && sel() && !sel()!.dir && editing() === undefined}>
+                <button class="btn ghost" title="원문 편집 (1MB 상한)" style={{ padding: "2px 6px" }} onClick={() => void startEdit()}>
+                  편집
+                </button>
+              </Show>
+              <Show when={editing() !== undefined}>
+                <button class="btn primary" style={{ padding: "2px 8px" }} onClick={() => void saveEdit()}>
+                  저장
+                </button>
+                <button class="btn ghost" style={{ padding: "2px 6px" }} onClick={() => setEditing(undefined)}>
+                  취소
+                </button>
+              </Show>
+              <button class="btn ghost" title="트리 새로 읽기" style={{ padding: "2px 6px" }} onClick={() => void loadTree()}>
+                ⟳
+              </button>
+            </div>
           </div>
 
           <Show
-            when={missionOf(selected())}
+            when={editing() !== undefined}
             fallback={
               <Show
-                when={preview() !== undefined}
+                when={missionOf(sel()?.rel)}
                 fallback={
-                  <div class="muted" style={{ padding: "14px 10px", "font-size": "11px" }}>
-                    {selected()
-                      ? "미리보기를 불러올 수 없습니다 (바이너리 또는 읽기 실패)"
-                      : "파일을 선택하면 원문이 표시됩니다. 임무 파일(.eqmux/missions/*.md)은 구조화되어 보입니다."}
-                  </div>
+                  <Show
+                    when={preview() !== undefined}
+                    fallback={
+                      <div class="muted" style={{ padding: "14px 10px", "font-size": "11px" }}>
+                        {sel() && !sel()!.dir
+                          ? "미리보기를 불러올 수 없습니다 (바이너리 또는 읽기 실패)"
+                          : sel()?.dir
+                            ? "폴더 선택됨 — +파일/+폴더는 이 안에 만들어집니다"
+                            : "파일을 선택하면 원문이 표시됩니다. 임무 파일(.eqmux/missions/*.md)은 구조화되어 보입니다."}
+                      </div>
+                    }
+                  >
+                    <pre
+                      class="mono"
+                      style={{
+                        "font-size": "11px",
+                        "white-space": "pre-wrap",
+                        padding: "10px",
+                        margin: 0,
+                        "overflow-y": "auto",
+                        "max-height": "100%",
+                      }}
+                    >
+                      {preview()}
+                    </pre>
+                  </Show>
                 }
               >
-                <pre
-                  class="mono"
-                  style={{
-                    "font-size": "11px",
-                    "white-space": "pre-wrap",
-                    padding: "10px",
-                    margin: 0,
-                    "overflow-y": "auto",
-                    "max-height": "100%",
-                  }}
-                >
-                  {preview()}
-                </pre>
+                {(m) => (
+                  <div class="msnp-doc">
+                    <div class="msnp-source-notice mono">✓ FILE SOURCE OF TRUTH</div>
+                    <div class="msnp-frontmatter mono">
+                      <div class="kv">
+                        <span class="k">status</span>
+                        <span class="v st-waiting">{m().status}</span>
+                      </div>
+                      <div class="kv">
+                        <span class="k">branch</span>
+                        <span class="v">{m().branch ?? "—"}</span>
+                      </div>
+                      <div class="kv">
+                        <span class="k">assigned</span>
+                        <span class="v">{m().assigned.length > 0 ? m().assigned.map(personaName).join(", ") : "—"}</span>
+                      </div>
+                    </div>
+                    <div class="msnp-md">
+                      <div class="msnp-md-h1"># {m().name}</div>
+                      <div class="msnp-md-h2">목표</div>
+                      <div class="msnp-md-p">{m().goal || "—"}</div>
+                      <Show when={m().outputs.length > 0}>
+                        <div class="msnp-md-h2">산출물</div>
+                        <For each={m().outputs}>{(o) => <div class="msnp-md-p mono">□ {o}</div>}</For>
+                      </Show>
+                    </div>
+                  </div>
+                )}
               </Show>
             }
           >
-            {(m) => (
-              <div class="msnp-doc">
-                <div class="msnp-source-notice mono">✓ FILE SOURCE OF TRUTH</div>
-                <div class="msnp-frontmatter mono">
-                  <div class="kv">
-                    <span class="k">status</span>
-                    <span class="v st-waiting">{m().status}</span>
-                  </div>
-                  <div class="kv">
-                    <span class="k">branch</span>
-                    <span class="v">{m().branch ?? "—"}</span>
-                  </div>
-                  <div class="kv">
-                    <span class="k">assigned</span>
-                    <span class="v">{m().assigned.length > 0 ? m().assigned.map(personaName).join(", ") : "—"}</span>
-                  </div>
-                </div>
-                <div class="msnp-md">
-                  <div class="msnp-md-h1"># {m().name}</div>
-                  <div class="msnp-md-h2">목표</div>
-                  <div class="msnp-md-p">{m().goal || "—"}</div>
-                  <Show when={m().outputs.length > 0}>
-                    <div class="msnp-md-h2">산출물</div>
-                    <For each={m().outputs}>{(o) => <div class="msnp-md-p mono">□ {o}</div>}</For>
-                  </Show>
-                </div>
-              </div>
-            )}
+            <textarea
+              class="mono msnp-edit"
+              value={editing()}
+              onInput={(e) => {
+                setEditing(e.currentTarget.value);
+                setDirty(true);
+              }}
+            />
           </Show>
         </div>
       </div>
@@ -226,7 +422,7 @@ export function MissionExplorerTab() {
             {isTauri() ? "실측 · 열 때 새로 읽음" : "WATCHING · .eqmux/ (목)"}
           </div>
           <div class="muted" style={{ "font-size": "10px" }}>
-            읽기 전용 · 파일 우선
+            파일 우선 · 삭제는 휴지통 · .git 불가침
           </div>
         </div>
         <div style={{ display: "flex", gap: "6px" }}>
