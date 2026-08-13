@@ -24,8 +24,22 @@ function pick<T>(options: T[], value: T): number {
 const START_VIEWS: AppSettings["startView"][] = ["control", "last"];
 const NOTI: AppSettings["notifications"][] = ["waiting-dead", "waiting", "off"];
 const REPLAY = [500, 1000, 2000];
+const THEMES: AppSettings["theme"][] = ["dark", "light", "system"];
 
 const SECTIONS: Section[] = [
+  {
+    title: "화면",
+    desc: "테마는 디자인 토큰만 바꿉니다 (M29). 터미널 페인은 TUI·ANSI 가독성을 위해 항상 다크입니다.",
+    wired: [
+      {
+        k: "테마",
+        labels: ["다크 (기본)", "라이트", "시스템 따름"],
+        current: () => pick(THEMES, settings().theme),
+        apply: (i) => updateSettings({ theme: THEMES[i] }),
+      },
+    ],
+    fixed: [{ k: "터미널 페인", label: "항상 다크 (ANSI 팔레트 전제)" }],
+  },
   {
     title: "시작과 복원",
     desc: "자동 실행 없이 화면 상태만 복원합니다 (FR-G-02 · FR-C-30).",

@@ -25,6 +25,31 @@
   --eq-mono: "IBM Plex Mono", ui-monospace, monospace;
 }
 
+/* 라이트 테마 (M29) — 토큰만 바꾼다. 터미널 페인(--eq-terminal)은 라이트에서도 다크 유지 —
+   에이전트 TUI·ANSI 팔레트가 다크 전제라서, terminal-first 정체성과 가독성을 지킨다. */
+:root[data-theme="light"] {
+  --eq-bg: #f2f4f8;
+  --eq-surface: #ffffff;
+  --eq-surface-2: #e9edf3;
+  --eq-line: #cdd6e1;
+  --eq-text: #1b2534;
+  --eq-muted: #62748c;
+  --eq-blue: #2a5fd6;
+  --eq-blue-soft: #e2ebfb;
+  --eq-blue-mid: #bfd3f4;
+  --eq-purple: #7a42cd;
+  --eq-purple-soft: #eee5fa;
+  --eq-green: #178a4c;
+  --eq-green-soft: #ddf2e5;
+  --eq-cyan: #0e8f8d;
+  --eq-amber: #9a700e;
+  --eq-amber-soft: #f6ecd0;
+  --eq-red: #cf3e49;
+  --eq-red-soft: #fadfe1;
+  --eq-gutter: #e2e7ee;
+  --eq-code: #41506a;
+}
+
 * {
   margin: 0;
   padding: 0;

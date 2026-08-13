@@ -12,6 +12,8 @@ export interface AppSettings {
   scrollbackReplay: number; // 500 | 1000 | 2000
   /** 음소거 (FR-G-35) — 세션 id 또는 워크스페이스 id. OS 알림·사운드만 막고 인앱 미확인은 유지 (FR-G-37) */
   muted: string[];
+  /** 테마 (M29) — 토큰 교체. 터미널 페인은 어느 테마에서든 다크 (TUI·ANSI 가독성) */
+  theme: "dark" | "light" | "system";
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -20,6 +22,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   waitingSound: false, // G6 — 기본 꺼짐
   scrollbackReplay: 500,
   muted: [],
+  theme: "dark", // terminal-first 기본
 };
 
 const [settings, setSettings] = createSignal<AppSettings>(DEFAULT_SETTINGS);
@@ -36,7 +39,28 @@ function sanitize(raw: unknown): AppSettings {
       ? (v.scrollbackReplay as number)
       : 500,
     muted: Array.isArray(v.muted) ? v.muted.filter((x): x is string => typeof x === "string") : [],
+    theme: v.theme === "light" || v.theme === "system" ? v.theme : "dark",
   };
+}
+
+// ── 테마 적용 (M29) — <html data-theme="…">가 토큰을 고른다. system은 OS 설정을 따라간다 ──
+
+function applyTheme(): void {
+  const t = settings().theme;
+  const resolved =
+    t === "system"
+      ? window.matchMedia("(prefers-color-scheme: light)").matches
+        ? "light"
+        : "dark"
+      : t;
+  document.documentElement.dataset.theme = resolved;
+}
+
+// OS 테마 변경 추적 — system 모드일 때만 반응한다
+if (typeof window !== "undefined") {
+  window.matchMedia("(prefers-color-scheme: light)").addEventListener("change", () => {
+    if (settings().theme === "system") applyTheme();
+  });
 }
 
 /** 음소거 토글 (FR-G-35) — id는 세션 id 또는 워크스페이스 id */
@@ -53,11 +77,13 @@ export async function loadSettings(): Promise<void> {
   loaded = true;
   const raw = await invoke<unknown>("settings_load").catch(() => null);
   setSettings(sanitize(raw));
+  applyTheme();
 }
 
 /** 변경 즉시 저장 — 파일 + Rust 메모리 사본(알림 게이트)이 함께 갱신된다 */
 export function updateSettings(patch: Partial<AppSettings>): void {
   const next = sanitize({ ...settings(), ...patch });
   setSettings(next);
+  applyTheme();
   if (isTauri()) void invoke("settings_save", { data: next }).catch(() => {});
 }
