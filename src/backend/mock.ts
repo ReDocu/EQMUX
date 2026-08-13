@@ -44,7 +44,7 @@ export interface Backend {
   /** 슬롯에 터미널 추가 — 페르소나·직무 없이 빈 슬롯 하나를 셸 세션으로 채운다 */
   addTerminal(wsId: string, shell?: string): void;
   /** 슬롯에 역할 세션 추가 — 스폰 시점에 권한 플래그가 결정되므로 재시작이 필요 없다 */
-  addRoleSession(wsId: string, personaId: string, jobId: string): void;
+  addRoleSession(wsId: string, personaId: string, jobId: string, opts?: { cwd?: string; worktree?: boolean }): void;
   /** 슬롯에서 터미널 제거 — 세션을 삭제하고 임무 배정도 해제한다 */
   removeTerminal(id: string): void;
   /** 역할 세션의 페르소나·직무 변경 — 직무가 바뀌면 권한 변경이므로 재시작 필요(E11′) */
@@ -625,7 +625,7 @@ export class MockBackend implements Backend {
     this.broadcast();
   }
 
-  addRoleSession(wsId: string, personaId: string, jobId: string) {
+  addRoleSession(wsId: string, personaId: string, jobId: string, opts?: { cwd?: string; worktree?: boolean }) {
     const ws = WORKSPACES.find((x) => x.id === wsId);
     if (!ws) return;
     const used = new Set(SESSIONS.filter((x) => x.workspaceId === wsId).map((x) => x.slot));
@@ -638,20 +638,30 @@ export class MockBackend implements Backend {
     SESSIONS.push(
       s(`${personaId}@${wsId}`, wsId, slot, personaId, jobId, {
         status: "starting",
-        cwd: ws.path,
+        cwd: opts?.cwd ?? ws.path,
+        worktree: opts?.worktree ?? false,
         sinceMs: 0,
         lastOutput: "세션 시작 중",
       }),
     );
     const pName = PERSONAS.find((x) => x.id === personaId)?.name ?? personaId;
     const jName = JOBS.find((x) => x.id === jobId)?.name ?? jobId;
-    this.logEvent("app", `역할 세션 추가 · ${pName} · ${jName} · SLOT ${slot}`);
+    const iso = opts?.worktree ? " · 워크트리" : "";
+    this.logEvent("app", `역할 세션 추가 · ${pName} · ${jName} · SLOT ${slot}${iso}`);
     this.broadcast();
   }
 
   hydrateTeam(
     wsId: string,
-    slots: { slot: number; persona: string; job: string; agentSessionId: string | null; resumable: boolean }[],
+    slots: {
+      slot: number;
+      persona: string;
+      job: string;
+      worktree?: boolean;
+      agentSessionId: string | null;
+      resumable: boolean;
+      worktreePath?: string | null;
+    }[],
     aliveIds?: Set<string>,
   ) {
     const ws = WORKSPACES.find((x) => x.id === wsId);
@@ -667,10 +677,14 @@ export class MockBackend implements Backend {
       // 상태는 agent_snapshot이 곧바로 덮는다 (restoreTeams에서 이어 호출).
       const alive = aliveIds?.has(id) ?? false;
       if (alive) revivedCount++;
+      // 워크트리 슬롯 (FR-E-62) — 이 머신에 실재할 때만 그 cwd로. 없으면(다른 머신 clone 등)
+      // repo 루트 폴백 — 재개는 어차피 cwd 종속이라 불가하고, 새 시작만 남는다
+      const worktreeMissing = !!sl.worktree && !sl.worktreePath;
       SESSIONS.push(
         s(id, wsId, slot, sl.persona, sl.job, {
           status: "shell",
-          cwd: ws.path,
+          cwd: sl.worktreePath ?? ws.path,
+          worktree: !!sl.worktreePath,
           sinceMs: 0,
           restored: !alive,
           revived: alive,
@@ -679,9 +693,11 @@ export class MockBackend implements Backend {
           agentSessionId: sl.agentSessionId?.slice(0, 8),
           lastOutput: alive
             ? "웹뷰 재시작 · 세션 이어짐"
-            : sl.resumable
-              ? "복원됨 · 재개 대기"
-              : "복원됨 · 새 시작 필요",
+            : worktreeMissing
+              ? "복원됨 · 워크트리 없음 — repo 루트 폴백"
+              : sl.resumable
+                ? "복원됨 · 재개 대기"
+                : "복원됨 · 새 시작 필요",
         }),
       );
       added++;

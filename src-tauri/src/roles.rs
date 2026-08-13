@@ -87,20 +87,27 @@ fn atomic_write(path: &Path, content: &str) -> Result<(), String> {
     fs::rename(&tmp, path).map_err(|e| e.to_string())
 }
 
-/// .eqmux/.gitignore 자동 생성 (FR-E-35) — roles/가 git status에 나타나지 않게 한다
+/// .eqmux/.gitignore 자동 생성 (FR-E-35) — roles/와 worktrees/(FR-E-62)가
+/// git status에 나타나지 않게 한다
 pub fn ensure_gitignore(ws_path: &str) -> Result<(), String> {
     let dir = Path::new(ws_path).join(".eqmux");
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let path = dir.join(".gitignore");
     let existing = fs::read_to_string(&path).unwrap_or_default();
-    if existing.lines().any(|l| l.trim() == "roles/") {
-        return Ok(());
-    }
-    let mut next = existing;
-    if !next.is_empty() && !next.ends_with('\n') {
+    let mut next = existing.clone();
+    for entry in ["roles/", "worktrees/"] {
+        if next.lines().any(|l| l.trim() == entry) {
+            continue;
+        }
+        if !next.is_empty() && !next.ends_with('\n') {
+            next.push('\n');
+        }
+        next.push_str(entry);
         next.push('\n');
     }
-    next.push_str("roles/\n");
+    if next == existing {
+        return Ok(());
+    }
     fs::write(&path, next).map_err(|e| e.to_string())
 }
 

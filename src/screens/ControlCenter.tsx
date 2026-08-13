@@ -24,6 +24,7 @@ import { refreshMissions } from "../backend/missions";
 import { isTauri, killPty, storeUsageReal } from "../backend/pty";
 import type { StoreUsageReal } from "../backend/pty";
 import { removeRoleFile } from "../backend/roles";
+import { ensureWorktree } from "../backend/team";
 import { disposeSessionTerminal, TerminalPane } from "../components/TerminalPane";
 import { SessionDetailPanel } from "./SessionDetailPanel";
 import { TranscriptPane } from "./TranscriptPane";
@@ -117,6 +118,8 @@ export function ControlCenter(props: { workspace: Workspace }) {
   const [addOpen, setAddOpen] = createSignal(false);
   const [addPersona, setAddPersona] = createSignal("");
   const [addJob, setAddJob] = createSignal("");
+  const [addWorktree, setAddWorktree] = createSignal(false); // 격리 옵트인 (FR-E-62 · E1′)
+  const [addErr, setAddErr] = createSignal<string | undefined>(undefined);
   const availablePersonas = () => {
     const used = new Set(sessions().map((x) => x.personaId));
     return backend.listPersonas().filter((p) => !used.has(p.id));
@@ -124,6 +127,8 @@ export function ControlCenter(props: { workspace: Workspace }) {
   const openAdd = () => {
     setAddPersona(availablePersonas()[0]?.id ?? "");
     setAddJob(backend.listJobs()[0]?.id ?? "");
+    setAddWorktree(false);
+    setAddErr(undefined);
     setAddOpen(true);
   };
   const addTerminal = () => {
@@ -132,9 +137,21 @@ export function ControlCenter(props: { workspace: Workspace }) {
   };
   const [shellMenuOpen, setShellMenuOpen] = createSignal(false);
   const shellCmdFor = (s: Session) => SHELLS.find((x) => x.label === s.shell)?.cmd;
-  const addRoleSession = () => {
+  const addRoleSession = async () => {
     if (!addPersona() || !addJob()) return;
-    backend.addRoleSession(props.workspace.id, addPersona(), addJob());
+    setAddErr(undefined);
+    let opts: { cwd: string; worktree: boolean } | undefined;
+    // 워크트리 격리 (FR-E-62) — 기본은 repo 공유 (FR-E-60). 실패는 정직하게 표시하고 만들지 않는다
+    if (addWorktree() && isTauri()) {
+      try {
+        const cwd = await ensureWorktree(props.workspace.path, `${addPersona()}@${props.workspace.id}`);
+        opts = { cwd, worktree: true };
+      } catch (err) {
+        setAddErr(String(err));
+        return;
+      }
+    }
+    backend.addRoleSession(props.workspace.id, addPersona(), addJob(), opts);
     setAddOpen(false);
   };
   const [removeTarget, setRemoveTarget] = createSignal<Session | undefined>(undefined);
@@ -142,7 +159,9 @@ export function ControlCenter(props: { workspace: Workspace }) {
     killPty(s.id);
     disposeSessionTerminal(s.id);
     if (zoomed() === s.id) setZoomed(undefined);
-    if (s.personaId && !props.workspace.pathMissing) removeRoleFile(props.workspace.path, s.id);
+    // 역할 파일은 세션 cwd 규약 (FR-E-63) — 워크트리 세션은 자기 사본에서 지운다.
+    // 워크트리 자체는 남긴다 (FR-E-64 — 커밋 안 된 작업이 있을 수 있다)
+    if (s.personaId && !props.workspace.pathMissing) removeRoleFile(s.cwd || props.workspace.path, s.id);
     backend.removeTerminal(s.id);
     setRemoveTarget(undefined);
   };
@@ -504,10 +523,25 @@ export function ControlCenter(props: { workspace: Workspace }) {
                     <select value={addJob()} onChange={(e) => setAddJob(e.currentTarget.value)}>
                       <For each={backend.listJobs()}>{(j) => <option value={j.id}>{j.name}</option>}</For>
                     </select>
-                    <button class="btn primary" onClick={addRoleSession}>
+                    <button class="btn primary" onClick={() => void addRoleSession()}>
                       생성
                     </button>
                   </div>
+                  {/* 세션 격리 (FR-E-62 · E1′) — 기본은 repo 공유 (FR-E-60) */}
+                  <label class="mono muted" style={{ display: "flex", gap: "6px", "align-items": "center", "font-size": "11px", "margin-top": "8px", cursor: "pointer" }}>
+                    <input type="checkbox" checked={addWorktree()} onChange={(e) => setAddWorktree(e.currentTarget.checked)} />
+                    워크트리 격리 — .eqmux/worktrees/&lt;세션&gt; · 전용 브랜치 eqmux/&lt;세션&gt;
+                  </label>
+                  <Show when={addWorktree()}>
+                    <div class="muted" style={{ "font-size": "10px", "margin-top": "4px" }}>
+                      의존성(node_modules 등)은 워크트리마다 별도입니다. 제거 시 워크트리는 남습니다 — 머지·정리는 사람이 합니다 (FR-E-64)
+                    </div>
+                  </Show>
+                  <Show when={addErr()}>
+                    <div class="mono st-dead" style={{ "font-size": "10px", "margin-top": "4px" }}>
+                      {addErr()}
+                    </div>
+                  </Show>
                 </Show>
               </div>
             </div>

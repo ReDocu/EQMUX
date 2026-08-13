@@ -848,6 +848,9 @@ struct TeamSlotInfo {
     slot: team::TeamSlot,
     agent_session_id: Option<String>,
     resumable: bool,
+    /// 워크트리 슬롯(FR-E-62)의 실제 cwd — 디렉터리가 실재할 때만. 없으면(다른 머신 clone 등)
+    /// 프런트가 repo 루트 폴백으로 복원한다
+    worktree_path: Option<String>,
 }
 
 /// team.json 로드 + 슬롯별 재개 정보 결합 (agent_session 테이블 · 트랜스크립트 실측)
@@ -873,11 +876,17 @@ fn team_load(
                 )
                 .ok()
             });
+            // 워크트리 세션의 재개는 워크트리 cwd 기준이다 — 트랜스크립트 경로가 cwd 파생(FR-D-03)
+            let worktree_path = slot.worktree.then(|| {
+                let p = workspace::worktree_dir(&ws_path, &session_id);
+                p.join(".git").exists().then(|| p.to_string_lossy().into_owned())
+            }).flatten();
+            let cwd = worktree_path.as_deref().unwrap_or(&ws_path);
             let resumable = uuid
                 .as_deref()
-                .map(|u| agent::resumable(&ws_path, u))
+                .map(|u| agent::resumable(cwd, u))
                 .unwrap_or(false);
-            TeamSlotInfo { slot, agent_session_id: uuid, resumable }
+            TeamSlotInfo { slot, agent_session_id: uuid, resumable, worktree_path }
         })
         .collect();
     Ok(out)
@@ -887,6 +896,15 @@ fn team_load(
 #[tauri::command]
 fn team_save(ws_path: String, slots: Vec<team::TeamSlot>) -> Result<(), String> {
     team::save(&ws_path, &slots)
+}
+
+/// 세션 워크트리 보장 (FR-E-62 · E1′ 옵트인) — 멱등, 반환은 절대 경로.
+/// 의존성(node_modules 등)은 워크트리마다 별도라는 것이 정책이다 (FR-E-64 — 공유하지 않는다).
+#[tauri::command]
+async fn worktree_ensure(ws_path: String, session: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || workspace::worktree_ensure(&ws_path, &session))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 // ── 역할 파일 합성 & 임무 (PRD E §4.4~4.6) — 원본은 전부 .eqmux/ 아래 텍스트 파일 ──
@@ -1540,6 +1558,7 @@ pub fn run() {
             transcript_read,
             team_load,
             team_save,
+            worktree_ensure,
             role_save,
             role_remove,
             library_list,

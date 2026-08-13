@@ -50,14 +50,15 @@ export function buildRolePayload(s: Session): RolePayload | undefined {
   };
 }
 
-/** 역할 파일 합성 저장 (FR-E-31) — 반환값은 절대 경로. 조건이 안 되면 no-op */
+/** 역할 파일 합성 저장 (FR-E-31) — 반환값은 절대 경로. 조건이 안 되면 no-op.
+ *  경로 규약은 세션 cwd 기준 (FR-E-63) — 워크트리 세션은 자기 사본의 .eqmux/roles/에 쓴다. */
 export async function saveRoleFile(sessionId: string): Promise<string | undefined> {
   if (!isTauri()) return undefined;
   const s = backend.listSessions().find((x) => x.id === sessionId);
   const ws = s && backend.listWorkspaces().find((w) => w.id === s.workspaceId);
   const payload = s && buildRolePayload(s);
   if (!ws || ws.pathMissing || !payload) return undefined;
-  return invoke<string>("role_save", { wsPath: ws.path, payload }).catch(() => undefined);
+  return invoke<string>("role_save", { wsPath: s.cwd || ws.path, payload }).catch(() => undefined);
 }
 
 /** 역할 해제·세션 제거 시 파일 삭제 — roles/는 gitignore라 repo 이력에 흔적이 없다 */

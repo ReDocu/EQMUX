@@ -77,6 +77,47 @@ pub fn is_repo(path: &str) -> bool {
     Path::new(path).join(".git").exists()
 }
 
+// ── 세션 워크트리 (FR-E-62 · E1′ 옵트인) — `<repo>/.eqmux/worktrees/<세션>` + 브랜치 `eqmux/<세션>` ──
+
+fn path_component(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_alphanumeric() || matches!(c, '-' | '_' | '.' | '@') { c } else { '_' })
+        .collect()
+}
+
+pub fn worktree_dir(ws_path: &str, session: &str) -> PathBuf {
+    Path::new(ws_path)
+        .join(".eqmux")
+        .join("worktrees")
+        .join(path_component(session))
+}
+
+/// 워크트리 보장 — 멱등: 이미 유효하면 그대로 반환. 삭제·정리는 하지 않는다
+/// (FR-E-64 정책 — 커밋 안 된 작업이 있을 수 있어 사람이 정리한다).
+pub fn worktree_ensure(ws_path: &str, session: &str) -> Result<String, String> {
+    let path = worktree_dir(ws_path, session);
+    let p = path.to_string_lossy().into_owned();
+    // 워크트리의 .git은 gitdir 포인터 "파일"이다 — 존재하면 이미 연결된 것
+    if path.join(".git").exists() {
+        return Ok(p);
+    }
+    crate::roles::ensure_gitignore(ws_path)?; // worktrees/가 status를 오염시키지 않게 (FR-E-35)
+    let _ = git(&["worktree", "prune"], ws_path); // 디렉터리만 지워진 잔재 등록 정리
+    let branch: String = format!(
+        "eqmux/{}",
+        session
+            .chars()
+            .map(|c| if c.is_alphanumeric() || matches!(c, '-' | '_') { c } else { '-' })
+            .collect::<String>()
+    );
+    // 새 브랜치로 시도 → 브랜치가 이미 있으면(이전 세션의 흔적) 그 브랜치를 다시 연결
+    if let Err(first) = git(&["worktree", "add", &p, "-b", &branch], ws_path) {
+        git(&["worktree", "add", &p, &branch], ws_path)
+            .map_err(|second| format!("워크트리 생성 실패 — {first} / {second}"))?;
+    }
+    Ok(p)
+}
+
 /// 등록 항목의 현재 상태 실측 — 존재 여부·브랜치·원격 (FR-E-03·08)
 pub fn inspect(entry: &WsEntry) -> WsInfo {
     let exists = Path::new(&entry.path).is_dir();
@@ -223,6 +264,35 @@ mod tests {
         assert_eq!(o.commits.len(), 1);
         assert_eq!(o.commits[0].message, "first");
         assert_eq!((o.ahead, o.behind), (0, 0)); // 업스트림 없음 = 0/0
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 세션 워크트리 (FR-E-62) — 생성·멱등·전용 브랜치·gitignore. 삭제는 하지 않는다 (FR-E-64)
+    #[test]
+    fn worktree_ensure_is_idempotent_with_own_branch() {
+        let dir = std::env::temp_dir().join(format!("eqmux-wt-{}", now_ms()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.to_string_lossy().into_owned();
+        git(&["init"], &path).unwrap();
+        git(&["config", "user.email", "t@t"], &path).unwrap();
+        git(&["config", "user.name", "t"], &path).unwrap();
+        fs::write(dir.join("a.txt"), "hi").unwrap();
+        git(&["add", "."], &path).unwrap();
+        git(&["commit", "-m", "first"], &path).unwrap();
+
+        let wt = worktree_ensure(&path, "kai@ws1").unwrap();
+        assert!(Path::new(&wt).join(".git").exists(), "워크트리 gitdir 포인터가 있어야 한다");
+        assert!(Path::new(&wt).join("a.txt").exists(), "체크아웃이 있어야 한다");
+        let branch = git(&["rev-parse", "--abbrev-ref", "HEAD"], &wt).unwrap();
+        assert_eq!(branch, "eqmux/kai-ws1"); // '@'는 브랜치명에서 '-'로
+        assert_eq!(worktree_ensure(&path, "kai@ws1").unwrap(), wt); // 멱등
+        // .eqmux/.gitignore가 worktrees/를 가린다 (FR-E-35 확장)
+        let ignore = fs::read_to_string(dir.join(".eqmux").join(".gitignore")).unwrap();
+        assert!(ignore.lines().any(|l| l.trim() == "worktrees/"));
+        // 디렉터리만 지운 잔재 → prune 후 재생성 (기존 브랜치 재연결)
+        fs::remove_dir_all(&wt).unwrap();
+        let again = worktree_ensure(&path, "kai@ws1").unwrap();
+        assert!(Path::new(&again).join("a.txt").exists());
         fs::remove_dir_all(&dir).ok();
     }
 }

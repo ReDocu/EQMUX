@@ -15,6 +15,10 @@ pub struct TeamSlot {
     pub persona_name: String,
     pub job: String,
     pub job_name: String,
+    /// 세션 격리 (FR-E-62 · E1′) — true면 `.eqmux/worktrees/<세션>`이 cwd다.
+    /// 경로가 아니라 플래그를 저장한다 — team.json은 커밋 대상(W3)이라 절대 경로 금지
+    #[serde(default)]
+    pub worktree: bool,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -50,7 +54,10 @@ pub fn save(ws_path: &str, slots: &[TeamSlot]) -> Result<(), String> {
     let mut md = String::from("# 팀 편성\n\n| 슬롯 | 페르소나 | 직무 |\n|---|---|---|\n");
     for n in 1u8..=4 {
         match slots.iter().find(|s| s.slot == n) {
-            Some(s) => md.push_str(&format!("| {} | {} | {} |\n", n, s.persona_name, s.job_name)),
+            Some(s) => {
+                let iso = if s.worktree { " · 워크트리" } else { "" };
+                md.push_str(&format!("| {} | {} | {}{} |\n", n, s.persona_name, s.job_name, iso));
+            }
             None => md.push_str(&format!("| {} | — | (비어 있음) |\n", n)),
         }
     }

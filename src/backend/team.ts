@@ -13,13 +13,20 @@ export interface TeamSlotInfo {
   personaName: string;
   job: string;
   jobName: string;
+  worktree: boolean; // 격리 옵트인 (FR-E-62) — 경로가 아니라 플래그 (team.json은 커밋 대상)
   agentSessionId: string | null;
   resumable: boolean;
+  worktreePath: string | null; // 이 머신에 워크트리가 실재할 때만 — 없으면 repo 루트 폴백
 }
 
 export async function loadTeam(workspaceId: string, wsPath: string): Promise<TeamSlotInfo[]> {
   if (!isTauri()) return [];
   return invoke<TeamSlotInfo[]>("team_load", { workspaceId, wsPath }).catch(() => []);
+}
+
+/** 세션 워크트리 보장 (FR-E-62) — 멱등. `.eqmux/worktrees/<세션>` + 브랜치 `eqmux/<세션>` */
+export async function ensureWorktree(wsPath: string, session: string): Promise<string> {
+  return invoke<string>("worktree_ensure", { wsPath, session });
 }
 
 /** 현재 목 상태에서 워크스페이스의 역할 슬롯을 직렬화 (기본 터미널은 팀 파일에 넣지 않는다) */
@@ -36,6 +43,7 @@ function slotsOf(wsId: string) {
       personaName: personas.find((p) => p.id === s.personaId)?.name ?? s.personaId,
       job: s.jobId,
       jobName: jobs.find((j) => j.id === s.jobId)?.name ?? s.jobId,
+      worktree: !!s.worktree,
     }));
 }
 
@@ -63,18 +71,19 @@ export function startTeamSync(): void {
             void invoke("team_save", { wsPath: ws.path, slots }).catch(() => {});
           }
         }
-        // 역할 파일 — 페르소나·직무·관계가 바뀐 워크스페이스만 다시 합성한다
+        // 역할 파일 — 페르소나·직무·관계가 바뀐 워크스페이스만 다시 합성한다.
+        // 경로 규약은 세션 cwd 기준 (FR-E-63) — 워크트리 세션은 자기 사본에 합성된다.
         const payloads = backend
           .listSessions()
           .filter((s) => s.workspaceId === ws.id && s.personaId)
-          .map(buildRolePayload)
-          .filter((p) => p !== undefined);
+          .map((s) => ({ cwd: s.cwd || ws.path, payload: buildRolePayload(s) }))
+          .filter((x): x is { cwd: string; payload: NonNullable<ReturnType<typeof buildRolePayload>> } => x.payload !== undefined);
         if (payloads.length === 0 && !lastRoleSaved.has(ws.id)) continue;
         const roleJson = JSON.stringify(payloads);
         if (lastRoleSaved.get(ws.id) === roleJson) continue;
         lastRoleSaved.set(ws.id, roleJson);
-        for (const payload of payloads) {
-          void invoke("role_save", { wsPath: ws.path, payload }).catch(() => {});
+        for (const x of payloads) {
+          void invoke("role_save", { wsPath: x.cwd, payload: x.payload }).catch(() => {});
         }
       }
     }, 500);
@@ -90,7 +99,7 @@ export async function restoreTeams(): Promise<void> {
     if (ws.pathMissing) continue;
     const slots = await loadTeam(ws.id, ws.path);
     if (slots.length > 0) {
-      lastSaved.set(ws.id, JSON.stringify(slots.map(({ slot, persona, personaName, job, jobName }) => ({ slot, persona, personaName, job, jobName }))));
+      lastSaved.set(ws.id, JSON.stringify(slots.map(({ slot, persona, personaName, job, jobName, worktree }) => ({ slot, persona, personaName, job, jobName, worktree }))));
       backend.hydrateTeam(ws.id, slots, alive);
     }
   }

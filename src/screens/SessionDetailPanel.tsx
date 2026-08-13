@@ -78,7 +78,8 @@ export function SessionDetailPanel(props: { session: Session }) {
   const detachRole = () => {
     const ws = backend.listWorkspaces().find((w) => w.id === s().workspaceId);
     backend.updateSessionRole(s().id, "", "");
-    if (ws && !ws.pathMissing) removeRoleFile(ws.path, s().id);
+    // 역할 파일은 세션 cwd 규약 (FR-E-63) — 워크트리 세션은 자기 사본에서 지운다
+    if (ws && !ws.pathMissing) removeRoleFile(s().cwd || ws.path, s().id);
   };
 
   const [actionErr, setActionErr] = createSignal<string | undefined>(undefined);
@@ -173,6 +174,9 @@ export function SessionDetailPanel(props: { session: Session }) {
         />
         <Show when={s().pid}>
           <KV k="PID · 셸" v={`${s().pid} · ${s().shell}`} />
+        </Show>
+        <Show when={s().personaId}>
+          <KV k="격리" v={s().worktree ? "워크트리 · 전용 브랜치 (E1′)" : "공유 · repo 루트 (FR-E-60)"} />
         </Show>
         <KV k="cwd" v={s().cwd} />
         <Show when={isTauri()}>
