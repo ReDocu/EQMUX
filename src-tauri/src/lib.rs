@@ -35,8 +35,9 @@ use workspace::{WsEntry, WsInfo};
 pub(crate) struct StoreState(pub(crate) Store);
 
 /// 비정상 종료 감지 (FR-C-35) — 시작 시 running.flag가 이미 있으면 직전 실행이
-/// 정상 종료(app_exit의 표식 제거)를 거치지 못한 것이다. 이번 실행 동안 값은 불변.
-struct DirtyStart(bool);
+/// 정상 종료(app_exit의 표식 제거)를 거치지 못한 것이다. 첫 crash_recovery 호출이
+/// 값을 소비한다 — 웹뷰만 재시작(FR-C-06)했을 때 안내가 다시 뜨지 않게.
+struct DirtyStart(Mutex<bool>);
 
 /// 설정 (PRD J) — 앱데이터 settings.json. 스키마는 프런트 소유(JSON 통과)이며
 /// Rust는 알림 게이트(FR-G-30 라우팅) 같은 즉시 참조를 위해 메모리 사본을 든다.
@@ -1267,13 +1268,43 @@ fn crash_scan(root: &Path) -> Vec<CrashSession> {
     out
 }
 
-/// 직전 실행이 비정상 종료였을 때만 dirty=true + 직전 세션 목록 (FR-C-35)
+/// 직전 실행이 비정상 종료였을 때만 dirty=true + 직전 세션 목록 (FR-C-35).
+/// 값은 1회 소비 — 웹뷰 재시작 후 재호출에는 dirty=false를 준다 (FR-C-06).
 #[tauri::command]
 fn crash_recovery(store_state: State<StoreState>, dirty: State<DirtyStart>) -> CrashReport {
-    if !dirty.0 {
+    let was_dirty = dirty.0.lock().map(|mut d| std::mem::take(&mut *d)).unwrap_or(false);
+    if !was_dirty {
         return CrashReport { dirty: false, sessions: Vec::new() };
     }
     CrashReport { dirty: true, sessions: crash_scan(&store_state.0.root()) }
+}
+
+/// 웹뷰 재시작 복구 (FR-C-06) — 추적 중인 에이전트 상태의 현재 스냅숏.
+/// **살아 있는 PTY가 있는 세션만** 준다 — 죽은 세션은 재개 제안(FR-C-33)의 몫이라
+/// 스냅숏이 restored 상태를 덮어 제안 카드를 지워버리면 안 된다.
+#[tauri::command]
+fn agent_snapshot(app: AppHandle) -> Vec<agent::AgentStateEvt> {
+    let pty: State<PtyState> = app.state();
+    let alive: std::collections::HashSet<String> = match pty.0.lock() {
+        Ok(s) => s.keys().cloned().collect(),
+        Err(_) => return Vec::new(),
+    };
+    let rt: State<agent::AgentRt> = app.state();
+    let Ok(map) = rt.by_uuid.lock() else {
+        return Vec::new();
+    };
+    map.iter()
+        .filter(|(_, t)| alive.contains(&t.app_session))
+        .map(|(uuid, t)| agent::AgentStateEvt {
+            session: t.app_session.clone(),
+            agent_session: uuid.clone(),
+            status: t.last_status.clone(),
+            waiting_for: t.last_waiting.clone(),
+            resumable: agent::resumable(&t.cwd, uuid),
+            version: None,
+            exit_code: None,
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -1450,7 +1481,7 @@ pub fn run() {
             // 정상 종료는 app_exit 끝에서 표식을 지운다.
             let dirty = root.join("running.flag").exists();
             let _ = std::fs::write(root.join("running.flag"), b"1");
-            app.manage(DirtyStart(dirty));
+            app.manage(DirtyStart(Mutex::new(dirty)));
             // 설정 로드 (PRD J) — 손상되면 Null로 시작 (프런트 기본값이 받친다)
             let settings = std::fs::read_to_string(root.join("settings.json"))
                 .ok()
@@ -1463,6 +1494,26 @@ pub fn run() {
             app.manage(MsgRate::default()); // 메시지 버스 발신 상한 (M6)
             agent::start_registry_watch(app.handle().clone());
             ipc::start_server(app.handle().clone()); // eqmux CLI 파이프 (PRD I)
+            // 웹뷰 렌더러 크래시 생존 (FR-C-06) — ProcessFailed → Reload. PTY는 Rust가
+            // 소유하므로 세션은 죽지 않고, 리로드된 프런트가 pty_list·agent_snapshot으로
+            // 재부착한다 (restoreTeams). 실패해도 앱은 정상 — 등록은 최선 노력이다.
+            #[cfg(windows)]
+            if let Some(win) = app.get_webview_window("main") {
+                let _ = win.with_webview(|wv| unsafe {
+                    let controller = wv.controller();
+                    let Ok(core) = controller.CoreWebView2() else { return };
+                    let handler = webview2_com::ProcessFailedEventHandler::create(Box::new(
+                        move |sender: Option<webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2>, _args| {
+                            if let Some(core) = sender {
+                                let _ = core.Reload();
+                            }
+                            Ok(())
+                        },
+                    ));
+                    let mut token: i64 = 0;
+                    let _ = core.add_ProcessFailed(&handler, &mut token);
+                });
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1519,6 +1570,7 @@ pub fn run() {
             shutdown_flush,
             app_exit,
             crash_recovery,
+            agent_snapshot,
             layout_load,
             layout_save,
             settings_load,

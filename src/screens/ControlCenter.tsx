@@ -209,6 +209,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
                   : undefined
               }
               restore={s.restored ? { resumable: s.resumable, reason: s.resumeReason } : undefined}
+              revive={s.revived}
               mockLines={mockLines(s, persona(s.personaId)?.name ?? "?")}
             />
           </div>

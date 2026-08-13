@@ -55,6 +55,7 @@ export interface Session {
   missionId?: string;
   restartNeeded: boolean; // 권한 변경 감지 (E11′)
   restored?: boolean; // team.json에서 복원됨 — 에이전트 자동 실행 없음, 재개 칩만 (S3)
+  revived?: boolean; // 웹뷰 재시작 복구 (FR-C-06) — PTY가 살아 있어 재부착만 한다 (restored와 배타)
   unseen?: boolean; // 미확인 (FR-G-44·45) — waiting·dead 진입 2종에만 마킹, 열람 시 해제
   sinceMs: number; // 현재 status 진입 이후 경과
   scrollbackLines: number;

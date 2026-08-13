@@ -45,6 +45,24 @@ export function ensureAgentListeners(): Promise<void> {
   return ready;
 }
 
+/** 웹뷰 재시작 복구 (FR-C-06) — 살아 있는 PTY의 에이전트 상태 스냅숏을 끌어와
+ *  목 백엔드에 반영한다. 스트림(agent-state)은 다음 변화부터만 오므로 초기값이 필요하다. */
+export async function applyAgentSnapshot(): Promise<void> {
+  if (!isTauri()) return;
+  const states = await invoke<AgentStateEvt[]>("agent_snapshot").catch(() => [] as AgentStateEvt[]);
+  for (const p of states) {
+    backend.applyAgentState({
+      session: p.session,
+      agentSession: p.agentSession,
+      status: STATUSES.includes(p.status as AgentStatus) ? (p.status as AgentStatus) : undefined,
+      waitingFor: p.waitingFor ?? undefined,
+      resumable: p.resumable,
+      version: p.version ?? undefined,
+      exitCode: p.exitCode ?? undefined,
+    });
+  }
+}
+
 /** 에이전트 기동 (FR-D-01·02·40) — UUID는 Rust가 발급하고 반환한다.
  *  스폰 전에 역할 파일을 합성해 (FR-E-31) 주입(FR-D-05)이 항상 성립하게 한다. */
 export async function spawnAgent(

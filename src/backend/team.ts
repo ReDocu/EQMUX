@@ -2,8 +2,9 @@
 // 저장: 백엔드 방송을 구독해 역할 슬롯이 바뀔 때마다 500ms 디바운스로 team.json/team.md를 갱신한다.
 // 로드: 워크스페이스 목록 갱신 시 슬롯을 복원한다 — 에이전트는 자동 실행하지 않는다 (C5 · FR-D-22).
 import { invoke } from "@tauri-apps/api/core";
+import { applyAgentSnapshot } from "./agent";
 import { backend } from "./mock";
-import { isTauri } from "./pty";
+import { isTauri, listAlivePty } from "./pty";
 import { buildRolePayload } from "./roles";
 
 export interface TeamSlotInfo {
@@ -80,15 +81,29 @@ export function startTeamSync(): void {
   });
 }
 
-/** 워크스페이스의 팀 슬롯 복원 — refreshWorkspaces 이후 호출된다 */
+/** 워크스페이스의 팀 슬롯 복원 — refreshWorkspaces 이후 호출된다.
+ *  살아 있는 PTY(웹뷰만 재시작한 경우, FR-C-06)는 재개 대기가 아니라 재부착으로 복원한다. */
 export async function restoreTeams(): Promise<void> {
   if (!isTauri()) return;
+  const alive = new Set(await listAlivePty());
   for (const ws of backend.listWorkspaces()) {
     if (ws.pathMissing) continue;
     const slots = await loadTeam(ws.id, ws.path);
     if (slots.length > 0) {
       lastSaved.set(ws.id, JSON.stringify(slots.map(({ slot, persona, personaName, job, jobName }) => ({ slot, persona, personaName, job, jobName }))));
-      backend.hydrateTeam(ws.id, slots);
+      backend.hydrateTeam(ws.id, slots, alive);
     }
   }
+  // 팀 파일에 없는 생존 PTY(기본 터미널) — 화면에 되살린다. 세션 id 관례가 `이름@wsId`라
+  // 워크스페이스 귀속을 id에서 푼다 (pty_spawn의 폴백과 같은 규칙).
+  const known = new Set(backend.listSessions().map((x) => x.id));
+  for (const id of alive) {
+    if (known.has(id)) continue;
+    const wsId = id.split("@")[1];
+    if (wsId && backend.listWorkspaces().some((w) => w.id === wsId && !w.pathMissing)) {
+      backend.reviveOrphan(id, wsId);
+    }
+  }
+  // 생존 세션의 에이전트 상태 초기값 (FR-C-06) — 스트림은 다음 변화부터만 온다
+  await applyAgentSnapshot();
 }

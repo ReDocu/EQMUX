@@ -49,11 +49,15 @@ export interface Backend {
   removeTerminal(id: string): void;
   /** 역할 세션의 페르소나·직무 변경 — 직무가 바뀌면 권한 변경이므로 재시작 필요(E11′) */
   updateSessionRole(id: string, personaId: string, jobId: string): void;
-  /** team.json에서 복원된 슬롯을 세션으로 채운다 — 에이전트는 자동 실행하지 않는다 (S3) */
+  /** team.json에서 복원된 슬롯을 세션으로 채운다 — 에이전트는 자동 실행하지 않는다 (S3).
+   *  aliveIds에 든 세션은 PTY가 살아 있는 것(웹뷰 재시작, FR-C-06)이라 재개 대기가 아니라 재부착 대상이다 */
   hydrateTeam(
     wsId: string,
     slots: { slot: number; persona: string; job: string; agentSessionId: string | null; resumable: boolean }[],
+    aliveIds?: Set<string>,
   ): void;
+  /** 웹뷰 재시작 복구 (FR-C-06) — 팀 파일에 없는 살아 있는 PTY(기본 터미널)를 화면에 되살린다 */
+  reviveOrphan(id: string, wsId: string): void;
   /** 세션 메모리 실측 반영 (FR-C-09) — 최신값·피크만 유지, 이벤트 적재 없음 */
   applyMemory(samples: { id: string; mb: number; peakMb: number }[]): void;
   /** 실물 에이전트 상태 반영 (PRD D agent-state 이벤트) — Tauri에서만 호출된다 */
@@ -646,32 +650,76 @@ export class MockBackend implements Backend {
   hydrateTeam(
     wsId: string,
     slots: { slot: number; persona: string; job: string; agentSessionId: string | null; resumable: boolean }[],
+    aliveIds?: Set<string>,
   ) {
     const ws = WORKSPACES.find((x) => x.id === wsId);
     if (!ws) return;
     let added = 0;
+    let revivedCount = 0;
     for (const sl of slots) {
       const slot = sl.slot as 1 | 2 | 3 | 4;
       const used = SESSIONS.some((x) => x.workspaceId === wsId && x.slot === slot);
       if (used || slot < 1 || slot > 4) continue;
+      const id = `${sl.persona}@${wsId}`;
+      // PTY 생존 = 웹뷰만 재시작한 것 (FR-C-06) — 재개 대기가 아니라 재부착 대상.
+      // 상태는 agent_snapshot이 곧바로 덮는다 (restoreTeams에서 이어 호출).
+      const alive = aliveIds?.has(id) ?? false;
+      if (alive) revivedCount++;
       SESSIONS.push(
-        s(`${sl.persona}@${wsId}`, wsId, slot, sl.persona, sl.job, {
+        s(id, wsId, slot, sl.persona, sl.job, {
           status: "shell",
           cwd: ws.path,
           sinceMs: 0,
-          restored: true,
+          restored: !alive,
+          revived: alive,
           resumable: sl.resumable,
           resumeReason: sl.resumable ? "transcript + cwd 일치" : "transcript 없음",
           agentSessionId: sl.agentSessionId?.slice(0, 8),
-          lastOutput: sl.resumable ? "복원됨 · 재개 대기" : "복원됨 · 새 시작 필요",
+          lastOutput: alive
+            ? "웹뷰 재시작 · 세션 이어짐"
+            : sl.resumable
+              ? "복원됨 · 재개 대기"
+              : "복원됨 · 새 시작 필요",
         }),
       );
       added++;
     }
     if (added > 0) {
-      this.logEvent("app", `팀 복원 · ${ws.name} · ${added}개 슬롯 (team.json)`);
+      this.logEvent(
+        "app",
+        revivedCount > 0
+          ? `팀 복원 · ${ws.name} · ${added}개 슬롯 (실행 중 ${revivedCount}개 재부착)`
+          : `팀 복원 · ${ws.name} · ${added}개 슬롯 (team.json)`,
+      );
       this.broadcast();
     }
+  }
+
+  reviveOrphan(id: string, wsId: string) {
+    const ws = WORKSPACES.find((x) => x.id === wsId);
+    if (!ws || SESSIONS.some((x) => x.id === id)) return;
+    const used = new Set(SESSIONS.filter((x) => x.workspaceId === wsId).map((x) => x.slot));
+    // `shell<N>@ws` 이름 관례를 따르는 세션은 원래 슬롯을 되찾고, 아니면 빈 슬롯
+    const m = /^shell([1-4])@/.exec(id);
+    const preferred = m ? (Number(m[1]) as 1 | 2 | 3 | 4) : undefined;
+    const slot = preferred && !used.has(preferred) ? preferred : ([1, 2, 3, 4] as const).find((n) => !used.has(n));
+    if (!slot) {
+      this.logEvent("app", `재부착 불가 · 슬롯 가득 참 (4/4) · ${id}`);
+      this.broadcast();
+      return;
+    }
+    SESSIONS.push(
+      s(id, wsId, slot, "", "", {
+        status: "shell",
+        cwd: ws.path,
+        sinceMs: 0,
+        revived: true,
+        resumeReason: "일반 셸 · cwd 유지",
+        lastOutput: "웹뷰 재시작 · 세션 이어짐",
+      }),
+    );
+    this.logEvent("state", `웹뷰 재시작 · 기본 터미널 재부착 · SLOT ${slot}`, id);
+    this.broadcast();
   }
 
   applyMemory(samples: { id: string; mb: number; peakMb: number }[]) {

@@ -154,7 +154,8 @@ function createEntry(): TermEntry {
 }
 
 /** 최초 1회 — 스트림 구독·재생·스폰. 리마운트에서는 다시 실행되지 않는다.
- *  복원 세션(restore)은 스폰하지 않고 재개 제안을 띄운다 (FR-C-33 — 자동 실행 없음). */
+ *  복원 세션(restore)은 스폰하지 않고 재개 제안을 띄운다 (FR-C-33 — 자동 실행 없음).
+ *  재부착 세션(revive, FR-C-06)은 PTY가 이미 살아 있다 — 아무것도 스폰하지 않고 이어 그린다. */
 async function initSession(
   entry: TermEntry,
   props: {
@@ -164,6 +165,7 @@ async function initSession(
     shell?: string;
     agent?: { name: string; permissions: Permissions };
     restore?: { resumable: boolean; reason?: string };
+    revive?: boolean;
     mockLines?: string[];
   },
 ) {
@@ -213,10 +215,24 @@ async function initSession(
       for (const line of cleaned) term.writeln(`\x1b[2m${line}\x1b[0m`);
       // FR-C-32 경계 — 복원 대기 중에는 "새 세션 시작"이 아니다 (아직 아무것도 안 떴다)
       term.writeln(
-        props.restore
-          ? "\x1b[90m─── 재개 대기 — 이전 PTY는 종료되었습니다 (자동 실행 안 함) ───\x1b[0m"
-          : "\x1b[90m─── 새 세션 시작 ───\x1b[0m",
+        props.revive
+          ? "\x1b[90m─── 웹뷰 재시작 — 실행 중인 세션에 재부착 (FR-C-06) ───\x1b[0m"
+          : props.restore
+            ? "\x1b[90m─── 재개 대기 — 이전 PTY는 종료되었습니다 (자동 실행 안 함) ───\x1b[0m"
+            : "\x1b[90m─── 새 세션 시작 ───\x1b[0m",
       );
+    }
+    // 웹뷰 재시작 재부착 (FR-C-06) — PTY는 Rust에 살아 있다. 스폰 없이 출력 구독만 잇고,
+    // ConPTY가 resize에 전체 리페인트로 응답하는 성질로 현재 화면을 다시 그리게 한다.
+    if (props.revive) {
+      if (cleaned.length === 0) {
+        term.writeln("\x1b[90m─── 웹뷰 재시작 — 실행 중인 세션에 재부착 (FR-C-06) ───\x1b[0m");
+      }
+      entry.lastCols = term.cols;
+      entry.lastRows = term.rows;
+      resizePty(props.sessionId, term.cols, Math.max(2, term.rows - 1));
+      setTimeout(() => resizePty(props.sessionId, term.cols, term.rows), 150);
+      return;
     }
     // 복원된 역할 세션 (FR-C-33) — 재개 가능 여부를 판별해 제안만 하고, 실행은 사용자 몫이다 (C5)
     if (props.restore && props.agent) {
@@ -284,6 +300,7 @@ export function TerminalPane(props: {
   shell?: string;
   agent?: { name: string; permissions: Permissions };
   restore?: { resumable: boolean; reason?: string };
+  revive?: boolean;
   mockLines?: string[];
 }) {
   let host!: HTMLDivElement;

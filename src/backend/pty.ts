@@ -68,6 +68,12 @@ export async function scrollbackTail(workspace: string, session: string, count: 
   return invoke<string[]>("scrollback_tail", { workspace, session, count }).catch(() => []);
 }
 
+/** 살아 있는 PTY 세션 id 목록 (FR-C-06) — 웹뷰만 재시작했을 때 Rust 쪽 세션은 계속 돌고 있다 */
+export async function listAlivePty(): Promise<string[]> {
+  if (!isTauri()) return [];
+  return invoke<string[]>("pty_list").catch(() => []);
+}
+
 export interface StoreUsageReal {
   db_file: string;
   db_size_bytes: number;
