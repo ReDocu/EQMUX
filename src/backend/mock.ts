@@ -83,6 +83,8 @@ export interface Backend {
   removeWorkspace(id: string): void;
   savePersona(p: Persona): void;
   addPersona(): void;
+  saveJob(j: Job): void;
+  deleteJob(id: string): void;
   listTurns(sessionId: string): TranscriptTurn[];
   sendInput(sessionId: string, text: string): void;
 }
@@ -885,6 +887,21 @@ export class MockBackend implements Backend {
   addPersona() {
     const n = seq++;
     PERSONAS.push({ id: `p${n}`, name: `새 페르소나`, hint: "판단 성향 1줄 (P3 예산 5~10줄)", color: "blue" });
+    this.broadcast();
+  }
+
+  saveJob(j: Job) {
+    const i = JOBS.findIndex((x) => x.id === j.id);
+    if (i >= 0) JOBS[i] = j;
+    else JOBS.push(j);
+    this.logEvent("app", `직무 저장 · ${j.name}`);
+    this.broadcast();
+  }
+
+  deleteJob(id: string) {
+    const i = JOBS.findIndex((x) => x.id === id);
+    if (i < 0) return;
+    JOBS.splice(i, 1);
     this.broadcast();
   }
 

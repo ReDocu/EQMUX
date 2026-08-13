@@ -937,6 +937,17 @@ fn library_delete_persona(store_state: State<StoreState>, id: String) -> Result<
     library::delete_persona(&store_state.0.root(), &id)
 }
 
+/// 직무 저장 (FR-E-28) — 전역 계층에 쓴다. 편집·복제(새 id로 저장)가 이 경로 하나다
+#[tauri::command]
+fn library_save_job(store_state: State<StoreState>, job: library::JobInfo) -> Result<(), String> {
+    library::save_job(&store_state.0.root(), &job)
+}
+
+#[tauri::command]
+fn library_delete_job(store_state: State<StoreState>, id: String) -> Result<(), String> {
+    library::delete_job(&store_state.0.root(), &id)
+}
+
 /// 편성 프리셋 목록 (FR-E-26) — 전역 앱데이터 presets/*.json이 원본
 #[tauri::command]
 fn preset_list(store_state: State<StoreState>) -> Vec<library::PresetInfo> {
@@ -1472,6 +1483,8 @@ pub fn run() {
             library_list,
             library_save_persona,
             library_delete_persona,
+            library_save_job,
+            library_delete_job,
             preset_list,
             mission_list,
             mission_create,

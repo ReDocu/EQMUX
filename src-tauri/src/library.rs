@@ -252,6 +252,15 @@ pub fn delete_persona(app_root: &Path, id: &str) -> Result<(), String> {
     }
 }
 
+pub fn delete_job(app_root: &Path, id: &str) -> Result<(), String> {
+    let path = jobs_dir(app_root).join(format!("{}.md", safe_id(id)));
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 /// 시드 번들 (FR-E-27) — 디렉터리가 없을 때만. 사용자가 지운 항목을 되살리지 않는다.
 pub fn seed(app_root: &Path) {
     if !jobs_dir(app_root).exists() {
@@ -339,6 +348,22 @@ mod tests {
         assert_eq!(kai2.color, "amber");
         delete_persona(&root, "kai").unwrap();
         assert!(list(&root, None).personas.iter().all(|p| p.id != "kai"));
+        // 직무 편집·삭제 왕복 (FR-E-28)
+        let lead2 = JobInfo {
+            id: "lead".into(),
+            name: "수석".into(),
+            permissions: crate::roles::RolePermissions { write: true, commit: true, push: true },
+            responsibility: "최종 판단".into(),
+            forbidden: "독단 push".into(),
+        };
+        save_job(&root, &lead2).unwrap();
+        let lib2 = list(&root, None);
+        let lead2r = lib2.jobs.iter().find(|j| j.id == "lead").unwrap();
+        assert_eq!(lead2r.name, "수석");
+        assert!(lead2r.permissions.push);
+        delete_job(&root, "lead").unwrap();
+        assert!(list(&root, None).jobs.iter().all(|j| j.id != "lead"));
+        delete_job(&root, "lead").unwrap(); // 없는 파일 삭제 = 멱등
         fs::remove_dir_all(&root).ok();
     }
 

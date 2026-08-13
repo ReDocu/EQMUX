@@ -792,6 +792,14 @@
   border-color: var(--eq-blue);
   box-shadow: inset 2px 0 0 var(--eq-blue);
 }
+/* 직무 카드도 선택·편집 대상이다 (FR-E-28) — 페르소나 카드와 같은 선택 표식 */
+.role-job:hover {
+  border-color: var(--eq-muted);
+}
+.role-job.selected {
+  border-color: var(--eq-blue);
+  box-shadow: inset 2px 0 0 var(--eq-blue);
+}
 
 /* ── 임무 배정 (화면 #8) ── */
 .assign-chip {

@@ -56,6 +56,41 @@ export async function deletePersonaFile(id: string): Promise<void> {
   await refreshLibrary();
 }
 
+// ── 직무 CRUD (FR-E-28) — 편집·복제·삭제. 복제 = 새 id로 저장, 같은 경로 하나다 ──
+
+export async function saveJobFile(j: Job): Promise<void> {
+  if (!isTauri()) {
+    backend.saveJob(j);
+    return;
+  }
+  await invoke("library_save_job", { job: j }).catch(() => {});
+  await refreshLibrary();
+}
+
+export async function duplicateJobFile(src: Job): Promise<void> {
+  const copy: Job = { ...src, id: `${src.id}-copy-${Date.now().toString(36)}`, name: `${src.name} (복제)` };
+  await saveJobFile(copy);
+}
+
+export async function addJobFile(): Promise<void> {
+  await saveJobFile({
+    id: `j${Date.now().toString(36)}`,
+    name: "새 직무",
+    permissions: { write: false, commit: false, push: false }, // 기본은 가장 보수적으로 (D5)
+    responsibility: "책임 · 산출물을 적으세요",
+    forbidden: "금지를 적으세요",
+  });
+}
+
+export async function deleteJobFile(id: string): Promise<void> {
+  if (!isTauri()) {
+    backend.deleteJob(id);
+    return;
+  }
+  await invoke("library_delete_job", { id }).catch(() => {});
+  await refreshLibrary();
+}
+
 /** 편성 프리셋 (FR-E-26) — 앱데이터 presets/*.json 실측. 직무 구성만 담는다 */
 export interface CastingPreset {
   id: string;
