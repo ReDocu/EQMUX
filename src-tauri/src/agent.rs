@@ -32,6 +32,8 @@ pub struct Tracked {
     pub subagents: i64,
     /// statusLine 채널 (FR-D-19 · §10.4) — 세션 누적 비용 USD
     pub cost_usd: Option<f64>,
+    /// 관측 저하 (FR-D-62·63, M34) — 레지스트리를 못 쓰는 중. 훅+프로세스 생존으로 유지된다
+    pub degraded: bool,
 }
 
 /// 세션당 알림 합침 상태 (FR-G-32) — 마지막 발신 시각 + 그 사이 억제된 건수
@@ -65,6 +67,8 @@ pub struct AgentStateEvt {
     pub resumable: bool,
     pub version: Option<String>,
     pub exit_code: Option<i64>,
+    /// 낮은 신뢰 표시 (FR-G-27) — 레지스트리 접근 불가로 상태의 정밀도가 떨어진 세션
+    pub degraded: bool,
 }
 
 /// 세션 레지스트리 레코드 (§10.1) — 부분 파싱 (FR-D-64): 모르는 필드는 무시,
@@ -354,6 +358,7 @@ pub fn apply_hook(app: &AppHandle, session: &str, event: &str, payload: &serde_j
                 resumable: resumable(&t.cwd, uuid),
                 version: None,
                 exit_code: None,
+                degraded: t.degraded,
             });
             break;
         }
@@ -404,6 +409,7 @@ pub fn apply_statusline(app: &AppHandle, session: &str, payload: &serde_json::Va
                 resumable: resumable(&t.cwd, uuid),
                 version: None,
                 exit_code: None,
+                degraded: t.degraded,
             });
             break;
         }
@@ -434,6 +440,7 @@ pub fn on_pty_exit(app: &AppHandle, id: &str, code: Option<u32>, gen: u64) {
                     resumable: resumable(&t.cwd, uuid),
                     version: None,
                     exit_code: code.map(i64::from),
+                    degraded: t.degraded,
                 });
                 break;
             }
@@ -479,10 +486,50 @@ fn scan(app: &AppHandle) {
     if tracked_uuids.is_empty() {
         return;
     }
-    let entries = match fs::read_dir(sessions_dir()) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
+    let entries = fs::read_dir(sessions_dir());
+    // degraded 전환 (FR-D-62·63, M34) — 레지스트리 디렉터리 접근 불가면 살아 있는 세션 전부에
+    // 낮은 신뢰 표시를 달고(FR-G-27), 상태는 훅 + 프로세스 생존(EOF→dead)으로만 유지한다.
+    // 접근이 돌아오면 해제한다. 앱은 계속 동작한다 — 조용히 열화되지 않는다 (FR-D-65).
+    let registry_ok = entries.is_ok();
+    let mut flips: Vec<AgentStateEvt> = Vec::new();
+    if let Ok(mut map) = rt.by_uuid.lock() {
+        for uuid in &tracked_uuids {
+            let Some(t) = map.get_mut(uuid) else { continue };
+            if t.last_status == "dead" || t.degraded != registry_ok {
+                continue; // 죽었거나 이미 원하는 값 — 전환 없음
+            }
+            t.degraded = !registry_ok;
+            flips.push(AgentStateEvt {
+                session: t.app_session.clone(),
+                agent_session: uuid.clone(),
+                status: t.last_status.clone(),
+                waiting_for: t.last_waiting.clone(),
+                activity: t.activity.clone(),
+                subagents: t.subagents,
+                cost_usd: t.cost_usd,
+                resumable: resumable(&t.cwd, uuid),
+                version: None,
+                exit_code: None,
+                degraded: t.degraded,
+            });
+        }
+    }
+    for evt in &flips {
+        // 상태 전이가 아니므로 알림 없이 방송만 — 대신 전환 자체는 피드에 기록한다 (FR-D-65)
+        let _ = app.emit("agent-state", evt.clone());
+        let store: tauri::State<crate::StoreState> = app.state();
+        let _ = store.0.sender().send(crate::store::StoreMsg::Event {
+            ws: evt.session.split('@').nth(1).unwrap_or("default").to_string(),
+            id: Some(evt.session.clone()),
+            kind: "agent".into(),
+            message: if evt.degraded {
+                "관측 저하 — 세션 레지스트리 접근 불가 · 훅 + 프로세스 생존으로 유지 (FR-D-63)".into()
+            } else {
+                "관측 정상화 — 세션 레지스트리 접근 회복".into()
+            },
+        });
+    }
+    let Ok(entries) = entries else { return };
     let mut found: HashMap<String, RegistryRecord> = HashMap::new();
     for entry in entries.flatten() {
         let p = entry.path();
@@ -525,6 +572,7 @@ fn scan(app: &AppHandle) {
                         resumable: resumable(&t.cwd, &uuid),
                         version: rec.version.clone(),
                         exit_code: None,
+                        degraded: t.degraded,
                     });
                 }
             }

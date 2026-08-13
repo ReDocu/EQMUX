@@ -22,6 +22,7 @@ export interface AgentStateEvt {
   resumable: boolean;
   version: string | null;
   exitCode: number | null;
+  degraded: boolean; // 관측 저하 (FR-D-62·63, M34) — 낮은 신뢰 표시 (FR-G-27)
 }
 
 const STATUSES: AgentStatus[] = ["starting", "busy", "waiting", "shell", "idle", "dead"];
@@ -47,6 +48,7 @@ function applyEvt(p: AgentStateEvt): void {
     resumable: p.resumable,
     version: p.version ?? undefined,
     exitCode: p.exitCode ?? undefined,
+    degraded: p.degraded,
   });
 }
 

@@ -769,6 +769,7 @@ export class MockBackend implements Backend {
     sess.activity = evt.activity; // 훅 2차 소스 (FR-D-15) — 도구명, 없으면 지운다
     if (evt.subagents !== undefined) sess.subagents = evt.subagents; // FR-D-18
     if (evt.costUsd !== undefined) sess.costUsd = evt.costUsd; // statusLine (FR-D-19)
+    if (evt.degraded !== undefined) sess.degraded = evt.degraded; // 낮은 신뢰 (FR-G-27)
     sess.resumable = evt.resumable;
     sess.resumeReason = evt.resumable ? "transcript + cwd 일치" : "transcript 없음";
     if (evt.version) sess.agentVersion = evt.version;

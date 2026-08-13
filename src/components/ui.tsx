@@ -19,7 +19,12 @@ export function StatusLabel(props: { session: Session }) {
       <Show when={s().status === "dead" && s().exitCode !== undefined}> · exit {s().exitCode}</Show>
       <Show when={s().degraded}>
         {" "}
-        <span class="badge">낮은 신뢰</span>
+        <span
+          class="badge"
+          title="관측 저하 (FR-G-27) — 세션 레지스트리 접근 불가. 상태는 훅 + 프로세스 생존으로만 유지됩니다 (FR-D-63)"
+        >
+          낮은 신뢰
+        </span>
       </Show>
     </span>
   );

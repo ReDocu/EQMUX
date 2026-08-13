@@ -82,6 +82,7 @@ export interface AgentStateApply {
   resumable: boolean;
   version?: string;
   exitCode?: number;
+  degraded?: boolean; // 관측 저하 (FR-D-62·63) — 낮은 신뢰 표시 (FR-G-27)
 }
 
 /** team.json 복원 슬롯 + 재개·워크트리 결합 정보 (team_load 반환의 소비 형태) */

@@ -724,6 +724,7 @@ fn agent_spawn_inner(
             resumable: resume,
             version: None,
             exit_code: None,
+            degraded: false,
         },
     );
     Ok(uuid)
@@ -1333,6 +1334,7 @@ fn agent_snapshot(app: AppHandle) -> Vec<agent::AgentStateEvt> {
             resumable: agent::resumable(&t.cwd, uuid),
             version: None,
             exit_code: None,
+            degraded: t.degraded,
         })
         .collect()
 }

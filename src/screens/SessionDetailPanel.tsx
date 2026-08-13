@@ -200,6 +200,10 @@ export function SessionDetailPanel(props: { session: Session }) {
 
       <div class="card inset" style={{ padding: "4px 10px", "margin-top": "10px" }}>
         <KV k="상태" v={s().status} vClass={s().status === "waiting" ? "st-waiting" : ""} />
+        {/* 낮은 신뢰 (FR-G-27) — 정확한 척하지 않는다 */}
+        <Show when={s().degraded}>
+          <KV k="관측" v="저하 — 레지스트리 접근 불가 · 훅 + 프로세스 생존으로 유지 (FR-D-63)" vClass="st-waiting" />
+        </Show>
         <KV k="임무" v={mission()?.name ?? "미배정"} />
         <KV k="역할" v={`${persona()?.name ?? "—"} · ${job()?.name ?? "—"}`} />
         <KV k="서브에이전트" v={String(s().subagents)} />
