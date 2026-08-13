@@ -55,3 +55,15 @@ export async function deletePersonaFile(id: string): Promise<void> {
   await invoke("library_delete_persona", { id }).catch(() => {});
   await refreshLibrary();
 }
+
+/** 편성 프리셋 (FR-E-26) — 앱데이터 presets/*.json 실측. 직무 구성만 담는다 */
+export interface CastingPreset {
+  id: string;
+  name: string;
+  jobs: string[];
+}
+
+export async function listPresets(): Promise<CastingPreset[]> {
+  if (!isTauri()) return [];
+  return invoke<CastingPreset[]>("preset_list").catch(() => []);
+}

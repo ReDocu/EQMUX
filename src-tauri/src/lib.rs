@@ -937,6 +937,12 @@ fn library_delete_persona(store_state: State<StoreState>, id: String) -> Result<
     library::delete_persona(&store_state.0.root(), &id)
 }
 
+/// 편성 프리셋 목록 (FR-E-26) — 전역 앱데이터 presets/*.json이 원본
+#[tauri::command]
+fn preset_list(store_state: State<StoreState>) -> Vec<library::PresetInfo> {
+    library::list_presets(&store_state.0.root())
+}
+
 /// 배정·해제 (FR-E-53·54) — 역할 파일의 임무 블록을 삽입·교체·삭제한다 (멱등)
 #[tauri::command]
 fn mission_assign(ws_path: String, session: String, mission_id: Option<String>) -> Result<(), String> {
@@ -1466,6 +1472,7 @@ pub fn run() {
             library_list,
             library_save_persona,
             library_delete_persona,
+            preset_list,
             mission_list,
             mission_create,
             mission_set_status,

@@ -38,6 +38,19 @@ pub struct LibraryData {
     pub personas: Vec<PersonaInfo>,
 }
 
+/// 편성 프리셋 (FR-E-26) — 전역 앱데이터 `presets/*.json`이 원본. 직무 구성만 담는다 —
+/// 페르소나 배정은 캐스팅 화면의 몫이다 (P1 직무/페르소나 분리와 일관).
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct PresetInfo {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub jobs: Vec<String>,
+}
+
 const COLORS: [&str; 4] = ["blue", "purple", "green", "amber"];
 
 fn jobs_dir(root: &Path) -> PathBuf {
@@ -46,6 +59,10 @@ fn jobs_dir(root: &Path) -> PathBuf {
 
 fn personas_dir(root: &Path) -> PathBuf {
     root.join("personas")
+}
+
+fn presets_dir(root: &Path) -> PathBuf {
+    root.join("presets")
 }
 
 fn safe_id(id: &str) -> String {
@@ -163,6 +180,40 @@ pub fn list(app_root: &Path, ws_path: Option<&str>) -> LibraryData {
     LibraryData { jobs, personas }
 }
 
+/// 프리셋 목록 (FR-E-26) — 파일명 정렬(숫자 접두로 순서 제어). 깨진 파일은 건너뛰고
+/// 빠진 필드는 파일명으로 채운다 (FR-E-72와 같은 관용 파싱). 직무 수는 세션 상한 4 (B2).
+pub fn list_presets(root: &Path) -> Vec<PresetInfo> {
+    let Ok(entries) = fs::read_dir(presets_dir(root)) else {
+        return Vec::new();
+    };
+    let mut files: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().map(|x| x == "json").unwrap_or(false))
+        .collect();
+    files.sort();
+    let mut out = Vec::new();
+    for path in files {
+        let Ok(text) = fs::read_to_string(&path) else { continue };
+        let Ok(mut p) = serde_json::from_str::<PresetInfo>(&text) else { continue };
+        let stem = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if p.id.is_empty() {
+            p.id = stem.clone();
+        }
+        if p.name.is_empty() {
+            p.name = stem;
+        }
+        p.jobs.truncate(4);
+        if !p.jobs.is_empty() {
+            out.push(p);
+        }
+    }
+    out
+}
+
 fn atomic_write(path: &Path, content: &str) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).map_err(|e| e.to_string())?;
@@ -213,6 +264,26 @@ pub fn seed(app_root: &Path) {
         ];
         for j in &seeds {
             let _ = save_job(app_root, j);
+        }
+    }
+    // 편성 프리셋 시드 (FR-E-26) — 디렉터리가 없을 때만. PRD의 탐색(리서치·문서)은
+    // 시드 직무 4종에 해당 직무가 없어 4직무 각 1로 갈음한다 — 사용자가 직무를 만들고
+    // presets/*.json을 고치면 그대로 반영된다 (파일이 원본).
+    if !presets_dir(app_root).exists() {
+        let seeds: [(&str, &str, &str, &[&str]); 4] = [
+            ("01-standard", "standard", "표준", &["lead", "impl", "impl", "verify"]),
+            ("02-impl-heavy", "impl-heavy", "집중구현", &["lead", "impl", "impl", "impl"]),
+            ("03-review-heavy", "review-heavy", "리뷰중심", &["impl", "impl", "review", "review"]),
+            ("04-explore", "explore", "탐색", &["lead", "impl", "verify", "review"]),
+        ];
+        let dir = presets_dir(app_root);
+        let _ = fs::create_dir_all(&dir);
+        for (file, id, name, jobs) in seeds {
+            let v = serde_json::json!({ "id": id, "name": name, "jobs": jobs });
+            let _ = fs::write(
+                dir.join(format!("{file}.json")),
+                serde_json::to_string_pretty(&v).unwrap_or_default(),
+            );
         }
     }
     if !personas_dir(app_root).exists() {
@@ -268,6 +339,28 @@ mod tests {
         assert_eq!(kai2.color, "amber");
         delete_persona(&root, "kai").unwrap();
         assert!(list(&root, None).personas.iter().all(|p| p.id != "kai"));
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// 프리셋 시드·관용 파싱 (FR-E-26) — 파일명 순서 유지, 깨진 파일·빈 구성은 건너뛴다
+    #[test]
+    fn preset_seed_and_tolerant_parse() {
+        let root = temp_root("preset");
+        seed(&root);
+        let presets = list_presets(&root);
+        assert_eq!(presets.len(), 4);
+        assert_eq!(presets[0].name, "표준"); // 01- 접두 = 첫 번째
+        assert_eq!(presets[0].jobs, vec!["lead", "impl", "impl", "verify"]);
+        assert_eq!(presets[1].jobs, vec!["lead", "impl", "impl", "impl"]);
+        // 깨진 JSON·빈 구성은 건너뛰고, 5개 직무는 4로 자른다 (B2)
+        let dir = root.join("presets");
+        fs::write(dir.join("05-broken.json"), "{ not json").unwrap();
+        fs::write(dir.join("06-empty.json"), r#"{"name":"빈"}"#).unwrap();
+        fs::write(dir.join("07-five.json"), r#"{"jobs":["a","b","c","d","e"]}"#).unwrap();
+        let again = list_presets(&root);
+        assert_eq!(again.len(), 5);
+        let five = again.iter().find(|p| p.id == "07-five").unwrap(); // id 없음 → 파일명
+        assert_eq!(five.jobs.len(), 4);
         fs::remove_dir_all(&root).ok();
     }
 

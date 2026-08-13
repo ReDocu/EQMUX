@@ -1,38 +1,30 @@
 // 팀 캐스팅 (IvduM) — 직무 + 페르소나를 4개 세션 슬롯에 배정. 실행 권한을 배정 시점에 미리 보여준다.
-import { createSignal, For } from "solid-js";
+// 프리셋의 원본은 앱데이터 presets/*.json 실파일이다 (FR-E-26) — 직무 구성만 담고,
+// 페르소나는 라이브러리에서 자동 배정한다 (P1 직무/페르소나 분리).
+import { createSignal, For, onMount } from "solid-js";
+import { listPresets } from "../backend/library";
+import type { CastingPreset } from "../backend/library";
 import { backend } from "../backend/mock";
+import { isTauri } from "../backend/pty";
 import { setView } from "../state";
 import type { Permissions } from "../types";
 
 type Slot = { badge: string; badgeColor: "blue" | "purple" | "green" | "amber"; personaId: string; jobId: string };
 
-const PRESET_PLANS: Record<string, Slot[]> = {
-  표준: [
-    { badge: "LEAD", badgeColor: "blue", personaId: "kai", jobId: "lead" },
-    { badge: "BUILDER", badgeColor: "purple", personaId: "noel", jobId: "impl" },
-    { badge: "REVIEW", badgeColor: "green", personaId: "lin", jobId: "review" },
-    { badge: "VERIFY", badgeColor: "amber", personaId: "sol", jobId: "verify" },
-  ],
-  집중구현: [
-    { badge: "LEAD", badgeColor: "blue", personaId: "kai", jobId: "lead" },
-    { badge: "BUILDER", badgeColor: "purple", personaId: "noel", jobId: "impl" },
-    { badge: "BUILDER", badgeColor: "purple", personaId: "lin", jobId: "impl" },
-    { badge: "BUILDER", badgeColor: "purple", personaId: "jun", jobId: "impl" },
-  ],
-  리뷰중심: [
-    { badge: "LEAD", badgeColor: "blue", personaId: "kai", jobId: "lead" },
-    { badge: "REVIEW", badgeColor: "green", personaId: "lin", jobId: "review" },
-    { badge: "REVIEW", badgeColor: "green", personaId: "hana", jobId: "review" },
-    { badge: "VERIFY", badgeColor: "amber", personaId: "sol", jobId: "verify" },
-  ],
-  탐색: [
-    { badge: "LEAD", badgeColor: "blue", personaId: "luca", jobId: "lead" },
-    { badge: "BUILDER", badgeColor: "purple", personaId: "mira", jobId: "impl" },
-    { badge: "BUILDER", badgeColor: "purple", personaId: "jun", jobId: "impl" },
-    { badge: "VERIFY", badgeColor: "amber", personaId: "hana", jobId: "verify" },
-  ],
+// 브라우저 dev 폴백 — Tauri에서는 presets/*.json 실측이 이 목록을 대체한다 (시드와 동일 구성)
+const FALLBACK_PRESETS: CastingPreset[] = [
+  { id: "standard", name: "표준", jobs: ["lead", "impl", "impl", "verify"] },
+  { id: "impl-heavy", name: "집중구현", jobs: ["lead", "impl", "impl", "impl"] },
+  { id: "review-heavy", name: "리뷰중심", jobs: ["impl", "impl", "review", "review"] },
+  { id: "explore", name: "탐색", jobs: ["lead", "impl", "verify", "review"] },
+];
+
+const BADGES: Record<string, { badge: string; color: Slot["badgeColor"] }> = {
+  lead: { badge: "LEAD", color: "blue" },
+  impl: { badge: "BUILDER", color: "purple" },
+  review: { badge: "REVIEW", color: "green" },
+  verify: { badge: "VERIFY", color: "amber" },
 };
-const PRESETS = Object.keys(PRESET_PLANS);
 
 function permText(p: Permissions): string {
   const mark = (b: boolean) => (b ? "✓" : "—");
@@ -41,15 +33,47 @@ function permText(p: Permissions): string {
 
 export function TeamCasting(props: { wsId: string }) {
   const ws = () => backend.listWorkspaces().find((w) => w.id === props.wsId);
-  const [preset, setPreset] = createSignal(PRESETS[0]);
-  const [slots, setSlots] = createSignal<Slot[]>(PRESET_PLANS[PRESETS[0]]);
-  const [saved, setSaved] = createSignal(false);
   const persona = (id: string) => backend.listPersonas().find((p) => p.id === id);
   const job = (id: string) => backend.listJobs().find((j) => j.id === id);
 
-  const pickPreset = (p: string) => {
-    setPreset(p);
-    setSlots(PRESET_PLANS[p]);
+  const badgeFor = (jobId: string): { badge: string; color: Slot["badgeColor"] } =>
+    BADGES[jobId] ?? { badge: (job(jobId)?.name ?? jobId).toUpperCase(), color: "blue" };
+
+  // 프리셋 = 직무 구성 → 페르소나는 라이브러리 순서대로 중복 없이 채운다.
+  // 페르소나가 부족하면 채울 수 있는 만큼만 (세션 상한 4는 프리셋 로드에서 이미 잘려 있다).
+  const slotsFromPreset = (p: CastingPreset): Slot[] => {
+    const personas = backend.listPersonas();
+    const used = new Set<string>();
+    const out: Slot[] = [];
+    for (const jobId of p.jobs) {
+      const cand = personas.find((x) => !used.has(x.id));
+      if (!cand) break;
+      used.add(cand.id);
+      const b = badgeFor(jobId);
+      out.push({ badge: b.badge, badgeColor: b.color, personaId: cand.id, jobId });
+    }
+    return out;
+  };
+
+  const [presets, setPresets] = createSignal<CastingPreset[]>(FALLBACK_PRESETS);
+  const [preset, setPreset] = createSignal(FALLBACK_PRESETS[0].id);
+  const [slots, setSlots] = createSignal<Slot[]>(slotsFromPreset(FALLBACK_PRESETS[0]));
+  const [saved, setSaved] = createSignal(false);
+
+  // 프리셋 실측 (FR-E-26) — 파일이 원본. 깨졌거나 비어 있으면 폴백 목록이 남는다.
+  onMount(() => {
+    if (!isTauri()) return;
+    void listPresets().then((list) => {
+      if (list.length === 0) return;
+      setPresets(list);
+      setPreset(list[0].id);
+      setSlots(slotsFromPreset(list[0]));
+    });
+  });
+
+  const pickPreset = (p: CastingPreset) => {
+    setPreset(p.id);
+    setSlots(slotsFromPreset(p));
     setSaved(false);
   };
 
@@ -78,13 +102,15 @@ export function TeamCasting(props: { wsId: string }) {
       <div class="screen-head">
         <div>
           <h1>팀 캐스팅 · {ws()?.name}</h1>
-          <div class="sub">직무 + 페르소나를 4개 세션 슬롯에 배정합니다</div>
+          <div class="sub">
+            직무 + 페르소나를 4개 세션 슬롯에 배정합니다 · 프리셋 원본: <span class="mono">앱데이터 presets/*.json</span>
+          </div>
         </div>
         <div style={{ display: "flex", gap: "6px" }}>
-          <For each={PRESETS}>
+          <For each={presets()}>
             {(p) => (
-              <button class="btn" classList={{ primary: preset() === p }} onClick={() => pickPreset(p)}>
-                {p}
+              <button class="btn" classList={{ primary: preset() === p.id }} onClick={() => pickPreset(p)}>
+                {p.name}
               </button>
             )}
           </For>
@@ -105,7 +131,7 @@ export function TeamCasting(props: { wsId: string }) {
                   </span>
                   <div>
                     <div style={{ "font-weight": 800, "font-size": "15px" }}>{persona(slot.personaId)?.name}</div>
-                    <div class="muted">{job(slot.jobId)?.name}</div>
+                    <div class="muted">{job(slot.jobId)?.name ?? `${slot.jobId} (라이브러리에 없음)`}</div>
                   </div>
                 </div>
                 <div class="muted" style={{ "font-size": "11px" }}>
@@ -114,7 +140,10 @@ export function TeamCasting(props: { wsId: string }) {
                 <div class="card inset" style={{ padding: "6px 10px", "margin-top": "auto" }}>
                   <div class="eyebrow">실행 권한</div>
                   <div class="mono" style={{ "font-size": "11px", "margin-top": "2px" }}>
-                    {permText(job(slot.jobId)!.permissions)}
+                    {(() => {
+                      const j = job(slot.jobId);
+                      return j ? permText(j.permissions) : "— 직무 파일 없음 · 권한 미정";
+                    })()}
                   </div>
                 </div>
                 <button class="btn ghost" style={{ "align-self": "start" }} onClick={() => cyclePersona(i())}>
