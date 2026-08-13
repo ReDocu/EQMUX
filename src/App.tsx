@@ -11,7 +11,7 @@ import type { CrashReport } from "./backend/recovery";
 import { performShutdown } from "./backend/shutdown";
 import { startTeamSync } from "./backend/team";
 import { refreshWorkspaces } from "./backend/workspaces";
-import { exitOpen, layoutPickerOpen, panelOpen, setExitOpen, setLayoutPickerOpen, view } from "./state";
+import { exitOpen, layoutPickerOpen, panelOpen, setExitOpen, setLayoutPickerOpen, terminalFull, view } from "./state";
 import { ControlCenter } from "./screens/ControlCenter";
 import { CrashRecovery } from "./screens/CrashRecovery";
 import { Dashboard } from "./screens/Dashboard";
@@ -120,7 +120,8 @@ export function App() {
             </Match>
           </Switch>
         </div>
-        <Show when={panelOpen()}>
+        {/* 전체 화면 오버레이가 떠 있는 동안은 그 안의 패널 인스턴스가 대신한다 (이중 마운트 방지) */}
+        <Show when={panelOpen() && !(terminalFull() && view().kind === "workspace")}>
           <SidePanel />
         </Show>
       </div>

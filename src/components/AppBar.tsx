@@ -1,8 +1,9 @@
-// 앱 바 (DdrkL) — 관제 고정 탭(맨 왼쪽, G1) + 워크스페이스 탭(B3, 닫기/추가) + 전역 도구 4종.
-// 패널 도구(git·포트·로그·브라우저·임무)는 사이드 패널 탭과 화면 버튼으로만 접근한다.
+// 앱 바 (DdrkL) — 관제 고정 탭(맨 왼쪽, G1) + 워크스페이스 탭(B3, 닫기/추가) + 전역 도구.
+// 대화는 전역 도구다 — 앱 바는 터미널 전체 화면에서도 보이므로 어느 모드에서든 접근된다 (M1).
+// 나머지 패널 도구(git·포트·로그·브라우저·임무)는 사이드 패널 탭과 화면 버튼으로만 접근한다.
 import { For, Show } from "solid-js";
 import { backend } from "../backend/mock";
-import { setExitOpen, setView, tick, view } from "../state";
+import { openPanel, panelOpen, panelTab, setExitOpen, setPanelOpen, setView, tick, view } from "../state";
 import { ATTENTION_ORDER } from "../types";
 
 export function AppBar() {
@@ -28,6 +29,16 @@ export function AppBar() {
   const anyUnseen = () => {
     tick();
     return backend.listSessions().some((s) => s.unseen);
+  };
+  // 대화 미확인 (M1) — 스트림의 안 읽은 메시지. 세션 미확인(unseen)과 별개의 신호다
+  const unreadMsgs = () => {
+    tick();
+    return backend.listMessages().some((m) => m.unread);
+  };
+  // 토글 — 이미 대화 탭이 열려 있으면 닫는다. 다른 탭이 열려 있으면 대화 탭으로 전환.
+  const toggleConversation = () => {
+    if (panelOpen() && panelTab() === "conversation") setPanelOpen(false);
+    else openPanel("conversation");
   };
 
   return (
@@ -79,6 +90,17 @@ export function AppBar() {
         </button>
       </div>
       <div class="tools">
+        <button
+          class="tool"
+          classList={{ active: panelOpen() && panelTab() === "conversation" }}
+          title="대화 패널 토글 — 전체 화면에서도 열립니다"
+          onClick={toggleConversation}
+        >
+          대화
+          <Show when={unreadMsgs()}>
+            <span class="unread-dot" />
+          </Show>
+        </button>
         <button
           class="tool"
           classList={{ active: view().kind === "connect" }}

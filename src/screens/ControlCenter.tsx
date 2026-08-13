@@ -4,9 +4,9 @@ import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { backend } from "../backend/mock";
 import {
   defaultShell,
-  openPanel,
   PANE_LAYOUTS,
   paneLayout,
+  panelOpen,
   selectedSession,
   setDefaultShell,
   setLayoutPickerOpen,
@@ -25,6 +25,7 @@ import { isTauri, killPty, storeUsageReal } from "../backend/pty";
 import type { StoreUsageReal } from "../backend/pty";
 import { removeRoleFile } from "../backend/roles";
 import { ensureWorktree } from "../backend/team";
+import { SidePanel } from "../components/SidePanel";
 import { disposeSessionTerminal, TerminalPane } from "../components/TerminalPane";
 import { SessionDetailPanel } from "./SessionDetailPanel";
 import { TranscriptPane } from "./TranscriptPane";
@@ -57,10 +58,6 @@ export function ControlCenter(props: { workspace: Workspace }) {
   const persona = (id: string) => backend.listPersonas().find((p) => p.id === id);
   const job = (id: string) => backend.listJobs().find((j) => j.id === id);
   const selected = () => sessions().find((s) => s.id === selectedSession()) ?? sessions()[0];
-  const unreadCount = () => {
-    tick();
-    return backend.listMessages().filter((m) => m.unread).length;
-  };
 
   const [centerTab, setCenterTab] = createSignal<"terminal" | "transcript">("terminal");
   const [zoomed, setZoomed] = createSignal<string | undefined>(undefined); // B1 — 줌 토글
@@ -275,12 +272,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
           <button class="btn" onClick={() => setView({ kind: "composition", wsId: props.workspace.id })}>
             팀 편성
           </button>
-          <button class="btn" onClick={() => openPanel("conversation")}>
-            대화
-            <Show when={unreadCount() > 0}>
-              <span class="unread-dot" />
-            </Show>
-          </button>
+          {/* 대화 버튼은 앱 바 전역 도구로 이동 — 전체 화면에서도 접근된다 (M1) */}
         </div>
       </div>
 
@@ -456,7 +448,8 @@ export function ControlCenter(props: { workspace: Workspace }) {
         </div>
       </div>
 
-      {/* 터미널 전체 화면 (포커스 모드) — 앱 바(Nav)는 유지, 그 아래만 덮는다 */}
+      {/* 터미널 전체 화면 (포커스 모드) — 앱 바(Nav)는 유지, 그 아래만 덮는다.
+          사이드 패널(대화 등)은 여기서도 열린다 — 앱 바 대화 버튼이 진입점이다 (M1) */}
       <Show when={terminalFull()}>
         <div class="terminal-fullscreen">
           <div class="tf-head">
@@ -482,8 +475,15 @@ export function ControlCenter(props: { workspace: Workspace }) {
               </button>
             </div>
           </div>
-          {paneGrid()}
-          {statusBar()}
+          <div class="tf-body">
+            <div class="tf-main">
+              {paneGrid()}
+              {statusBar()}
+            </div>
+            <Show when={panelOpen()}>
+              <SidePanel />
+            </Show>
+          </div>
         </div>
       </Show>
 
