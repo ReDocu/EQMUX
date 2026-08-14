@@ -1,105 +1,156 @@
 /* 화면별 레이아웃 — square · dense */
 
-/* ── 관제 대시보드 ── */
+/* ── 관제 대시보드 (UI 리파인 §03) ── */
 .dash-body {
   display: grid;
   grid-template-columns: 1fr 300px;
   gap: 16px;
   align-items: start;
 }
-.dash-tiles {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 10px;
-  margin-bottom: 14px;
+/* 요약 한 줄 — 통계 타일 4개의 후신. 색은 waiting·dead에만 */
+.dash-sum {
+  display: flex;
+  gap: 14px;
+  align-items: baseline;
+  font-size: 11px;
+  color: var(--eq-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
-.tile {
-  padding: 10px 12px;
-}
-.tile-v {
-  font-size: 24px;
+.dash-sum b {
+  color: var(--eq-text);
   font-weight: 700;
-  margin: 2px 0;
+  font-size: 12px;
 }
-.tile-waiting {
-  border-color: var(--eq-amber);
-  background: var(--eq-amber-soft);
-}
-.tile-waiting .tile-v {
+.dash-sum .st-waiting b {
   color: var(--eq-amber);
 }
-.tile-dead {
-  border-color: var(--eq-red);
-  background: var(--eq-red-soft);
-}
-.tile-dead .tile-v {
+.dash-sum .st-dead b {
   color: var(--eq-red);
+}
+.dash-sum .sdot {
+  margin-right: 4px;
 }
 
 .ws-row {
-  margin-bottom: 10px;
+  margin-bottom: 18px;
 }
 .ws-row-head {
   display: flex;
   align-items: baseline;
   gap: 10px;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--eq-line);
+  padding: 0 2px 8px;
   font-size: 12px;
+}
+.ws-name {
+  font-weight: 700;
+  font-size: 13px;
 }
 .ws-cells {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
 }
+/* 세션 셀 — 테두리 대신 표면 + 좌측 상태 스트라이프 (waiting·dead 한정) */
 .cell {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 3px;
+  gap: 4px;
   padding: 10px 12px;
-  border-right: 1px solid var(--eq-line);
+  border-left: 3px solid transparent;
   text-align: left;
   font-size: 12px;
   min-height: 74px;
-}
-.cell:last-child {
-  border-right: none;
 }
 .cell:hover {
   background: var(--eq-surface-2);
 }
 .cell-name {
   font-weight: 700;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.cell-role {
+  font-size: 10.5px;
+  font-weight: 400;
+}
+.cell-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
 }
 .cell-mission {
   font-size: 11px;
 }
 .cell-waiting {
-  background: var(--eq-amber-soft);
-  box-shadow: inset 2px 0 0 var(--eq-amber);
+  border-left-color: var(--eq-amber);
 }
 .cell-dead {
-  background: var(--eq-red-soft);
-  box-shadow: inset 2px 0 0 var(--eq-red);
+  border-left-color: var(--eq-red);
 }
-.cell-empty {
-  cursor: default;
+/* 빈 슬롯 병합 — 슬롯당 카드 대신 고스트 하나 (캐스팅 진입점) */
+.cell-ghost {
+  border: 1px dashed var(--eq-line);
+  border-radius: var(--eq-r);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--eq-dim);
+  font-size: 11px;
+  min-height: 74px;
 }
-.cell-empty:hover {
-  background: transparent;
+.cell-ghost:hover {
+  color: var(--eq-muted);
+  border-color: var(--eq-muted);
+}
+/* 닫힌 워크스페이스 — 한 줄 강등 */
+.ws-closed {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  border-top: 1px solid var(--eq-line);
+  padding-top: 12px;
+  font-size: 12px;
+}
+/* 닫힌 워크스페이스 카드 (U4) — 링크 나열이 아니라 상태 배지 있는 행으로 읽힌다 */
+.ws-closed-card {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  padding: 5px 10px;
+  border: 1px solid var(--eq-line);
+}
+.ws-closed-name {
+  font-weight: 700;
+  font-size: 12px;
+}
+.ws-closed-path {
+  font-size: 10px;
+  max-width: 180px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ws-closed-card .btn {
+  padding: 1px 8px;
+  font-size: 11px;
 }
 
 .dash-side {
   position: sticky;
   top: 0;
 }
+/* 주의 카드 — 전면 amber 대신 좌측 스트라이프 (시안 §02 상태색 규칙) */
 .waiting-alert {
   display: block;
   width: 100%;
   text-align: left;
   padding: 10px 12px;
-  border-color: var(--eq-amber);
-  background: var(--eq-amber-soft);
+  border-left: 3px solid var(--eq-amber);
 }
 .event-row {
   display: flex;
@@ -112,68 +163,230 @@
 .event-row:last-child {
   border-bottom: none;
 }
+.event-row .ev-time {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
 
 /* ── 컨트롤 센터 ── */
 /* 화면 크기에 동적으로 맞춘다: 본문은 스크롤하지 않고, 중앙 터미널 그리드가
    남은 높이를 페인들에 균등 분배하며(xterm fit), 좌·우 컬럼만 독립 스크롤한다. */
+/* 헤더 한 줄 병합 (시안 §04) — 타이틀 + 중앙 탭 + 도구 */
+.cc-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 18px;
+  border-bottom: 1px solid var(--eq-line);
+  flex-shrink: 0;
+}
+.cc-title {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.cc-title h1 {
+  font-size: 15px;
+  font-weight: 800;
+}
+.cc-title .mono {
+  font-size: 11px;
+}
+.cc-seg {
+  display: inline-flex;
+  background: var(--eq-surface);
+  border-radius: var(--eq-r-sm);
+  padding: 2px;
+  gap: 2px;
+}
+.cc-seg button {
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 4px 14px;
+  border-radius: 5px;
+  color: var(--eq-muted);
+}
+.cc-seg button.on {
+  background: var(--eq-surface-2);
+  color: var(--eq-text);
+}
+.cc-seg button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
 .cc-body {
   display: grid;
-  grid-template-columns: 280px 1fr 320px;
+  grid-template-columns: 200px 1fr;
   grid-template-rows: minmax(0, 1fr);
-  gap: 16px;
+  gap: 14px;
   align-items: stretch;
   overflow: hidden;
 }
-.cc-left,
-.cc-right {
-  min-height: 0;
+/* 세션 상세 — 우측 드로어 (U1): 중앙 모달 대신 오른쪽에 붙어 터미널을 계속 보여준다 */
+.detail-overlay {
+  justify-content: flex-end;
+  align-items: stretch;
+  background: rgba(4, 6, 10, 0.35);
+}
+.detail-dialog {
+  position: relative;
+  width: 440px;
+  max-width: calc(100vw - 48px);
+  height: 100%;
+  max-height: none;
   overflow-y: auto;
+  padding: 0 18px 18px;
+  border-radius: 0;
+  border-top: none;
+  border-right: none;
+  border-bottom: none;
+  animation: detail-slide 0.16s ease-out;
+}
+@keyframes detail-slide {
+  from {
+    transform: translateX(24px);
+    opacity: 0.5;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+/* 드로어 상단 고정 (U1) — 이름·상태가 스크롤을 따라온다. ✕도 같은 층에 선다 */
+.detail-top {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--eq-surface);
+  padding: 14px 0 10px;
+  border-bottom: 1px solid var(--eq-line);
+  margin-bottom: 8px;
+}
+.detail-dialog-x {
+  position: sticky;
+  top: 10px;
+  float: right;
+  z-index: 3;
+  margin: 10px -6px 0 0;
+  padding: 2px 6px;
+  color: var(--eq-dim);
+  border-radius: var(--eq-r-sm);
+}
+.detail-dialog-x:hover {
+  color: var(--eq-text);
+  background: var(--eq-surface-2);
 }
 .cc-center {
   min-height: 0;
   display: flex;
   flex-direction: column;
 }
-.cc-center .cc-strip,
 .cc-center .terminal-statusbar {
   flex-shrink: 0;
 }
-.session-card {
+/* 세션 리스트 레일 — 아바타 전용 56px 레일의 후신, 가로형 리스트 버튼 */
+.cc-rail {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  gap: 4px;
-  width: 100%;
-  text-align: left;
-  padding: 10px 12px;
-  margin-top: 8px;
-  font-size: 12px;
+  align-items: stretch;
+  gap: 6px;
+  padding-top: 4px;
+  min-height: 0;
+  overflow-y: auto;
 }
-.session-card:hover {
-  border-color: var(--eq-muted);
-}
-.session-card.selected {
-  border-color: var(--eq-blue);
-  box-shadow: inset 2px 0 0 var(--eq-blue);
-}
-.session-card.empty {
-  justify-content: center;
-  align-items: center;
-  border-style: dashed;
-  min-height: 52px;
-}
-.session-card-head {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-}
-.mission-row {
+.rail-av {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
-  padding: 8px 12px;
-  margin-top: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: var(--eq-r-sm);
+  border: 1px solid transparent;
+  text-align: left;
+}
+.rail-av:hover {
+  border-color: var(--eq-line);
+  background: var(--eq-surface);
+}
+.rail-av.sel {
+  border-color: var(--eq-blue);
+  background: var(--eq-surface);
+}
+.rail-txt {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+.rail-nm {
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rail-job {
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rail-av .sdot {
+  width: 9px;
+  height: 9px;
+}
+.rail-av.add {
+  justify-content: center;
+  padding: 8px;
+  border: 1px dashed var(--eq-line);
+  color: var(--eq-dim);
+  font-size: 11px;
+}
+.rail-av.add:hover {
+  color: var(--eq-muted);
+  border-color: var(--eq-muted);
+  background: none;
+}
+.rail-unread {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+}
+/* 레일 행은 클릭=페인 포커스 (U2) — 상세는 ⓘ 버튼으로 분리 */
+.rail-av {
+  cursor: pointer;
+}
+.rail-info {
+  flex-shrink: 0;
+  padding: 1px 5px;
+  font-size: 11px;
+  color: var(--eq-dim);
+  border-radius: var(--eq-r-sm);
+  opacity: 0;
+}
+.rail-av:hover .rail-info,
+.rail-av:focus-within .rail-info {
+  opacity: 1;
+}
+.rail-info:hover {
+  color: var(--eq-text);
+  background: var(--eq-surface-2);
+}
+.rail-sep {
+  border-top: 1px solid var(--eq-line);
+}
+.rail-ms {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  border-radius: var(--eq-r-sm);
+}
+.rail-ms:hover {
+  background: var(--eq-surface);
+}
+.rail-ms b {
   font-size: 12px;
 }
 
@@ -195,18 +408,47 @@
   color: var(--eq-code);
   min-height: 220px;
 }
-.cc-strip {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-  margin-top: 10px;
-}
-.strip-card {
-  padding: 10px 12px;
-  font-size: 12px;
-}
+/* .cc-strip/.strip-card → 상태바 이벤트 팝오버로 흡수 (시안 §04) */
 
 /* ── 세션 상세 ── */
+/* 아코디언 3그룹 (시안 §04) — 개요 / 실행 / 영속성 */
+.acc {
+  border-top: 1px solid var(--eq-line);
+  margin-top: 8px;
+}
+.acc summary {
+  font-family: var(--eq-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: var(--eq-muted);
+  text-transform: uppercase;
+  padding: 8px 0 6px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.acc summary::-webkit-details-marker {
+  display: none;
+}
+.acc summary::before {
+  content: "▸ ";
+  color: var(--eq-dim);
+}
+.acc[open] > summary::before {
+  content: "▾ ";
+}
+.acc > :not(summary) {
+  margin-bottom: 10px;
+}
+.acc .acc-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.acc .acc-body > * {
+  margin-top: 0 !important;
+}
 .detail-head {
   display: flex;
   justify-content: space-between;
@@ -388,9 +630,6 @@
 }
 
 @media (max-width: 1200px) {
-  .cc-body {
-    grid-template-columns: 240px 1fr 280px;
-  }
   .settings-grid {
     grid-template-columns: repeat(2, 1fr);
   }
@@ -526,6 +765,7 @@
 }
 /* .terminal-grid.zoomed 규칙은 배치 6종 섹션 끝에 통합돼 있다 (열·행 템플릿 동시 해제) */
 .terminal-pane {
+  position: relative; /* 인라인 재개 버튼 (U8) 기준점 */
   background: var(--eq-terminal);
   border: 1px solid var(--eq-line);
   display: flex;
@@ -557,40 +797,7 @@
   overflow: hidden;
 }
 
-/* 터미널 우클릭 메뉴 */
-.term-menu {
-  position: fixed;
-  z-index: 60;
-  min-width: 200px;
-  display: flex;
-  flex-direction: column;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
-}
-.term-menu-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 14px;
-  width: 100%;
-  padding: 7px 12px;
-  font-size: 12px;
-  text-align: left;
-}
-.term-menu-item:hover:not(:disabled) {
-  background: var(--eq-blue-soft);
-}
-.term-menu-item:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-.term-menu-item .mono {
-  font-size: 9px;
-}
-.term-menu-note {
-  padding: 5px 12px;
-  font-size: 10px;
-  border-top: 1px solid var(--eq-line);
-}
+/* 터미널 우클릭 메뉴 → 공용 ContextMenu(ui.tsx · styles.css .cmenu)로 승격됨 (UI 리파인 §06) */
 
 /* 셸 선택 드롭다운 — 그리드(배치) 버튼 왼쪽 */
 .shell-picker {
@@ -789,6 +996,29 @@
   padding: 3px 10px;
 }
 
+/* 승인 대기 도구 배지 (U5) — 페인 헤더에서 곧바로 무엇을 승인할지 보인다 */
+.pane-wait-badge {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* dead 페인 인라인 재개 (U8) — 상세 드로어 2단계를 건너뛴다 */
+.pane-resume {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  z-index: 3;
+  font-size: 11px;
+  padding: 4px 12px;
+  border-color: var(--eq-red);
+  color: var(--eq-text);
+  background: var(--eq-surface);
+}
+.pane-resume:hover {
+  border-color: var(--eq-blue);
+}
+
 /* 과부하 소프트 경고 배너 (D11 · FR-G-36) — 알림이 아니라 상단 배너, 막지 않는다 */
 .dash-overload {
   margin: 0 0 10px;
@@ -809,13 +1039,16 @@
 }
 
 /* ── 트랜스크립트 페인 (화면 #12) ── */
+/* 세로를 가득 채운다 (U6) — 터미널 뷰와 같은 높이 정책, 입력창은 하단 고정 */
 .transcript {
   display: flex;
   flex-direction: column;
+  flex: 1;
+  min-height: 0;
 }
 .transcript-body {
-  min-height: 220px;
-  max-height: 300px;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
 }
 .turn {
@@ -963,6 +1196,7 @@
   display: flex;
   align-items: center;
   gap: 10px;
+  position: relative;
 }
 .gitp-branch {
   flex: 1;
@@ -971,28 +1205,69 @@
   font-size: 11px;
   white-space: nowrap;
 }
-.gitp-actions {
+/* 팝오버 (시안 §05) — 브랜치 체크아웃·워크트리 생성 폼. 내용을 밀지 않고 위에 뜬다 */
+.gitp-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 30;
+  border-color: var(--eq-line);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.45);
+  padding: 8px;
   display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 4px;
 }
-.gitp-actions .btn {
-  padding: 5px 9px;
-  font-size: 11px;
-  font-family: var(--eq-mono);
+/* 변경 요약 한 줄 (시안 §05) — 타일 4개의 후신 */
+.gitp-sumline {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  padding: 2px 2px 0;
+  font-variant-numeric: tabular-nums;
 }
-.gitp-summary {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 6px;
-}
-.gitp-metric {
-  padding: 8px 6px;
-  text-align: center;
-}
-.gitp-metric-v {
-  font-size: 17px;
+.gitp-sumline b {
+  font-size: 16px;
   font-weight: 700;
+}
+.gitp-added {
+  color: var(--eq-green);
+}
+/* 워크트리 행 — 뱃지 박스 대신 우측 텍스트 라벨 */
+.gitp-wt-head {
+  position: relative;
+}
+.gitp-wt-list {
+  display: flex;
+  flex-direction: column;
+}
+.gitp-wt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 2px;
+  border-top: 1px solid var(--eq-line);
+}
+.gitp-wt:first-child {
+  border-top: none;
+}
+.gitp-wt-tag {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--eq-dim);
+  flex-shrink: 0;
+}
+.gitp-wt-tag.main {
+  color: var(--eq-blue);
+}
+.gitp-foot {
+  font-size: 10px;
+  border-top: 1px solid var(--eq-line);
+  padding-top: 8px;
+  margin-top: 2px;
 }
 .gitp-commits {
   display: flex;
@@ -1013,8 +1288,8 @@
   left: 6px;
   top: 0;
   bottom: 0;
-  width: 2px;
-  background: var(--eq-blue-mid);
+  width: 1px;
+  background: var(--eq-line);
 }
 .gitp-line.first {
   top: 12px;
@@ -1673,9 +1948,6 @@
   background: var(--eq-blue-soft);
   box-shadow: inset 2px 0 0 var(--eq-blue);
 }
-.gde-file.staged .gde-file-path {
-  color: var(--eq-green);
-}
 .gde-st {
   width: 16px;
   height: 16px;
@@ -1707,6 +1979,21 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* 상태 필터 칩 (U12) — A/M/D 토글 */
+.gde-filter-chips {
+  display: flex;
+  gap: 4px;
+  padding: 0 10px 6px;
+}
+.gde-filter-chips .btn {
+  font-size: 10px;
+  padding: 1px 8px;
+}
+.gde-filter-chips .btn.on,
+.gde-toolbar-actions .btn.on {
+  color: var(--eq-blue);
+  outline: 1px solid var(--eq-blue);
 }
 .gde-sidebar-actions {
   display: flex;
@@ -1769,6 +2056,14 @@
   background: var(--eq-surface-2);
   flex-shrink: 0;
 }
+/* 코드 페인 래퍼 — 스크롤과 무관하게 고정되는 마커 레일의 기준 좌표 (U10) */
+.gde-codewrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
 .gde-code {
   flex: 1;
   min-height: 0;
@@ -1778,9 +2073,78 @@
   line-height: 1.75;
   padding: 6px 0;
 }
+/* 줄바꿈 모드 (U13) — 행 높이는 JS가 좌우 짝의 최대값으로 맞춘다 */
+.gde-code.wrap .gde-line {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
 .gde-line {
   display: flex;
   white-space: pre;
+  min-height: 1.75em; /* 빈 줄·pad 필러도 행 높이를 유지해 좌우 정렬이 깨지지 않는다 (B8) */
+}
+/* 정렬 필러 (B8) — 반대편 변경에 대응하는 실제 줄이 없는 자리 */
+.gde-line.pad {
+  background: repeating-linear-gradient(-45deg, transparent 0 6px, var(--eq-surface-2) 6px 12px);
+}
+/* 인트라라인 강조 (U13) — 줄 안에서 실제로 바뀐 구간 */
+.gde-line.del .gde-hl {
+  background: color-mix(in srgb, var(--eq-red) 30%, transparent);
+  border-radius: 2px;
+}
+.gde-line.add .gde-hl {
+  background: color-mix(in srgb, var(--eq-green) 30%, transparent);
+  border-radius: 2px;
+}
+/* 문맥 접기 행 (U10) — 양 페인 같은 자리에 들어가 정렬을 유지한다 */
+.gde-fold {
+  display: block;
+  width: 100%;
+  border: 0;
+  border-top: 1px dashed var(--eq-line);
+  border-bottom: 1px dashed var(--eq-line);
+  padding: 2px 12px 2px 50px;
+  font-size: 10px;
+  text-align: left;
+  color: var(--eq-muted);
+  background: var(--eq-surface-2);
+  cursor: pointer;
+}
+.gde-fold:hover {
+  color: var(--eq-code);
+}
+/* 변경 위치 마커 레일 (U10) — 스크롤바 옆의 미니맵 */
+.gde-markers {
+  position: absolute;
+  top: 0;
+  right: 1px;
+  bottom: 0;
+  width: 8px;
+  z-index: 2;
+  pointer-events: none;
+}
+.gde-marker {
+  position: absolute;
+  left: 1px;
+  right: 1px;
+  width: 6px;
+  min-height: 5px;
+  border: 0;
+  padding: 0;
+  border-radius: 2px;
+  opacity: 0.5;
+  cursor: pointer;
+  pointer-events: auto;
+}
+.gde-marker.addm {
+  background: var(--eq-green);
+}
+.gde-marker.delm {
+  background: var(--eq-red);
+}
+.gde-marker.active {
+  opacity: 1;
+  outline: 1px solid var(--eq-blue);
 }
 .gde-line.add {
   background: var(--eq-green-soft);
@@ -1821,6 +2185,19 @@
 .gde-status-left {
   display: flex;
   gap: 16px;
+  align-items: center;
+}
+/* 상태바 수치 = 첫 변경으로 가는 버튼 (U10) */
+.gde-stat-jump {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: inherit;
+  font-size: inherit;
+  cursor: pointer;
+}
+.gde-stat-jump:hover {
+  color: var(--eq-blue);
 }
 
 /* ── 페인 배치 (srpYm) ── */
@@ -1946,15 +2323,42 @@
 
 .terminal-statusbar {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  gap: 12px;
+  gap: 16px;
   margin-top: 8px;
   padding: 6px 12px;
-  border: 1px solid var(--eq-line);
-  background: var(--eq-surface-2);
+  border-radius: var(--eq-r-sm);
+  background: var(--eq-surface);
   font-size: 10px;
-  white-space: pre;
+  white-space: nowrap;
+  position: relative;
+}
+.terminal-statusbar .sb-ev {
+  color: var(--eq-muted);
+  font-size: inherit;
+  font-family: inherit;
+}
+.terminal-statusbar .sb-ev:hover {
+  color: var(--eq-text);
+}
+/* 이벤트 팝오버 — 상태바 위로 뜬다 (저장 상태 + SessionService) */
+.sb-pop {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  width: 400px;
+  max-width: 90%;
+  z-index: 30;
+  border-color: var(--eq-line);
+  box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.4);
+  padding: 8px 10px;
+  white-space: normal;
+}
+.sb-pop-store {
+  font-size: 10px;
+  margin-top: 6px;
+  border-top: 1px solid var(--eq-line);
+  padding-top: 6px;
 }
 
 /* ── 터미널 전체 화면 (포커스 모드) — 앱 바(38px)는 가리지 않는다 ── */

@@ -13,6 +13,7 @@ import {
 import { backend } from "../backend/mock";
 import { tick, view } from "../state";
 import { Eyebrow } from "./ui";
+import { sessionDisplayName } from "../types";
 import type { ConversationMessage, Session } from "../types";
 
 const TYPES: ConversationMessage["type"][] = ["ask", "handoff", "report", "review", "escalate"];
@@ -43,11 +44,13 @@ export function ConversationTab() {
 
   const personaName = (personaId: string) =>
     backend.listPersonas().find((p) => p.id === personaId)?.name ?? personaId;
-  const wsSessions = () =>
-    backend.listSessions().filter((s) => s.workspaceId === ws()?.id && s.personaId);
+  // 기본 터미널(역할 없음)도 대화 참여자다 — 수신은 셸 프롬프트의 주석 라인 (conversation.ts)
+  const wsSessions = () => backend.listSessions().filter((s) => s.workspaceId === ws()?.id);
+  const nameOf = (s: Session) =>
+    sessionDisplayName(s, s.personaId ? personaName(s.personaId) : "기본 터미널");
   const sessionName = (id: string) => {
     const s = backend.listSessions().find((x) => x.id === id);
-    return s?.personaId ? personaName(s.personaId) : id;
+    return s ? nameOf(s) : id;
   };
   const displayTo = (to: string) => (to === "@all" ? "@all" : sessionName(to));
 
@@ -70,10 +73,14 @@ export function ConversationTab() {
 
   const shown = () => (filter() === "미확인" ? messages().filter((m) => m.unread) : messages());
 
-  // @멘션 해석 (M4) — 페르소나 이름·페르소나 id·세션 id 무엇으로든 그 세션을 찾는다
+  // @멘션 해석 (M4) — 표시 이름·페르소나 이름·페르소나 id·세션 id 무엇으로든 그 세션을 찾는다.
+  // 이름 없는 기본 터미널 여럿이면 첫 번째가 잡힌다 — 구분하려면 세션 이름(FR-E-36)을 붙인다
   const target = (mention: string): Session | undefined =>
     wsSessions().find(
-      (s) => personaName(s.personaId) === mention || s.personaId === mention || s.id === mention,
+      (s) =>
+        nameOf(s) === mention ||
+        (s.personaId && (personaName(s.personaId) === mention || s.personaId === mention)) ||
+        s.id === mention,
     );
 
   const send = async () => {
@@ -86,7 +93,7 @@ export function ConversationTab() {
     if (m && m[1] !== "all") {
       const t = target(m[1]);
       if (!t) {
-        setError(`수신자 없음: @${m[1]} — 이 워크스페이스의 페르소나 이름으로`);
+        setError(`수신자 없음: @${m[1]} — 이 워크스페이스의 페르소나·세션 이름으로`);
         return;
       }
       to = t.id;

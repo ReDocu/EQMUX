@@ -29,6 +29,8 @@ import { resumeAgent, spawnAgent } from "../backend/agent";
 import { backend } from "../backend/mock";
 import { settings } from "../backend/settings";
 import { tick } from "../state";
+import { ContextMenu } from "./ui";
+import type { MenuGroup } from "./ui";
 import type { Permissions } from "../types";
 
 const EQ_THEME = {
@@ -320,6 +322,8 @@ export function TerminalPane(props: {
   restore?: { resumable: boolean; reason?: string };
   revive?: boolean;
   mockLines?: string[];
+  /** 페인 소유 화면(컨트롤 센터)이 얹는 세션 액션 그룹 — 편집 그룹 뒤에 붙는다 (시안 §06) */
+  extraMenu?: () => MenuGroup[];
 }) {
   let host!: HTMLDivElement;
   let historyEl: HTMLDivElement | undefined;
@@ -646,31 +650,25 @@ export function TerminalPane(props: {
       </div>
       <Show when={menu()}>
         {(m) => (
-          <div
-            class="card term-menu"
-            style={{ left: `${m().x}px`, top: `${m().y}px` }}
-            onMouseDown={(ev) => ev.stopPropagation()}
-          >
-            <button class="term-menu-item" disabled={!m().hasSel} onClick={() => menuAction(copySelection)}>
-              복사 <span class="mono muted">Ctrl+Shift+C</span>
-            </button>
-            <button
-              class="term-menu-item"
-              onClick={() => menuAction((t) => void pasteFromClipboard(props.sessionId, t))}
-            >
-              붙여넣기 <span class="mono muted">Ctrl+Shift+V</span>
-            </button>
-            <button class="term-menu-item" onClick={() => menuAction((t) => t.selectAll())}>
-              모두 선택
-            </button>
-            <button class="term-menu-item" onClick={() => menuAction(() => setSearchSession(props.sessionId))}>
-              검색 <span class="mono muted">Ctrl+F</span>
-            </button>
-            <button class="term-menu-item" onClick={() => menuAction((t) => t.clear())}>
-              화면 지우기
-            </button>
-            <div class="term-menu-note muted">이미지 붙여넣기 → 파일 저장 후 경로 삽입</div>
-          </div>
+          <ContextMenu
+            x={m().x}
+            y={m().y}
+            header={props.agent ? `${props.agent.name} · 터미널` : "기본 터미널"}
+            onClose={() => setMenu(undefined)}
+            groups={[
+              // 주 동작 — 편집
+              [
+                { label: "복사", kbd: "Ctrl+Shift+C", disabled: !m().hasSel, action: () => menuAction(copySelection) },
+                { label: "붙여넣기", kbd: "Ctrl+Shift+V", action: () => menuAction((t) => void pasteFromClipboard(props.sessionId, t)) },
+                { label: "모두 선택", action: () => menuAction((t) => t.selectAll()) },
+                { label: "검색", kbd: "Ctrl+F", action: () => menuAction(() => setSearchSession(props.sessionId)) },
+                { label: "화면 지우기", action: () => menuAction((t) => t.clear()) },
+              ],
+              // 보기·이동·세션 — 소유 화면이 얹는다 (danger 항목은 컴포넌트가 마지막으로 모은다)
+              ...(props.extraMenu?.() ?? []),
+              [{ label: "이미지 붙여넣기 → 파일 저장 후 경로 삽입", note: true }],
+            ]}
+          />
         )}
       </Show>
     </>

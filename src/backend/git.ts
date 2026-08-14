@@ -70,9 +70,9 @@ export interface ChangedFile {
 }
 
 export interface DiffLine {
-  no: number;
+  no: number | null; // pad 필러 행은 번호가 없다 (B8)
   text: string;
-  kind: "add" | "del" | null;
+  kind: "add" | "del" | "pad" | null;
 }
 
 export interface FileDiff {

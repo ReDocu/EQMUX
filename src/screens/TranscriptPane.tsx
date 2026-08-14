@@ -95,7 +95,18 @@ export function TranscriptPane(props: { session: Session }) {
             onInput={(e) => setQuery(e.currentTarget.value)}
           />
           <span class="muted">
-            {isTauri() ? (data()?.turns.length ?? fallback()?.length ?? 0) : mockTurns().length} {data() || !isTauri() ? "turns" : "lines"}
+            {(() => {
+              // 검색 중에는 필터 결과를 함께 보인다 — 총계만 남으면 카운터가 거짓말이 된다 (B6)
+              const label = data() || !isTauri() ? "turns" : "lines";
+              const total = isTauri() ? (data()?.turns.length ?? fallback()?.length ?? 0) : mockTurns().length;
+              if (!query().trim()) return `${total} ${label}`;
+              const shown = isTauri()
+                ? (data()
+                    ? data()!.turns.filter((t) => hit(t.text, t.detail)).length
+                    : (fallback() ?? []).filter((l) => hit(l)).length)
+                : mockTurns().filter((t) => hit(t.text)).length;
+              return `${shown} / ${total} ${label}`;
+            })()}
           </span>
         </span>
       </div>

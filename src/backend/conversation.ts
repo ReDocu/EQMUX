@@ -159,26 +159,31 @@ function fmt(m: ConversationMessage): string {
   return `[EQMUX 메시지·${m.type}] ${m.from}: ${m.body}\r`;
 }
 
-/** 수신 세션 결정 (M4) — "@all"이면 그 워크스페이스의 살아 있는 에이전트 전원.
- *  restored(에이전트 미기동)·dead·shell은 제외 — PTY 너머에 받을 사람이 없다. */
+/** 기본 터미널용 포맷 — 일반 셸 프롬프트에 \r 주입은 그대로 실행되므로, 무해한 주석
+ *  라인(pwsh·bash `#`, cmd `rem`)으로 보낸다. 터미널 히스토리에 남고 아무것도 실행하지 않는다. */
+function fmtShell(m: ConversationMessage, shell: string | undefined): string {
+  const prefix = shell === "cmd" ? "rem " : "# ";
+  return `${prefix}[EQMUX 메시지·${m.type}] ${m.from}: ${m.body}\r`;
+}
+
+/** 수신 세션 결정 (M4) — "@all"이면 그 워크스페이스의 살아 있는 참여자 전원.
+ *  역할 세션은 에이전트가 떠 있어야 받는다 (restored·dead·shell 제외 — PTY 너머에 받을 사람이 없다).
+ *  기본 터미널(역할 없음)은 참여자다 — 프롬프트 앞의 사람이 읽는다. */
 function recipients(wsId: string, to: string) {
-  const live = backend
-    .listSessions()
-    .filter(
-      (s) =>
-        s.workspaceId === wsId &&
-        s.personaId &&
-        !s.restored &&
-        s.status !== "dead" &&
-        s.status !== "shell",
-    );
+  const live = backend.listSessions().filter((s) => {
+    if (s.workspaceId !== wsId || s.restored || s.status === "dead") return false;
+    if (s.personaId) return s.status !== "shell"; // 역할 세션 — 에이전트 미기동(shell)은 제외
+    return true; // 기본 터미널 — 대화 참여자
+  });
   return to === "@all" ? live : live.filter((s) => s.id === to);
 }
 
 function deliver(wsId: string, m: ConversationMessage): void {
   for (const s of recipients(wsId, m.to)) {
     if (s.id === m.from) continue; // 에이전트 발신(@all)이 자기 자신에게 되돌아가지 않게
-    if (s.status === "idle") {
+    if (!s.personaId) {
+      writePty(s.id, fmtShell(m, s.shell)); // 기본 터미널 — 주석 라인으로 즉시 표시
+    } else if (s.status === "idle") {
       writePty(s.id, fmt(m)); // 유휴 = 프롬프트가 비어 있다 → 즉시 (M3)
     } else {
       const q = inbox.get(s.id) ?? [];

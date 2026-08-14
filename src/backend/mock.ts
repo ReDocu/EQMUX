@@ -1,5 +1,8 @@
 // MockBackend — SessionService(PRD C §7.1)의 프런트 소비 표면을 흉내 낸다.
 // M1에서 TauriBackend(invoke/Channel)로 교체하며, 화면은 Backend 인터페이스만 안다 (C9 모듈 경계).
+// 컬렉션은 createMutable 프록시다 — in-place 변경이 곧 반응성이라, 상세 모달·<For> 행처럼
+// tick()을 다시 읽지 않는 표면도 즉시 갱신된다 (B1~B4 재발 방지).
+import { createMutable } from "solid-js/store";
 import type {
   AgentStateApply,
   ConversationMessage,
@@ -22,7 +25,8 @@ export interface Backend {
   listPersonas(): Persona[];
   listEvents(): EventRecord[];
   listMessages(): ConversationMessage[];
-  storeUsage(): StoreUsage;
+  /** 저장소 사용량 (목) — wsName을 주면 그 워크스페이스의 db 파일명으로 표기한다 (B6) */
+  storeUsage(wsName?: string): StoreUsage;
   /** 상태 변경 방송 (FR-C-43) — MockBackend는 타이머로 경과 시간만 진행시킨다 */
   subscribe(cb: () => void): () => void;
 
@@ -99,7 +103,7 @@ export interface TranscriptTurn {
 
 // ── 목 데이터: docs/design.pen의 카피를 그대로 사용 (Academy 팀 시나리오) ──
 
-export const JOBS: Job[] = [
+export const JOBS: Job[] = createMutable<Job[]>([
   {
     id: "lead",
     name: "리드",
@@ -128,9 +132,9 @@ export const JOBS: Job[] = [
     responsibility: "변경 검토 · 품질 기준",
     forbidden: "리뷰 없이 승인",
   },
-];
+]);
 
-export const PERSONAS: Persona[] = [
+export const PERSONAS: Persona[] = createMutable<Persona[]>([
   { id: "kai", name: "카이", hint: "전체 구조와 위험을 먼저 본다", color: "blue" },
   { id: "noel", name: "노엘", hint: "작은 단위로 구현하고 검증한다", color: "purple" },
   { id: "lin", name: "린", hint: "경계와 정합성", color: "green" },
@@ -139,9 +143,9 @@ export const PERSONAS: Persona[] = [
   { id: "jun", name: "준", hint: "계약과 인터페이스 우선", color: "purple" },
   { id: "hana", name: "하나", hint: "문서와 재현 절차", color: "green" },
   { id: "luca", name: "루카", hint: "사용자 흐름 중심", color: "blue" },
-];
+]);
 
-const WORKSPACES: Workspace[] = [
+const WORKSPACES: Workspace[] = createMutable<Workspace[]>([
   {
     id: "academy",
     name: "Academy",
@@ -196,7 +200,7 @@ const WORKSPACES: Workspace[] = [
     pathMissing: false,
     teamFile: ".eqmux/team.json",
   },
-];
+]);
 
 const s = (
   id: string,
@@ -225,7 +229,7 @@ const s = (
   ...patch,
 });
 
-const SESSIONS: Session[] = [
+const SESSIONS: Session[] = createMutable<Session[]>([
   s("kai@academy", "academy", 1, "kai", "lead", {
     status: "busy",
     subagents: 3,
@@ -306,9 +310,9 @@ const SESSIONS: Session[] = [
     memoryMb: 120,
     lastOutput: "대기 중",
   }),
-];
+]);
 
-const MISSIONS: Mission[] = [
+const MISSIONS: Mission[] = createMutable<Mission[]>([
   {
     id: "auth-refactor",
     workspaceId: "academy",
@@ -350,9 +354,9 @@ const MISSIONS: Mission[] = [
     outputs: ["파서", "폴백 전환"],
     assigned: ["jun@eqmux"],
   },
-];
+]);
 
-const EVENTS: EventRecord[] = [
+const EVENTS: EventRecord[] = createMutable<EventRecord[]>([
   { id: "e1", time: "10:42", sessionId: "noel@academy", kind: "state", message: "busy → waiting" },
   { id: "e2", time: "10:38", sessionId: "kai@academy", kind: "agent", message: "서브에이전트 3 시작" },
   { id: "e3", time: "10:31", sessionId: "hana@eqmux", kind: "state", message: "종료됨 · exit 1" },
@@ -360,9 +364,9 @@ const EVENTS: EventRecord[] = [
   { id: "e5", time: "09:58", sessionId: "jun@eqmux", kind: "agent", message: "역할 파일 다시 읽음" },
   { id: "e6", time: "09:48", kind: "store", message: "scrollback batch committed · 42ms" },
   { id: "e7", time: "09:47", kind: "app", message: "EQMUX 시작 → 워크스페이스 Academy" },
-];
+]);
 
-const MESSAGES: ConversationMessage[] = [
+const MESSAGES: ConversationMessage[] = createMutable<ConversationMessage[]>([
   {
     id: "m1",
     time: "10:34",
@@ -399,7 +403,7 @@ const MESSAGES: ConversationMessage[] = [
     body: "npm publish 승인은 보류했습니다. dry-run 산출물을 먼저 첨부하세요.",
     unread: true,
   },
-];
+]);
 
 const nowTime = () => new Date().toTimeString().slice(0, 5);
 let seq = 100;
@@ -456,9 +460,9 @@ export class MockBackend implements Backend {
   listMessages() {
     return MESSAGES;
   }
-  storeUsage(): StoreUsage {
+  storeUsage(wsName?: string): StoreUsage {
     return {
-      dbFile: "Academy/session.db",
+      dbFile: `${wsName ?? "Academy"}/session.db`,
       dbSizeMb: 324,
       dbPercent: 64,
       walLatencyMs: 42,
@@ -1046,84 +1050,199 @@ export interface GitChangedFile {
 }
 
 export interface DiffLine {
-  no: number;
+  no: number | null; // pad 필러 행은 번호가 없다 (B8)
   text: string;
-  kind?: "add" | "del" | "ctx";
+  kind: "add" | "del" | "pad" | null;
 }
-
-export const GIT_STATE = {
-  repo: "project/AcademyCurriculum",
-  branch: "main",
-  ahead: 4,
-  behind: 0,
-  changed: 25,
-  added: 18,
-  modified: 6,
-  deleted: 1,
-  lastCommit: "Sesac: 교재 기반 일차별 학습문서",
-  commits: [
-    { hash: "07c0aa9", message: "Sesac: 교재 기반 일차별 학습문서", author: "ReDocu", when: "1일 전", tag: "main" },
-    { hash: "d447777", message: "MBC: AI 커리큘럼 및 일차별 학습문서", author: "ReDocu", when: "1일 전" },
-    { hash: "da53823", message: "KY: 게임개발 24주 커리큘럼", author: "ReDocu", when: "1일 전" },
-    { hash: "e67e1e9", message: "프로젝트 메타 정보 추가", author: "ReDocu", when: "1일 전" },
-    { hash: "a5bafbe", message: "Initial commit", author: "ReDocu", when: "1일 전", tag: "origin/main" },
-  ] as GitCommit[],
-};
 
 /** Git Diff & Editor (AXXhV) — feature/auth-refactor의 변경 파일 목 */
 export const DIFF_BRANCH = { name: "feature/auth-refactor", ahead: 2, behind: 0 };
 
-export const DIFF_FILES: GitChangedFile[] = [
-  { status: "M", path: "src/auth/session.ts", stat: "+18 −6" },
-  { status: "M", path: "src/auth/token.ts", stat: "+9 −3" },
-  { status: "A", path: "src/auth/guard.ts", stat: "+42" },
-  { status: "M", path: "tests/auth/session.test.ts", stat: "+27 −4" },
-  { status: "M", path: "package.json", stat: "+2 −1" },
-  { status: "D", path: "src/auth/legacy.ts", stat: "−81" },
-];
+// 파일별 diff 원본 — 실측 unified diff와 같은 순서의 ctx/del/add 시퀀스.
+// 화면 배열(DIFF_CONTENT)과 목록 stat(DIFF_FILES)을 여기서 파생시켜 수치가 구조적으로 일치한다 (B6).
+type DiffSrc = ["ctx" | "del" | "add", string][];
 
-export const DIFF_BASE: { header: string; range: string; lines: DiffLine[] } = {
-  header: "feat(auth): add base session token · 2026-08-09 18:42",
-  range: "@@ createSession · restoreSession @@",
-  lines: [
-    { no: 1, text: 'import { sign, verify } from "./token";', kind: "del" },
-    { no: 2, text: 'import type { User } from "../types";' },
-    { no: 3, text: " " },
-    { no: 4, text: "export async function createSession(user: User) {" },
-    { no: 5, text: "  const token = sign(user.id);", kind: "del" },
-    { no: 6, text: "  return { token, user };", kind: "del" },
-    { no: 7, text: " " },
-    { no: 8, text: "}" },
-    { no: 9, text: " " },
-    { no: 10, text: "export async function restoreSession(raw: string) {" },
-    { no: 11, text: "  return verify(raw);", kind: "del" },
-    { no: 12, text: " " },
-    { no: 13, text: " " },
-    { no: 14, text: "}" },
-    { no: 15, text: "export const SESSION_TTL = 1000 * 60 * 60;" },
+const DIFF_SRC: Record<string, DiffSrc> = {
+  "src/auth/session.ts": [
+    ["del", 'import { sign, verify } from "./token";'],
+    ["add", 'import { signToken, verifyToken } from "./token";'],
+    ["ctx", 'import type { User } from "../types";'],
+    ["ctx", ""],
+    ["ctx", "export async function createSession(user: User) {"],
+    ["del", "  const token = sign(user.id);"],
+    ["del", "  return { token, user };"],
+    ["add", "  const claims = await buildClaims(user);"],
+    ["add", "  const token = await signToken(claims);"],
+    ["add", "  const expiresAt = Date.now() + SESSION_TTL;"],
+    ["add", "  return { token, user, expiresAt };"],
+    ["ctx", "}"],
+    ["ctx", ""],
+    ["ctx", "export async function restoreSession(raw: string) {"],
+    ["del", "  return verify(raw);"],
+    ["add", "  const result = await verifyToken(raw);"],
+    ["add", "  if (!result.valid) return null;"],
+    ["add", "  return hydrateSession(result.claims);"],
+    ["ctx", "}"],
+    ["ctx", ""],
+    ["ctx", "export const SESSION_TTL = 1000 * 60 * 60;"],
+  ],
+  "src/auth/token.ts": [
+    ["ctx", 'import { SECRET } from "./config";'],
+    ["add", 'import { sealed, unseal } from "./crypto";'],
+    ["ctx", ""],
+    ["del", "export function sign(id: string) {"],
+    ["del", '  return btoa(id + ":" + SECRET);'],
+    ["add", "export async function signToken(claims: Claims) {"],
+    ["add", "  const payload = JSON.stringify(claims);"],
+    ["add", "  return sealed(payload, SECRET);"],
+    ["ctx", "}"],
+    ["ctx", ""],
+    ["del", "export function verify(raw: string) {"],
+    ["del", '  return raw.startsWith("v1:");'],
+    ["add", "export async function verifyToken(raw: string) {"],
+    ["add", "  const opened = unseal(raw, SECRET);"],
+    ["add", "  if (!opened) return { valid: false };"],
+    ["add", "  return { valid: true, claims: JSON.parse(opened) };"],
+    ["ctx", "}"],
+    ["ctx", ""],
+    ["add", "export type Claims = { sub: string; exp: number };"],
+    ["add", "export const TOKEN_VERSION = 2;"],
+  ],
+  "src/auth/guard.ts": [
+    ["add", 'import { verifyToken } from "./token";'],
+    ["add", 'import type { Claims } from "./token";'],
+    ["add", ""],
+    ["add", "export interface GuardResult {"],
+    ["add", "  ok: boolean;"],
+    ["add", "  claims?: Claims;"],
+    ["add", "}"],
+    ["add", ""],
+    ["add", "export async function guard(raw: string): Promise<GuardResult> {"],
+    ["add", "  const r = await verifyToken(raw);"],
+    ["add", "  if (!r.valid) return { ok: false };"],
+    ["add", "  if (r.claims.exp < Date.now()) return { ok: false };"],
+    ["add", "  return { ok: true, claims: r.claims };"],
+    ["add", "}"],
+  ],
+  "tests/auth/session.test.ts": [
+    ["ctx", 'import { createSession } from "../../src/auth/session";'],
+    ["add", 'import { guard } from "../../src/auth/guard";'],
+    ["ctx", ""],
+    ["del", 'test("createSession returns token", async () => {'],
+    ["add", 'test("createSession returns sealed token + expiry", async () => {'],
+    ["ctx", "  const s = await createSession(user);"],
+    ["del", "  expect(s.token).toBeDefined();"],
+    ["add", "  expect(s.expiresAt).toBeGreaterThan(Date.now());"],
+    ["ctx", "});"],
+    ["add", ""],
+    ["add", 'test("guard rejects expired claims", async () => {'],
+    ["add", "  expect((await guard(expired)).ok).toBe(false);"],
+    ["add", "});"],
+  ],
+  "package.json": [
+    ["ctx", "{"],
+    ["ctx", '  "name": "academy",'],
+    ["ctx", '  "dependencies": {'],
+    ["del", '    "jsonwebtoken": "^9.0.0",'],
+    ["add", '    "iron-webcrypto": "^1.2.1",'],
+    ["add", '    "tsx": "^4.19.0",'],
+    ["ctx", '    "vitest": "^2.0.0"'],
+    ["ctx", "  }"],
+    ["ctx", "}"],
+  ],
+  "src/auth/legacy.ts": [
+    ["del", "// legacy session store — v1 토큰 경로"],
+    ["del", 'import { SECRET } from "./config";'],
+    ["del", ""],
+    ["del", "const store = new Map<string, string>();"],
+    ["del", ""],
+    ["del", "export function put(id: string, raw: string) {"],
+    ["del", "  store.set(id, raw + SECRET);"],
+    ["del", "}"],
+    ["del", ""],
+    ["del", "export function take(id: string) {"],
+    ["del", "  return store.get(id);"],
+    ["del", "}"],
   ],
 };
 
-export const DIFF_CURRENT: { header: string; range: string; lines: DiffLine[] } = {
-  header: "현재 내용 · 저장되지 않은 변경 1개",
-  range: "@@ createSession · restoreSession @@",
-  lines: [
-    { no: 1, text: 'import { signToken, verifyToken } from "./token";', kind: "add" },
-    { no: 2, text: 'import type { User } from "../types";' },
-    { no: 3, text: " " },
-    { no: 4, text: "export async function createSession(user: User) {" },
-    { no: 5, text: "  const claims = await buildClaims(user);", kind: "add" },
-    { no: 6, text: "  const token = await signToken(claims);", kind: "add" },
-    { no: 7, text: "  const expiresAt = Date.now() + SESSION_TTL;", kind: "add" },
-    { no: 8, text: "  return { token, user, expiresAt };", kind: "add" },
-    { no: 9, text: "}" },
-    { no: 10, text: "export async function restoreSession(raw: string) {" },
-    { no: 11, text: "  const result = await verifyToken(raw);", kind: "add" },
-    { no: 12, text: "  if (!result.valid) return null;", kind: "add" },
-    { no: 13, text: "  return hydrateSession(result.claims);", kind: "add" },
-    { no: 14, text: "}" },
-    { no: 15, text: "export const SESSION_TTL = 1000 * 60 * 60;" },
-  ],
+/** 실측 파서(diff.rs)와 같은 정렬 규칙 (B8) — 변경 런의 i번째 del과 i번째 add를 같은 행에 놓고
+ *  짧은 쪽은 pad 필러로 채운다. 양측 배열은 항상 같은 길이. 한쪽이 통째로 비면 빈 배열(B5 빈 상태). */
+export function alignDiff(src: DiffSrc): { base: DiffLine[]; current: DiffLine[] } {
+  const base: DiffLine[] = [];
+  const current: DiffLine[] = [];
+  let dels: string[] = [];
+  let adds: string[] = [];
+  const pad = (): DiffLine => ({ no: null, text: "", kind: "pad" });
+  const flush = () => {
+    for (let i = 0; i < Math.max(dels.length, adds.length); i++) {
+      base.push(i < dels.length ? { no: null, text: dels[i], kind: "del" } : pad());
+      current.push(i < adds.length ? { no: null, text: adds[i], kind: "add" } : pad());
+    }
+    dels = [];
+    adds = [];
+  };
+  for (const [kind, text] of src) {
+    if (kind === "del") dels.push(text);
+    else if (kind === "add") adds.push(text);
+    else {
+      flush();
+      base.push({ no: null, text, kind: null });
+      current.push({ no: null, text, kind: null });
+    }
+  }
+  flush();
+  for (const side of [base, current]) {
+    let n = 0;
+    for (const l of side) if (l.kind !== "pad") l.no = ++n;
+  }
+  const hasReal = (side: DiffLine[]) => side.some((l) => l.kind !== "pad");
+  return { base: hasReal(base) ? base : [], current: hasReal(current) ? current : [] };
+}
+
+// 목록 stat도 원본에서 파생 — "+a −d"가 상태바의 add/del 카운트와 항상 같다 (B6)
+const statOf = (src: DiffSrc, status: "A" | "M" | "D"): string => {
+  const a = src.filter(([k]) => k === "add").length;
+  const d = src.filter(([k]) => k === "del").length;
+  return status === "A" ? `+${a}` : status === "D" ? `−${d}` : `+${a} −${d}`;
+};
+
+export const DIFF_FILES: GitChangedFile[] = (
+  [
+    ["M", "src/auth/session.ts"],
+    ["M", "src/auth/token.ts"],
+    ["A", "src/auth/guard.ts"],
+    ["M", "tests/auth/session.test.ts"],
+    ["M", "package.json"],
+    ["D", "src/auth/legacy.ts"],
+  ] as ["M" | "A" | "D", string][]
+).map(([status, path]) => ({ status, path, stat: statOf(DIFF_SRC[path], status) }));
+
+/** 파일별 BASE/CURRENT 내용 — 모든 변경 파일이 diff를 갖고(B5) 양측 행이 정렬돼 있다(B8) */
+export const DIFF_CONTENT: Record<string, { base: DiffLine[]; current: DiffLine[] }> = {};
+for (const p of Object.keys(DIFF_SRC)) DIFF_CONTENT[p] = alignDiff(DIFF_SRC[p]);
+
+// git 패널 요약 — 커밋 서사·수치·브랜치를 diff 목에서 파생시켜 화면 간 불일치를 없앤다 (B6·B13)
+// ahead 2 = origin/main 태그 위의 커밋 2개. HEAD = commits[0] — diff 화면 BASE 라벨의 출처.
+const GIT_COMMITS: GitCommit[] = [
+  { hash: "8f31c2a", message: "auth: 토큰 서명을 sealed 방식으로 교체", author: "ReDocu", when: "10분 전", tag: DIFF_BRANCH.name },
+  { hash: "3d92b41", message: "auth: 세션 만료(expiresAt) 도입", author: "ReDocu", when: "1시간 전" },
+  { hash: "07c0aa9", message: "auth: v1 토큰 경로 정리 준비", author: "ReDocu", when: "1일 전", tag: "origin/main" },
+  { hash: "d447777", message: "테스트: vitest 기반으로 전환", author: "ReDocu", when: "2일 전" },
+  { hash: "a5bafbe", message: "Initial commit", author: "ReDocu", when: "1주 전" },
+];
+
+export const GIT_STATE = {
+  repo: "acme/academy", // WORKSPACES의 Academy remote와 같은 저장소 (B13)
+  branch: DIFF_BRANCH.name,
+  ahead: DIFF_BRANCH.ahead,
+  behind: DIFF_BRANCH.behind,
+  changed: DIFF_FILES.length,
+  added: DIFF_FILES.filter((f) => f.status === "A").length,
+  modified: DIFF_FILES.filter((f) => f.status === "M").length,
+  deleted: DIFF_FILES.filter((f) => f.status === "D").length,
+  lastCommit: GIT_COMMITS[0].message,
+  commits: GIT_COMMITS,
 };
 
 /** 서버 로그 (KcL3j) — 실시간 스트림 목 */
