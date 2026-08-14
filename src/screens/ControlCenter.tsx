@@ -19,6 +19,7 @@ import {
   tick,
 } from "../state";
 import { ContextMenu, Eyebrow, PersonaDot, StatusLabel } from "../components/ui";
+import { resumeAgent } from "../backend/agent";
 import { queryEvents } from "../backend/events";
 import type { FeedEvent } from "../backend/events";
 import { autoAssignDefault, refreshMissions } from "../backend/missions";
@@ -28,7 +29,7 @@ import { removeRoleFile } from "../backend/roles";
 import { ensureWorktree } from "../backend/team";
 import { gridTemplateStyle, PaneDividers } from "../components/PaneDividers";
 import { SidePanel } from "../components/SidePanel";
-import { disposeSessionTerminal, TerminalPane } from "../components/TerminalPane";
+import { disposeSessionTerminal, sessionTermSize, TerminalPane } from "../components/TerminalPane";
 import { SessionDetailPanel } from "./SessionDetailPanel";
 import { TranscriptPane } from "./TranscriptPane";
 import type { Session, Workspace } from "../types";
@@ -57,13 +58,15 @@ export function ControlCenter(props: { workspace: Workspace }) {
     tick();
     return backend.listMissions().filter((m) => m.workspaceId === props.workspace.id);
   };
-  const usage = () => backend.storeUsage();
+  const usage = () => backend.storeUsage(props.workspace.name);
   const persona = (id: string) => backend.listPersonas().find((p) => p.id === id);
   const job = (id: string) => backend.listJobs().find((j) => j.id === id);
   const selected = () => sessions().find((s) => s.id === selectedSession()) ?? sessions()[0];
 
   const [centerTab, setCenterTab] = createSignal<"terminal" | "transcript">("terminal");
   const [zoomed, setZoomed] = createSignal<string | undefined>(undefined); // B1 — 줌 토글
+  // 세션 상세 팝업 — 우측 고정 인스펙터의 후신. 아바타 레일·페인 메뉴 "세션 상세"가 연다
+  const [detailOpen, setDetailOpen] = createSignal(false);
   // 팀 도구 메뉴 (시안 §04) — 임무·캐스팅·팀 편성 버튼 3개의 후신
   const [teamMenu, setTeamMenu] = createSignal<{ x: number; y: number } | undefined>(undefined);
   // 상태바 이벤트 팝오버 (시안 §04) — 저장 상태·SessionService 카드 2장의 후신
@@ -101,10 +104,16 @@ export function ControlCenter(props: { workspace: Workspace }) {
       ? wsFeed().map((e) => ({ time: e.time, message: e.message }))
       : backend.listEvents().slice(0, 4).map((e) => ({ time: e.time, message: e.message }));
 
-  // ESC = 전체 화면 종료 (줌 상태가 있으면 줌부터 해제)
+  // ESC = 상세 드로어 → 줌 → 전체 화면 순으로 한 겹씩 닫는다
   onMount(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && terminalFull()) {
+      if (e.key !== "Escape") return;
+      if (detailOpen()) {
+        e.preventDefault();
+        setDetailOpen(false);
+        return;
+      }
+      if (terminalFull()) {
         e.preventDefault();
         if (zoomed()) setZoomed(undefined);
         else setTerminalFull(false);
@@ -161,6 +170,71 @@ export function ControlCenter(props: { workspace: Workspace }) {
     setAddOpen(false);
   };
   const [removeTarget, setRemoveTarget] = createSignal<Session | undefined>(undefined);
+  // 세션 우클릭 메뉴 (U8) — 레일 행·페인 헤더 공용. 재개·중지·상세·점프를 상세 모달 없이 꺼낸다
+  const [sessMenu, setSessMenu] = createSignal<{ x: number; y: number; s: Session } | undefined>(undefined);
+
+  // 인라인 재개 (U8) — 상세 모달의 doResume과 같은 경로 (FR-D-21~23)
+  const resumeInline = async (s: Session) => {
+    if (isTauri() && s.personaId) {
+      const p = s.permOverride ?? job(s.jobId)?.permissions;
+      if (!p) return;
+      const size = sessionTermSize(s.id);
+      try {
+        await resumeAgent(s.id, s.workspaceId, s.cwd, persona(s.personaId)?.name ?? s.personaId, p, size.cols, size.rows);
+      } catch {
+        return; // 실패는 페인의 restore 카드·이벤트 피드가 보여준다
+      }
+    }
+    backend.resumeSession(s.id);
+  };
+
+  const openSessMenu = (e: MouseEvent, s: Session) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setSessMenu({ x: e.clientX, y: e.clientY, s });
+  };
+  const sessMenuGroups = (s: Session) => [
+    [
+      {
+        label: "페인으로 점프",
+        action: () => {
+          setSelectedSession(s.id);
+          backend.markSeen(s.id);
+          setCenterTab("terminal");
+        },
+      },
+      {
+        label: "세션 상세",
+        action: () => {
+          setSelectedSession(s.id);
+          setDetailOpen(true);
+        },
+      },
+      {
+        label: "트랜스크립트 열기",
+        action: () => {
+          setSelectedSession(s.id);
+          setCenterTab("transcript");
+        },
+      },
+    ],
+    [
+      {
+        label: "재개",
+        disabled: !s.resumable || (s.status !== "dead" && !s.restored),
+        action: () => void resumeInline(s),
+      },
+      {
+        label: "중지",
+        disabled: s.status === "dead",
+        action: () => {
+          if (isTauri()) killPty(s.id);
+          backend.stopSession(s.id);
+        },
+      },
+    ],
+    [{ label: s.personaId ? "역할 세션 제거…" : "터미널 제거", danger: true, action: () => removeTerminal(s) }],
+  ];
   const doRemove = (s: Session) => {
     killPty(s.id);
     disposeSessionTerminal(s.id);
@@ -204,15 +278,22 @@ export function ControlCenter(props: { workspace: Workspace }) {
             <button
               class="terminal-head mono"
               style={{ width: "100%", "text-align": "left", cursor: "zoom-in" }}
-              title="클릭하면 줌 토글 (B1)"
+              title="클릭하면 줌 토글 (B1) · 우클릭 세션 메뉴"
               onClick={(e) => {
                 e.stopPropagation();
                 setZoomed(zoomed() === s.id ? undefined : s.id);
               }}
+              onContextMenu={(e) => openSessMenu(e, s)}
             >
               {/* 시안 §04·§06 — SLOT 라벨·✕ 제거, 헤더는 이름·상태만. 제거는 페인 우클릭 메뉴 */}
               <span>{sessionDisplayName(s, personaName(s.personaId))}</span>
               <span style={{ display: "inline-flex", "align-items": "center", gap: "8px" }}>
+                {/* 승인 대기 문맥 (U5) — 도착 즉시 어떤 도구 요청인지 헤더에서 보인다 */}
+                <Show when={s.status === "waiting" && s.waitingFor}>
+                  <span class="badge amber pane-wait-badge" title="승인 대기 중인 도구 요청 — y/n은 이 페인에 입력">
+                    {s.waitingFor}
+                  </span>
+                </Show>
                 <StatusLabel session={s} />
               </span>
             </button>
@@ -247,9 +328,15 @@ export function ControlCenter(props: { workspace: Workspace }) {
                   { label: zoomed() === s.id ? "줌 해제" : "줌", action: () => setZoomed(zoomed() === s.id ? undefined : s.id) },
                   { label: "전체 화면", kbd: "ESC 종료", action: () => setTerminalFull(true) },
                 ],
-                // 이동 — 인스펙터·트랜스크립트
+                // 이동 — 상세 팝업·트랜스크립트
                 [
-                  { label: "세션 상세", action: () => setSelectedSession(s.id) },
+                  {
+                    label: "세션 상세",
+                    action: () => {
+                      setSelectedSession(s.id);
+                      setDetailOpen(true);
+                    },
+                  },
                   {
                     label: "트랜스크립트 열기",
                     action: () => {
@@ -262,6 +349,19 @@ export function ControlCenter(props: { workspace: Workspace }) {
                 [{ label: s.personaId ? "역할 세션 제거…" : "터미널 제거", danger: true, action: () => removeTerminal(s) }],
               ]}
             />
+            {/* dead 페인 인라인 재개 (U8) — 상세 모달 2단계를 거치지 않는다 */}
+            <Show when={s.status === "dead" && s.resumable}>
+              <button
+                class="btn pane-resume mono"
+                title="이 자리에서 재개 — --resume · 대화 복원 (FR-D-21)"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void resumeInline(s);
+                }}
+              >
+                ▶ 재개 — 대화 복원
+              </button>
+            </Show>
           </div>
         )}
       </For>
@@ -418,29 +518,77 @@ export function ControlCenter(props: { workspace: Workspace }) {
         )}
       </Show>
 
+      {/* 세션 우클릭 메뉴 (U8) — 레일 행·페인 헤더 공용 */}
+      <Show when={sessMenu()}>
+        {(m) => (
+          <ContextMenu
+            x={m().x}
+            y={m().y}
+            header={`${sessionDisplayName(m().s, personaName(m().s.personaId))} · ${jobName(m().s.jobId)} — ${m().s.status}`}
+            onClose={() => setSessMenu(undefined)}
+            groups={sessMenuGroups(m().s)}
+          />
+        )}
+      </Show>
+
       <div class="screen-body cc-body">
-        {/* 좌: 아바타 레일 (시안 §04) — 목록이 나르던 정보는 페인 헤더·인스펙터가 담당한다.
-            직책은 툴팁, 선택은 테두리, 상태는 점, LEAD는 slot 1 관례 */}
+        {/* 좌: 세션 리스트 레일 — 아바타 전용 56px 레일의 후신. 가로형 리스트 버튼으로
+            이름·직무를 직접 보여준다. 선택은 테두리, 상태는 점, LEAD는 slot 1 관례 */}
         <div class="cc-rail">
           <For each={sessions()}>
             {(s) => (
-              <button
+              /* 클릭=페인 포커스 · ⓘ=상세 · 우클릭=메뉴 (U2·U8) — 상세 버튼을 품어야 해서 button이 아니라 div */
+              <div
                 class="rail-av"
+                role="button"
+                tabIndex={0}
                 classList={{ sel: selected()?.id === s.id }}
                 title={`${sessionDisplayName(s, personaName(s.personaId))} · ${jobName(s.jobId)} — ${s.status}${s.slot === 1 && persona(s.personaId) ? " · LEAD" : ""}`}
-                onClick={() => setSelectedSession(s.id)}
+                onClick={() => {
+                  setSelectedSession(s.id);
+                  backend.markSeen(s.id); // 페인을 보는 동작이다 (FR-G-44)
+                  setCenterTab("terminal");
+                }}
+                onDblClick={() => setDetailOpen(true)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    setSelectedSession(s.id);
+                    backend.markSeen(s.id);
+                    setCenterTab("terminal");
+                  }
+                }}
+                onContextMenu={(e) => openSessMenu(e, s)}
               >
                 <PersonaDot name={sessionDisplayName(s, personaName(s.personaId))} color={persona(s.personaId)?.color ?? "blue"} />
+                <span class="rail-txt">
+                  <span class="rail-nm">{sessionDisplayName(s, personaName(s.personaId))}</span>
+                  <span class="rail-job mono muted">
+                    {jobName(s.jobId)}
+                    {s.slot === 1 && persona(s.personaId) ? " · LEAD" : ""}
+                  </span>
+                </span>
+                <button
+                  class="rail-info mono"
+                  title="세션 상세"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelectedSession(s.id);
+                    setDetailOpen(true);
+                  }}
+                >
+                  ⓘ
+                </button>
                 <span class={`sdot ${s.status}`} />
                 <Show when={s.unseen}>
                   <span class="unread-dot rail-unread" title="미확인" />
                 </Show>
-              </button>
+              </div>
             )}
           </For>
           <Show when={sessions().length < 4}>
             <button class="rail-av add mono" title="빈 슬롯에 세션 추가 — 기본 터미널 또는 역할 세션" onClick={openAdd}>
-              +
+              + 세션 추가
             </button>
           </Show>
           <div class="rail-sep" />
@@ -463,14 +611,22 @@ export function ControlCenter(props: { workspace: Workspace }) {
             {(s) => <TranscriptPane session={s()} />}
           </Show>
         </div>
-
-        {/* 우: 인스펙터 */}
-        <div class="cc-right">
-          <Show when={selected()} fallback={<div class="muted">세션을 선택하세요</div>}>
-            {(s) => <SessionDetailPanel session={s()} />}
-          </Show>
-        </div>
       </div>
+
+      {/* 세션 상세 — 우측 드로어 (U1). 관제 대상(터미널)을 가리지 않고 옆에 선다.
+          레일 ⓘ·페인 메뉴 "세션 상세"가 연다 */}
+      <Show when={detailOpen() && selected()}>
+        {(s) => (
+          <div class="overlay detail-overlay" onClick={() => setDetailOpen(false)}>
+            <div class="dialog detail-dialog" onClick={(e) => e.stopPropagation()}>
+              <button class="detail-dialog-x" title="닫기 (ESC)" onClick={() => setDetailOpen(false)}>
+                ✕
+              </button>
+              <SessionDetailPanel session={s()} onClose={() => setDetailOpen(false)} />
+            </div>
+          </div>
+        )}
+      </Show>
 
       {/* 터미널 전체 화면 (포커스 모드) — 앱 바(Nav)는 유지, 그 아래만 덮는다.
           사이드 패널(대화 등)은 여기서도 열린다 — 앱 바 대화 버튼이 진입점이다 (M1) */}

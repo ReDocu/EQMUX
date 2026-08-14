@@ -1,13 +1,15 @@
 // 팀 캐스팅 (IvduM) — 직무 + 페르소나를 4개 세션 슬롯에 배정. 실행 권한을 배정 시점에 미리 보여준다.
 // 프리셋의 원본은 앱데이터 presets/*.json 실파일이다 (FR-E-26) — 직무 구성만 담고,
 // 페르소나는 라이브러리에서 자동 배정한다 (P1 직무/페르소나 분리).
-import { createSignal, For, onMount } from "solid-js";
+import { createSignal, For, onMount, Show } from "solid-js";
 import { listPresets } from "../backend/library";
 import type { CastingPreset } from "../backend/library";
 import { autoAssignDefault } from "../backend/missions";
 import { backend } from "../backend/mock";
 import { isTauri } from "../backend/pty";
 import { setView } from "../state";
+import { ContextMenu } from "../components/ui";
+import type { MenuGroup } from "../components/ui";
 import type { Permissions } from "../types";
 
 type Slot = { badge: string; badgeColor: "blue" | "purple" | "green" | "amber"; personaId: string; jobId: string };
@@ -78,19 +80,28 @@ export function TeamCasting(props: { wsId: string }) {
     setSaved(false);
   };
 
-  // 캐스팅 변경 — 현재 편성에 없는 다음 페르소나로 순환
-  const cyclePersona = (i: number) => {
-    const all = backend.listPersonas();
-    const used = new Set(slots().map((sl) => sl.personaId));
-    const cur = all.findIndex((p) => p.id === slots()[i].personaId);
-    for (let step = 1; step <= all.length; step++) {
-      const cand = all[(cur + step) % all.length];
-      if (!used.has(cand.id)) {
-        setSlots(slots().map((sl, j) => (j === i ? { ...sl, personaId: cand.id } : sl)));
-        setSaved(false);
-        return;
-      }
-    }
+  // 캐스팅 변경 (U3) — 순환 클릭 대신 팝오버 목록에서 직접 고른다.
+  // 이 편성의 다른 슬롯에 선 페르소나는 비활성, 다른 워크스페이스에서 활동 중이면 표시만 한다.
+  const [castMenu, setCastMenu] = createSignal<{ x: number; y: number; slot: number } | undefined>(undefined);
+  const personaGroups = (i: number): MenuGroup[] => {
+    const usedElsewhere = new Set(slots().flatMap((sl, j) => (j === i ? [] : [sl.personaId])));
+    const activeWs = new Map(
+      backend
+        .listSessions()
+        .filter((sess) => sess.workspaceId !== props.wsId && sess.personaId)
+        .map((sess) => [sess.personaId, backend.listWorkspaces().find((w) => w.id === sess.workspaceId)?.name ?? "?"]),
+    );
+    return [
+      backend.listPersonas().map((p) => ({
+        label: activeWs.has(p.id) ? `${p.name} — ${activeWs.get(p.id)} 활동 중` : p.name,
+        checked: slots()[i].personaId === p.id,
+        disabled: usedElsewhere.has(p.id),
+        action: () => {
+          setSlots(slots().map((sl, j) => (j === i ? { ...sl, personaId: p.id } : sl)));
+          setSaved(false);
+        },
+      })),
+    ];
   };
 
   const save = () => {
@@ -151,13 +162,34 @@ export function TeamCasting(props: { wsId: string }) {
                     })()}
                   </div>
                 </div>
-                <button class="btn ghost" style={{ "align-self": "start" }} onClick={() => cyclePersona(i())}>
-                  캐스팅 변경
+                <button
+                  class="btn ghost"
+                  style={{ "align-self": "start" }}
+                  title="페르소나 목록에서 선택"
+                  onClick={(e) => {
+                    const r = e.currentTarget.getBoundingClientRect();
+                    setCastMenu({ x: r.left, y: r.bottom + 4, slot: i() });
+                  }}
+                >
+                  캐스팅 변경 ▾
                 </button>
               </div>
             )}
           </For>
         </div>
+        {/* 페르소나 선택 팝오버 (U3) */}
+        <Show when={castMenu()}>
+          {(m) => (
+            <ContextMenu
+              x={m().x}
+              y={m().y}
+              header={`SLOT ${String(m().slot + 1).padStart(2, "0")} · 페르소나 선택`}
+              onClose={() => setCastMenu(undefined)}
+              groups={personaGroups(m().slot)}
+            />
+          )}
+        </Show>
+
         <div class="cast-footer card">
           <div>
             <div style={{ "font-weight": 700, "font-size": "12px" }}>.eqmux/team.json과 team.md에 저장</div>

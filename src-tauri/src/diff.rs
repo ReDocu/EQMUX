@@ -1,6 +1,8 @@
 // diff 에디터 실파싱 (PRD H) — HEAD ↔ 워크트리 비교를 읽기 전용으로 제공한다.
 // 원리: `git diff -U999999`로 파일 전체가 한 헝크에 들어오게 만들고,
 // ' '(양측) · '-'(BASE) · '+'(WORKTREE) 접두로 양측 라인 배열을 재구성한다.
+// 양측 배열은 항상 같은 길이다 (B8) — 변경 런(-…+…)을 1:1로 짝짓고 짧은 쪽을
+// kind="pad" 필러 행으로 채워, 화면이 행 단위로 정렬된 side-by-side를 그릴 수 있게 한다.
 // 스테이지·커밋·편집은 제공하지 않는다 — 실행은 터미널에서 사람이 한다 (다른 패널과 같은 원칙).
 
 use std::path::Path;
@@ -22,9 +24,9 @@ pub struct ChangedFile {
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct DiffLine {
-    pub no: u32,
+    pub no: Option<u32>, // pad 필러 행은 실제 줄이 아니므로 번호가 없다
     pub text: String,
-    pub kind: Option<String>, // "add" | "del" | None(ctx)
+    pub kind: Option<String>, // "add" | "del" | "pad"(정렬 필러) | None(ctx)
 }
 
 #[derive(Serialize)]
@@ -89,8 +91,36 @@ fn all_lines(text: &str, kind: &str) -> Vec<DiffLine> {
     text.lines()
         .take(MAX_LINES_PER_SIDE)
         .enumerate()
-        .map(|(i, l)| DiffLine { no: (i + 1) as u32, text: l.to_string(), kind: Some(kind.into()) })
+        .map(|(i, l)| DiffLine { no: Some((i + 1) as u32), text: l.to_string(), kind: Some(kind.into()) })
         .collect()
+}
+
+/// 모아둔 변경 런을 양측에 내보낸다 — i번째 del과 i번째 add를 같은 행에, 남는 쪽은 pad로 (B8)
+fn flush_run(base: &mut Vec<DiffLine>, current: &mut Vec<DiffLine>, dels: &mut Vec<String>, adds: &mut Vec<String>) {
+    let pad = || DiffLine { no: None, text: String::new(), kind: Some("pad".into()) };
+    for i in 0..dels.len().max(adds.len()) {
+        base.push(match dels.get(i) {
+            Some(t) => DiffLine { no: None, text: t.clone(), kind: Some("del".into()) },
+            None => pad(),
+        });
+        current.push(match adds.get(i) {
+            Some(t) => DiffLine { no: None, text: t.clone(), kind: Some("add".into()) },
+            None => pad(),
+        });
+    }
+    dels.clear();
+    adds.clear();
+}
+
+/// pad를 건너뛰며 실제 줄 번호를 매긴다 — 전체 파일이 한 헝크이므로 1부터 순번이 곧 파일 줄 번호
+fn number_side(side: &mut [DiffLine]) {
+    let mut n = 0;
+    for l in side.iter_mut() {
+        if l.kind.as_deref() != Some("pad") {
+            n += 1;
+            l.no = Some(n);
+        }
+    }
 }
 
 /// HEAD ↔ 워크트리 양측 라인 재구성. untracked = 전부 add, 삭제 = 전부 del, 바이너리 = Err.
@@ -118,7 +148,7 @@ pub fn file_diff(ws_path: &str, path: &str) -> Result<FileDiff, String> {
             t.lines()
                 .take(MAX_LINES_PER_SIDE)
                 .enumerate()
-                .map(|(i, l)| DiffLine { no: (i + 1) as u32, text: l.to_string(), kind: None })
+                .map(|(i, l)| DiffLine { no: Some((i + 1) as u32), text: l.to_string(), kind: None })
                 .collect::<Vec<_>>()
         };
         let truncated = text.lines().count() > MAX_LINES_PER_SIDE;
@@ -127,6 +157,8 @@ pub fn file_diff(ws_path: &str, path: &str) -> Result<FileDiff, String> {
 
     let mut base = Vec::new();
     let mut current = Vec::new();
+    let mut dels: Vec<String> = Vec::new();
+    let mut adds: Vec<String> = Vec::new();
     let mut in_hunk = false;
     let mut truncated = false;
     for line in out.lines() {
@@ -137,20 +169,32 @@ pub fn file_diff(ws_path: &str, path: &str) -> Result<FileDiff, String> {
         if !in_hunk || line.starts_with('\\') {
             continue; // 헤더 · "\ No newline" 마커
         }
-        if base.len() >= MAX_LINES_PER_SIDE || current.len() >= MAX_LINES_PER_SIDE {
+        if base.len() + dels.len() >= MAX_LINES_PER_SIDE || current.len() + adds.len() >= MAX_LINES_PER_SIDE {
             truncated = true;
             break;
         }
         let (prefix, text) = line.split_at(1.min(line.len()));
         let text = text.to_string();
         match prefix {
-            "-" => base.push(DiffLine { no: base.len() as u32 + 1, text, kind: Some("del".into()) }),
-            "+" => current.push(DiffLine { no: current.len() as u32 + 1, text, kind: Some("add".into()) }),
+            "-" => dels.push(text),
+            "+" => adds.push(text),
             _ => {
-                base.push(DiffLine { no: base.len() as u32 + 1, text: text.clone(), kind: None });
-                current.push(DiffLine { no: current.len() as u32 + 1, text, kind: None });
+                // ctx가 나오면 진행 중이던 변경 런을 정렬해 내보내고 양측에 같은 행으로 얹는다
+                flush_run(&mut base, &mut current, &mut dels, &mut adds);
+                base.push(DiffLine { no: None, text: text.clone(), kind: None });
+                current.push(DiffLine { no: None, text, kind: None });
             }
         }
+    }
+    flush_run(&mut base, &mut current, &mut dels, &mut adds);
+    number_side(&mut base);
+    number_side(&mut current);
+    // 한쪽이 통째로 비는 파일(전량 삭제 등)은 pad 기둥 대신 빈 배열로 — 화면의 빈 상태 안내가 말하게 한다 (B5)
+    if !base.iter().any(|l| l.kind.as_deref() != Some("pad")) {
+        base.clear();
+    }
+    if !current.iter().any(|l| l.kind.as_deref() != Some("pad")) {
+        current.clear();
     }
     Ok(FileDiff { base_label, base, current, truncated })
 }
@@ -189,13 +233,19 @@ mod tests {
         assert_eq!(st("new.txt").as_deref(), Some("A"));
         assert_eq!(files.iter().find(|f| f.path == "a.txt").unwrap().stat, "+2 −1");
 
-        // 수정 파일 — 양측 재구성: ctx는 양쪽, del은 BASE만, add는 WORKTREE만
+        // 수정 파일 — 양측 정렬 재구성 (B8): 같은 길이, del↔add는 같은 행에, 남는 쪽은 pad
         let d = file_diff(&ws, "a.txt").unwrap();
         assert_eq!(d.base.iter().filter(|l| l.kind.as_deref() == Some("del")).count(), 1);
         assert_eq!(d.current.iter().filter(|l| l.kind.as_deref() == Some("add")).count(), 2);
-        assert_eq!(d.base.len(), 3); // 하나·둘·셋
-        assert_eq!(d.current.len(), 4); // 하나·둘-고침·셋·넷
+        assert_eq!(d.base.len(), d.current.len()); // 항상 같은 길이 (B8)
+        assert_eq!(d.base.len(), 4); // 하나·둘(del)·셋·pad
+        assert_eq!(d.base[1].kind.as_deref(), Some("del")); // 둘 ↔ 둘-고침이 같은 행
         assert_eq!(d.current[1].text, "둘-고침");
+        assert_eq!(d.base[3].kind.as_deref(), Some("pad")); // 넷의 반대편은 필러
+        assert_eq!(d.base[3].no, None);
+        assert_eq!(d.current[3].text, "넷");
+        assert_eq!(d.current[3].no, Some(4)); // pad를 건너뛴 실제 줄 번호
+        assert_eq!(d.base[2].no, Some(3)); // 셋 — ctx 줄 번호 유지
 
         // 신규 — BASE 없음, 전부 add / 삭제 — 전부 del
         let n = file_diff(&ws, "new.txt").unwrap();

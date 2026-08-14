@@ -205,18 +205,34 @@ export function Dashboard() {
               <div class="muted">열린 워크스페이스가 없습니다 — 상단 + 또는 워크스페이스 연결에서 git 저장소를 열어주세요</div>
             </div>
           </Show>
-          {/* 닫힌 워크스페이스 — 한 줄 강등 (시안 §03 · FR-G-08) */}
+          {/* 닫힌 워크스페이스 — 한 줄 강등은 유지하되 항목을 카드로 (U4).
+              이름·상태 배지·경로가 구조로 읽히고, 경로 소실은 열기 대신 재지정으로 보낸다 */}
           <Show when={closedWs().length > 0}>
             <div class="ws-closed">
-              <span class="muted">닫힘</span>
+              <span class="eyebrow">닫힘 · {closedWs().length}</span>
               <For each={closedWs()}>
                 {(ws) => (
-                  <span class="ws-closed-item mono muted">
-                    {ws.name}
-                    <button class="btn ghost" style={{ padding: "1px 8px", "font-size": "11px" }} onClick={() => backend.openWorkspace(ws.id)}>
-                      열기
-                    </button>
-                  </span>
+                  <div class="card ws-closed-card">
+                    <span class="ws-closed-name">{ws.name}</span>
+                    <span class="badge" classList={{ amber: ws.pathMissing }}>
+                      {ws.pathMissing ? "경로 소실" : "닫힘"}
+                    </span>
+                    <span class="mono muted ws-closed-path" title={ws.path}>
+                      {ws.path}
+                    </span>
+                    <Show
+                      when={!ws.pathMissing}
+                      fallback={
+                        <button class="btn ghost" title="워크스페이스 연결에서 경로 재지정" onClick={() => setView({ kind: "connect" })}>
+                          재지정 →
+                        </button>
+                      }
+                    >
+                      <button class="btn ghost" onClick={() => backend.openWorkspace(ws.id)}>
+                        열기
+                      </button>
+                    </Show>
+                  </div>
                 )}
               </For>
             </div>

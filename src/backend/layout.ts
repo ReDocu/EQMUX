@@ -10,12 +10,12 @@ import { settings } from "./settings";
 import {
   DEFAULT_RATIOS,
   defaultShell,
-  paneLayout,
   PANE_LAYOUTS,
+  paneLayouts,
   paneRatios,
   selectedSession,
   setDefaultShell,
-  setPaneLayout,
+  setPaneLayouts,
   setPaneRatios,
   setSelectedSession,
   setView,
@@ -26,12 +26,16 @@ import type { PaneLayout, PaneRatio } from "../state";
 
 interface LayoutData {
   openWorkspaces?: string[];
-  paneLayout?: string;
+  paneLayout?: string; // 구버전 — 전역 단일 배치. 읽기 폴백으로만 남는다
+  paneLayoutsByWs?: Record<string, string>; // 배치는 워크스페이스별 (U7)
   shell?: string;
   selectedSession?: string;
   lastWorkspace?: string; // 마지막으로 보던 워크스페이스 탭 — startView="last"일 때만 복원
   paneRatios?: Record<string, PaneRatio>; // 분할선 드래그 비율 (M30) — 배치별
 }
+
+const isLayoutKey = (v: unknown): v is PaneLayout =>
+  typeof v === "string" && PANE_LAYOUTS.some((l) => l.key === v);
 
 /** 저장본 비율 검증 — 길이·합·범위가 맞는 축만 받는다. 깨진 값은 기본 비율로 조용히 폴백 */
 function sanitizeRatio(layout: PaneLayout, raw: unknown): PaneRatio | undefined {
@@ -56,8 +60,17 @@ export async function restoreLayout(): Promise<void> {
   if (!isTauri()) return;
   const data = await invoke<LayoutData | null>("layout_load").catch(() => null);
   if (!data) return;
-  if (data.paneLayout && PANE_LAYOUTS.some((l) => l.key === data.paneLayout)) {
-    setPaneLayout(data.paneLayout as PaneLayout);
+  // 배치 복원 — 워크스페이스별 맵 우선 (U7), 구버전 단일 값은 모든 워크스페이스의 초기값으로
+  if (data.paneLayoutsByWs && typeof data.paneLayoutsByWs === "object") {
+    const restored: Partial<Record<string, PaneLayout>> = {};
+    for (const [wsId, l] of Object.entries(data.paneLayoutsByWs)) {
+      if (isLayoutKey(l)) restored[wsId] = l;
+    }
+    if (Object.keys(restored).length > 0) setPaneLayouts(restored);
+  } else if (isLayoutKey(data.paneLayout)) {
+    const legacy: Partial<Record<string, PaneLayout>> = { _default: data.paneLayout };
+    for (const w of backend.listWorkspaces()) legacy[w.id] = data.paneLayout;
+    setPaneLayouts(legacy);
   }
   // 분할선 비율 복원 (M30) — 배치별로 검증해 통과한 것만
   if (data.paneRatios && typeof data.paneRatios === "object") {
@@ -99,7 +112,7 @@ export function startLayoutSync(): void {
           .listWorkspaces()
           .filter((w) => w.open)
           .map((w) => w.id),
-        paneLayout: paneLayout(),
+        paneLayoutsByWs: paneLayouts() as Record<string, string>,
         shell: defaultShell().label,
         selectedSession: selectedSession(),
         lastWorkspace: v.kind === "workspace" ? (v as { id: string }).id : lastWs,
@@ -115,7 +128,7 @@ export function startLayoutSync(): void {
   backend.subscribe(save); // 워크스페이스 열기/닫기
   createRoot(() => {
     createEffect(() => {
-      paneLayout();
+      paneLayouts(); // 워크스페이스별 배치 (U7)
       paneRatios(); // 분할선 드래그 (M30)
       defaultShell();
       selectedSession();

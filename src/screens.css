@@ -109,17 +109,35 @@
 /* 닫힌 워크스페이스 — 한 줄 강등 */
 .ws-closed {
   display: flex;
-  gap: 14px;
+  gap: 10px;
   align-items: center;
   flex-wrap: wrap;
   border-top: 1px solid var(--eq-line);
   padding-top: 12px;
   font-size: 12px;
 }
-.ws-closed-item {
+/* 닫힌 워크스페이스 카드 (U4) — 링크 나열이 아니라 상태 배지 있는 행으로 읽힌다 */
+.ws-closed-card {
   display: inline-flex;
-  gap: 2px;
+  gap: 8px;
   align-items: center;
+  padding: 5px 10px;
+  border: 1px solid var(--eq-line);
+}
+.ws-closed-name {
+  font-weight: 700;
+  font-size: 12px;
+}
+.ws-closed-path {
+  font-size: 10px;
+  max-width: 180px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ws-closed-card .btn {
+  padding: 1px 8px;
+  font-size: 11px;
 }
 
 .dash-side {
@@ -198,15 +216,65 @@
 }
 .cc-body {
   display: grid;
-  grid-template-columns: 56px 1fr 320px;
+  grid-template-columns: 200px 1fr;
   grid-template-rows: minmax(0, 1fr);
   gap: 14px;
   align-items: stretch;
   overflow: hidden;
 }
-.cc-right {
-  min-height: 0;
+/* 세션 상세 — 우측 드로어 (U1): 중앙 모달 대신 오른쪽에 붙어 터미널을 계속 보여준다 */
+.detail-overlay {
+  justify-content: flex-end;
+  align-items: stretch;
+  background: rgba(4, 6, 10, 0.35);
+}
+.detail-dialog {
+  position: relative;
+  width: 440px;
+  max-width: calc(100vw - 48px);
+  height: 100%;
+  max-height: none;
   overflow-y: auto;
+  padding: 0 18px 18px;
+  border-radius: 0;
+  border-top: none;
+  border-right: none;
+  border-bottom: none;
+  animation: detail-slide 0.16s ease-out;
+}
+@keyframes detail-slide {
+  from {
+    transform: translateX(24px);
+    opacity: 0.5;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+/* 드로어 상단 고정 (U1) — 이름·상태가 스크롤을 따라온다. ✕도 같은 층에 선다 */
+.detail-top {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--eq-surface);
+  padding: 14px 0 10px;
+  border-bottom: 1px solid var(--eq-line);
+  margin-bottom: 8px;
+}
+.detail-dialog-x {
+  position: sticky;
+  top: 10px;
+  float: right;
+  z-index: 3;
+  margin: 10px -6px 0 0;
+  padding: 2px 6px;
+  color: var(--eq-dim);
+  border-radius: var(--eq-r-sm);
+}
+.detail-dialog-x:hover {
+  color: var(--eq-text);
+  background: var(--eq-surface-2);
 }
 .cc-center {
   min-height: 0;
@@ -216,64 +284,103 @@
 .cc-center .terminal-statusbar {
   flex-shrink: 0;
 }
-/* 아바타 레일 (시안 §04) — 세션 목록 280px의 후신 */
+/* 세션 리스트 레일 — 아바타 전용 56px 레일의 후신, 가로형 리스트 버튼 */
 .cc-rail {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 10px;
+  align-items: stretch;
+  gap: 6px;
   padding-top: 4px;
   min-height: 0;
   overflow-y: auto;
 }
 .rail-av {
   position: relative;
-  padding: 3px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
   border-radius: var(--eq-r-sm);
-  border: 2px solid transparent;
+  border: 1px solid transparent;
+  text-align: left;
 }
 .rail-av:hover {
   border-color: var(--eq-line);
+  background: var(--eq-surface);
 }
 .rail-av.sel {
   border-color: var(--eq-blue);
+  background: var(--eq-surface);
+}
+.rail-txt {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+.rail-nm {
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rail-job {
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .rail-av .sdot {
-  position: absolute;
-  right: -2px;
-  bottom: -2px;
   width: 9px;
   height: 9px;
-  border: 2px solid var(--eq-bg);
 }
 .rail-av.add {
-  width: 38px;
-  height: 38px;
+  justify-content: center;
+  padding: 8px;
   border: 1px dashed var(--eq-line);
   color: var(--eq-dim);
-  display: grid;
-  place-items: center;
-  font-size: 14px;
+  font-size: 11px;
 }
 .rail-av.add:hover {
   color: var(--eq-muted);
   border-color: var(--eq-muted);
+  background: none;
 }
 .rail-unread {
   position: absolute;
-  top: -2px;
-  right: -2px;
+  top: 4px;
+  right: 4px;
+}
+/* 레일 행은 클릭=페인 포커스 (U2) — 상세는 ⓘ 버튼으로 분리 */
+.rail-av {
+  cursor: pointer;
+}
+.rail-info {
+  flex-shrink: 0;
+  padding: 1px 5px;
+  font-size: 11px;
+  color: var(--eq-dim);
+  border-radius: var(--eq-r-sm);
+  opacity: 0;
+}
+.rail-av:hover .rail-info,
+.rail-av:focus-within .rail-info {
+  opacity: 1;
+}
+.rail-info:hover {
+  color: var(--eq-text);
+  background: var(--eq-surface-2);
 }
 .rail-sep {
-  width: 26px;
   border-top: 1px solid var(--eq-line);
 }
 .rail-ms {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  gap: 2px;
-  padding: 6px 8px;
+  justify-content: space-between;
+  padding: 6px 10px;
   border-radius: var(--eq-r-sm);
 }
 .rail-ms:hover {
@@ -523,9 +630,6 @@
 }
 
 @media (max-width: 1200px) {
-  .cc-body {
-    grid-template-columns: 240px 1fr 280px;
-  }
   .settings-grid {
     grid-template-columns: repeat(2, 1fr);
   }
@@ -661,6 +765,7 @@
 }
 /* .terminal-grid.zoomed 규칙은 배치 6종 섹션 끝에 통합돼 있다 (열·행 템플릿 동시 해제) */
 .terminal-pane {
+  position: relative; /* 인라인 재개 버튼 (U8) 기준점 */
   background: var(--eq-terminal);
   border: 1px solid var(--eq-line);
   display: flex;
@@ -891,6 +996,29 @@
   padding: 3px 10px;
 }
 
+/* 승인 대기 도구 배지 (U5) — 페인 헤더에서 곧바로 무엇을 승인할지 보인다 */
+.pane-wait-badge {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* dead 페인 인라인 재개 (U8) — 상세 드로어 2단계를 건너뛴다 */
+.pane-resume {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  z-index: 3;
+  font-size: 11px;
+  padding: 4px 12px;
+  border-color: var(--eq-red);
+  color: var(--eq-text);
+  background: var(--eq-surface);
+}
+.pane-resume:hover {
+  border-color: var(--eq-blue);
+}
+
 /* 과부하 소프트 경고 배너 (D11 · FR-G-36) — 알림이 아니라 상단 배너, 막지 않는다 */
 .dash-overload {
   margin: 0 0 10px;
@@ -911,13 +1039,16 @@
 }
 
 /* ── 트랜스크립트 페인 (화면 #12) ── */
+/* 세로를 가득 채운다 (U6) — 터미널 뷰와 같은 높이 정책, 입력창은 하단 고정 */
 .transcript {
   display: flex;
   flex-direction: column;
+  flex: 1;
+  min-height: 0;
 }
 .transcript-body {
-  min-height: 220px;
-  max-height: 300px;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
 }
 .turn {
@@ -1817,9 +1948,6 @@
   background: var(--eq-blue-soft);
   box-shadow: inset 2px 0 0 var(--eq-blue);
 }
-.gde-file.staged .gde-file-path {
-  color: var(--eq-green);
-}
 .gde-st {
   width: 16px;
   height: 16px;
@@ -1851,6 +1979,21 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* 상태 필터 칩 (U12) — A/M/D 토글 */
+.gde-filter-chips {
+  display: flex;
+  gap: 4px;
+  padding: 0 10px 6px;
+}
+.gde-filter-chips .btn {
+  font-size: 10px;
+  padding: 1px 8px;
+}
+.gde-filter-chips .btn.on,
+.gde-toolbar-actions .btn.on {
+  color: var(--eq-blue);
+  outline: 1px solid var(--eq-blue);
 }
 .gde-sidebar-actions {
   display: flex;
@@ -1913,6 +2056,14 @@
   background: var(--eq-surface-2);
   flex-shrink: 0;
 }
+/* 코드 페인 래퍼 — 스크롤과 무관하게 고정되는 마커 레일의 기준 좌표 (U10) */
+.gde-codewrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
 .gde-code {
   flex: 1;
   min-height: 0;
@@ -1922,9 +2073,78 @@
   line-height: 1.75;
   padding: 6px 0;
 }
+/* 줄바꿈 모드 (U13) — 행 높이는 JS가 좌우 짝의 최대값으로 맞춘다 */
+.gde-code.wrap .gde-line {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
 .gde-line {
   display: flex;
   white-space: pre;
+  min-height: 1.75em; /* 빈 줄·pad 필러도 행 높이를 유지해 좌우 정렬이 깨지지 않는다 (B8) */
+}
+/* 정렬 필러 (B8) — 반대편 변경에 대응하는 실제 줄이 없는 자리 */
+.gde-line.pad {
+  background: repeating-linear-gradient(-45deg, transparent 0 6px, var(--eq-surface-2) 6px 12px);
+}
+/* 인트라라인 강조 (U13) — 줄 안에서 실제로 바뀐 구간 */
+.gde-line.del .gde-hl {
+  background: color-mix(in srgb, var(--eq-red) 30%, transparent);
+  border-radius: 2px;
+}
+.gde-line.add .gde-hl {
+  background: color-mix(in srgb, var(--eq-green) 30%, transparent);
+  border-radius: 2px;
+}
+/* 문맥 접기 행 (U10) — 양 페인 같은 자리에 들어가 정렬을 유지한다 */
+.gde-fold {
+  display: block;
+  width: 100%;
+  border: 0;
+  border-top: 1px dashed var(--eq-line);
+  border-bottom: 1px dashed var(--eq-line);
+  padding: 2px 12px 2px 50px;
+  font-size: 10px;
+  text-align: left;
+  color: var(--eq-muted);
+  background: var(--eq-surface-2);
+  cursor: pointer;
+}
+.gde-fold:hover {
+  color: var(--eq-code);
+}
+/* 변경 위치 마커 레일 (U10) — 스크롤바 옆의 미니맵 */
+.gde-markers {
+  position: absolute;
+  top: 0;
+  right: 1px;
+  bottom: 0;
+  width: 8px;
+  z-index: 2;
+  pointer-events: none;
+}
+.gde-marker {
+  position: absolute;
+  left: 1px;
+  right: 1px;
+  width: 6px;
+  min-height: 5px;
+  border: 0;
+  padding: 0;
+  border-radius: 2px;
+  opacity: 0.5;
+  cursor: pointer;
+  pointer-events: auto;
+}
+.gde-marker.addm {
+  background: var(--eq-green);
+}
+.gde-marker.delm {
+  background: var(--eq-red);
+}
+.gde-marker.active {
+  opacity: 1;
+  outline: 1px solid var(--eq-blue);
 }
 .gde-line.add {
   background: var(--eq-green-soft);
@@ -1965,6 +2185,19 @@
 .gde-status-left {
   display: flex;
   gap: 16px;
+  align-items: center;
+}
+/* 상태바 수치 = 첫 변경으로 가는 버튼 (U10) */
+.gde-stat-jump {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: inherit;
+  font-size: inherit;
+  cursor: pointer;
+}
+.gde-stat-jump:hover {
+  color: var(--eq-blue);
 }
 
 /* ── 페인 배치 (srpYm) ── */

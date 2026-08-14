@@ -233,19 +233,21 @@ fn spawn_pty_session(
                 }
             }
         }
-        // 세대가 일치할 때만 정리한다 — 같은 id로 재기동된 새 세션을 지우면 안 된다
-        let code = {
+        // 세대가 일치할 때만 정리한다 — 같은 id로 재기동된 새 세션을 지우면 안 된다.
+        // 잠금 안에서는 꺼내기만 하고 child.wait()는 잠금 밖에서 한다 (B14) —
+        // 잠금을 쥔 채 기다리면 그동안 모든 세션의 pty_write/resize가 멈춘다
+        let owned = {
             let state: State<PtyState> = app.state();
             let mut sessions = state.0.lock().ok();
-            let owned = sessions.as_mut().and_then(|s| {
+            sessions.as_mut().and_then(|s| {
                 if s.get(&id).map(|e| e.gen) == Some(gen) {
                     s.remove(&id)
                 } else {
                     None
                 }
-            });
-            owned.and_then(|mut s| s.child.wait().ok()).map(|st| st.exit_code())
+            })
         };
+        let code = owned.and_then(|mut s| s.child.wait().ok()).map(|st| st.exit_code());
         if let Some(f) = log_file.as_mut() {
             let _ = writeln!(f, "\n=== session exit · {} · code {:?} · epoch {} ===", id, code, epoch_secs());
         }
@@ -320,6 +322,19 @@ fn pty_resize(state: State<PtyState>, id: String, cols: u16, rows: u16) -> Resul
         .map_err(|e| e.to_string())
 }
 
+/// 블록 가능성이 있는 PTY 정리(잡 종료·kill·ConPTY 닫기)를 백그라운드로 보낸다 (B14).
+/// 동기 커맨드는 메인 스레드에서 돌므로, ConPTY 닫기가 리더 스레드의 드레인을 기다리는 동안
+/// 메인 스레드나 PtyState 잠금을 쥐고 있으면 리더와 교착해 앱 전체가 멈춘다.
+fn teardown_session_in_background(mut s: PtySession) {
+    std::thread::spawn(move || {
+        if let Some(j) = &s.job {
+            j.terminate(); // FR-C-05 — 자식 트리까지 즉시 정리
+        }
+        let _ = s.child.kill();
+        // s drop = ConPTY 닫기 — 리더가 남은 출력을 비울 때까지 이 스레드에서만 기다린다
+    });
+}
+
 #[tauri::command]
 fn pty_kill(
     state: State<PtyState>,
@@ -327,23 +342,31 @@ fn pty_kill(
     rt: State<agent::AgentRt>,
     id: String,
 ) -> Result<(), String> {
-    let mut sessions = state.0.lock().map_err(|e| e.to_string())?;
-    if let Some(mut s) = sessions.remove(&id) {
-        // 사용자가 의도한 종료 — dead 전이는 나되 OS 알림은 내지 않는다 (G3)
-        if let Ok(mut expected) = rt.expected_exit.lock() {
-            expected.insert(id.clone());
+    // 사용자가 의도한 종료 — dead 전이는 나되 OS 알림은 내지 않는다 (G3).
+    // 리더 스레드가 pty-exit를 내기 전에 먼저 표시해 둔다 (kill 이후 삽입은 늦을 수 있다)
+    if let Ok(mut expected) = rt.expected_exit.lock() {
+        expected.insert(id.clone());
+    }
+    // 잠금 안에서는 map에서 꺼내기만 한다 (B14) — kill·drop을 잠금 아래서 하면
+    // EOF를 맞은 리더 스레드(같은 잠금 대기)와 교착하고 모든 pty_write/resize가 따라 멈춘다
+    let removed = state.0.lock().map_err(|e| e.to_string())?.remove(&id);
+    match removed {
+        Some(s) => {
+            teardown_session_in_background(s);
+            let ws = id.split('@').nth(1).unwrap_or("default").to_string();
+            let _ = store_state.0.sender().send(StoreMsg::Event {
+                ws,
+                id: Some(id.clone()),
+                kind: "session-kill".into(),
+                message: "사용자 요청으로 종료".into(),
+            });
         }
-        if let Some(j) = &s.job {
-            j.terminate(); // FR-C-05 — 자식 트리까지 즉시 정리
+        None => {
+            // 세션이 없으면 표시를 되돌린다 — 남겨두면 미래의 정당한 dead 알림 하나를 삼킨다
+            if let Ok(mut expected) = rt.expected_exit.lock() {
+                expected.remove(&id);
+            }
         }
-        let _ = s.child.kill();
-        let ws = id.split('@').nth(1).unwrap_or("default").to_string();
-        let _ = store_state.0.sender().send(StoreMsg::Event {
-            ws,
-            id: Some(id.clone()),
-            kind: "session-kill".into(),
-            message: "사용자 요청으로 종료".into(),
-        });
     }
     Ok(())
 }
@@ -750,11 +773,9 @@ fn agent_spawn(
 fn kill_pty_for_restart(app: &AppHandle, id: &str) {
     let state: State<PtyState> = app.state();
     let removed = state.0.lock().ok().and_then(|mut s| s.remove(id));
-    if let Some(mut s) = removed {
-        if let Some(j) = &s.job {
-            j.terminate(); // FR-C-05 — 재시작도 트리째 정리 후 새로 띄운다
-        }
-        let _ = s.child.kill();
+    if let Some(s) = removed {
+        // FR-C-05 — 재시작도 트리째 정리 후 새로 띄운다. 정리는 백그라운드로 (B14 — 메인 스레드 블록 방지)
+        teardown_session_in_background(s);
     }
 }
 

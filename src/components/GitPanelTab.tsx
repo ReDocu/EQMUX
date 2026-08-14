@@ -160,7 +160,9 @@ export function GitPanelTab() {
   };
 
   const openDiff = () => {
-    setView({ kind: "gitdiff", wsId: ws()?.id });
+    // 진입 시점 뷰를 기억한다 — diff의 ✕/Esc가 관제 센터가 아니라 여기로 복귀한다 (U11)
+    const cur = view();
+    setView({ kind: "gitdiff", wsId: ws()?.id, back: cur.kind === "gitdiff" ? cur.back : cur });
     setPanelOpen(false);
   };
 
@@ -264,9 +266,9 @@ export function GitPanelTab() {
         <span class="st-dead">−{g().deleted}</span>
       </div>
 
-      {/* diff 진입 단일화 — 이 버튼 하나뿐이다 (시안 §05) */}
+      {/* diff 진입 단일화 — 이 버튼 하나뿐이다 (시안 §05). 이름은 보이는 그대로 (U9) */}
       <button class="card gitp-diff-cta" onClick={openDiff}>
-        <span>{g().changed}개 변경 파일을 3분할 diff로 검토</span>
+        <span>{g().changed}개 변경 파일을 나란히 비교(diff)로 검토</span>
         <span class="mono">→</span>
       </button>
 
@@ -412,7 +414,8 @@ export function GitPanelTab() {
                 { label: "메시지 복사", action: () => clipWriteText(m().c.message) },
               ],
               [
-                { label: "3분할 diff 열기", action: openDiff },
+                // 커밋 기준 diff가 아니다 (B11) — 여는 것은 언제나 HEAD↔워크트리 비교
+                { label: "워크트리 diff 열기", action: openDiff },
                 {
                   label: "이 커밋에서 워크트리 생성…",
                   disabled: !isTauri(),

@@ -1,12 +1,19 @@
 // Git Diff (AXXhV) — 변경 파일 사이드바 + HEAD ↔ 워크트리 나란히 비교.
+// 양측 행은 1:1 정렬돼 있고(B8 — pad 필러) 세로·가로 스크롤이 동기화된다.
+// 변경 내비게이션(U10): n/p 점프 · 스크롤바 마커 · ±3줄 문맥 접기 · ↑↓ 파일 이동.
 // Tauri에서는 실측 (PRD H) · 읽기 전용이다 — 스테이지·커밋·편집은 터미널에서 사람이 한다
 // (다른 패널과 같은 원칙). 브라우저 dev에서는 기존 목 데이터를 보여준다.
-import { createEffect, createSignal, For, on, onMount, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
+import type { JSX } from "solid-js";
 import { diffChangedFiles, diffFile, gitOverview } from "../backend/git";
-import type { ChangedFile, FileDiff } from "../backend/git";
-import { backend, DIFF_BASE, DIFF_BRANCH, DIFF_CURRENT, DIFF_FILES } from "../backend/mock";
+import type { ChangedFile, DiffLine, FileDiff } from "../backend/git";
+import { backend, DIFF_BRANCH, DIFF_CONTENT, DIFF_FILES, GIT_STATE } from "../backend/mock";
 import { isTauri } from "../backend/pty";
-import { setView, tick } from "../state";
+import { openPanel, setView, tick, view } from "../state";
+
+const FOLD_CONTEXT = 3; // 변경 주변에 남기는 문맥 줄 수 (U10)
+
+type DispRow = { type: "line"; i: number } | { type: "fold"; start: number; end: number };
 
 export function GitDiffEditor(props: { wsId?: string }) {
   const ws = () => {
@@ -24,20 +31,36 @@ export function GitDiffEditor(props: { wsId?: string }) {
   );
   const [selected, setSelected] = createSignal<string | undefined>(undefined);
   const [query, setQuery] = createSignal("");
+  const [statusFilter, setStatusFilter] = createSignal<"A" | "M" | "D" | undefined>(undefined); // U12
   const [real, setReal] = createSignal<FileDiff | undefined>(undefined);
   const [diffErr, setDiffErr] = createSignal<string | undefined>(undefined);
+  const [filesErr, setFilesErr] = createSignal(false); // 목록 읽기 실패 ≠ 깨끗한 워크트리 (B9)
+  const [diffLoading, setDiffLoading] = createSignal(false); // 읽는 중 ≠ 내용 없음 (B10)
   const [branch, setBranch] = createSignal<string>(isTauri() ? "—" : DIFF_BRANCH.name);
   const [sync, setSync] = createSignal<{ ahead: number; behind: number }>(
     isTauri() ? { ahead: 0, behind: 0 } : { ahead: DIFF_BRANCH.ahead, behind: DIFF_BRANCH.behind },
   );
+  const [blockIdx, setBlockIdx] = createSignal(-1); // 현재 변경 블록 (U10)
+  const [foldCtx, setFoldCtx] = createSignal(true); // 기본은 ±3줄 문맥만 — 전체 문맥은 토글 (U10)
+  const [expandedFolds, setExpandedFolds] = createSignal<number[]>([]);
+  const [wrap, setWrap] = createSignal(false); // 줄바꿈 토글 (U13)
+
+  /** 파일 선택 — 내비게이션·접기 상태는 파일별이므로 함께 초기화한다 */
+  const selectFile = (path: string | undefined) => {
+    setSelected(path);
+    setBlockIdx(-1);
+    setExpandedFolds([]);
+  };
 
   const loadFiles = async () => {
     const target = ws();
     if (!isTauri() || !target) return;
-    const list = (await diffChangedFiles(target.path)) ?? [];
+    const result = await diffChangedFiles(target.path);
+    setFilesErr(result === undefined); // 실패(비 저장소·git 없음)를 빈 목록과 구분한다 (B9)
+    const list = result ?? [];
     setFiles(list);
     if (!selected() || !list.some((f) => f.path === selected())) {
-      setSelected(list[0]?.path);
+      selectFile(list[0]?.path);
     }
     void gitOverview(target.path).then((o) => {
       if (o) {
@@ -47,40 +70,262 @@ export function GitDiffEditor(props: { wsId?: string }) {
     });
   };
 
+  let diffReq = 0; // 빠른 파일 전환 시 뒤늦은 응답이 최신 선택을 덮지 않게 하는 토큰
   const loadDiff = async () => {
     const target = ws();
     const path = selected();
     setReal(undefined);
     setDiffErr(undefined);
     if (!isTauri() || !target || !path) return;
+    const req = ++diffReq;
+    setDiffLoading(true);
     const d = await diffFile(target.path, path);
+    if (req !== diffReq) return;
+    setDiffLoading(false);
     if (typeof d === "string") setDiffErr(d);
     else setReal(d);
   };
 
   onMount(() => {
     if (!isTauri()) {
-      setSelected(DIFF_FILES[0]?.path);
+      selectFile(DIFF_FILES[0]?.path);
       return;
     }
     createEffect(on(() => ws()?.id, () => void loadFiles()));
     createEffect(on(selected, () => void loadDiff()));
   });
 
-  const filtered = () => files().filter((f) => !query().trim() || f.path.includes(query().trim()));
+  // 새로 읽기 — 무반응을 두지 않는다 (B12): 목 모드는 사유를 말하고, 실모드는 진행을 보인다
+  const [refreshing, setRefreshing] = createSignal(false);
+  const [refreshNote, setRefreshNote] = createSignal<string | undefined>(undefined);
+  const refresh = async () => {
+    if (!isTauri()) {
+      setRefreshNote("목 데이터 — 실측 없음");
+      setTimeout(() => setRefreshNote(undefined), 1800);
+      return;
+    }
+    setRefreshing(true);
+    await loadFiles();
+    setRefreshing(false);
+  };
+
+  // 필터 — 대소문자 무시 + 상태(A/M/D) 칩 (U12)
+  const filtered = () => {
+    const q = query().trim().toLowerCase();
+    return files().filter(
+      (f) => (!q || f.path.toLowerCase().includes(q)) && (!statusFilter() || f.status === statusFilter()),
+    );
+  };
   const stat = () => files().find((f) => f.path === selected())?.stat ?? "";
 
-  // 목 폴백 라인 (브라우저 dev)
-  const mockIsSession = () => selected() === "src/auth/session.ts";
-  const baseLines = () => {
-    if (isTauri()) return real()?.base ?? [];
-    return mockIsSession() ? DIFF_BASE.lines : [];
+  /** 파일 목록 ↑↓ 이동 (U10) — 필터된 목록 안에서 순환 */
+  const moveFile = (dir: 1 | -1) => {
+    const list = filtered();
+    if (!list.length) return;
+    const idx = list.findIndex((f) => f.path === selected());
+    selectFile(list[(idx + dir + list.length) % list.length]?.path ?? list[0].path);
   };
-  const curLines = () => {
-    if (isTauri()) return real()?.current ?? [];
-    return mockIsSession() ? DIFF_CURRENT.lines : [];
+
+  // 목 폴백 라인 (브라우저 dev) — 모든 변경 파일이 파일별 내용을 갖는다 (B5)
+  const mockDiff = () => (selected() ? DIFF_CONTENT[selected()!] : undefined);
+  const baseLines = (): DiffLine[] => (isTauri() ? (real()?.base ?? []) : (mockDiff()?.base ?? []));
+  const curLines = (): DiffLine[] => (isTauri() ? (real()?.current ?? []) : (mockDiff()?.current ?? []));
+  // BASE = HEAD 짧은 해시 — 목에서는 커밋 그래프 최상단에서 파생해 화면 간 해시가 일치한다 (B13)
+  const baseLabel = () => (isTauri() ? (real()?.baseLabel ?? "HEAD") : GIT_STATE.commits[0].hash);
+
+  const rowCount = () => Math.max(baseLines().length, curLines().length);
+  const isChanged = (i: number) => !!(baseLines()[i]?.kind || curLines()[i]?.kind);
+
+  /** 연속한 변경 행 묶음 — 점프·마커의 단위 (U10) */
+  const changeBlocks = createMemo(() => {
+    const blocks: { start: number; end: number }[] = [];
+    let open = false;
+    for (let i = 0; i < rowCount(); i++) {
+      if (isChanged(i)) {
+        if (open) blocks[blocks.length - 1].end = i;
+        else blocks.push({ start: i, end: i });
+        open = true;
+      } else open = false;
+    }
+    return blocks;
+  });
+
+  /** 표시 행 — 접기 모드에서는 변경 ±3줄 밖의 ctx 런을 fold 행 하나로 접는다 (U10) */
+  const display = createMemo<{ rows: DispRow[]; pos: Map<number, number> }>(() => {
+    const n = rowCount();
+    const rows: DispRow[] = [];
+    const pos = new Map<number, number>();
+    const push = (i: number) => {
+      pos.set(i, rows.length);
+      rows.push({ type: "line", i });
+    };
+    if (!foldCtx()) {
+      for (let i = 0; i < n; i++) push(i);
+      return { rows, pos };
+    }
+    const keep = new Array<boolean>(n).fill(false);
+    for (const b of changeBlocks()) {
+      for (let j = Math.max(0, b.start - FOLD_CONTEXT); j <= Math.min(n - 1, b.end + FOLD_CONTEXT); j++) keep[j] = true;
+    }
+    let i = 0;
+    while (i < n) {
+      if (keep[i]) {
+        push(i);
+        i++;
+        continue;
+      }
+      let j = i;
+      while (j < n && !keep[j]) j++;
+      // 두 줄 미만 접기는 접는 값이 없다 — 그대로 보여준다
+      if (expandedFolds().includes(i) || j - i < 2) {
+        for (let k = i; k < j; k++) push(k);
+      } else {
+        rows.push({ type: "fold", start: i, end: j - 1 });
+      }
+      i = j;
+    }
+    return { rows, pos };
+  });
+
+  // 양 페인 스크롤 동기화 (B8·U13) — 행이 1:1 정렬돼 있으므로 세로·가로 모두 그대로 미러링한다
+  let baseEl: HTMLDivElement | undefined;
+  let curEl: HTMLDivElement | undefined;
+  let syncing = false;
+  const mirror = (from?: HTMLDivElement, to?: HTMLDivElement) => {
+    if (!from || !to || syncing) return;
+    syncing = true;
+    to.scrollTop = from.scrollTop;
+    to.scrollLeft = from.scrollLeft;
+    requestAnimationFrame(() => (syncing = false));
   };
-  const baseLabel = () => (isTauri() ? (real()?.baseLabel ?? "HEAD") : "8f31c2a");
+
+  /** idx번째 변경 블록으로 점프 (U10) — 순환하며, 화면 위 1/3 지점에 놓는다 */
+  const jumpTo = (idx: number) => {
+    const blocks = changeBlocks();
+    if (!blocks.length) return;
+    const i = ((idx % blocks.length) + blocks.length) % blocks.length;
+    setBlockIdx(i);
+    const host = curLines().length ? curEl : baseEl;
+    const row = host?.querySelector<HTMLElement>(`.gde-line[data-row="${blocks[i].start}"]`);
+    if (host && row) {
+      host.scrollTop = Math.max(0, row.offsetTop - host.clientHeight / 3);
+      mirror(host, host === curEl ? baseEl : curEl);
+    }
+  };
+
+  /** 짝지어진 del↔add 행에서 공통 접두·접미를 제외한 실제 변경 구간을 강조한다 (U13) */
+  const intraSpans = (text: string, other?: string): JSX.Element => {
+    if (other === undefined) return text;
+    const max = Math.min(text.length, other.length);
+    let p = 0;
+    while (p < max && text[p] === other[p]) p++;
+    let s = 0;
+    while (s < max - p && text[text.length - 1 - s] === other[other.length - 1 - s]) s++;
+    const mid = text.slice(p, text.length - s);
+    if (!mid || mid === text) return text;
+    return (
+      <>
+        {text.slice(0, p)}
+        <span class="gde-hl">{mid}</span>
+        {text.slice(text.length - s)}
+      </>
+    );
+  };
+
+  /** 반대편에서 같은 행에 짝지어진 텍스트 — del↔add 쌍일 때만 */
+  const pairText = (i: number, mine: "del" | "add") => {
+    const other = (mine === "del" ? curLines() : baseLines())[i];
+    return other && other.kind === (mine === "del" ? "add" : "del") ? other.text : undefined;
+  };
+
+  // 줄바꿈 모드 (U13) — 좌우 행 높이를 짝의 최대값으로 맞춰 정렬(B8)이 깨지지 않게 한다
+  const equalize = () => {
+    if (!baseEl || !curEl) return;
+    const a = baseEl.querySelectorAll<HTMLElement>(".gde-line");
+    const b = curEl.querySelectorAll<HTMLElement>(".gde-line");
+    const n = Math.min(a.length, b.length);
+    for (let i = 0; i < n; i++) {
+      a[i].style.minHeight = "";
+      b[i].style.minHeight = "";
+    }
+    if (!wrap()) return;
+    for (let i = 0; i < n; i++) {
+      const h = Math.max(a[i].getBoundingClientRect().height, b[i].getBoundingClientRect().height);
+      a[i].style.minHeight = `${h}px`;
+      b[i].style.minHeight = `${h}px`;
+    }
+  };
+  createEffect(on([wrap, () => display().rows.length, selected, real], () => requestAnimationFrame(equalize)));
+  onMount(() => {
+    const ro = new ResizeObserver(() => equalize());
+    if (curEl) ro.observe(curEl);
+    onCleanup(() => ro.disconnect());
+  });
+
+  /** 닫기 — 진입 시점 뷰로 복귀하고 git 패널 문맥도 되살린다 (U11) */
+  const close = () => {
+    const v = view();
+    const back = v.kind === "gitdiff" ? v.back : undefined;
+    setView(back ?? { kind: "control" });
+    if (back) openPanel("git");
+  };
+
+  // 키보드 (U10·U11) — n/p 변경 점프 · ↑↓ 파일 이동 · Esc 닫기. 입력 필드에서는 양보한다
+  onMount(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT")) return;
+      if (e.key === "Escape") close();
+      else if (e.key === "n") jumpTo(blockIdx() + 1);
+      else if (e.key === "p") jumpTo(blockIdx() - 1);
+      else if (e.key === "ArrowDown") {
+        e.preventDefault();
+        moveFile(1);
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        moveFile(-1);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    onCleanup(() => window.removeEventListener("keydown", onKey));
+  });
+
+  /** 한 페인의 표시 행 렌더 — fold 행은 양 페인에 같은 자리로 들어가 정렬이 유지된다 */
+  const paneRows = (side: () => DiffLine[], mine: "del" | "add") => (
+    <For each={display().rows}>
+      {(r) =>
+        r.type === "fold" ? (
+          <button class="gde-fold mono" onClick={() => setExpandedFolds([...expandedFolds(), r.start])}>
+            ⋯ {r.end - r.start + 1}줄 접힘 — 펼치기
+          </button>
+        ) : (
+          <Show when={side()[r.i]} keyed>
+            {(l) => (
+              <div
+                class="gde-line"
+                data-row={r.i}
+                classList={{
+                  del: mine === "del" && l.kind === "del",
+                  add: mine === "add" && l.kind === "add",
+                  pad: l.kind === "pad",
+                  cursor:
+                    blockIdx() >= 0 &&
+                    !!changeBlocks()[blockIdx()] &&
+                    r.i >= changeBlocks()[blockIdx()].start &&
+                    r.i <= changeBlocks()[blockIdx()].end,
+                }}
+              >
+                <span class="gde-gutter">{l.no ?? ""}</span>
+                <span class="gde-text">
+                  {l.kind === mine ? intraSpans(l.text, pairText(r.i, mine)) : l.text}
+                </span>
+              </div>
+            )}
+          </Show>
+        )
+      }
+    </For>
+  );
 
   return (
     <div class="screen gde">
@@ -104,13 +349,28 @@ export function GitDiffEditor(props: { wsId?: string }) {
             value={query()}
             onInput={(e) => setQuery(e.currentTarget.value)}
           />
+          {/* 상태 칩 (U12) — 다시 누르면 해제 */}
+          <div class="gde-filter-chips">
+            <For each={["A", "M", "D"] as const}>
+              {(st) => (
+                <button
+                  class="btn ghost mono"
+                  classList={{ on: statusFilter() === st }}
+                  title={st === "A" ? "새 파일만" : st === "M" ? "수정만" : "삭제만"}
+                  onClick={() => setStatusFilter(statusFilter() === st ? undefined : st)}
+                >
+                  {st}
+                </button>
+              )}
+            </For>
+          </div>
           <div class="gde-files">
             <For each={filtered()}>
               {(f) => (
                 <button
                   class="gde-file"
                   classList={{ selected: selected() === f.path }}
-                  onClick={() => setSelected(f.path)}
+                  onClick={() => selectFile(f.path)}
                 >
                   <span
                     class="gde-st mono"
@@ -127,15 +387,26 @@ export function GitDiffEditor(props: { wsId?: string }) {
                 </button>
               )}
             </For>
-            <Show when={filtered().length === 0}>
+            <Show when={filesErr()}>
+              {/* 실패는 깨끗한 워크트리가 아니다 (B9) — git 패널과 같은 오류 카드로 말한다 */}
+              <div class="card conn-error mono" style={{ margin: "8px", "font-size": "11px" }}>
+                <div>변경 파일을 읽을 수 없습니다 — git 저장소가 아니거나 git CLI가 없습니다</div>
+                <button class="btn" style={{ "margin-top": "6px", width: "100%" }} onClick={() => void loadFiles()}>
+                  다시 시도
+                </button>
+              </div>
+            </Show>
+            <Show when={!filesErr() && filtered().length === 0}>
               <div class="muted" style={{ padding: "10px", "font-size": "11px" }}>
-                {isTauri() ? "변경된 파일이 없습니다 — 워크트리가 깨끗합니다" : "검색 결과 없음"}
+                {isTauri() && !query().trim() && !statusFilter()
+                  ? "변경된 파일이 없습니다 — 워크트리가 깨끗합니다"
+                  : "검색 결과 없음"}
               </div>
             </Show>
           </div>
           <div class="gde-sidebar-actions">
-            <button class="btn" style={{ flex: 1 }} onClick={() => void loadFiles()}>
-              ⟳ 새로 읽기
+            <button class="btn" style={{ flex: 1 }} disabled={refreshing()} onClick={() => void refresh()}>
+              {refreshing() ? "읽는 중…" : refreshNote() ?? "⟳ 새로 읽기"}
             </button>
           </div>
         </div>
@@ -148,14 +419,36 @@ export function GitDiffEditor(props: { wsId?: string }) {
                 {selected()?.split("/").join(" / ") ?? "파일을 선택하세요"}
               </div>
               <div class="mono muted" style={{ "font-size": "10px" }}>
-                COMPARE · {baseLabel()} ({branch()}) ↔ WORKTREE · {stat()}
+                COMPARE · {baseLabel()} ({branch()}) ↔ WORKTREE · {stat()} · 읽기 전용 — 커밋·편집은 터미널에서
               </div>
             </div>
             <div class="gde-toolbar-actions">
+              {/* 변경 내비게이션 (U10) */}
               <span class="mono muted" style={{ "font-size": "10px", "align-self": "center" }}>
-                읽기 전용 — 스테이지·커밋·편집은 터미널에서
+                {changeBlocks().length
+                  ? `변경 ${blockIdx() >= 0 ? Math.min(blockIdx() + 1, changeBlocks().length) : "–"}/${changeBlocks().length}`
+                  : "변경 없음"}
               </span>
-              <button class="btn ghost" onClick={() => setView({ kind: "control" })}>
+              <button class="btn ghost" title="이전 변경 (p)" onClick={() => jumpTo(blockIdx() - 1)}>
+                ↑
+              </button>
+              <button class="btn ghost" title="다음 변경 (n)" onClick={() => jumpTo(blockIdx() + 1)}>
+                ↓
+              </button>
+              <button
+                class="btn ghost"
+                title={foldCtx() ? "전체 문맥 보기" : `변경 ±${FOLD_CONTEXT}줄만 보기`}
+                onClick={() => {
+                  setFoldCtx(!foldCtx());
+                  setExpandedFolds([]);
+                }}
+              >
+                {foldCtx() ? "전체 문맥" : "변경만"}
+              </button>
+              <button class="btn ghost" classList={{ on: wrap() }} title="줄바꿈 (U13)" onClick={() => setWrap(!wrap())}>
+                ↩ 줄바꿈
+              </button>
+              <button class="btn ghost" title="닫기 (Esc) — 진입한 화면으로 복귀" onClick={close}>
                 ✕
               </button>
             </div>
@@ -180,20 +473,24 @@ export function GitDiffEditor(props: { wsId?: string }) {
                 </div>
                 <span class="badge">🔒 읽기 전용</span>
               </div>
-              <div class="gde-code mono">
-                <For each={baseLines()}>
-                  {(l) => (
-                    <div class="gde-line" classList={{ del: l.kind === "del" }}>
-                      <span class="gde-gutter">{l.no}</span>
-                      <span class="gde-text">{l.text}</span>
+              <div class="gde-codewrap">
+                <div
+                  class="gde-code mono"
+                  classList={{ wrap: wrap() }}
+                  ref={baseEl}
+                  onScroll={() => mirror(baseEl, curEl)}
+                >
+                  {paneRows(baseLines, "del")}
+                  {/* 빈 상태를 침묵시키지 않는다 (B5) — 읽는 중(B10)·새 파일·내용 불가를 구분해 말한다 */}
+                  <Show when={diffLoading()}>
+                    <div class="muted" style={{ padding: "10px", "font-size": "11px" }}>읽는 중…</div>
+                  </Show>
+                  <Show when={!diffLoading() && selected() && baseLines().length === 0}>
+                    <div class="muted" style={{ padding: "10px", "font-size": "11px" }}>
+                      {curLines().length > 0 ? "BASE 없음 — 새 파일입니다" : "이 파일의 내용을 표시할 수 없습니다"}
                     </div>
-                  )}
-                </For>
-                <Show when={baseLines().length === 0}>
-                  <div class="muted" style={{ padding: "10px", "font-size": "11px" }}>
-                    {isTauri() && real() ? "BASE 없음 — 새 파일입니다" : ""}
-                  </div>
-                </Show>
+                  </Show>
+                </div>
               </div>
             </div>
 
@@ -209,20 +506,45 @@ export function GitDiffEditor(props: { wsId?: string }) {
                 </div>
                 <span class="badge">🔒 읽기 전용</span>
               </div>
-              <div class="gde-code mono">
-                <For each={curLines()}>
-                  {(l) => (
-                    <div class="gde-line" classList={{ add: l.kind === "add" }}>
-                      <span class="gde-gutter">{l.no}</span>
-                      <span class="gde-text">{l.text}</span>
+              <div class="gde-codewrap">
+                <div
+                  class="gde-code mono"
+                  classList={{ wrap: wrap() }}
+                  ref={curEl}
+                  onScroll={() => mirror(curEl, baseEl)}
+                >
+                  {paneRows(curLines, "add")}
+                  <Show when={diffLoading()}>
+                    <div class="muted" style={{ padding: "10px", "font-size": "11px" }}>읽는 중…</div>
+                  </Show>
+                  <Show when={!diffLoading() && selected() && curLines().length === 0}>
+                    <div class="muted" style={{ padding: "10px", "font-size": "11px" }}>
+                      {baseLines().length > 0 ? "워크트리에 없음 — 삭제된 파일입니다" : "이 파일의 내용을 표시할 수 없습니다"}
                     </div>
-                  )}
-                </For>
-                <Show when={curLines().length === 0}>
-                  <div class="muted" style={{ padding: "10px", "font-size": "11px" }}>
-                    {isTauri() && real() ? "워크트리에 없음 — 삭제된 파일입니다" : ""}
-                  </div>
-                </Show>
+                  </Show>
+                </div>
+                {/* 스크롤바 변경 위치 마커 (U10) — 클릭하면 그 변경으로 점프 */}
+                <div class="gde-markers">
+                  <For each={changeBlocks()}>
+                    {(b, bi) => {
+                      const d = () => display();
+                      const total = () => Math.max(1, d().rows.length);
+                      const top = () => ((d().pos.get(b.start) ?? 0) / total()) * 100;
+                      const h = () =>
+                        Math.max((((d().pos.get(b.end) ?? 0) - (d().pos.get(b.start) ?? 0) + 1) / total()) * 100, 1.5);
+                      const hasAdd = () => curLines().slice(b.start, b.end + 1).some((l) => l?.kind === "add");
+                      return (
+                        <button
+                          class="gde-marker"
+                          classList={{ addm: hasAdd(), delm: !hasAdd(), active: bi() === blockIdx() }}
+                          style={{ top: `${top()}%`, height: `${h()}%` }}
+                          title={`변경 ${bi() + 1}로 이동`}
+                          onClick={() => jumpTo(bi())}
+                        />
+                      );
+                    }}
+                  </For>
+                </div>
               </div>
             </div>
           </div>
@@ -230,11 +552,12 @@ export function GitDiffEditor(props: { wsId?: string }) {
           <div class="gde-statusbar mono">
             <div class="gde-status-left">
               <span class="muted">BASE {baseLabel()} · READ ONLY</span>
-              <span>
+              {/* 숫자는 위치로 이어진다 (U10) — 클릭 시 첫 변경으로 점프 */}
+              <button class="gde-stat-jump mono" title="첫 변경으로 이동" onClick={() => jumpTo(0)}>
                 WORKTREE · {curLines().filter((l) => l.kind === "add").length} 추가 ·{" "}
                 {baseLines().filter((l) => l.kind === "del").length} 삭제
                 <Show when={real()?.truncated}> · 3,000줄에서 잘림</Show>
-              </span>
+              </button>
             </div>
             <span class="muted">{isTauri() ? "git diff -U999999 실측" : "목 데이터"}</span>
           </div>

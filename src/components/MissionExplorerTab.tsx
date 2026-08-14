@@ -61,8 +61,26 @@ export function MissionExplorerTab() {
     createEffect(on(() => ws()?.id, () => void loadTree()));
   });
 
+  // 브라우저 dev — 정적 목 트리에 이 워크스페이스의 임무 파일을 실측(MISSIONS)으로 합친다.
+  // 임무 생성이 곧 파일 생성이라는 계약(FR-E-51)이 목에서도 보이게 한다 (B6).
+  const mockTree = () => {
+    tick();
+    const wsId = ws()?.id;
+    const seen = new Set(MOCK_TREE.map((n) => n.rel));
+    const missionNodes: FsNode[] = backend
+      .listMissions()
+      .filter((m) => m.workspaceId === wsId && !seen.has(m.file) && seen.add(m.file))
+      .map((m) => ({ name: m.file.split("/").pop()!, rel: m.file, depth: 2, dir: false }));
+    if (missionNodes.length === 0) return MOCK_TREE;
+    const merged = [...MOCK_TREE];
+    let at = merged.findIndex((n) => n.rel === ".eqmux/missions") + 1;
+    while (at < merged.length && merged[at].rel.startsWith(".eqmux/missions/")) at++;
+    merged.splice(at, 0, ...missionNodes);
+    return merged;
+  };
+
   const tree = () => {
-    const list = isTauri() ? (nodes() ?? []) : MOCK_TREE;
+    const list = isTauri() ? (nodes() ?? []) : mockTree();
     const q = query().trim();
     return q ? list.filter((n) => n.name.includes(q)) : list;
   };

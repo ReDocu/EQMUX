@@ -13,7 +13,7 @@ export type View =
   | { kind: "composition"; wsId: string } // 레인 01 — 팀 편성
   | { kind: "roles" } // 역할 라이브러리 (화면 #7)
   | { kind: "missions"; wsId: string } // 임무 배정 (화면 #8)
-  | { kind: "gitdiff"; wsId?: string } // Git Diff & Editor (AXXhV) — wsId 없으면 활성 워크스페이스
+  | { kind: "gitdiff"; wsId?: string; back?: View } // Git Diff (AXXhV) — wsId 없으면 활성 워크스페이스, ✕/Esc는 back으로 복귀 (U11)
   | { kind: "settings" };
 
 export type PanelTab = "conversation" | "git" | "ports" | "logs" | "browser";
@@ -42,7 +42,19 @@ export const PANE_LAYOUTS: { key: PaneLayout; name: string; desc: string }[] = [
   { key: "main-right", name: "메인 + 우측 스택", desc: "첫 세션 크게, 나머지 우측" },
   { key: "main-bottom", name: "메인 + 하단 나열", desc: "첫 세션 크게, 나머지 하단" },
 ];
-export const [paneLayout, setPaneLayout] = createSignal<PaneLayout>("grid-row");
+/** 배치는 워크스페이스별이다 (U7) — EQMux에서 바꾼 배치가 Atlas까지 따라가지 않는다.
+ *  paneLayout()/setPaneLayout()은 기존 시그니처를 유지하고 현재 워크스페이스 탭에 바인딩된다. */
+export const [paneLayouts, setPaneLayouts] = createSignal<Partial<Record<string, PaneLayout>>>({});
+const layoutScope = () => {
+  const v = view();
+  return v.kind === "workspace" ? v.id : "_default";
+};
+export function paneLayout(): PaneLayout {
+  return paneLayouts()[layoutScope()] ?? "grid-row";
+}
+export function setPaneLayout(l: PaneLayout): void {
+  setPaneLayouts({ ...paneLayouts(), [layoutScope()]: l });
+}
 export const [layoutPickerOpen, setLayoutPickerOpen] = createSignal(false);
 
 /** 분할선 드래그 (PRD B 잔여, M30) — 배치별 트랙 비율. 축이 있는 배치만 해당 축을 갖는다.

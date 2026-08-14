@@ -17,7 +17,7 @@ import { flagsToString, sessionDisplayName, translatePermissions } from "../type
 
 const PERM_KEYS: (keyof Permissions)[] = ["write", "commit", "push"];
 
-export function SessionDetailPanel(props: { session: Session }) {
+export function SessionDetailPanel(props: { session: Session; onClose?: () => void }) {
   const s = () => props.session;
   // 상세를 열면 미확인 해제 (FR-G-44) — markSeen은 변경 없으면 방송하지 않아 재귀가 없다
   createEffect(() => {
@@ -166,6 +166,8 @@ export function SessionDetailPanel(props: { session: Session }) {
 
   return (
     <div class="detail">
+      {/* 드로어 상단 고정 (U1) — 스크롤해도 누구의 상세인지 남는다 */}
+      <div class="detail-top">
       <Eyebrow>SELECTED SESSION</Eyebrow>
       <div class="detail-head">
         <div>
@@ -185,6 +187,7 @@ export function SessionDetailPanel(props: { session: Session }) {
           </div>
         </div>
         <StatusLabel session={s()} />
+      </div>
       </div>
 
       <Show when={s().status === "waiting"}>
@@ -317,6 +320,22 @@ export function SessionDetailPanel(props: { session: Session }) {
         </div>
       </Show>
 
+      {/* 재시작 필요 (E11′) — 원인(권한 변경) 바로 아래에 선다. 인과가 한 화면에 보인다 (U1) */}
+      <Show when={s().restartNeeded}>
+        <div class="card restart-card">
+          <span class="mono st-waiting" style={{ "font-weight": 700 }}>
+            권한 변경 감지 · 재시작 필요
+          </span>
+          <button
+            class="btn"
+            title="재개 기반 재시작 — 대화를 잃지 않는다 (FR-D-26)"
+            onClick={() => void doRestart()}
+          >
+            대화 유지 재시작
+          </button>
+        </div>
+      </Show>
+
       {/* 역할 CRUD — 기본 터미널엔 부여, 역할 세션엔 변경·해제. 권한 변경은 재시작으로 이어진다. */}
       <Show
         when={s().personaId}
@@ -365,20 +384,6 @@ export function SessionDetailPanel(props: { session: Session }) {
         </div>
       </Show>
 
-      <Show when={s().restartNeeded}>
-        <div class="card restart-card">
-          <span class="mono st-waiting" style={{ "font-weight": 700 }}>
-            권한 변경 감지 · 재시작 필요
-          </span>
-          <button
-            class="btn"
-            title="재개 기반 재시작 — 대화를 잃지 않는다 (FR-D-26)"
-            onClick={() => void doRestart()}
-          >
-            대화 유지 재시작
-          </button>
-        </div>
-      </Show>
         </div>
       </details>
 
@@ -420,7 +425,13 @@ export function SessionDetailPanel(props: { session: Session }) {
       </Show>
 
       <div class="detail-actions">
-        <button class="btn primary" onClick={() => jumpToSession(s().workspaceId, s().id)}>
+        <button
+          class="btn primary"
+          onClick={() => {
+            jumpToSession(s().workspaceId, s().id);
+            props.onClose?.(); // 팝업에서 점프하면 닫는다 — 페인을 보러 가는 동작이다
+          }}
+        >
           페인으로 점프
         </button>
         <button
