@@ -1,6 +1,6 @@
 [package]
 name = "eqmux"
-version = "0.1.0"
+version = "0.2.0"
 description = "EQMUX — 멀티 에이전트 관제 MUX"
 edition = "2021"
 
