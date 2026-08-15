@@ -7,27 +7,23 @@ import type { CastingPreset } from "../backend/library";
 import { autoAssignDefault } from "../backend/missions";
 import { backend } from "../backend/mock";
 import { isTauri } from "../backend/pty";
+import { jobMeta } from "../jobs";
+import type { JobBadgeColor } from "../jobs";
 import { setView } from "../state";
 import { ContextMenu } from "../components/ui";
 import type { MenuGroup } from "../components/ui";
+import { personaTagline } from "../types";
 import type { Permissions } from "../types";
 
-type Slot = { badge: string; badgeColor: "blue" | "purple" | "green" | "amber"; personaId: string; jobId: string };
+type Slot = { badge: string; badgeColor: JobBadgeColor; personaId: string; jobId: string };
 
 // 브라우저 dev 폴백 — Tauri에서는 presets/*.json 실측이 이 목록을 대체한다 (시드와 동일 구성)
 const FALLBACK_PRESETS: CastingPreset[] = [
-  { id: "standard", name: "표준", jobs: ["lead", "impl", "impl", "verify"] },
-  { id: "impl-heavy", name: "집중구현", jobs: ["lead", "impl", "impl", "impl"] },
-  { id: "review-heavy", name: "리뷰중심", jobs: ["impl", "impl", "review", "review"] },
-  { id: "explore", name: "탐색", jobs: ["lead", "impl", "verify", "review"] },
+  { id: "standard", name: "표준", jobs: ["lead", "dev", "dev", "qa"] },
+  { id: "dev-heavy", name: "집중개발", jobs: ["lead", "dev", "dev", "dev"] },
+  { id: "product", name: "제품기획", jobs: ["lead", "plan", "design", "dev"] },
+  { id: "quality", name: "품질", jobs: ["dev", "debug", "qa", "docs"] },
 ];
-
-const BADGES: Record<string, { badge: string; color: Slot["badgeColor"] }> = {
-  lead: { badge: "LEAD", color: "blue" },
-  impl: { badge: "BUILDER", color: "purple" },
-  review: { badge: "REVIEW", color: "green" },
-  verify: { badge: "VERIFY", color: "amber" },
-};
 
 function permText(p: Permissions): string {
   const mark = (b: boolean) => (b ? "✓" : "—");
@@ -39,8 +35,8 @@ export function TeamCasting(props: { wsId: string }) {
   const persona = (id: string) => backend.listPersonas().find((p) => p.id === id);
   const job = (id: string) => backend.listJobs().find((j) => j.id === id);
 
-  const badgeFor = (jobId: string): { badge: string; color: Slot["badgeColor"] } =>
-    BADGES[jobId] ?? { badge: (job(jobId)?.name ?? jobId).toUpperCase(), color: "blue" };
+  // 직무 8종 고정 — 배지·색은 jobs.ts JOB_META가 단일 원본 (알 수 없는 id는 이름 대문자 + 파랑)
+  const badgeFor = (jobId: string): { badge: string; color: Slot["badgeColor"] } => jobMeta(jobId, job(jobId)?.name);
 
   // 프리셋 = 직무 구성 → 페르소나는 라이브러리 순서대로 중복 없이 채운다.
   // 페르소나가 부족하면 채울 수 있는 만큼만 (세션 상한 4는 프리셋 로드에서 이미 잘려 있다).
@@ -151,7 +147,10 @@ export function TeamCasting(props: { wsId: string }) {
                   </div>
                 </div>
                 <div class="muted" style={{ "font-size": "11px" }}>
-                  {persona(slot.personaId)?.hint}
+                  {(() => {
+                    const pp = persona(slot.personaId);
+                    return pp ? personaTagline(pp) : "";
+                  })()}
                 </div>
                 <div class="card inset" style={{ padding: "6px 10px", "margin-top": "auto" }}>
                   <div class="eyebrow">실행 권한</div>

@@ -313,11 +313,16 @@ mod tests {
             persona: "kai".into(),
             persona_name: "카이".into(),
             hint: "전체 구조와 위험을 먼저 본다".into(),
+            tone: String::new(),
+            personality: String::new(),
             job: "lead".into(),
             job_name: "리드".into(),
             permissions: roles::RolePermissions { write: true, commit: true, push: false },
             responsibility: "전체 구조 · 최종 판단".into(),
             forbidden: "원격 push".into(),
+            character_path: None,
+            character_name: None,
+            character_source: None,
             teammates: vec![roles::Teammate { slot: 1, name: "카이".into(), job_name: "리드".into(), me: true }],
         }
     }

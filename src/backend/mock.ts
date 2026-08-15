@@ -106,34 +106,63 @@ export interface TranscriptTurn {
 
 // ── 목 데이터: docs/design.pen의 카피를 그대로 사용 (Academy 팀 시나리오) ──
 
+// 직무 8종 고정 로스터 — 원본은 Rust library.rs fixed_jobs()와 src/jobs.ts (id·배지·색 1:1)
 export const JOBS: Job[] = createMutable<Job[]>([
   {
     id: "lead",
     name: "리드",
-    permissions: { write: true, commit: true, push: false },
-    responsibility: "전체 구조 · 임무 분해 · 최종 판단",
-    forbidden: "검증 없이 완료 선언 · 원격 push",
+    permissions: { write: true, commit: true, push: true },
+    responsibility: "전체 구조 · 임무 분해 · 통합 · 최종 판단",
+    forbidden: "검증 없이 완료 선언 · 검증 없이 push",
   },
   {
-    id: "impl",
-    name: "구현",
+    id: "plan",
+    name: "기획",
     permissions: { write: true, commit: false, push: false },
-    responsibility: "작은 단위 구현과 자체 검증",
-    forbidden: "검증 없이 커밋 요청",
+    responsibility: "요구 정리 · 조사 · 기획 문서(PRD)",
+    forbidden: "근거 없는 요구 확정 · 코드 수정",
   },
   {
-    id: "verify",
-    name: "검증",
-    permissions: { write: false, commit: false, push: false },
-    responsibility: "테스트 · 증거 수집",
-    forbidden: "증거 없는 통과 판정",
+    id: "dev",
+    name: "개발",
+    permissions: { write: true, commit: false, push: false },
+    responsibility: "기획 내용에 대한 구현과 자체 검증",
+    forbidden: "기획에 없는 임의 구현 · 검증 없이 커밋 요청",
   },
   {
-    id: "review",
-    name: "리뷰",
+    id: "design",
+    name: "디자인",
+    permissions: { write: true, commit: false, push: false },
+    responsibility: "UI 설계 · 스타일 가이드 · 목업",
+    forbidden: "동작 코드의 로직 변경",
+  },
+  {
+    id: "qa",
+    name: "QA",
     permissions: { write: false, commit: false, push: false },
-    responsibility: "변경 검토 · 품질 기준",
-    forbidden: "리뷰 없이 승인",
+    responsibility: "테스트 · 증거 수집 · 변경 검토",
+    forbidden: "증거 없는 통과 판정 · 리뷰 없이 승인",
+  },
+  {
+    id: "debug",
+    name: "디버거",
+    permissions: { write: true, commit: false, push: false },
+    responsibility: "재현 · 원인 규명 · 최소 수정",
+    forbidden: "원인 불명 상태의 땜질 수정",
+  },
+  {
+    id: "docs",
+    name: "문서",
+    permissions: { write: true, commit: false, push: false },
+    responsibility: "문서화 · 재현 절차 · 가이드",
+    forbidden: "코드 동작과 다른 문서",
+  },
+  {
+    id: "release",
+    name: "릴리즈",
+    permissions: { write: false, commit: true, push: true },
+    responsibility: "커밋 정리 · 태그 · 배포",
+    forbidden: "검증 안 된 변경의 push",
   },
 ]);
 
@@ -246,7 +275,7 @@ const SESSIONS: Session[] = createMutable<Session[]>([
     lastOutput: "작업 중 · 인증 리팩터",
     sinceMs: 8 * 60000,
   }),
-  s("noel@academy", "academy", 2, "noel", "impl", {
+  s("noel@academy", "academy", 2, "noel", "dev", {
     status: "waiting",
     waitingFor: "Bash(npm publish)",
     unseen: true,
@@ -260,7 +289,7 @@ const SESSIONS: Session[] = createMutable<Session[]>([
     lastOutput: "승인 대기 · Bash(npm publish)",
     sinceMs: 12 * 60000,
   }),
-  s("lin@academy", "academy", 3, "lin", "review", {
+  s("lin@academy", "academy", 3, "lin", "qa", {
     status: "busy",
     missionId: "auth-refactor",
     agentSessionId: "77ab01ce",
@@ -273,7 +302,7 @@ const SESSIONS: Session[] = createMutable<Session[]>([
     lastOutput: "리뷰 중 · 승인 게이트",
     sinceMs: 4 * 60000,
   }),
-  s("sol@academy", "academy", 4, "sol", "verify", {
+  s("sol@academy", "academy", 4, "sol", "debug", {
     status: "idle",
     missionId: "regression",
     scrollbackLines: 2100,
@@ -290,7 +319,7 @@ const SESSIONS: Session[] = createMutable<Session[]>([
     memoryPeakMb: 300,
     lastOutput: "스토리지 계측",
   }),
-  s("jun@eqmux", "eqmux", 2, "jun", "impl", {
+  s("jun@eqmux", "eqmux", 2, "jun", "dev", {
     status: "busy",
     missionId: "prd-d-impl",
     scrollbackLines: 7300,
@@ -298,7 +327,7 @@ const SESSIONS: Session[] = createMutable<Session[]>([
     memoryPeakMb: 420,
     lastOutput: "PRD D 구현",
   }),
-  s("hana@eqmux", "eqmux", 3, "hana", "impl", {
+  s("hana@eqmux", "eqmux", 3, "hana", "dev", {
     status: "dead",
     exitCode: 1,
     resumable: true,

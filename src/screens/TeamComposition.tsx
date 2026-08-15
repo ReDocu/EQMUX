@@ -24,20 +24,21 @@ export function TeamComposition(props: { wsId: string }) {
   const leadName = () => persona(lead()?.personaId ?? "")?.name ?? "리드";
 
   const badge = (m: Session) =>
-    m.slot === 1 ? "LEAD" : m.jobId === "review" ? "REVIEW" : `REPORTS TO ${leadName()}`;
+    m.slot === 1 ? "LEAD" : m.jobId === "qa" ? "QA" : `REPORTS TO ${leadName()}`;
   const relations = (m: Session): string[] => {
     if (m.slot === 1) {
       const rest = members().filter((x) => x.slot !== 1).map((x) => persona(x.personaId)?.name);
       return [`지도 ⇢ ${rest.join(" · ") || "—"}`, "협업 — 전원"];
     }
     const rel = [`보고 → ${leadName()}`];
-    if (m.jobId === "review") {
-      const impls = members().filter((x) => x.jobId === "impl").map((x) => persona(x.personaId)?.name);
-      if (impls.length) rel.push(`리뷰 ◇ ${impls.join(" · ")}`);
+    // 고정 8종 관계 — QA는 개발·디버거의 변경을 검토, 디버거는 개발 산출물을 대상으로 한다
+    if (m.jobId === "qa") {
+      const devs = members().filter((x) => x.jobId === "dev" || x.jobId === "debug").map((x) => persona(x.personaId)?.name);
+      if (devs.length) rel.push(`검토 ◇ ${devs.join(" · ")}`);
     }
-    if (m.jobId === "verify") {
-      const targets = members().filter((x) => x.jobId === "impl" || x.jobId === "review").map((x) => persona(x.personaId)?.name);
-      if (targets.length) rel.push(`검증 → ${targets.join(" · ")}`);
+    if (m.jobId === "debug") {
+      const targets = members().filter((x) => x.jobId === "dev").map((x) => persona(x.personaId)?.name);
+      if (targets.length) rel.push(`수정 → ${targets.join(" · ")}`);
     }
     return rel;
   };
@@ -49,9 +50,9 @@ export function TeamComposition(props: { wsId: string }) {
   const fillDefault = () => {
     backend.applyCasting(props.wsId, [
       { personaId: "kai", jobId: "lead" },
-      { personaId: "noel", jobId: "impl" },
-      { personaId: "lin", jobId: "review" },
-      { personaId: "sol", jobId: "verify" },
+      { personaId: "noel", jobId: "dev" },
+      { personaId: "lin", jobId: "qa" },
+      { personaId: "sol", jobId: "debug" },
     ]);
     setSaved(false);
   };

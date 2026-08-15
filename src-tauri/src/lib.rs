@@ -1151,6 +1151,36 @@ fn library_delete_persona(store_state: State<StoreState>, id: String) -> Result<
     library::delete_persona(&store_state.0.root(), &id)
 }
 
+// ── 고급 캐릭터 시트 (3단계 페르소나) — personas/<id>.character.md, 존재가 곧 고급 단계 ──
+
+/// 시트 생성 (고급 승급) — 템플릿으로 만들고 절대 경로를 반환. 이미 있으면 그대로 (멱등)
+#[tauri::command]
+fn library_character_create(store_state: State<StoreState>, id: String, name: String) -> Result<String, String> {
+    library::create_character(&store_state.0.root(), &id, &name)
+}
+
+#[tauri::command]
+fn library_character_read(store_state: State<StoreState>, id: String) -> Result<library::CharacterSheet, String> {
+    library::read_character(&store_state.0.root(), &id)
+}
+
+/// 시트 저장 — 페르소나 저장과 같은 외부 변경 충돌 규칙 (P-7)
+#[tauri::command]
+fn library_character_save(
+    store_state: State<StoreState>,
+    id: String,
+    content: String,
+    expected_mtime_ms: Option<i64>,
+) -> Result<(), String> {
+    library::save_character(&store_state.0.root(), &id, &content, expected_mtime_ms)
+}
+
+/// 시트 삭제 (중간 이하로 강등) — 없는 파일은 성공 (멱등)
+#[tauri::command]
+fn library_character_delete(store_state: State<StoreState>, id: String) -> Result<(), String> {
+    library::delete_character(&store_state.0.root(), &id)
+}
+
 /// 직무 저장 (FR-E-28) — 전역 계층에 쓴다. 편집·복제(새 id로 저장)가 이 경로 하나다
 #[tauri::command]
 fn library_save_job(
@@ -1762,6 +1792,10 @@ pub fn run() {
             library_list,
             library_save_persona,
             library_delete_persona,
+            library_character_create,
+            library_character_read,
+            library_character_save,
+            library_character_delete,
             library_save_job,
             library_delete_job,
             preset_list,

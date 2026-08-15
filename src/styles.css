@@ -19,10 +19,17 @@
   --eq-green: #6bd38e;
   --eq-green-soft: #10251b;
   --eq-cyan: #55d1cf;
+  --eq-cyan-soft: #0f2827;
   --eq-amber: #ddb34c;
   --eq-amber-soft: #2b2212;
   --eq-red: #ef6b73;
   --eq-red-soft: #2a1519;
+  --eq-pink: #ee8bd0;
+  --eq-pink-soft: #2e1a29;
+  --eq-slate: #9aa8bd;
+  --eq-slate-soft: #1a2231;
+  --eq-orange: #eb9a5f;
+  --eq-orange-soft: #2b1c10;
   --eq-terminal: #080b10;
   --eq-gutter: #0d1219;
   --eq-code: #aab7c8;
@@ -48,10 +55,17 @@
   --eq-green: #178a4c;
   --eq-green-soft: #ddf2e5;
   --eq-cyan: #0e8f8d;
+  --eq-cyan-soft: #d7f0ef;
   --eq-amber: #9a700e;
   --eq-amber-soft: #f6ecd0;
   --eq-red: #cf3e49;
   --eq-red-soft: #fadfe1;
+  --eq-pink: #c2408f;
+  --eq-pink-soft: #f9e0ee;
+  --eq-slate: #5a6b84;
+  --eq-slate-soft: #e4e9f0;
+  --eq-orange: #c06a1c;
+  --eq-orange-soft: #f8e8d8;
   --eq-gutter: #e2e7ee;
   --eq-code: #41506a;
 }
@@ -195,6 +209,23 @@ textarea:focus {
 .badge.red {
   color: var(--eq-red);
   background: var(--eq-red-soft);
+}
+/* 직무 8종 고정 배지 색 — jobs.ts JOB_META와 1:1 */
+.badge.cyan {
+  color: var(--eq-cyan);
+  background: var(--eq-cyan-soft);
+}
+.badge.pink {
+  color: var(--eq-pink);
+  background: var(--eq-pink-soft);
+}
+.badge.slate {
+  color: var(--eq-slate);
+  background: var(--eq-slate-soft);
+}
+.badge.orange {
+  color: var(--eq-orange);
+  background: var(--eq-orange-soft);
 }
 
 /* 카드 — 시안 §01 "상자 속 상자" 해소: 기본 테두리 없음, 표면 색으로만 뜬다.

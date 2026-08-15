@@ -647,6 +647,27 @@
   color: var(--eq-amber);
   background: var(--eq-amber-soft);
 }
+/* 직무 8색 팔레트 정렬 — jobs.ts JOB_META 색과 1:1 (amber는 구 데이터 호환용으로 유지) */
+.persona-dot.cyan {
+  color: var(--eq-cyan);
+  background: var(--eq-cyan-soft);
+}
+.persona-dot.pink {
+  color: var(--eq-pink);
+  background: var(--eq-pink-soft);
+}
+.persona-dot.red {
+  color: var(--eq-red);
+  background: var(--eq-red-soft);
+}
+.persona-dot.slate {
+  color: var(--eq-slate);
+  background: var(--eq-slate-soft);
+}
+.persona-dot.orange {
+  color: var(--eq-orange);
+  background: var(--eq-orange-soft);
+}
 
 /* ── 워크스페이스 연결 ── */
 .conn-body {
@@ -1232,8 +1253,8 @@
 }
 .roles-personas {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 8px;
+  grid-template-columns: repeat(4, 1fr); /* 직무 그리드와 같은 4열 — 화면 비율 정렬 */
+  gap: 10px;
   margin-top: 8px;
 }
 .role-persona {

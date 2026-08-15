@@ -11,7 +11,7 @@ interface LibraryData {
   personas: (Omit<Persona, "color"> & { color: string })[];
 }
 
-const COLORS: Persona["color"][] = ["blue", "purple", "green", "amber"];
+const COLORS: Persona["color"][] = ["blue", "cyan", "purple", "pink", "green", "red", "slate", "orange", "amber"];
 
 function toPersona(p: LibraryData["personas"][number]): Persona {
   return {
@@ -50,21 +50,65 @@ export async function savePersonaFile(p: Persona): Promise<string | null> {
   return null;
 }
 
-export async function addPersonaFile(): Promise<void> {
+/** 새 페르소나 생성 — 고른 단계가 명시 상태로 저장된다. 만들어진 id를 반환 (생성 플로우가 이어서 선택) */
+export async function addPersonaFile(level: "basic" | "mid" | "adv" = "basic"): Promise<string | undefined> {
   if (!isTauri()) {
     backend.addPersona();
-    return;
+    return undefined;
   }
   const id = `p${Date.now().toString(36)}`;
   await invoke("library_save_persona", {
-    persona: { id, name: "새 페르소나", hint: "판단 우선순위 · 강조점 · 금기를 5~10줄로", color: "blue" },
+    persona: { id, name: "새 페르소나", level, hint: "판단 우선순위 · 강조점 · 금기를 5~10줄로", color: "blue" },
   }).catch(() => {});
   await refreshLibrary();
+  return id;
 }
 
 export async function deletePersonaFile(id: string): Promise<void> {
   if (!isTauri()) return;
   await invoke("library_delete_persona", { id }).catch(() => {});
+  await refreshLibrary();
+}
+
+// ── 고급 캐릭터 시트 (3단계 페르소나) — personas/<id>.character.md, 존재 = 고급 단계.
+// 전역 계층에만 쓴다 — 오버라이드 시트는 .eqmux/personas 파일로 직접 (FR-E-28과 동일 규칙).
+
+export interface CharacterSheet {
+  content: string;
+  mtimeMs: number;
+}
+
+/** 시트 생성 (고급 승급) — 템플릿으로 만든다. 이미 있으면 그대로 (멱등) */
+export async function createCharacterFile(id: string, name: string): Promise<void> {
+  if (!isTauri()) return;
+  await invoke("library_character_create", { id, name }).catch(() => {});
+  await refreshLibrary();
+}
+
+export async function readCharacterFile(id: string): Promise<CharacterSheet | undefined> {
+  if (!isTauri()) return undefined;
+  return invoke<CharacterSheet>("library_character_read", { id }).catch(() => undefined);
+}
+
+/** 시트 저장 — 페르소나 저장과 같은 충돌 계약 (P-7). null이면 성공. */
+export async function saveCharacterFile(id: string, content: string, expectedMtimeMs?: number): Promise<string | null> {
+  if (!isTauri()) return null;
+  try {
+    await invoke("library_character_save", { id, content, expectedMtimeMs: expectedMtimeMs ?? null });
+  } catch (e) {
+    await refreshLibrary();
+    return String(e).includes("CONFLICT")
+      ? "시트가 밖에서 바뀌었습니다 — 다시 열어 확인 후 저장하세요"
+      : "저장 실패 — 로그 패널을 확인하세요";
+  }
+  await refreshLibrary();
+  return null;
+}
+
+/** 시트 삭제 (중간 이하로 강등) — 멱등 */
+export async function deleteCharacterFile(id: string): Promise<void> {
+  if (!isTauri()) return;
+  await invoke("library_character_delete", { id }).catch(() => {});
   await refreshLibrary();
 }
 

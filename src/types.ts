@@ -26,13 +26,55 @@ export interface Job {
   mtimeMs?: number; // 읽은 시점의 파일 mtime (P-7) — 저장 시 외부 변경 충돌 감지
 }
 
+/** 단계별 독립 프로필 — 기본/중급/고급이 판단 성향·말투·성격을 각자 한 벌씩 갖는다 */
+export interface PersonaProfile {
+  hint: string;
+  tone?: string;
+  personality?: string;
+}
+
 export interface Persona {
   id: string;
   name: string;
-  hint: string; // 판단 성향 1줄 (P3 예산)
-  color: "blue" | "purple" | "green" | "amber";
+  level?: PersonaLevel | string; // 명시적 단계 — 어느 프로필이 활성인지. 없으면 내용 유추 (구 데이터)
+  basic?: PersonaProfile; // 단계별 프로필 3벌 — 저장의 원본 (Tauri 실측이 채움)
+  mid?: PersonaProfile;
+  adv?: PersonaProfile;
+  hint: string; // 활성 프로필 편의 사본 — 목록·캐스팅 표시·역할 합성이 그대로 쓴다
+  tone?: string;
+  personality?: string;
+  // 직무 8색 팔레트와 정렬 (jobs.ts JOB_META) — amber는 구 데이터 호환용으로만 남는다
+  color: "blue" | "cyan" | "purple" | "pink" | "green" | "red" | "slate" | "orange" | "amber";
+  characterPath?: string; // 고급 캐릭터 시트 절대 경로 — personas/<id>.character.md, 존재가 곧 고급
+  characterName?: string; // 시트 frontmatter name — 역할 파일 정체성 줄에 쓴다
+  characterSource?: string; // 시트 frontmatter source (원전 — 게임·역사·창작)
   mtimeMs?: number; // 읽은 시점의 파일 mtime (P-7) — 저장 시 외부 변경 충돌 감지
 }
+
+export type PersonaLevel = "basic" | "mid" | "adv";
+
+/** 페르소나 단계 — 명시적 상태(level)가 원본. 없는 구 데이터만 내용으로 유추한다.
+ *  단계 전환 = 프로필 통째 교체 — 다른 단계의 내용은 파일에 보존된다. */
+export const personaLevel = (p: Persona): PersonaLevel => {
+  if (p.level === "basic" || p.level === "mid" || p.level === "adv") return p.level;
+  return p.characterPath ? "adv" : p.tone?.trim() || p.personality?.trim() ? "mid" : "basic";
+};
+
+/** 단계의 프로필 — 프로필이 없는 구 데이터(목 등)는 최상위 편의 필드로 받친다 */
+export const personaProfile = (p: Persona, lvl: PersonaLevel): PersonaProfile =>
+  (lvl === "basic" ? p.basic : lvl === "mid" ? p.mid : p.adv) ?? {
+    hint: p.hint,
+    tone: p.tone,
+    personality: p.personality,
+  };
+
+/** 목록·카드 한 줄 소개 — 고급은 캐릭터 시트가 전부이므로 캐릭터 이름(출처)을 보여준다 */
+export const personaTagline = (p: Persona): string => {
+  if (personaLevel(p) !== "adv") return p.hint;
+  const name = p.characterName?.trim();
+  if (!name) return "캐릭터 시트";
+  return p.characterSource?.trim() ? `${name} (${p.characterSource})` : name;
+};
 
 /** 세션 = 에이전트 1명 = 페인 1개 (도메인 모델 불변 규칙) */
 export interface Session {
