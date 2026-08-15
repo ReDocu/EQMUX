@@ -12,10 +12,12 @@ import {
   defaultShell,
   PANE_LAYOUTS,
   paneLayouts,
+  panelSide,
   paneRatios,
   selectedSession,
   setDefaultShell,
   setPaneLayouts,
+  setPanelSide,
   setPaneRatios,
   setSelectedSession,
   setView,
@@ -32,6 +34,7 @@ interface LayoutData {
   selectedSession?: string;
   lastWorkspace?: string; // 마지막으로 보던 워크스페이스 탭 — startView="last"일 때만 복원
   paneRatios?: Record<string, PaneRatio>; // 분할선 드래그 비율 (M30) — 배치별
+  panelSide?: string; // 사이드 패널 위치 — "left" | "right"
 }
 
 const isLayoutKey = (v: unknown): v is PaneLayout =>
@@ -88,6 +91,7 @@ export async function restoreLayout(): Promise<void> {
   }
   const sh = SHELLS.find((s) => s.label === data.shell);
   if (sh) setDefaultShell(sh);
+  if (data.panelSide === "left" || data.panelSide === "right") setPanelSide(data.panelSide);
   for (const id of data.openWorkspaces ?? []) {
     backend.openWorkspace(id); // 경로 소실·10개 상한은 openWorkspace가 거른다
   }
@@ -117,6 +121,7 @@ function doSaveLayout(): void {
     selectedSession: selectedSession(),
     lastWorkspace: v.kind === "workspace" ? (v as { id: string }).id : lastWs,
     paneRatios: paneRatios(),
+    panelSide: panelSide(),
   };
   lastWs = data.lastWorkspace;
   const json = JSON.stringify(data);
@@ -147,6 +152,7 @@ export function startLayoutSync(): void {
       paneRatios(); // 분할선 드래그 (M30)
       defaultShell();
       selectedSession();
+      panelSide(); // 패널 위치 전환
       view();
       save(); // 시그널 변경
     });

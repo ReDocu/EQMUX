@@ -12,8 +12,9 @@ import { performShutdown } from "./backend/shutdown";
 import { startTeamSync } from "./backend/team";
 import { startFileWatch } from "./backend/watch";
 import { refreshWorkspaces } from "./backend/workspaces";
-import { exitOpen, explorerOpen, layoutPickerOpen, panelOpen, setExitOpen, setLayoutPickerOpen, setView, terminalFull, view } from "./state";
-import { ExplorerOverlay } from "./components/ExplorerOverlay";
+import { exitOpen, layoutPickerOpen, overlay, panelOpen, setExitOpen, setLayoutPickerOpen, setView, terminalFull, view } from "./state";
+import { ScreenOverlay } from "./components/ScreenOverlay";
+import { editorGuard, MissionExplorerTab } from "./components/MissionExplorerTab";
 import { ControlCenter } from "./screens/ControlCenter";
 import { CrashRecovery } from "./screens/CrashRecovery";
 import { Dashboard } from "./screens/Dashboard";
@@ -124,9 +125,6 @@ export function App() {
                 return ws ? <ControlCenter workspace={ws} /> : <Dashboard />;
               })()}
             </Match>
-            <Match when={v().kind === "connect"}>
-              <WorkspaceConnection />
-            </Match>
             <Match when={v().kind === "launch"}>
               <LaunchMode wsId={(v() as { kind: "launch"; wsId: string }).wsId} />
             </Match>
@@ -139,17 +137,11 @@ export function App() {
             <Match when={v().kind === "composition"}>
               <TeamComposition wsId={(v() as { kind: "composition"; wsId: string }).wsId} />
             </Match>
-            <Match when={v().kind === "roles"}>
-              <RoleLibrary />
-            </Match>
             <Match when={v().kind === "missions"}>
               <Missions wsId={(v() as { kind: "missions"; wsId: string }).wsId} />
             </Match>
             <Match when={v().kind === "gitdiff"}>
               <GitDiffEditor wsId={(v() as { kind: "gitdiff"; wsId?: string }).wsId} />
-            </Match>
-            <Match when={v().kind === "settings"}>
-              <Settings />
             </Match>
           </Switch>
         </div>
@@ -158,8 +150,26 @@ export function App() {
           <SidePanel />
         </Show>
       </div>
-      <Show when={explorerOpen()}>
-        <ExplorerOverlay />
+      {/* 전체 화면 팝업 4종 — overlay 신호 하나라서 동시에 하나만 열린다 (M25 확장) */}
+      <Show when={overlay() === "explorer"}>
+        <ScreenOverlay title="임무 · 파일 탐색기" icon="≡" guard={editorGuard}>
+          <MissionExplorerTab />
+        </ScreenOverlay>
+      </Show>
+      <Show when={overlay() === "connect"}>
+        <ScreenOverlay title="워크스페이스 연결" icon="⌂">
+          <WorkspaceConnection />
+        </ScreenOverlay>
+      </Show>
+      <Show when={overlay() === "roles"}>
+        <ScreenOverlay title="역할 라이브러리" icon="◇">
+          <RoleLibrary />
+        </ScreenOverlay>
+      </Show>
+      <Show when={overlay() === "settings"}>
+        <ScreenOverlay title="설정" icon="⚙">
+          <Settings />
+        </ScreenOverlay>
       </Show>
       <Show when={exitOpen()}>
         <ExitDialog />

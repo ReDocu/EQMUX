@@ -2,29 +2,66 @@
 // 상태를 바꾸는 것은 언제나 사용자 버튼이며, 자동 실행 경로는 없다.
 import { createSignal } from "solid-js";
 import { backend } from "./backend/mock";
+import type { Workspace } from "./types";
 
 export type View =
   | { kind: "control" } // 관제 고정 탭 (FR-G-01·02) — 다중 워크스페이스 대시보드
   | { kind: "workspace"; id: string } // 워크스페이스 탭 = 컨트롤 센터 (bi8Au)
-  | { kind: "connect" } // 레인 01 — 워크스페이스 연결
   | { kind: "launch"; wsId: string } // 레인 01 — 실행 방식 선택 (ChIvy)
   | { kind: "terminalSetup"; wsId: string } // 레인 01 — 기본 터미널 구성 (S9u2S)
   | { kind: "casting"; wsId: string } // 레인 01 — 팀 캐스팅
   | { kind: "composition"; wsId: string } // 레인 01 — 팀 편성
-  | { kind: "roles" } // 역할 라이브러리 (화면 #7)
   | { kind: "missions"; wsId: string } // 임무 배정 (화면 #8)
-  | { kind: "gitdiff"; wsId?: string; back?: View } // Git Diff (AXXhV) — wsId 없으면 활성 워크스페이스, ✕/Esc는 back으로 복귀 (U11)
-  | { kind: "settings" };
+  | { kind: "gitdiff"; wsId?: string; back?: View }; // Git Diff (AXXhV) — wsId 없으면 활성 워크스페이스, ✕/Esc는 back으로 복귀 (U11)
+// 워크스페이스 연결·역할 라이브러리·설정은 View가 아니라 팝업(OverlayKind)이다 — 아래 overlay 참조
+
+/** 전체 화면 팝업 (M25 확장) — NAV 도구 4종(임무·워크스페이스·역할·설정)이 전부 팝업이다.
+ *  신호가 하나라서 동시에 하나만 열린다. 화면 전환(setView)은 열린 팝업을 닫는다. */
+export type OverlayKind = "explorer" | "connect" | "roles" | "settings";
+export const [overlay, setOverlay] = createSignal<OverlayKind | undefined>(undefined);
+export function toggleOverlay(k: OverlayKind): void {
+  setOverlay(overlay() === k ? undefined : k);
+}
 
 export type PanelTab = "conversation" | "git" | "ports" | "logs" | "browser";
 
-export const [view, setView] = createSignal<View>({ kind: "control" });
+const [viewSig, setViewRaw] = createSignal<View>({ kind: "control" });
+export const view = viewSig;
+/** 마지막으로 있던 워크스페이스 — 관제·설정 같은 전역 화면에서도 패널 스코프가 유지되게 한다 */
+export const [lastWorkspaceId, setLastWorkspaceId] = createSignal<string | undefined>(undefined);
+export function setView(v: View): View {
+  // 워크스페이스 문맥을 가진 화면 전부가 기록 대상이다 — 임무 배정·캐스팅·diff에서
+  // 대화를 열어도 그 워크스페이스의 스트림이 나와야 한다
+  const wsId = v.kind === "workspace" ? v.id : "wsId" in v ? v.wsId : undefined;
+  if (wsId) setLastWorkspaceId(wsId);
+  setOverlay(undefined); // 화면 전환 = 팝업 문맥을 떠난다 — 열린 팝업이 새 화면을 가리지 않게
+  return setViewRaw(v);
+}
 export const [selectedSession, setSelectedSession] = createSignal<string | undefined>(undefined);
 export const [exitOpen, setExitOpen] = createSignal(false);
+
+/** 패널 스코프의 단일 소스 — 대화·임무 탐색기·git 패널이 전부 이 판정을 본다.
+ *  규칙: 워크스페이스 문맥이 있는 화면이 활성이면 그것, 아니면 마지막으로 있던 워크스페이스.
+ *  "첫 번째 열린 것" 폴백은 없다 — 조용히 다른 팀을 보여주는 것이 최악이라서다. */
+export function activeWorkspaceId(): string | undefined {
+  const v = view();
+  if (v.kind === "workspace") return v.id;
+  if ("wsId" in v && v.wsId) return v.wsId;
+  return lastWorkspaceId();
+}
+
+/** activeWorkspaceId를 실제 워크스페이스로 해석 — 등록 해제됐으면 undefined (스코프 없음) */
+export function scopeWorkspace(): Workspace | undefined {
+  tick();
+  const id = activeWorkspaceId();
+  return id ? backend.listWorkspaces().find((w) => w.id === id) : undefined;
+}
 
 /** 사이드 패널 (M1 — 대화는 패널 탭이며 메인 화면이 아니다) */
 export const [panelOpen, setPanelOpen] = createSignal(false);
 export const [panelTab, setPanelTab] = createSignal<PanelTab>("conversation");
+/** 사이드 패널 위치 — 패널 탭 줄의 전환 버튼이 토글하고 layout.json에 영속된다 */
+export const [panelSide, setPanelSide] = createSignal<"left" | "right">("right");
 
 /** 패널 탭을 지정해 열기 — 앱 바 도구 버튼(DdrkL)의 진입 경로 */
 export function openPanel(tab: PanelTab) {
@@ -86,8 +123,7 @@ export function setRatioAxis(layout: PaneLayout, axis: "cols" | "rows", fraction
 /** 터미널 전체 화면 (포커스 모드) — 앱 바는 유지되고 그 아래 영역만 덮는다 */
 export const [terminalFull, setTerminalFull] = createSignal(false);
 
-/** 임무 · 파일 탐색기 전체 화면 팝업 (M25) — 사이드 패널 탭에서 승격, 앱 바 임무 버튼이 토글 */
-export const [explorerOpen, setExplorerOpen] = createSignal(false);
+// 임무 탐색기 팝업(M25)의 explorerOpen은 overlay("explorer")로 통합됐다 — 위 OverlayKind 참조
 
 /** 새 터미널 셸 선택 — 실패 시 Rust 쪽 폴백 체인(pwsh → powershell → cmd)이 받친다 */
 export interface ShellChoice {

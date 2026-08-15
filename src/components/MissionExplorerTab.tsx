@@ -1,14 +1,14 @@
 // 임무 · 파일 탐색기 패널 (ehpqx) — 워크스페이스 파일 트리 + 미리보기 + 파일 CRUD (M24).
 // Tauri에서는 실제 FS를 읽고 쓴다 (깊이·개수 상한 · .git 불가침 · 삭제는 휴지통).
 // 파일이 원본이라는 계약 그대로: 임무 파일은 backend의 실측 임무 데이터로, 그 외 텍스트는 원문으로.
-import { createEffect, createSignal, For, on, onMount, Show } from "solid-js";
+import { createEffect, createSignal, For, lazy, on, onMount, Show } from "solid-js";
 import { backend } from "../backend/mock";
 import { fsCreate, fsDelete, fsPreview, fsRead, fsRename, fsTree, fsWrite } from "../backend/panels";
 import type { FsNode } from "../backend/panels";
 import { refreshMissions } from "../backend/missions";
 import { sendConversation } from "../backend/conversation";
 import { isTauri } from "../backend/pty";
-import { openPanel, selectedSession, setExplorerOpen, setView, tick, view } from "../state";
+import { openPanel, scopeWorkspace, selectedSession, setOverlay, setView, tick } from "../state";
 
 // 브라우저 dev 폴백 트리 (기존 목)
 const MOCK_TREE: FsNode[] = [
@@ -22,6 +22,9 @@ const MOCK_TREE: FsNode[] = [
 ];
 
 const parentOf = (rel: string) => (rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "");
+
+// CodeMirror는 편집을 열 때만 필요하다 — 지연 로드로 메인 번들에서 분리한다 (~600KB)
+const CodeEditor = lazy(() => import("./CodeEditor").then((m) => ({ default: m.CodeEditor })));
 
 // 미저장 이탈 보호 — 오버레이(ESC 닫기)가 편집 중 여부를 알아야 한다
 export const [editorGuard, setEditorGuard] = createSignal(false);
@@ -37,18 +40,16 @@ export function MissionExplorerTab() {
     const all = backend.listSessions();
     return all.find((s) => s.id === selectedSession()) ?? all[0];
   };
-  // 스코프 — 선택 세션의 워크스페이스 → 활성 탭 → 첫 등록
+  // 스코프 — 현재 워크스페이스 문맥(단일 소스)이 우선이다. 전역 세션 선택이 스코프를 끌고
+  // 다니면 A에서 세션을 고른 뒤 B 탭에 와도 A의 트리가 보인다. 세션 폴백은 워크스페이스
+  // 문맥이 아예 없을 때(첫 실행 관제 화면)만. "첫 등록" 폴백은 폐기.
   const ws = () => {
     tick();
-    const all = backend.listWorkspaces();
-    const bySession = session() && all.find((w) => w.id === session()!.workspaceId);
+    const scoped = scopeWorkspace();
+    if (scoped && !scoped.pathMissing) return scoped;
+    const bySession = session() && backend.listWorkspaces().find((w) => w.id === session()!.workspaceId);
     if (bySession && !bySession.pathMissing) return bySession;
-    const v = view();
-    if (v.kind === "workspace") {
-      const cur = all.find((w) => w.id === (v as { id: string }).id);
-      if (cur && !cur.pathMissing) return cur;
-    }
-    return all.find((w) => !w.pathMissing);
+    return undefined;
   };
   const persona = () => backend.listPersonas().find((p) => p.id === session()?.personaId);
   const job = () => backend.listJobs().find((j) => j.id === session()?.jobId);
@@ -267,7 +268,7 @@ export function MissionExplorerTab() {
       void sendConversation(wsId, "@all", "handoff", `브리프 전달 · ${sel()?.rel ?? ".eqmux/missions/"}`);
     }
     // 전체 화면 팝업(M25)에서 부르므로 — 팝업을 접고 대화 패널을 연다
-    setExplorerOpen(false);
+    setOverlay(undefined);
     openPanel("conversation");
   };
 
@@ -474,20 +475,16 @@ export function MissionExplorerTab() {
               </Show>
             }
           >
-            <textarea
-              class="mono msnp-edit"
-              value={editing()}
-              onInput={(e) => {
-                setEditing(e.currentTarget.value);
+            {/* CodeMirror 6 (textarea의 후신) — 구문 강조·줄 번호·검색(Ctrl+F)·되돌리기.
+                저장 배관(1MB 상한 · mtime 충돌)은 그대로 saveEdit가 소유한다 */}
+            <CodeEditor
+              value={editing()!}
+              fileName={sel()?.name ?? ""}
+              onChange={(text) => {
+                setEditing(text);
                 setDirty(true);
               }}
-              onKeyDown={(e) => {
-                // Ctrl+S 저장 — 브라우저 저장 다이얼로그를 가로챈다
-                if (e.ctrlKey && e.key.toLowerCase() === "s") {
-                  e.preventDefault();
-                  void saveEdit();
-                }
-              }}
+              onSave={() => void saveEdit()}
             />
           </Show>
         </div>
@@ -508,8 +505,7 @@ export function MissionExplorerTab() {
             disabled={!ws()}
             onClick={() => {
               if (!ws()) return;
-              setExplorerOpen(false); // 팝업 아래로 이동하므로 접는다
-              setView({ kind: "missions", wsId: ws()!.id });
+              setView({ kind: "missions", wsId: ws()!.id }); // setView가 팝업을 접는다
             }}
           >
             임무 관리

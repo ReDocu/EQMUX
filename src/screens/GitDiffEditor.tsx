@@ -9,21 +9,20 @@ import { diffChangedFiles, diffFile, gitOverview } from "../backend/git";
 import type { ChangedFile, DiffLine, FileDiff } from "../backend/git";
 import { backend, DIFF_BRANCH, DIFF_CONTENT, DIFF_FILES, GIT_STATE } from "../backend/mock";
 import { isTauri } from "../backend/pty";
-import { openPanel, setView, tick, view } from "../state";
+import { openPanel, scopeWorkspace, setView, tick, view } from "../state";
 
 const FOLD_CONTEXT = 3; // 변경 주변에 남기는 문맥 줄 수 (U10)
 
 type DispRow = { type: "line"; i: number } | { type: "fold"; start: number; end: number };
 
 export function GitDiffEditor(props: { wsId?: string }) {
+  // wsId 지정(진입점이 안다)이 우선, 없으면 현재 워크스페이스 문맥 (단일 소스 — 임의 폴백 없음)
   const ws = () => {
     tick();
-    const all = backend.listWorkspaces();
-    return (
-      (props.wsId && all.find((w) => w.id === props.wsId)) ||
-      all.find((w) => w.open && !w.pathMissing) ||
-      all.find((w) => !w.pathMissing)
-    );
+    const byProp = props.wsId ? backend.listWorkspaces().find((w) => w.id === props.wsId) : undefined;
+    if (byProp) return byProp;
+    const scoped = scopeWorkspace();
+    return scoped && !scoped.pathMissing ? scoped : undefined;
   };
 
   const [files, setFiles] = createSignal<ChangedFile[]>(

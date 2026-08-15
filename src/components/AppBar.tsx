@@ -4,15 +4,15 @@
 import { For, Show } from "solid-js";
 import { backend } from "../backend/mock";
 import {
-  explorerOpen,
   openPanel,
+  overlay,
   panelOpen,
   panelTab,
   setExitOpen,
-  setExplorerOpen,
   setPanelOpen,
   setView,
   tick,
+  toggleOverlay,
   view,
 } from "../state";
 import { ATTENTION_ORDER } from "../types";
@@ -96,19 +96,11 @@ export function AppBar() {
             </button>
           )}
         </For>
-        <button class="tab tab-add" title="워크스페이스 연결" onClick={() => setView({ kind: "connect" })}>
+        <button class="tab tab-add" title="워크스페이스 연결" onClick={() => toggleOverlay("connect")}>
           +
         </button>
       </div>
       <div class="tools">
-        <button
-          class="tool"
-          classList={{ active: explorerOpen() }}
-          title="임무 · 파일 탐색기 — 전체 화면 팝업 (M25)"
-          onClick={() => setExplorerOpen(!explorerOpen())}
-        >
-          임무
-        </button>
         <button
           class="tool"
           classList={{ active: panelOpen() && panelTab() === "conversation" }}
@@ -120,20 +112,36 @@ export function AppBar() {
             <span class="unread-dot" />
           </Show>
         </button>
+        {/* 도구 4종은 전부 전체 화면 팝업이다 — overlay 신호 하나라서 동시에 하나만 열린다 */}
         <button
           class="tool"
-          classList={{ active: view().kind === "connect" }}
-          onClick={() => setView({ kind: "connect" })}
+          classList={{ active: overlay() === "explorer" }}
+          title="임무 · 파일 탐색기 — 전체 화면 팝업 (M25)"
+          onClick={() => toggleOverlay("explorer")}
+        >
+          임무
+        </button>
+        <button
+          class="tool"
+          classList={{ active: overlay() === "connect" }}
+          title="워크스페이스 연결 — 전체 화면 팝업"
+          onClick={() => toggleOverlay("connect")}
         >
           워크스페이스
         </button>
-        <button class="tool" classList={{ active: view().kind === "roles" }} onClick={() => setView({ kind: "roles" })}>
+        <button
+          class="tool"
+          classList={{ active: overlay() === "roles" }}
+          title="역할 라이브러리 — 전체 화면 팝업"
+          onClick={() => toggleOverlay("roles")}
+        >
           역할
         </button>
         <button
           class="tool"
-          classList={{ active: view().kind === "settings" }}
-          onClick={() => setView({ kind: "settings" })}
+          classList={{ active: overlay() === "settings" }}
+          title="설정 — 전체 화면 팝업"
+          onClick={() => toggleOverlay("settings")}
         >
           설정
         </button>

@@ -11,7 +11,7 @@ import {
   sendConversation,
 } from "../backend/conversation";
 import { backend } from "../backend/mock";
-import { tick, view } from "../state";
+import { scopeWorkspace, tick } from "../state";
 import { Eyebrow } from "./ui";
 import { sessionDisplayName } from "../types";
 import type { ConversationMessage, Session } from "../types";
@@ -26,17 +26,10 @@ const TYPE_COLOR: Record<ConversationMessage["type"], string> = {
 };
 
 export function ConversationTab() {
-  // 스코프 = 활성 워크스페이스 탭, 아니면 첫 번째 열린 워크스페이스 (GitPanelTab과 같은 규칙)
-  const ws = () => {
-    tick();
-    const v = view();
-    const all = backend.listWorkspaces();
-    if (v.kind === "workspace") {
-      const cur = all.find((w) => w.id === (v as { id: string }).id);
-      if (cur) return cur;
-    }
-    return all.find((w) => w.open);
-  };
+  // 스코프 = 현재 워크스페이스 문맥 (state.scopeWorkspace — 단일 소스). 활성 워크스페이스
+  // 화면이 없으면 마지막으로 있던 워크스페이스를 유지한다. 임의 폴백은 없다 —
+  // 조용히 다른 팀의 스트림을 보여주지 않는다.
+  const ws = () => scopeWorkspace();
   createEffect(() => {
     const w = ws();
     if (w) ensureConversation(w.id); // 늦게 등록된 워크스페이스도 첫 열람 때 원장을 읽는다
@@ -184,7 +177,7 @@ export function ConversationTab() {
         <div style={{ display: "flex", gap: "6px" }}>
           <input
             style={{ flex: 1, "min-width": 0 }}
-            placeholder={ws() ? "@카이 질문… (@ 없으면 @all)" : "열린 워크스페이스가 없습니다"}
+            placeholder={ws() ? "@카이 질문… (@ 없으면 @all)" : "워크스페이스 탭을 먼저 여세요"}
             disabled={!ws()}
             maxLength={MSG_MAX_BODY}
             value={draft()}

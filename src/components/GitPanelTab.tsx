@@ -11,7 +11,7 @@ import type { BranchInfo, GitOverview, WorktreeInfo } from "../backend/git";
 import { GIT_STATE, backend } from "../backend/mock";
 import { clipWriteText, isTauri } from "../backend/pty";
 import { checkoutBranch } from "../backend/workspaces";
-import { defaultShell, setPanelOpen, setView, tick, view } from "../state";
+import { defaultShell, scopeWorkspace, setPanelOpen, setView, view } from "../state";
 import { ContextMenu, Eyebrow } from "./ui";
 
 interface CommitRow {
@@ -29,16 +29,10 @@ function refBadge(refs: string): string | undefined {
 }
 
 export function GitPanelTab() {
-  // 스코프 = 활성 워크스페이스 탭, 아니면 첫 번째 열린 워크스페이스
+  // 스코프 = 현재 워크스페이스 문맥 (state.scopeWorkspace — 대화·임무 탐색기와 같은 단일 소스)
   const ws = () => {
-    tick();
-    const v = view();
-    const all = backend.listWorkspaces();
-    if (v.kind === "workspace") {
-      const cur = all.find((w) => w.id === (v as { id: string }).id);
-      if (cur) return cur;
-    }
-    return all.find((w) => w.open && !w.pathMissing);
+    const scoped = scopeWorkspace();
+    return scoped && !scoped.pathMissing ? scoped : undefined;
   };
 
   const [real, setReal] = createSignal<GitOverview | undefined>(undefined);
@@ -51,6 +45,7 @@ export function GitPanelTab() {
     const target = ws();
     if (!target || target.pathMissing) {
       setReal(undefined);
+      setFailed(false); // 스코프 없음은 읽기 실패가 아니다 — 이전 워크스페이스의 실패 표시를 지운다
       return;
     }
     const req = ++loadReq;
@@ -150,6 +145,21 @@ export function GitPanelTab() {
         real: true,
       };
     }
+    if (isTauri()) {
+      // 워크스페이스 문맥 없음 · 읽기 실패 — 목 데이터를 실물처럼 보여주지 않는다 (빈 상태가 정직하다)
+      return {
+        repo: ws()?.name ?? "—",
+        branch: "—",
+        ahead: 0,
+        behind: 0,
+        changed: 0,
+        added: 0,
+        modified: 0,
+        deleted: 0,
+        commits: [] as CommitRow[],
+        real: true,
+      };
+    }
     return {
       repo: GIT_STATE.repo,
       branch: GIT_STATE.branch,
@@ -183,9 +193,9 @@ export function GitPanelTab() {
         </span>
       </div>
 
-      <Show when={isTauri() && failed()}>
+      <Show when={isTauri() && (failed() || !ws())}>
         <div class="card conn-error mono" style={{ "font-size": "11px" }}>
-          저장소를 읽을 수 없습니다 — {ws() ? "git 저장소가 아니거나 git CLI가 없습니다" : "열린 워크스페이스가 없습니다"}
+          {ws() ? "저장소를 읽을 수 없습니다 — git 저장소가 아니거나 git CLI가 없습니다" : "워크스페이스 문맥이 없습니다 — 워크스페이스 탭을 먼저 여세요"}
         </div>
       </Show>
 

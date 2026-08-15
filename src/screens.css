@@ -781,6 +781,20 @@
   border-left: 1px solid var(--eq-line);
   background: var(--eq-surface-2);
 }
+/* 위치 전환 — 왼쪽에 붙으면 테두리도 반대편이다 (order는 컴포넌트가 인라인으로) */
+.side-panel.left {
+  border-left: none;
+  border-right: 1px solid var(--eq-line);
+}
+.panel-tab.side-toggle {
+  margin-left: auto;
+  flex: 0 0 auto;
+  border-right: none;
+  border-left: 1px solid var(--eq-line);
+}
+.panel-tab.side-toggle + .panel-tab.close {
+  margin-left: 0;
+}
 .panel-tabs {
   display: flex;
   align-items: stretch;
@@ -1714,18 +1728,15 @@
   min-width: 0;
   font-size: 11px;
 }
-.msnp-edit {
+/* CodeMirror 편집 표면 — msnp-edit(textarea)의 후신. 색·폰트는 컴포넌트가 토큰으로 그린다 */
+.cm-host {
   flex: 1;
   min-height: 0;
   width: 100%;
-  resize: none;
-  border: none;
-  outline: none;
-  background: var(--eq-surface);
-  color: var(--eq-text);
-  font-size: 11px;
-  line-height: 1.6;
-  padding: 10px;
+  overflow: hidden;
+}
+.cm-host .cm-editor {
+  height: 100%;
 }
 .msnp-tree-rows {
   flex: 1;
@@ -2521,6 +2532,17 @@
 }
 .explorer-fullscreen .msnp-content {
   grid-template-columns: 320px minmax(0, 1fr); /* 패널의 168px 트리를 넓힌다 */
+}
+/* 팝업 본문 — .screen(height:100%)과 패널형 콘텐츠가 다 들어갈 수 있게 flex로 채운다 */
+.overlay-screen-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.overlay-screen-body > * {
+  flex: 1;
+  min-height: 0;
 }
 
 /* 전체 화면 본문 — 터미널 열 + (열려 있으면) 사이드 패널. 대화도 포커스 모드에서 보인다 */

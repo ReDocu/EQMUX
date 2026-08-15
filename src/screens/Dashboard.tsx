@@ -8,7 +8,7 @@ import type { FeedEvent } from "../backend/events";
 import { backend } from "../backend/mock";
 import { isTauri, killPty } from "../backend/pty";
 import { settings } from "../backend/settings";
-import { jumpToSession, openPanel, setView, tick } from "../state";
+import { jumpToSession, openPanel, setOverlay, setView, tick } from "../state";
 import { ContextMenu, StatusLabel } from "../components/ui";
 import type { Session } from "../types";
 import { ATTENTION_ORDER, fmtSince, sessionDisplayName } from "../types";
@@ -223,7 +223,7 @@ export function Dashboard() {
                     <Show
                       when={!ws.pathMissing}
                       fallback={
-                        <button class="btn ghost" title="워크스페이스 연결에서 경로 재지정" onClick={() => setView({ kind: "connect" })}>
+                        <button class="btn ghost" title="워크스페이스 연결에서 경로 재지정" onClick={() => setOverlay("connect")}>
                           재지정 →
                         </button>
                       }

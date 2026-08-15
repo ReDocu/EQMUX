@@ -2,7 +2,7 @@
 // 권한 번역 결과(permission-mode)를 시작 전에 노출한다 (FR-D-40·41).
 import { createSignal, For, Show } from "solid-js";
 import { backend } from "../backend/mock";
-import { setView, tick } from "../state";
+import { setOverlay, setView, tick } from "../state";
 import { Eyebrow, KV } from "../components/ui";
 import { translatePermissions } from "../types";
 import type { Session } from "../types";
@@ -79,7 +79,7 @@ export function TeamComposition(props: { wsId: string }) {
           <button class="btn" onClick={fillDefault}>
             기본 편성 채우기
           </button>
-          <button class="btn" onClick={() => setView({ kind: "roles" })}>
+          <button class="btn" onClick={() => setOverlay("roles")}>
             역할 라이브러리
           </button>
           <button class="btn" onClick={() => setSaved(true)}>
