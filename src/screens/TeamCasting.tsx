@@ -100,12 +100,16 @@ export function TeamCasting(props: { wsId: string }) {
     ];
   };
 
-  const save = () => {
+  // 저장과 "편성 선택 →"이 같은 적용 경로를 탄다 — 선택으로 바로 넘어가도
+  // 기본 임무 자동 배정(FR-E-56)이 빠지지 않는다 (autoAssignDefault는 임무 있으면 건너뛴다)
+  const apply = () => {
     backend.applyCasting(props.wsId, slots());
-    // 기본 임무 자동 배정 (FR-E-56) — 캐스팅으로 생긴 임무 없는 역할 세션에만
     for (const sl of slots()) {
       if (sl.personaId) void autoAssignDefault(props.wsId, `${sl.personaId}@${props.wsId}`);
     }
+  };
+  const save = () => {
+    apply();
     setSaved(true);
   };
 
@@ -203,7 +207,7 @@ export function TeamCasting(props: { wsId: string }) {
             <button
               class="btn primary"
               onClick={() => {
-                backend.applyCasting(props.wsId, slots());
+                apply();
                 setView({ kind: "composition", wsId: props.wsId });
               }}
             >

@@ -1806,6 +1806,11 @@ pub fn cli_main() -> i32 {
     cli::run(std::env::args().skip(1).collect())
 }
 
+/// main.rs의 분기 판별 — CLI 서브커맨드 목록의 단일 원천은 cli.rs다.
+pub fn is_cli_command(cmd: &str) -> bool {
+    cli::is_cli_command(cmd)
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())

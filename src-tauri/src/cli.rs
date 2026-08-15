@@ -20,6 +20,13 @@ pub enum Req {
 
 const USAGE: &str = "사용법:\n  eqmux send --type <ask|handoff|report|review|escalate> [--to @이름] \"내용\"\n  eqmux report \"진척 한 줄\"\n  eqmux ping";
 
+/// main.rs의 CLI/GUI 분기 판별 — parse가 아는 서브커맨드 전부와 같이 움직여야 한다.
+/// 여기 빠진 커맨드는 GUI 기동으로 흘러, Claude Code가 주기 호출하는 채널이면
+/// 앱 창이 계속 늘어난다 (_statusline 누락이 그 사례).
+pub fn is_cli_command(cmd: &str) -> bool {
+    matches!(cmd, "ping" | "send" | "report" | "_hook" | "_statusline")
+}
+
 /// argv → 요청. session은 EQMUX_SESSION — 테스트를 위해 주입받는다.
 pub fn parse(args: &[String], session: Option<&str>) -> Result<Req, String> {
     let cmd = args.first().map(String::as_str).unwrap_or("");
@@ -193,6 +200,17 @@ mod tests {
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()
+    }
+
+    /// GUI/CLI 분기 (main.rs) — parse가 아는 서브커맨드는 전부 CLI로 분기해야 한다.
+    /// 하나라도 빠지면 Claude Code가 그 커맨드를 부를 때마다 앱 창이 새로 뜬다.
+    #[test]
+    fn cli_branch_covers_every_subcommand() {
+        for cmd in ["ping", "send", "report", "_hook", "_statusline"] {
+            assert!(is_cli_command(cmd), "{cmd}가 main.rs CLI 분기에서 빠졌다");
+        }
+        assert!(!is_cli_command("")); // 인자 없음 → GUI 기동
+        assert!(!is_cli_command("--flag")); // 미지의 토큰 → GUI 기동
     }
 
     /// statusLine 채널 (FR-D-19) — 세션 필수, 인자 없음
