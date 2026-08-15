@@ -7,7 +7,7 @@
 // UI 리파인 §git: 카드 스택 → 한 줄 툴바 · 밀도 높은 커밋 행(뱃지 복수 + 우측 메타) ·
 // 커밋 행 클릭 = 부모 커밋 ↔ 이 커밋 diff · 워크트리는 한 줄 스트립.
 import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
-import { branchList, gitOverview, worktreeAdd, worktreeList } from "../backend/git";
+import { branchList, gitOverview, worktreeAdd, worktreeAttach, worktreeList } from "../backend/git";
 import type { BranchInfo, GitOverview, WorktreeInfo } from "../backend/git";
 import { GIT_STATE, backend } from "../backend/mock";
 import { clipWriteText, isTauri } from "../backend/pty";
@@ -98,22 +98,30 @@ export function GitPanelTab() {
     }
   };
 
-  // ── 워크트리 (M36) — 목록·생성·셸 열기. 삭제는 없다 (FR-E-64 — 정리는 사람 몫) ──
+  // ── 워크트리 (M36) — 목록·생성·셸 열기. 삭제는 없다 (FR-E-64 — 정리는 사람 몫).
+  // "기존 브랜치" 모드(레일 §워크트리)는 새 브랜치 없이 그 브랜치를 체크아웃해 연결한다 ──
   const [wtFormOpen, setWtFormOpen] = createSignal(false);
+  const [wtMode, setWtMode] = createSignal<"new" | "attach">("new");
   const [wtName, setWtName] = createSignal("");
   const [wtBase, setWtBase] = createSignal("");
+  const [wtAttachBranch, setWtAttachBranch] = createSignal("");
   const [wtBusy, setWtBusy] = createSignal(false);
   const [wtErr, setWtErr] = createSignal<string | undefined>(undefined);
+  /** 연결 가능한 브랜치 — 로컬이면서 어떤 워크트리에도 체크아웃돼 있지 않은 것 (git: 같은 브랜치는 한 트리에만) */
+  const attachable = () => branches().filter((b) => !b.remote && !worktrees().some((wt) => wt.branch === b.name));
   const createWorktree = async () => {
     const target = ws();
-    if (!isTauri() || !target || !wtName().trim()) return;
+    const attach = wtMode() === "attach";
+    if (!isTauri() || !target || (attach ? !wtAttachBranch() : !wtName().trim())) return;
     setWtErr(undefined);
     setWtBusy(true);
     try {
-      await worktreeAdd(target.path, wtName().trim(), wtBase() || undefined);
+      if (attach) await worktreeAttach(target.path, wtAttachBranch());
+      else await worktreeAdd(target.path, wtName().trim(), wtBase() || undefined);
       setWtFormOpen(false);
       setWtName("");
       setWtBase("");
+      setWtAttachBranch("");
       await load();
     } catch (err) {
       setWtErr(String(err));
@@ -397,31 +405,73 @@ export function GitPanelTab() {
           </div>
           <Show when={wtFormOpen()}>
             <div class="card gitp-pop">
-              <input
-                class="mono"
-                style={{ "font-size": "11px", padding: "2px 6px" }}
-                placeholder="이름 → .eqmux/worktrees/<이름> · 브랜치 eqmux/<이름>"
-                value={wtName()}
-                onInput={(e) => setWtName(e.currentTarget.value)}
-              />
-              <div style={{ display: "flex", gap: "4px" }}>
-                <select
-                  style={{ flex: 1, "font-size": "11px" }}
-                  title="분기 기준 ref (start-from)"
-                  value={wtBase()}
-                  onChange={(e) => setWtBase(e.currentTarget.value)}
+              {/* 모드 — 새 브랜치를 만들거나, 이미 있는 브랜치를 트리에 연결하거나 (레일 §워크트리) */}
+              <div class="wt-mode-toggle">
+                <button classList={{ on: wtMode() === "new" }} onClick={() => setWtMode("new")}>
+                  새 브랜치
+                </button>
+                <button
+                  classList={{ on: wtMode() === "attach" }}
+                  onClick={() => {
+                    setWtMode("attach");
+                    if (!wtAttachBranch()) setWtAttachBranch(attachable()[0]?.name ?? "");
+                  }}
                 >
-                  <option value="">HEAD (현재)</option>
-                  {/* 커밋 메뉴에서 열면 해시가 기준 ref로 잡힌다 */}
-                  <Show when={wtBase() && !branches().some((b) => b.name === wtBase())}>
-                    <option value={wtBase()}>{wtBase()} (커밋)</option>
-                  </Show>
-                  <For each={branches()}>{(b) => <option value={b.name}>{b.name}</option>}</For>
-                </select>
-                <button class="btn primary" style={{ "font-size": "10px" }} disabled={!wtName().trim() || wtBusy()} onClick={() => void createWorktree()}>
-                  {wtBusy() ? "생성 중…" : "생성"}
+                  기존 브랜치
                 </button>
               </div>
+              <Show
+                when={wtMode() === "new"}
+                fallback={
+                  <>
+                    <div style={{ display: "flex", gap: "4px" }}>
+                      <select
+                        style={{ flex: 1, "font-size": "11px" }}
+                        title="이 브랜치를 체크아웃하는 워크트리를 만든다 — 새 브랜치 없음"
+                        value={wtAttachBranch()}
+                        onChange={(e) => setWtAttachBranch(e.currentTarget.value)}
+                      >
+                        <Show when={attachable().length === 0}>
+                          <option value="">연결 가능한 로컬 브랜치 없음</option>
+                        </Show>
+                        <For each={attachable()}>{(b) => <option value={b.name}>{b.name}</option>}</For>
+                      </select>
+                      <button class="btn primary" style={{ "font-size": "10px" }} disabled={!wtAttachBranch() || wtBusy()} onClick={() => void createWorktree()}>
+                        {wtBusy() ? "연결 중…" : "연결"}
+                      </button>
+                    </div>
+                    <div class="muted" style={{ "font-size": "10px" }}>
+                      체크아웃 중인 브랜치는 목록에서 빠집니다 — 같은 브랜치는 한 트리에만 (git)
+                    </div>
+                  </>
+                }
+              >
+                <input
+                  class="mono"
+                  style={{ "font-size": "11px", padding: "2px 6px" }}
+                  placeholder="이름 → .eqmux/worktrees/<이름> · 브랜치 eqmux/<이름>"
+                  value={wtName()}
+                  onInput={(e) => setWtName(e.currentTarget.value)}
+                />
+                <div style={{ display: "flex", gap: "4px" }}>
+                  <select
+                    style={{ flex: 1, "font-size": "11px" }}
+                    title="분기 기준 ref (start-from)"
+                    value={wtBase()}
+                    onChange={(e) => setWtBase(e.currentTarget.value)}
+                  >
+                    <option value="">HEAD (현재)</option>
+                    {/* 커밋 메뉴에서 열면 해시가 기준 ref로 잡힌다 */}
+                    <Show when={wtBase() && !branches().some((b) => b.name === wtBase())}>
+                      <option value={wtBase()}>{wtBase()} (커밋)</option>
+                    </Show>
+                    <For each={branches()}>{(b) => <option value={b.name}>{b.name}</option>}</For>
+                  </select>
+                  <button class="btn primary" style={{ "font-size": "10px" }} disabled={!wtName().trim() || wtBusy()} onClick={() => void createWorktree()}>
+                    {wtBusy() ? "생성 중…" : "생성"}
+                  </button>
+                </div>
+              </Show>
               <Show when={wtErr()}>
                 <div class="mono st-dead" style={{ "font-size": "10px" }}>
                   {wtErr()}
@@ -530,6 +580,7 @@ export function GitPanelTab() {
                   disabled: !isTauri(),
                   action: () => {
                     setWtErr(undefined);
+                    setWtMode("new"); // 해시 기준 분기는 새 브랜치 흐름이다
                     setWtBase(m().c.hash);
                     setWtName("");
                     setWtFormOpen(true);

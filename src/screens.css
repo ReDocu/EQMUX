@@ -1414,6 +1414,26 @@
   color: var(--eq-blue);
   font-weight: 700;
 }
+/* 워크트리 생성 모드 토글 (레일 §워크트리) — 새 브랜치 / 기존 브랜치 연결. 레일·git 패널 공용 */
+.wt-mode-toggle {
+  display: flex;
+  gap: 4px;
+}
+.wt-mode-toggle button {
+  flex: 1;
+  font-size: 10px;
+  padding: 2px 6px;
+  background: none;
+  border: 1px solid var(--eq-line);
+  border-radius: var(--eq-r-sm);
+  color: var(--eq-muted);
+  cursor: pointer;
+}
+.wt-mode-toggle button.on {
+  color: var(--eq-blue);
+  border-color: var(--eq-blue-mid);
+  background: var(--eq-blue-soft);
+}
 /* 팝오버 (시안 §05) — 브랜치 체크아웃·워크트리 생성 폼. 내용을 밀지 않고 위에 뜬다 */
 .gitp-pop {
   position: absolute;

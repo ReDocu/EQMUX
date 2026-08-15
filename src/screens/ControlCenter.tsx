@@ -22,7 +22,7 @@ import { ContextMenu, Eyebrow, PersonaDot, StatusLabel } from "../components/ui"
 import { resumeAgent } from "../backend/agent";
 import { queryEvents } from "../backend/events";
 import type { FeedEvent } from "../backend/events";
-import { branchList, worktreeAdd, worktreeList } from "../backend/git";
+import { branchList, worktreeAdd, worktreeAttach, worktreeList } from "../backend/git";
 import type { BranchInfo, WorktreeInfo } from "../backend/git";
 import { autoAssignDefault, refreshMissions } from "../backend/missions";
 import { clipWriteText, isTauri, killPty, storeUsageReal } from "../backend/pty";
@@ -167,15 +167,21 @@ export function ControlCenter(props: { workspace: Workspace }) {
   const openWtShell = (wt: WorktreeInfo) => {
     backend.addTerminal(props.workspace.id, defaultShell().label, wt.path);
   };
-  // 생성 팝오버 — git 패널과 같은 계약: .eqmux/worktrees/<이름> + 브랜치 eqmux/<이름>
+  // 생성 팝오버 — git 패널과 같은 계약: .eqmux/worktrees/<이름> + 브랜치 eqmux/<이름>.
+  // "기존 브랜치" 모드(레일 §워크트리)는 새 브랜치 없이 그 브랜치를 체크아웃해 연결한다
   const [wtFormOpen, setWtFormOpen] = createSignal(false);
+  const [wtMode, setWtMode] = createSignal<"new" | "attach">("new");
   const [wtName, setWtName] = createSignal("");
   const [wtBase, setWtBase] = createSignal("");
+  const [wtAttachBranch, setWtAttachBranch] = createSignal("");
   const [wtOpenShell, setWtOpenShell] = createSignal(true); // orca처럼 만든 트리에 바로 세션을 태우는 흐름
   const [wtBusy, setWtBusy] = createSignal(false);
   const [wtErr, setWtErr] = createSignal<string | undefined>(undefined);
+  /** 연결 가능한 브랜치 — 로컬이면서 어떤 워크트리에도 체크아웃돼 있지 않은 것 (git: 같은 브랜치는 한 트리에만) */
+  const attachable = () => wtBranches().filter((b) => !b.remote && !worktrees().some((wt) => wt.branch === b.name));
   const createWt = async () => {
-    if (!wtName().trim() || wtBusy()) return;
+    const attach = wtMode() === "attach";
+    if (wtBusy() || (attach ? !wtAttachBranch() : !wtName().trim())) return;
     if (!isTauri()) {
       setWtErr("브라우저 dev — 실제 생성 없음");
       return;
@@ -183,10 +189,13 @@ export function ControlCenter(props: { workspace: Workspace }) {
     setWtErr(undefined);
     setWtBusy(true);
     try {
-      const path = await worktreeAdd(props.workspace.path, wtName().trim(), wtBase() || undefined);
+      const path = attach
+        ? await worktreeAttach(props.workspace.path, wtAttachBranch())
+        : await worktreeAdd(props.workspace.path, wtName().trim(), wtBase() || undefined);
       setWtFormOpen(false);
       setWtName("");
       setWtBase("");
+      setWtAttachBranch("");
       if (wtOpenShell()) backend.addTerminal(props.workspace.id, defaultShell().label, path);
       await loadWorktrees();
     } catch (err) {
@@ -697,7 +706,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
             <b class="mono">{wtRows().length}</b>
             <button
               class="rail-wt-add mono"
-              title="워크트리 생성 — .eqmux/worktrees/<이름> · 브랜치 eqmux/<이름>"
+              title="워크트리 생성 — 새 브랜치(eqmux/<이름>) 또는 기존 브랜치 연결"
               onClick={() => {
                 setWtErr(undefined);
                 setWtFormOpen(!wtFormOpen());
@@ -707,32 +716,74 @@ export function ControlCenter(props: { workspace: Workspace }) {
             </button>
             <Show when={wtFormOpen()}>
               <div class="card rail-wt-pop" onClick={(e) => e.stopPropagation()}>
-                <input
-                  class="mono"
-                  style={{ "font-size": "11px", padding: "2px 6px" }}
-                  placeholder="이름 → .eqmux/worktrees/<이름>"
-                  value={wtName()}
-                  onInput={(e) => setWtName(e.currentTarget.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") void createWt();
-                    if (e.key === "Escape") setWtFormOpen(false);
-                  }}
-                />
-                <select
-                  style={{ "font-size": "11px" }}
-                  title="분기 기준 ref (start-from)"
-                  value={wtBase()}
-                  onChange={(e) => setWtBase(e.currentTarget.value)}
+                {/* 모드 — 새 브랜치를 만들거나, 이미 있는 브랜치를 트리에 연결하거나 (레일 §워크트리) */}
+                <div class="wt-mode-toggle">
+                  <button classList={{ on: wtMode() === "new" }} onClick={() => setWtMode("new")}>
+                    새 브랜치
+                  </button>
+                  <button
+                    classList={{ on: wtMode() === "attach" }}
+                    onClick={() => {
+                      setWtMode("attach");
+                      if (!wtAttachBranch()) setWtAttachBranch(attachable()[0]?.name ?? "");
+                    }}
+                  >
+                    기존 브랜치
+                  </button>
+                </div>
+                <Show
+                  when={wtMode() === "new"}
+                  fallback={
+                    <>
+                      <select
+                        style={{ "font-size": "11px" }}
+                        title="이 브랜치를 체크아웃하는 워크트리를 만든다 — 새 브랜치 없음"
+                        value={wtAttachBranch()}
+                        onChange={(e) => setWtAttachBranch(e.currentTarget.value)}
+                      >
+                        <Show when={attachable().length === 0}>
+                          <option value="">연결 가능한 로컬 브랜치 없음</option>
+                        </Show>
+                        <For each={attachable()}>{(b) => <option value={b.name}>{b.name}</option>}</For>
+                      </select>
+                      <div class="mono muted" style={{ "font-size": "10px" }}>
+                        체크아웃 중인 브랜치는 목록에서 빠집니다 — 같은 브랜치는 한 트리에만 (git)
+                      </div>
+                    </>
+                  }
                 >
-                  <option value="">HEAD (현재)</option>
-                  <For each={wtBranches()}>{(b) => <option value={b.name}>{b.name}</option>}</For>
-                </select>
+                  <input
+                    class="mono"
+                    style={{ "font-size": "11px", padding: "2px 6px" }}
+                    placeholder="이름 → .eqmux/worktrees/<이름>"
+                    value={wtName()}
+                    onInput={(e) => setWtName(e.currentTarget.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void createWt();
+                      if (e.key === "Escape") setWtFormOpen(false);
+                    }}
+                  />
+                  <select
+                    style={{ "font-size": "11px" }}
+                    title="분기 기준 ref (start-from)"
+                    value={wtBase()}
+                    onChange={(e) => setWtBase(e.currentTarget.value)}
+                  >
+                    <option value="">HEAD (현재)</option>
+                    <For each={wtBranches()}>{(b) => <option value={b.name}>{b.name}</option>}</For>
+                  </select>
+                </Show>
                 <label class="mono muted" style={{ "font-size": "10px", display: "flex", gap: "5px", "align-items": "center", cursor: "pointer" }}>
                   <input type="checkbox" checked={wtOpenShell()} onChange={(e) => setWtOpenShell(e.currentTarget.checked)} />
                   생성 후 이 트리에서 셸 열기
                 </label>
-                <button class="btn primary" style={{ "font-size": "10px", "justify-content": "center" }} disabled={!wtName().trim() || wtBusy()} onClick={() => void createWt()}>
-                  {wtBusy() ? "생성 중…" : "생성"}
+                <button
+                  class="btn primary"
+                  style={{ "font-size": "10px", "justify-content": "center" }}
+                  disabled={wtBusy() || (wtMode() === "attach" ? !wtAttachBranch() : !wtName().trim())}
+                  onClick={() => void createWt()}
+                >
+                  {wtBusy() ? (wtMode() === "attach" ? "연결 중…" : "생성 중…") : wtMode() === "attach" ? "연결" : "생성"}
                 </button>
                 <Show when={wtErr()}>
                   <div class="mono st-dead" style={{ "font-size": "10px" }}>

@@ -156,6 +156,31 @@ pub fn worktree_ensure(ws_path: &str, session: &str) -> Result<String, String> {
     worktree_create(ws_path, session, None)
 }
 
+/// 기존 브랜치를 워크트리로 연결 (레일 §워크트리) — 새 브랜치를 만들지 않는다:
+/// `.eqmux/worktrees/<브랜치명 정규화>`에 그 브랜치를 그대로 체크아웃한다. 멱등.
+/// 로컬 브랜치만 받는다 — 원격 전용 이름은 detached로 붙는 모호함이 있어 거절한다
+/// (git 패널 체크아웃으로 추적 브랜치를 먼저 만들면 된다). 이미 다른 워크트리(메인 포함)에
+/// 체크아웃된 브랜치는 git이 거부한다 — 그 오류를 그대로 올려 화면이 정직하게 말하게 한다.
+pub fn worktree_attach(ws_path: &str, branch: &str) -> Result<String, String> {
+    git(
+        &["rev-parse", "--verify", "--end-of-options", &format!("refs/heads/{branch}")],
+        ws_path,
+    )
+    .map_err(|_| format!("로컬 브랜치가 아닙니다 — {branch}"))?;
+    let path = worktree_dir(ws_path, branch); // path_component가 '/'를 '_'로 정규화한다
+    let p = path.to_string_lossy().into_owned();
+    // 워크트리의 .git은 gitdir 포인터 "파일"이다 — 존재하면 이미 연결된 것
+    if path.join(".git").exists() {
+        return Ok(p);
+    }
+    crate::roles::ensure_gitignore(ws_path)?; // worktrees/가 status를 오염시키지 않게 (FR-E-35)
+    let _ = git(&["worktree", "prune"], ws_path); // 디렉터리만 지워진 잔재 등록 정리
+    // branch는 UI가 for-each-ref로 읽은 이름이지만 크래프트 방지로 --end-of-options 뒤에 둔다
+    git(&["worktree", "add", &p, "--end-of-options", branch], ws_path)
+        .map_err(|e| format!("워크트리 연결 실패 — {e}"))?;
+    Ok(p)
+}
+
 /// 워크트리 목록 항목 (M36) — 외부에서 만든 워크트리도 잡힌다 (순수 git 호환)
 #[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -430,6 +455,34 @@ mod tests {
         fs::remove_dir_all(&wt).unwrap();
         let again = worktree_ensure(&path, "kai@ws1").unwrap();
         assert!(Path::new(&again).join("a.txt").exists());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 레일 §워크트리 — 기존 브랜치 연결: 새 브랜치 없이 그 브랜치를 체크아웃, 멱등.
+    /// 체크아웃 중인 브랜치·로컬에 없는 이름은 거절한다 (git 제약을 정직하게 올린다)
+    #[test]
+    fn worktree_attach_checks_out_existing_branch() {
+        let dir = std::env::temp_dir().join(format!("eqmux-wta-{}", now_ms()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.to_string_lossy().into_owned();
+        git(&["init"], &path).unwrap();
+        git(&["config", "user.email", "t@t"], &path).unwrap();
+        git(&["config", "user.name", "t"], &path).unwrap();
+        fs::write(dir.join("a.txt"), "1").unwrap();
+        git(&["add", "."], &path).unwrap();
+        git(&["commit", "-m", "first"], &path).unwrap();
+        let current = git(&["rev-parse", "--abbrev-ref", "HEAD"], &path).unwrap();
+        git(&["branch", "feature/x"], &path).unwrap(); // 브랜치만 있고 트리는 없다
+
+        let wt = worktree_attach(&path, "feature/x").unwrap();
+        assert!(wt.replace('\\', "/").contains("/.eqmux/worktrees/feature_x")); // '/'는 경로에서 '_'
+        assert_eq!(git(&["rev-parse", "--abbrev-ref", "HEAD"], &wt).unwrap(), "feature/x"); // 새 브랜치 없음
+        assert_eq!(worktree_attach(&path, "feature/x").unwrap(), wt); // 멱등
+
+        // 이미 메인 트리에 체크아웃된 브랜치 — git이 거부, 오류로 올라온다
+        assert!(worktree_attach(&path, &current).is_err());
+        // 로컬에 없는 이름 — rev-parse 검증에서 거절
+        assert!(worktree_attach(&path, "no-such-branch").is_err());
         fs::remove_dir_all(&dir).ok();
     }
 

@@ -1051,6 +1051,14 @@ async fn worktree_add(ws_path: String, name: String, base: Option<String>) -> Re
     .map_err(|e| e.to_string())?
 }
 
+/// 기존 브랜치를 워크트리로 연결 (레일 §워크트리) — 새 브랜치 없이 그 브랜치를 체크아웃
+#[tauri::command]
+async fn worktree_attach(ws_path: String, branch: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || workspace::worktree_attach(&ws_path, &branch))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 // ── 경량 KV (assignment_cache 테이블, FR-C-23) — 미확인·인박스 같은 파생 상태의 영속 캐시.
 // 파일이 원본인 것(팀·역할·임무)은 여기 넣지 않는다 — DB는 어디까지나 캐시다.
 
@@ -1743,6 +1751,7 @@ pub fn run() {
             team_save,
             worktree_ensure,
             worktree_add,
+            worktree_attach,
             git_worktrees,
             git_branches,
             ws_checkout,

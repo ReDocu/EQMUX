@@ -61,6 +61,12 @@ export function worktreeAdd(wsPath: string, name: string, base?: string): Promis
   return invoke<string>("worktree_add", { wsPath, name, base: base ?? null });
 }
 
+/** 기존 로컬 브랜치를 워크트리로 연결 (레일 §워크트리) — 새 브랜치를 만들지 않는다.
+ *  이미 체크아웃된 브랜치는 git이 거부한다 (같은 브랜치는 한 트리에만). 실패는 throw */
+export function worktreeAttach(wsPath: string, branch: string): Promise<string> {
+  return invoke<string>("worktree_attach", { wsPath, branch });
+}
+
 // ── diff 에디터 (PRD H) — HEAD ↔ 워크트리, 읽기 전용 ──
 
 export interface ChangedFile {
