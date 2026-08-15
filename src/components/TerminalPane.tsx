@@ -59,6 +59,8 @@ interface TermEntry {
   lastRows: number;
   /** 재개 제안 대기 (FR-C-33·34) — 복원된 역할 세션. 사용자가 선택할 때까지 아무것도 스폰하지 않는다 */
   pendingRestore?: { resumable: boolean; reason?: string };
+  /** pty 구독 해제 — dispose 시 함께 정리하지 않으면 disposed 터미널이 클로저로 영구 잔류한다 */
+  unsubs?: (() => void)[];
 }
 
 const REGISTRY = new Map<string, TermEntry>();
@@ -84,6 +86,7 @@ export function sessionTermSize(id: string): { cols: number; rows: number } {
 export function disposeSessionTerminal(id: string) {
   const e = REGISTRY.get(id);
   if (e) {
+    e.unsubs?.forEach((u) => u());
     e.term.dispose();
     REGISTRY.delete(id);
   }
@@ -208,10 +211,12 @@ async function initSession(
   });
 
   if (isTauri()) {
-    onPtyOutput(props.sessionId, (data) => term.write(data));
-    onPtyExit(props.sessionId, (code) => {
-      term.write(`\r\n\x1b[31m프로세스 종료 · exit ${code ?? "?"}\x1b[0m\r\n`);
-    });
+    entry.unsubs = [
+      onPtyOutput(props.sessionId, (data) => term.write(data)),
+      onPtyExit(props.sessionId, (code) => {
+        term.write(`\r\n\x1b[31m프로세스 종료 · exit ${code ?? "?"}\x1b[0m\r\n`);
+      }),
+    ];
     term.onData((data) => writePty(props.sessionId, data));
 
     // 앱 재시작 복구 (FR-C-31·32) — 스토어의 확정 줄을 흐리게 재생하고 경계를 긋는다.

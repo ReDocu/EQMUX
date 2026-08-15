@@ -34,7 +34,12 @@ export function RoleLibrary() {
     tick();
     return backend.listWorkspaces().filter((w) => w.open && !w.pathMissing);
   };
-  const loadScope = async (ws: Workspace) => setMergedLib(await listMergedLibrary(ws.path));
+  let scopeReq = 0; // 스코프 빠른 전환 시 이전 워크스페이스의 늦은 병합 응답이 덮지 않게
+  const loadScope = async (ws: Workspace) => {
+    const req = ++scopeReq;
+    const merged = await listMergedLibrary(ws.path);
+    if (req === scopeReq) setMergedLib(merged);
+  };
   const pickScope = (ws: Workspace | undefined) => {
     setSelId(undefined);
     setSelJobId(undefined);

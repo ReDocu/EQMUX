@@ -129,8 +129,14 @@ pub fn file_diff(ws_path: &str, path: &str) -> Result<FileDiff, String> {
     let in_head = git(&["cat-file", "-e", &format!("HEAD:{path}")], ws_path).is_ok();
 
     if !in_head {
-        // untracked/새 파일 — BASE 없음, 현재 전체가 add
-        let text = std::fs::read_to_string(Path::new(ws_path).join(path))
+        // untracked/새 파일 — BASE 없음, 현재 전체가 add.
+        // 워크스페이스 밖 탈출 방어 (fsx와 동일 규칙) — path가 절대경로/..면 join이 탈출한다
+        let base = std::fs::canonicalize(ws_path).map_err(|_| "워크스페이스 경로 없음".to_string())?;
+        let target = std::fs::canonicalize(base.join(path)).map_err(|_| "파일 없음".to_string())?;
+        if !target.starts_with(&base) {
+            return Err("워크스페이스 밖 경로".into());
+        }
+        let text = std::fs::read_to_string(&target)
             .map_err(|_| "파일을 읽을 수 없습니다 (바이너리 또는 없음)".to_string())?;
         let current = all_lines(&text, "add");
         let truncated = text.lines().count() > MAX_LINES_PER_SIDE;
@@ -138,7 +144,9 @@ pub fn file_diff(ws_path: &str, path: &str) -> Result<FileDiff, String> {
     }
 
     let out = git(&["diff", "--no-color", "-U999999", "HEAD", "--", path], ws_path)?;
-    if out.contains("Binary files") {
+    // "Binary files …" 는 diff 헤더의 한 줄로만 판정한다 — 본문(변경된 코드)에 그 문자열이
+    // 들어 있는 파일(이 diff.rs 자신 등)이 바이너리로 오탐되지 않게 줄 단위로 검사
+    if out.lines().any(|l| l.starts_with("Binary files ") && l.ends_with(" differ")) {
         return Err("바이너리 파일 — 텍스트 비교 불가".into());
     }
     if out.trim().is_empty() {

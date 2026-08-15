@@ -142,8 +142,12 @@ pub fn read(path: &std::path::Path, limit: usize) -> Result<TranscriptData, Stri
     if windowed {
         f.seek(SeekFrom::Start(len - TAIL_WINDOW)).map_err(|e| e.to_string())?;
     }
-    let mut buf = String::new();
-    f.read_to_string(&mut buf).map_err(|_| "UTF-8이 아닌 트랜스크립트".to_string())?;
+    // lossy 읽기 — 2MB 창 경계가 멀티바이트(한글) 문자 중간을 자르면 read_to_string은
+    // 파일 전체를 Err로 버린다. 바이트로 읽고 손상 바이트만 대체해, 깨진 줄은 파서가
+    // 건너뛰고 나머지는 집계한다는 계약(FR-G-85)을 지킨다.
+    let mut raw = Vec::new();
+    f.read_to_end(&mut raw).map_err(|e| e.to_string())?;
+    let buf = String::from_utf8_lossy(&raw).into_owned();
     let mut lines: Vec<&str> = buf.lines().collect();
     if windowed && !lines.is_empty() {
         lines.remove(0); // 창 경계의 부분 라인

@@ -94,12 +94,14 @@ fn sessions_dir() -> PathBuf {
     home().join(".claude").join("sessions")
 }
 
-/// 트랜스크립트 경로 (§10.3) — cwd의 ':' '\' '/'를 '-'로 치환. cwd가 경로에 들어가므로
-/// 재개는 같은 cwd에서만 성립한다 (FR-D-03 · R4).
+/// 트랜스크립트 경로 (§10.3) — Claude Code의 projects 디렉터리 명명 규칙과 일치해야 한다.
+/// 실측 결과 CC는 ASCII 영숫자만 남기고 나머지(`:` `\` `/` `.` `_` 공백 한글 등)를 전부 '-'로 치환한다
+/// (예: `C:\Users` → `C--Users`, `D:\ClaudeProject.EQMent` → `D---ClaudeProject-EQMent`).
+/// cwd가 경로에 들어가므로 재개는 같은 cwd에서만 성립한다 (FR-D-03 · R4).
 pub fn transcript_path(cwd: &str, uuid: &str) -> PathBuf {
     let escaped: String = cwd
         .chars()
-        .map(|c| if matches!(c, ':' | '\\' | '/') { '-' } else { c })
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .collect();
     home()
         .join(".claude")
@@ -184,6 +186,16 @@ fn maybe_notify(app: &AppHandle, evt: &AgentStateEvt) {
     if evt.status != "waiting" && evt.status != "dead" {
         return;
     }
+    // 의도된 종료(중지·제거) 표식은 알림 설정보다 먼저 소비한다 — off/음소거로 여기서 일찍
+    // return하면 표식이 남아, 나중에 설정을 켰을 때 같은 id의 정당한 dead 알림 1건을 삼킨다
+    let rt: tauri::State<AgentRt> = app.state();
+    if evt.status == "dead" {
+        if let Ok(mut expected) = rt.expected_exit.lock() {
+            if expected.remove(&evt.session) {
+                return;
+            }
+        }
+    }
     // 설정 라우팅 (PRD J · FR-G-30) — 꺼도 인앱 미확인 표시는 계속 동작한다 (FR-G-37)
     match crate::setting_str(app, "notifications").as_deref() {
         Some("off") => return,
@@ -209,15 +221,6 @@ fn maybe_notify(app: &AppHandle, evt: &AgentStateEvt) {
         .unwrap_or(false);
     if muted {
         return;
-    }
-    let rt: tauri::State<AgentRt> = app.state();
-    // 사용자가 의도한 종료(중지·제거)는 dead 알림 대상이 아니다
-    if evt.status == "dead" {
-        if let Ok(mut expected) = rt.expected_exit.lock() {
-            if expected.remove(&evt.session) {
-                return;
-            }
-        }
     }
     // 창이 포커스를 갖고 있으면 내지 않는다 (FR-G-31) — 인앱 표현으로 충분하다
     let focused = app
@@ -308,7 +311,7 @@ pub fn apply_hook(app: &AppHandle, session: &str, event: &str, payload: &serde_j
     }
     // 상태 전이만 이벤트 테이블·알림까지 간다 (FR-D-17) — activity·subagents 변경은
     // 도구 호출마다 일어나므로 방송만 하고 기록하지 않는다 (피드는 전이의 기록이다)
-    let quiet = !matches!(effect, HookEffect::Status(_));
+    let mut quiet = !matches!(effect, HookEffect::Status(_));
     let rt: tauri::State<AgentRt> = app.state();
     let mut evt = None;
     if let Ok(mut map) = rt.by_uuid.lock() {
@@ -333,10 +336,18 @@ pub fn apply_hook(app: &AppHandle, session: &str, event: &str, payload: &serde_j
                     }
                 }
                 HookEffect::Activity(tool) => {
-                    if t.activity == *tool {
+                    // 도구 실행 시작 = 승인 완료 — waiting에 고착돼 있으면 busy로 되돌린다.
+                    // degraded(레지스트리 없음) 모드에선 이 전이가 없으면 다음 Stop까지 "승인 대기"로 남는다
+                    let unstick = t.last_status == "waiting";
+                    if t.activity == *tool && !unstick {
                         break;
                     }
                     t.activity = tool.clone();
+                    if unstick {
+                        t.last_status = "busy".into();
+                        t.last_waiting = None;
+                        quiet = false; // 상태 전이이므로 피드·알림 경로로 보낸다
+                    }
                 }
                 HookEffect::SubagentDelta(d) => {
                     let next = (t.subagents + d).max(0);
@@ -448,6 +459,13 @@ pub fn on_pty_exit(app: &AppHandle, id: &str, code: Option<u32>, gen: u64) {
     }
     if let Some(e) = evt {
         emit_state(app, &e);
+    } else {
+        // dead 이벤트가 안 나간 exit(일반 셸·세대 불일치 재시작) — 이 exit을 위해 남긴
+        // expected_exit 표식을 여기서 소비한다. 방치하면 같은 id의 미래 에이전트가
+        // 뜻하지 않게 죽었을 때 정당한 dead 알림 1건을 삼킨다.
+        if let Ok(mut expected) = rt.expected_exit.lock() {
+            expected.remove(id);
+        }
     }
 }
 
@@ -586,6 +604,25 @@ fn scan(app: &AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::HookEffect;
+
+    /// 트랜스크립트 경로 이스케이프 (QA) — Claude Code는 ASCII 영숫자만 남기고 나머지를 '-'로.
+    /// `_`·`.`·공백·한글이 든 cwd에서 resumable이 오판되던 회귀를 막는다.
+    #[test]
+    fn transcript_path_escapes_like_claude_code() {
+        let esc = |cwd: &str| {
+            super::transcript_path(cwd, "u")
+                .parent()
+                .unwrap()
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        };
+        assert_eq!(esc("C:\\Users\\USER"), "C--Users-USER");
+        assert_eq!(esc("D:\\ClaudeProject.EQMent"), "D--ClaudeProject-EQMent");
+        assert_eq!(esc("D:\\my_proj v2"), "D--my-proj-v2"); // 밑줄·공백도 '-'
+        assert_eq!(esc("D:\\팀"), "D---"); // 한글은 ASCII 영숫자가 아니라 '-'
+    }
 
     #[test]
     fn hook_events_map_to_states() {

@@ -63,7 +63,7 @@ export async function cycleMissionStatus(wsId: string, missionId: string): Promi
     backend.cycleMissionStatus(missionId);
     return;
   }
-  const m = backend.listMissions().find((x) => x.id === missionId);
+  const m = backend.listMissions().find((x) => x.id === missionId && x.workspaceId === wsId);
   if (!m) return;
   const next = ORDER[(ORDER.indexOf(m.status) + 1) % ORDER.length];
   await invoke("mission_set_status", { wsPath: path, id: missionId, status: next }).catch(() => {});
@@ -81,7 +81,7 @@ export async function toggleAssign(
     backend.toggleAssign(missionId, sessionId);
     return;
   }
-  const m = backend.listMissions().find((x) => x.id === missionId);
+  const m = backend.listMissions().find((x) => x.id === missionId && x.workspaceId === wsId);
   if (!m) return;
   const wasAssigned = m.assigned.includes(sessionId);
   await invoke("mission_assign", {
@@ -98,6 +98,9 @@ export async function toggleAssign(
 function sendBrief(sessionId: string, m: Mission): void {
   const s = backend.listSessions().find((x) => x.id === sessionId);
   if (!s?.personaId || !s.agentSessionId || s.status === "dead" || s.restored) return;
+  // waiting = 승인 다이얼로그가 떠 있다 — 여기 텍스트를 주입하면 다이얼로그의 오답이 된다.
+  // 브리프는 역할 파일 임무 블록에 이미 있으니 다음 턴에 전달된다 (conversation.ts M3와 동일 원칙)
+  if (s.status === "waiting") return;
   const goal = m.goal ? ` — ${m.goal}` : "";
   writePty(sessionId, `[EQMUX] 임무 배정: ${m.name}${goal} · 정의 ${m.file}\r`);
 }

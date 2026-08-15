@@ -6,6 +6,7 @@ import { backend } from "../backend/mock";
 import { fsCreate, fsDelete, fsPreview, fsRead, fsRename, fsTree, fsWrite } from "../backend/panels";
 import type { FsNode } from "../backend/panels";
 import { refreshMissions } from "../backend/missions";
+import { sendConversation } from "../backend/conversation";
 import { isTauri } from "../backend/pty";
 import { openPanel, selectedSession, setExplorerOpen, setView, tick, view } from "../state";
 
@@ -233,12 +234,12 @@ export function MissionExplorerTab() {
   };
 
   const sendBrief = () => {
-    backend.sendMessage(
-      persona()?.name ?? "리드",
-      "@all",
-      "handoff",
-      `브리프 전달 · ${sel()?.rel ?? ".eqmux/missions/"}`,
-    );
+    // 원장 경로(msg_send)로 보낸다 — backend.sendMessage 직접 호출은 Tauri에서 DB·PTY 전달 없이
+    // workspaceId undefined인 유령 메시지가 됐다가 다음 hydrate에서 사라진다
+    const wsId = ws()?.id;
+    if (wsId) {
+      void sendConversation(wsId, "@all", "handoff", `브리프 전달 · ${sel()?.rel ?? ".eqmux/missions/"}`);
+    }
     // 전체 화면 팝업(M25)에서 부르므로 — 팝업을 접고 대화 패널을 연다
     setExplorerOpen(false);
     openPanel("conversation");

@@ -5,7 +5,7 @@ import { ensureAgentListeners } from "./backend/agent";
 import { startMessageBus } from "./backend/conversation";
 import { backend } from "./backend/mock";
 import { startMemorySampling } from "./backend/memory";
-import { isTauri } from "./backend/pty";
+import { ensurePtyListeners, isTauri, setPtyExitHook } from "./backend/pty";
 import { crashRecovery } from "./backend/recovery";
 import type { CrashReport } from "./backend/recovery";
 import { performShutdown } from "./backend/shutdown";
@@ -32,6 +32,12 @@ import { WorkspaceConnection } from "./screens/WorkspaceConnection";
 export function App() {
   const v = view;
 
+  // 전역 pty-output/exit 수신 — spawnPty 경로에만 맡기면 에이전트 전용 실행·재부착 세션이
+  // 출력을 못 받는다. 셸 exit은 여기서 상태에 반영한다 (에이전트는 agent-state가 관장)
+  onMount(() => {
+    void ensurePtyListeners();
+    setPtyExitHook((id, code) => backend.sessionExited(id, code));
+  });
   // Tauri 부트스트랩 — workspaces.json 실물 레지스트리가 목 목록을 대체한다 (PRD E)
   onMount(() => void refreshWorkspaces());
   // agent-state 이벤트 수신 시작 (PRD D) — 상태 스트림이 목 백엔드를 실측으로 덮는다

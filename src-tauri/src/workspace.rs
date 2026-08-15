@@ -43,26 +43,52 @@ fn registry_path(root: &Path) -> PathBuf {
     root.join("workspaces.json")
 }
 
+/// 읽기 전용 폴백 로드 — 파일이 없거나 깨졌으면 빈 목록 (목록 표시·크래시 스캔용)
 pub fn load(root: &Path) -> Vec<WsEntry> {
-    fs::read_to_string(registry_path(root))
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+    load_strict(root).unwrap_or_default()
+}
+
+/// 변경 경로용 엄격 로드 — 파일이 "있는데" 못 읽거나 못 파싱하면 Err.
+/// 여기서 빈 목록으로 폴백한 채 진행하면 바로 다음 save가 레지스트리 전체를
+/// 빈 파일로 덮어써 등록이 복구 불가로 사라진다. 없는 파일만 빈 목록이다.
+pub fn load_strict(root: &Path) -> Result<Vec<WsEntry>, String> {
+    let path = registry_path(root);
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let s = fs::read_to_string(&path).map_err(|e| format!("workspaces.json 읽기 실패: {e}"))?;
+    serde_json::from_str(&s).map_err(|e| format!("workspaces.json 파싱 실패: {e}"))
+}
+
+/// 원자적 쓰기 — tmp에 쓰고 fsync 후 rename. sync 없이 rename만 하면 전원 단절 시
+/// rename 메타데이터만 먼저 커밋돼 0바이트/부분 파일이 target 자리에 남을 수 있다.
+pub(crate) fn atomic_write(target: &Path, data: &[u8]) -> Result<(), String> {
+    // 전체 파일명 + ".tmp" — with_extension은 team.json/team.md가 같은 team.tmp로 충돌한다
+    let tmp = target.with_file_name(format!(
+        "{}.tmp",
+        target.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+    ));
+    {
+        use std::io::Write as _;
+        let mut f = fs::File::create(&tmp).map_err(|e| e.to_string())?;
+        f.write_all(data).map_err(|e| e.to_string())?;
+        f.sync_all().map_err(|e| e.to_string())?;
+    }
+    fs::rename(&tmp, target).map_err(|e| e.to_string())
 }
 
 pub fn save(root: &Path, list: &[WsEntry]) -> Result<(), String> {
     let _ = fs::create_dir_all(root);
-    let target = registry_path(root);
-    let tmp = root.join("workspaces.json.tmp");
     let json = serde_json::to_string_pretty(list).map_err(|e| e.to_string())?;
-    fs::write(&tmp, json).map_err(|e| e.to_string())?;
-    fs::rename(&tmp, &target).map_err(|e| e.to_string())
+    atomic_write(&registry_path(root), json.as_bytes())
 }
 
-/// git CLI 실행 — GUI 앱이므로 콘솔 창을 띄우지 않는다
+/// git CLI 실행 — GUI 앱이므로 콘솔 창을 띄우지 않는다.
+/// core.quotepath=off — 비ASCII(한글) 경로를 8진 이스케이프(`\355…`) 대신 그대로 출력한다.
+/// 이게 없으면 status·diff·numstat 파싱이 한글 파일명에서 전부 어긋난다 (대상 사용자 상시).
 pub fn git(args: &[&str], cwd: &str) -> Result<String, String> {
     let mut cmd = Command::new("git");
-    cmd.args(args).current_dir(cwd);
+    cmd.args(["-c", "core.quotepath=off"]).args(args).current_dir(cwd);
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
     let out = cmd.output().map_err(|e| format!("git 실행 실패: {e}"))?;
@@ -110,9 +136,12 @@ pub fn worktree_create(ws_path: &str, name: &str, base: Option<&str>) -> Result<
             .map(|c| if c.is_alphanumeric() || matches!(c, '-' | '_') { c } else { '-' })
             .collect::<String>()
     );
-    // 새 브랜치로 시도(+base ref) → 브랜치가 이미 있으면(이전 흔적) 그 브랜치를 다시 연결
+    // 새 브랜치로 시도(+base ref) → 브랜치가 이미 있으면(이전 흔적) 그 브랜치를 다시 연결.
+    // base는 UI가 for-each-ref로 읽은 ref라 '--foo' 같은 크래프트된 ref 이름이 흘러들 수 있어
+    // --end-of-options로 옵션 오인을 막는다 (p·branch는 앱 생성값이라 안전)
     let mut add_new: Vec<&str> = vec!["worktree", "add", &p, "-b", &branch];
     if let Some(b) = base.filter(|b| !b.trim().is_empty()) {
+        add_new.push("--end-of-options");
         add_new.push(b);
     }
     if let Err(first) = git(&add_new, ws_path) {
@@ -327,6 +356,31 @@ pub fn entry_name(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 레지스트리 보호 (QA C-5) — 손상 파일은 변경 경로에서 Err, 없는 파일만 빈 목록.
+    /// atomic_write 왕복과 team.json/team.md식 이름 충돌 없는 tmp도 함께 확인한다.
+    #[test]
+    fn load_strict_rejects_corrupt_registry() {
+        let dir = std::env::temp_dir().join(format!("eqmux-reg-{}", now_ms()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        assert_eq!(load_strict(&dir).unwrap().len(), 0); // 없는 파일 = 빈 목록
+        let entry = WsEntry {
+            id: "ws1".into(),
+            name: "ws1".into(),
+            path: "C:\\w".into(),
+            remote: None,
+            branch: None,
+            last_used: 1,
+        };
+        save(&dir, &[entry]).unwrap();
+        assert_eq!(load_strict(&dir).unwrap().len(), 1);
+        assert!(!dir.join("workspaces.json.tmp").exists()); // rename 완료 — tmp 잔재 없음
+        fs::write(dir.join("workspaces.json"), "{broken").unwrap();
+        assert!(load_strict(&dir).is_err()); // 손상 = 변경 경로 차단 (빈 목록 덮어쓰기 방지)
+        assert!(load(&dir).is_empty()); // 읽기 전용 폴백은 빈 목록
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn overview_reads_a_real_repo() {

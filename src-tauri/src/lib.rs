@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::fs::{create_dir_all, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
@@ -56,7 +56,9 @@ pub(crate) fn setting_bool(app: &AppHandle, key: &str, default: bool) -> bool {
 
 struct PtySession {
     master: Box<dyn MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
+    /// 세션별 잠금 — 블로킹 파이프 쓰기를 전역 PtyState 잠금 밖으로 뺀다.
+    /// 한 세션의 stdin이 막혀도(먹통 TUI 등) 다른 세션의 write/resize와 pty_kill이 살아 있어야 한다.
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
     child: Box<dyn Child + Send + Sync>,
     gen: u64, // 같은 id로 재기동 시 이전 리더 스레드의 정리를 무효화하는 세대 표식
     job: Option<job::Job>, // FR-C-05 — 자식 트리 정리. drop = KILL_ON_JOB_CLOSE
@@ -176,7 +178,7 @@ fn spawn_pty_session(
         id.clone(),
         PtySession {
             master: pair.master,
-            writer,
+            writer: Arc::new(Mutex::new(writer)),
             child,
             gen,
             job,
@@ -302,10 +304,15 @@ fn pty_spawn(
 
 #[tauri::command]
 fn pty_write(state: State<PtyState>, id: String, data: String) -> Result<(), String> {
-    let mut sessions = state.0.lock().map_err(|e| e.to_string())?;
-    let s = sessions.get_mut(&id).ok_or("세션 없음")?;
-    s.writer.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
-    s.writer.flush().map_err(|e| e.to_string())
+    // 전역 잠금은 Arc 복제까지만 — 파이프 버퍼가 가득 찬 세션에서 write_all이 블록해도
+    // 전역 잠금은 이미 풀려 있어 다른 세션의 write/resize·pty_kill이 막히지 않는다
+    let writer = {
+        let sessions = state.0.lock().map_err(|e| e.to_string())?;
+        sessions.get(&id).ok_or("세션 없음")?.writer.clone()
+    };
+    let mut w = writer.lock().map_err(|e| e.to_string())?;
+    w.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
+    w.flush().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -771,6 +778,12 @@ fn agent_spawn(
 }
 
 fn kill_pty_for_restart(app: &AppHandle, id: &str) {
+    // 재시작으로 인한 exit — 구 PTY의 EOF가 새 Tracked 등록보다 빨라도(세대 경합)
+    // "종료됨" OS 알림은 내지 않는다. 표식은 그 exit 처리에서 소비된다 (on_pty_exit).
+    let rt: State<agent::AgentRt> = app.state();
+    if let Ok(mut expected) = rt.expected_exit.lock() {
+        expected.insert(id.to_string());
+    }
     let state: State<PtyState> = app.state();
     let removed = state.0.lock().ok().and_then(|mut s| s.remove(id));
     if let Some(s) = removed {
@@ -975,7 +988,9 @@ async fn worktree_ensure(ws_path: String, session: String) -> Result<String, Str
 #[tauri::command]
 async fn ws_checkout(ws_path: String, branch: String) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        if workspace::git(&["checkout", &branch], &ws_path).is_ok() {
+        // --end-of-options — 브랜치명이 '-'로 시작해도(크래프트된 ref) git이 옵션으로 오인하지 않게.
+        // (`--`는 뒤를 pathspec으로 만들어 브랜치 전환이 아니라 파일 복원이 되므로 쓰면 안 된다)
+        if workspace::git(&["checkout", "--end-of-options", &branch], &ws_path).is_ok() {
             return Ok(branch);
         }
         workspace::git(&["checkout", "-b", &branch], &ws_path).map(|_| branch)
@@ -1218,7 +1233,7 @@ fn ws_register(store_state: State<StoreState>, path: String) -> Result<WsInfo, S
         return Err("NOT_A_REPO".into());
     }
     let root = store_state.0.root();
-    let mut list = workspace::load(&root);
+    let mut list = workspace::load_strict(&root)?;
     if let Some(existing) = list.iter_mut().find(|e| e.path.eq_ignore_ascii_case(&path)) {
         existing.last_used = workspace::now_ms();
         let info = workspace::inspect(existing);
@@ -1273,7 +1288,7 @@ async fn ws_clone(url: String, parent: String) -> Result<String, String> {
 #[tauri::command]
 fn ws_unregister(store_state: State<StoreState>, id: String) -> Result<(), String> {
     let root = store_state.0.root();
-    let mut list = workspace::load(&root);
+    let mut list = workspace::load_strict(&root)?;
     list.retain(|e| e.id != id);
     workspace::save(&root, &list)
 }
@@ -1285,7 +1300,7 @@ fn ws_repath(store_state: State<StoreState>, id: String, path: String) -> Result
         return Err("폴더를 찾을 수 없습니다".into());
     }
     let root = store_state.0.root();
-    let mut list = workspace::load(&root);
+    let mut list = workspace::load_strict(&root)?;
     let entry = list.iter_mut().find(|e| e.id == id).ok_or("등록 항목 없음")?;
     entry.path = path;
     entry.name = workspace::entry_name(&entry.path);
@@ -1298,10 +1313,11 @@ fn ws_repath(store_state: State<StoreState>, id: String, path: String) -> Result
 #[tauri::command]
 fn ws_touch(store_state: State<StoreState>, id: String) -> Result<(), String> {
     let root = store_state.0.root();
-    let mut list = workspace::load(&root);
-    if let Some(entry) = list.iter_mut().find(|e| e.id == id) {
-        entry.last_used = workspace::now_ms();
-    }
+    let mut list = workspace::load_strict(&root)?;
+    let Some(entry) = list.iter_mut().find(|e| e.id == id) else {
+        return Ok(()); // 없는 id면 쓸 것도 없다 — 불필요한 덮어쓰기 방지
+    };
+    entry.last_used = workspace::now_ms();
     workspace::save(&root, &list)
 }
 
@@ -1382,23 +1398,36 @@ fn shutdown_flush(store_state: State<StoreState>) -> bool {
 #[tauri::command]
 async fn app_exit(app: AppHandle) {
     let state: State<PtyState> = app.state();
-    // ③ 정상 종료 신호 — TUI 에이전트가 스스로 정리할 기회
-    if let Ok(mut sessions) = state.0.lock() {
-        for s in sessions.values_mut() {
-            let _ = s.writer.write_all(b"\x03");
-            let _ = s.writer.flush();
+    // ③ 정상 종료 신호 — TUI 에이전트가 스스로 정리할 기회.
+    // writer Arc만 복제해 전역 잠금 밖에서 쓴다 (B14) — 막힌 파이프가 종료를 못 멈추게
+    let writers: Vec<_> = match state.0.lock() {
+        Ok(sessions) => sessions.values().map(|s| s.writer.clone()).collect(),
+        Err(_) => Vec::new(),
+    };
+    for w in writers {
+        if let Ok(mut w) = w.lock() {
+            let _ = w.write_all(b"\x03");
+            let _ = w.flush();
         }
     }
     tokio_sleep(std::time::Duration::from_millis(500)).await; // ④ 유예
-    if let Ok(mut sessions) = state.0.lock() {
-        for (_, s) in sessions.drain() {
-            if let Some(j) = &s.job {
-                j.terminate(); // FR-C-05 — 트리째
-            }
-            let mut child = s.child;
-            let _ = child.kill();
+    // 잠금 안에서는 map을 비우기만 한다 (B14) — kill·ConPTY drop을 잠금 아래서 하면
+    // EOF를 맞은 리더 스레드(같은 잠금 대기)와 교착해 종료 시퀀스가 영영 멈춘다
+    let drained: Vec<(String, PtySession)> = match state.0.lock() {
+        Ok(mut sessions) => sessions.drain().collect(),
+        Err(_) => Vec::new(),
+    };
+    for (_, s) in drained {
+        if let Some(j) = &s.job {
+            j.terminate(); // FR-C-05 — 트리째
         }
+        let mut child = s.child;
+        let _ = child.kill();
+        // 나머지 필드 drop = ConPTY 닫기. 리더가 잔여 출력을 비울 때까지 여기서(잠금 밖) 기다린다
     }
+    // 리더들이 EOF 후 마지막 줄·SessionExit을 store 채널에 넣을 짧은 유예 —
+    // flush보다 늦게 도착하면 exit 기록이 유실돼 다음 dirty 시작에서 크래시 세션으로 오인된다
+    tokio_sleep(std::time::Duration::from_millis(200)).await;
     // 세션 exit 기록까지 flush (최대 1초 — 이미 ②를 거쳤으므로 잔량은 적다)
     let store: State<StoreState> = app.state();
     let (ack_tx, ack_rx) = std::sync::mpsc::channel();
@@ -1467,9 +1496,7 @@ fn settings_save(
     let root = store_state.0.root();
     std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
     let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
-    let tmp = root.join("settings.json.tmp");
-    std::fs::write(&tmp, json).map_err(|e| e.to_string())?;
-    std::fs::rename(tmp, root.join("settings.json")).map_err(|e| e.to_string())?;
+    workspace::atomic_write(&root.join("settings.json"), json.as_bytes())?;
     if let Ok(mut v) = settings.0.lock() {
         *v = data;
     }
@@ -1487,9 +1514,7 @@ fn layout_save(store_state: State<StoreState>, data: serde_json::Value) -> Resul
     let root = store_state.0.root();
     std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
     let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
-    let tmp = root.join("layout.json.tmp");
-    std::fs::write(&tmp, json).map_err(|e| e.to_string())?;
-    std::fs::rename(tmp, root.join("layout.json")).map_err(|e| e.to_string())
+    workspace::atomic_write(&root.join("layout.json"), json.as_bytes())
 }
 
 #[tauri::command]
@@ -1569,6 +1594,37 @@ pub fn run() {
         .setup(|app| {
             // 스토어 루트 = 앱 데이터 (FR-C-20a — repo 안에 바이너리를 두지 않는다)
             let root = app.path().app_data_dir()?;
+            // 설치·갱신 후 첫 실행 감지 — 데이터 버전 표식이 현재 앱 버전과 다르면
+            // 이전 설치가 남긴 데이터를 전부 비우고 새로 시작한다
+            let ver_file = root.join("data.ver");
+            let cur_ver = app.package_info().version.to_string();
+            if std::fs::read_to_string(&ver_file).ok().as_deref() != Some(cur_ver.as_str()) {
+                // 사용자 저작물은 wipe에서 제외한다 — 설정과 커스텀 페르소나·직무·프리셋은
+                // 버전과 무관한 사용자 자산이다. 세션 기록·레지스트리·레이아웃만 비운다.
+                const PRESERVED: [&str; 4] = ["settings.json", "jobs", "personas", "presets"];
+                // 삭제가 실패하면(AV·열린 핸들 — Windows에서 흔함) 표식을 갱신하지 않는다.
+                // 반쯤 지워진 상태에 새 버전이 찍히면 다음 실행부터 재시도조차 안 하기 때문.
+                let mut wiped = true;
+                if let Ok(entries) = std::fs::read_dir(&root) {
+                    for entry in entries.flatten() {
+                        let name = entry.file_name().to_string_lossy().into_owned();
+                        if PRESERVED.contains(&name.as_str()) {
+                            continue;
+                        }
+                        let p = entry.path();
+                        let ok = if p.is_dir() { std::fs::remove_dir_all(&p) } else { std::fs::remove_file(&p) };
+                        if ok.is_err() {
+                            wiped = false;
+                        }
+                    }
+                }
+                std::fs::create_dir_all(&root)?;
+                if wiped {
+                    let _ = std::fs::write(&ver_file, &cur_ver);
+                }
+            } else {
+                std::fs::create_dir_all(&root)?;
+            }
             library::seed(&root); // 역할 라이브러리 시드 (FR-E-27) — 디렉터리가 없을 때만
             write_hook_settings(&root); // --settings 주입용 훅 합성 파일 (D3)
             // 비정상 종료 감지 (FR-C-35) — 표식이 남아 있으면 직전 실행이 크래시였다.

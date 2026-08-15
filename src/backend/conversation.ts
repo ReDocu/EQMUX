@@ -44,13 +44,17 @@ const loaded = new Set<string>();
 /** 원장 실측 → 그 워크스페이스 스트림 교체. 부트스트랩과 늦게 열린 워크스페이스가 쓴다. */
 export async function refreshConversation(wsId: string): Promise<void> {
   if (!isTauri()) return;
-  loaded.add(wsId);
   const rows = await invoke<MsgRow[]>("msg_list", {
     workspace: wsId,
     beforeId: null,
     limit: 200,
-  }).catch(() => [] as MsgRow[]);
-  backend.hydrateMessages(wsId, rows.map((r) => toMsg(wsId, r)));
+  }).catch(() => undefined);
+  // 로드 실패(일시 오류)에 빈 배열로 스트림을 덮으면 대화 내역이 화면에서 사라진다 —
+  // 성공했을 때만 교체하고, 실패면 다음 재실측까지 기존 표시를 유지한다
+  if (rows) {
+    loaded.add(wsId);
+    backend.hydrateMessages(wsId, rows.map((r) => toMsg(wsId, r)));
+  }
   await restoreInbox(wsId); // 인박스 영속 (F) — 재시작 전 대기분을 되살린다
 }
 

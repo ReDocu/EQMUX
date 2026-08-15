@@ -52,17 +52,24 @@ export function GitDiffEditor(props: { wsId?: string }) {
     setExpandedFolds([]);
   };
 
+  let filesReq = 0; // 워크스페이스 전환 시 이전 저장소의 늦은 응답이 새 목록·브랜치를 덮지 않게
   const loadFiles = async () => {
     const target = ws();
     if (!isTauri() || !target) return;
+    const req = ++filesReq;
     const result = await diffChangedFiles(target.path);
+    if (req !== filesReq) return; // 그새 워크스페이스가 바뀌었다 — 이 응답은 버린다
     setFilesErr(result === undefined); // 실패(비 저장소·git 없음)를 빈 목록과 구분한다 (B9)
     const list = result ?? [];
     setFiles(list);
+    // 파일이 바뀌지 않아 selectFile이 안 불려도 새 워크스페이스에선 diff를 다시 읽는다
     if (!selected() || !list.some((f) => f.path === selected())) {
       selectFile(list[0]?.path);
+    } else {
+      void loadDiff();
     }
     void gitOverview(target.path).then((o) => {
+      if (req !== filesReq) return;
       if (o) {
         setBranch(o.branch);
         setSync({ ahead: o.ahead, behind: o.behind });

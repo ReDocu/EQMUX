@@ -7,6 +7,10 @@
 use serde_json::json;
 use tauri::{AppHandle, Emitter, Manager, State};
 
+/// 동시 연결 스레드 상한 — CLI는 한 줄 요청/응답이라 정상 부하에서는 한 자릿수다
+const MAX_CONNS: usize = 32;
+static CONN_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 fn pipe_path() -> String {
     let user: String = std::env::var("USERNAME")
         .unwrap_or_else(|_| "default".into())
@@ -88,12 +92,20 @@ fn server_loop(app: AppHandle) {
             unsafe { CloseHandle(h) };
             continue;
         }
+        // 동시 연결 상한 — 한 줄도 안 보내는 클라이언트가 read_line에 영구 블록되면
+        // 스레드+핸들이 무한 누적된다. ponytail: 상한 거부로 막는다, read 타임아웃이 필요해지면 그때
+        if CONN_COUNT.load(std::sync::atomic::Ordering::Relaxed) >= MAX_CONNS {
+            unsafe { CloseHandle(h) };
+            continue;
+        }
+        CONN_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let app2 = app.clone();
         let h_addr = h as usize; // HANDLE(*mut c_void)은 Send가 아니라 usize로 건넨다
         // 연결당 스레드 — 요청 한 줄이라 수명이 짧다. 파일 래핑으로 drop 시 핸들이 닫힌다.
         std::thread::spawn(move || {
             let file = unsafe { std::fs::File::from_raw_handle(h_addr as _) };
             handle_conn(&app2, file);
+            CONN_COUNT.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
         });
     }
 }

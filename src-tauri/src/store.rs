@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, Sender, SyncSender};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rusqlite::{params, Connection};
@@ -22,7 +22,7 @@ pub enum StoreMsg {
 }
 
 pub struct Store {
-    tx: Sender<StoreMsg>,
+    tx: SyncSender<StoreMsg>,
     root: PathBuf,
 }
 
@@ -99,7 +99,7 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-fn sanitize(ws: &str) -> String {
+pub(crate) fn sanitize(ws: &str) -> String {
     ws.chars()
         .map(|c| if c.is_alphanumeric() || matches!(c, '-' | '_' | '.') { c } else { '_' })
         .collect()
@@ -118,6 +118,8 @@ pub(crate) fn open_db(root: &Path, ws: &str) -> rusqlite::Result<Connection> {
     let conn = Connection::open(path)?;
     let _ = conn.pragma_update(None, "journal_mode", "WAL");
     let _ = conn.pragma_update(None, "synchronous", "NORMAL");
+    // 이중 쓰기 연결 경합 (store 배치 커밋 vs msg_send·IPC publish) — 즉시 실패 대신 대기
+    let _ = conn.busy_timeout(Duration::from_millis(500));
     conn.execute_batch(SCHEMA)?;
     // SGR 보존 컬럼 (FR-C-15, M32) — 기존 DB 마이그레이션. 이미 있으면 조용히 실패한다
     let _ = conn.execute("ALTER TABLE scrollback ADD COLUMN styled TEXT", []);
@@ -150,13 +152,15 @@ pub(crate) fn open_db(root: &Path, ws: &str) -> rusqlite::Result<Connection> {
 
 impl Store {
     pub fn new(root: PathBuf) -> Store {
-        let (tx, rx) = channel();
+        // bounded — 쓰기 스레드가 수 초 정체해도(FTS 첫 시드·보존 DELETE) 힙이 무한 증가하지 않는다.
+        // 가득 차면 생산자(PTY 리더)가 잠시 블록된다 = 출력 표시가 느려질 뿐 데이터는 안 버린다
+        let (tx, rx) = sync_channel(50_000);
         let thread_root = root.clone();
         std::thread::spawn(move || run(thread_root, rx));
         Store { tx, root }
     }
 
-    pub fn sender(&self) -> Sender<StoreMsg> {
+    pub fn sender(&self) -> SyncSender<StoreMsg> {
         self.tx.clone()
     }
 
@@ -230,7 +234,12 @@ fn flush(
                 Ok(c) => {
                     dbs.insert(ws.clone(), c);
                 }
-                Err(_) => continue,
+                Err(_) => {
+                    // 일시 오류(잠금·디스크)로 배치를 무음 폐기하지 않는다 — 다음 tick에 재시도.
+                    // ponytail: 영구 장애면 pending이 계속 자란다, 재시도 상한이 필요해지면 그때 단다
+                    pending.extend(msgs);
+                    continue;
+                }
             }
         }
         let conn = dbs.get_mut(&ws).unwrap();
@@ -239,7 +248,10 @@ fn flush(
 
         let tx = match conn.transaction() {
             Ok(t) => t,
-            Err(_) => continue,
+            Err(_) => {
+                pending.extend(msgs);
+                continue;
+            }
         };
         for msg in &msgs {
             match msg {
@@ -255,14 +267,18 @@ fn flush(
                     );
                 }
                 StoreMsg::SessionExit { id, code, .. } => {
+                    // 종료 코드를 모르면 -1 — NULL은 "exit 기록 자체가 없음 = 크래시"의 뜻으로
+                    // crash_scan이 판정에 쓰므로, kill·종료 시퀀스로 끝난 세션에 NULL을 남기면
+                    // 다음 dirty 시작마다 크래시 세션으로 오인된다
                     let _ = tx.execute(
                         "UPDATE session SET exit_code = ?2 WHERE id = ?1",
-                        params![id, code.map(|c| c as i64)],
+                        params![id, code.map(|c| c as i64).unwrap_or(-1)],
                     );
                     let _ = tx.execute(
                         "INSERT INTO event (ts, session_id, kind, payload) VALUES (?1, ?2, 'session-exit', ?3)",
                         params![now, id, format!("{:?}", code)],
                     );
+                    cursors.remove(id); // 끝난 세션의 커서 잔류 방지 — 재시작 시 MAX(seq)로 다시 만든다
                 }
                 StoreMsg::Line { id, text, styled, .. } => {
                     let cur = cursors.entry(id.clone()).or_insert_with(|| {

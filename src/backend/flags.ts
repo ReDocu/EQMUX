@@ -24,26 +24,31 @@ export async function restoreUnseen(): Promise<void> {
 }
 
 let started = false;
+let timer: ReturnType<typeof setTimeout> | undefined;
 
 /** 변경 감지 → 800ms 디바운스 저장. 반드시 restoreUnseen 이후에 시작한다 */
 export function startUnseenSync(): void {
   if (started || !isTauri()) return;
   started = true;
-  let timer: ReturnType<typeof setTimeout> | undefined;
   backend.subscribe(() => {
     clearTimeout(timer);
-    timer = setTimeout(() => {
-      for (const ws of backend.listWorkspaces()) {
-        if (ws.pathMissing) continue;
-        const ids = backend
-          .listSessions()
-          .filter((s) => s.workspaceId === ws.id && s.unseen)
-          .map((s) => s.id);
-        const json = JSON.stringify(ids);
-        if (lastSaved.get(ws.id) === json) continue;
-        lastSaved.set(ws.id, json);
-        void invoke("cache_set", { workspace: ws.id, key: KEY, value: json }).catch(() => {});
-      }
-    }, 800);
+    timer = setTimeout(flushUnseenNow, 800);
   });
+}
+
+/** 디바운스 즉시 flush — 종료 시퀀스가 부른다. sync 시작 전에는 no-op (빈 상태 덮어쓰기 방지) */
+export function flushUnseenNow(): void {
+  if (!started) return;
+  clearTimeout(timer);
+  for (const ws of backend.listWorkspaces()) {
+    if (ws.pathMissing) continue;
+    const ids = backend
+      .listSessions()
+      .filter((s) => s.workspaceId === ws.id && s.unseen)
+      .map((s) => s.id);
+    const json = JSON.stringify(ids);
+    if (lastSaved.get(ws.id) === json) continue;
+    lastSaved.set(ws.id, json);
+    void invoke("cache_set", { workspace: ws.id, key: KEY, value: json }).catch(() => {});
+  }
 }

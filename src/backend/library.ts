@@ -24,7 +24,9 @@ function toPersona(p: LibraryData["personas"][number]): Persona {
 export async function refreshLibrary(): Promise<void> {
   if (!isTauri()) return;
   const lib = await invoke<LibraryData>("library_list", { wsPath: null }).catch(() => undefined);
-  if (lib && lib.jobs.length > 0) {
+  // 로드 성공이면 빈 목록이어도 반영한다 (파일이 이긴다, FR-E-74) — 마지막 직무를 지웠을 때
+  // 빈 결과를 버리면 삭제된 항목이 화면·캐스팅에 계속 남는다. undefined(호출 실패)만 건너뛴다
+  if (lib) {
     backend.hydrateLibrary(lib.jobs, lib.personas.map(toPersona));
   }
 }

@@ -3,6 +3,7 @@
 // 컬렉션은 createMutable 프록시다 — in-place 변경이 곧 반응성이라, 상세 모달·<For> 행처럼
 // tick()을 다시 읽지 않는 표면도 즉시 갱신된다 (B1~B4 재발 방지).
 import { createMutable } from "solid-js/store";
+import { isTauri, killPty } from "./pty";
 import type {
   AgentStateApply,
   ConversationMessage,
@@ -72,6 +73,8 @@ export interface Backend {
   applyMemory(samples: { id: string; mb: number; peakMb: number }[]): void;
   /** 실물 에이전트 상태 반영 (PRD D agent-state 이벤트) — Tauri에서만 호출된다 */
   applyAgentState(evt: AgentStateApply): void;
+  /** PTY 종료 실측 반영 — 셸(기본 터미널) 전용. 에이전트는 agent-state 경로가 관장한다 (FR-D-50) */
+  sessionExited(id: string, code: number | null): void;
   createMission(wsId: string, name: string, goal: string, branch?: string): void;
   cycleMissionStatus(id: string): void;
   toggleAssign(missionId: string, sessionId: string): void;
@@ -427,6 +430,16 @@ const TURNS = new Map<string, TranscriptTurn[]>([
   ],
 ]);
 
+// Tauri에서는 목 시드를 렌더링 전에 비운다 — ws_registry hydrate가 도착하기 전
+// 첫 프레임에 가짜 워크스페이스·세션·미확인 점이 노출되는 것을 막는다. 브라우저 dev는 유지.
+if (isTauri()) {
+  WORKSPACES.length = 0;
+  SESSIONS.length = 0;
+  MISSIONS.length = 0;
+  EVENTS.length = 0;
+  MESSAGES.length = 0;
+}
+
 export class MockBackend implements Backend {
   private listeners = new Set<() => void>();
   private timer: ReturnType<typeof setInterval> | undefined;
@@ -524,6 +537,21 @@ export class MockBackend implements Backend {
     sess.exitCode = undefined;
     sess.lastOutput = "재개됨 · transcript 복원";
     this.logEvent("state", "dead → busy · 재개", id);
+    this.broadcast();
+  }
+
+  sessionExited(id: string, code: number | null) {
+    const sess = SESSIONS.find((x) => x.id === id);
+    if (!sess || sess.personaId) return; // 에이전트 dead는 agent-state가 권위 — 재시작 중 거짓 dead 방지
+    sess.resumable = false; // 셸에는 재개할 transcript가 없다 — 죽은 터미널의 "재개"는 좀비 상태만 만든다
+    if (sess.status !== "dead") {
+      sess.status = "dead";
+      sess.exitCode = code ?? undefined;
+      sess.sinceMs = 0;
+      sess.waitingFor = undefined;
+      sess.lastOutput = `프로세스 종료 · exit ${code ?? "?"}`;
+      this.logEvent("state", `프로세스 종료 · exit ${code ?? "?"}`, id);
+    }
     this.broadcast();
   }
 
@@ -947,10 +975,14 @@ export class MockBackend implements Backend {
     const openIds = new Set(WORKSPACES.filter((w) => w.open).map((w) => w.id));
     WORKSPACES.length = 0;
     for (const w of list) WORKSPACES.push({ ...w, open: openIds.has(w.id) });
-    // 레지스트리에 없는 워크스페이스의 목 세션·임무는 함께 걷어낸다
+    // 레지스트리에 없는 워크스페이스의 목 세션·임무는 함께 걷어낸다.
+    // PTY도 함께 죽인다 — 화면에서만 지우면 재접속 불가능한 고아 프로세스가 계속 돈다
     const valid = new Set(WORKSPACES.map((w) => w.id));
     for (let i = SESSIONS.length - 1; i >= 0; i--) {
-      if (!valid.has(SESSIONS[i].workspaceId)) SESSIONS.splice(i, 1);
+      if (!valid.has(SESSIONS[i].workspaceId)) {
+        killPty(SESSIONS[i].id);
+        SESSIONS.splice(i, 1);
+      }
     }
     for (let i = MISSIONS.length - 1; i >= 0; i--) {
       if (!valid.has(MISSIONS[i].workspaceId)) MISSIONS.splice(i, 1);
@@ -964,7 +996,10 @@ export class MockBackend implements Backend {
     const ws = WORKSPACES[i];
     WORKSPACES.splice(i, 1);
     for (let j = SESSIONS.length - 1; j >= 0; j--) {
-      if (SESSIONS[j].workspaceId === id) SESSIONS.splice(j, 1);
+      if (SESSIONS[j].workspaceId === id) {
+        killPty(SESSIONS[j].id); // 등록 해제 = 세션도 끝 — PTY 고아 방지
+        SESSIONS.splice(j, 1);
+      }
     }
     for (let j = MISSIONS.length - 1; j >= 0; j--) {
       if (MISSIONS[j].workspaceId === id) MISSIONS.splice(j, 1);

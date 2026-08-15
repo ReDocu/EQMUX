@@ -55,9 +55,14 @@ function sanitizeRatio(layout: PaneLayout, raw: unknown): PaneRatio | undefined 
   return { ...(cols ? { cols } : {}), ...(rows ? { rows } : {}) };
 }
 
-/** 저장본 복원 — refreshWorkspaces가 워크스페이스를 하이드레이트한 뒤에 불린다 */
+let restored = false;
+
+/** 저장본 복원 — refreshWorkspaces가 워크스페이스를 하이드레이트한 뒤에 불린다.
+ *  부트스트랩 1회만 실행한다 — 등록·해제가 부르는 재hydrate에서 또 돌면
+ *  디바운스(800ms) 중인 스테일 layout.json이 현재 상태(닫은 탭·현재 화면)를 되돌린다. */
 export async function restoreLayout(): Promise<void> {
-  if (!isTauri()) return;
+  if (restored || !isTauri()) return;
+  restored = true;
   const data = await invoke<LayoutData | null>("layout_load").catch(() => null);
   if (!data) return;
   // 배치 복원 — 워크스페이스별 맵 우선 (U7), 구버전 단일 값은 모든 워크스페이스의 초기값으로
@@ -97,33 +102,43 @@ export async function restoreLayout(): Promise<void> {
 let syncStarted = false;
 let lastWs: string | undefined; // 관제 탭에 있을 때도 직전 워크스페이스를 기억한다
 
+let timer: ReturnType<typeof setTimeout> | undefined;
+let last = "";
+
+function doSaveLayout(): void {
+  const v = view();
+  const data: LayoutData = {
+    openWorkspaces: backend
+      .listWorkspaces()
+      .filter((w) => w.open)
+      .map((w) => w.id),
+    paneLayoutsByWs: paneLayouts() as Record<string, string>,
+    shell: defaultShell().label,
+    selectedSession: selectedSession(),
+    lastWorkspace: v.kind === "workspace" ? (v as { id: string }).id : lastWs,
+    paneRatios: paneRatios(),
+  };
+  lastWs = data.lastWorkspace;
+  const json = JSON.stringify(data);
+  if (json === last) return;
+  last = json;
+  void invoke("layout_save", { data }).catch(() => {});
+}
+
+/** 디바운스 즉시 flush — 종료 시퀀스가 부른다. sync 시작 전에는 no-op (부트스트랩 중간 상태 방지) */
+export function flushLayoutNow(): void {
+  if (!syncStarted) return;
+  clearTimeout(timer);
+  doSaveLayout();
+}
+
 /** 변경 감지 → 800ms 디바운스 저장. 반드시 restoreLayout 이후에 시작한다. */
 export function startLayoutSync(): void {
   if (syncStarted || !isTauri()) return;
   syncStarted = true;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let last = "";
   const save = () => {
     clearTimeout(timer);
-    timer = setTimeout(() => {
-      const v = view();
-      const data: LayoutData = {
-        openWorkspaces: backend
-          .listWorkspaces()
-          .filter((w) => w.open)
-          .map((w) => w.id),
-        paneLayoutsByWs: paneLayouts() as Record<string, string>,
-        shell: defaultShell().label,
-        selectedSession: selectedSession(),
-        lastWorkspace: v.kind === "workspace" ? (v as { id: string }).id : lastWs,
-        paneRatios: paneRatios(),
-      };
-      lastWs = data.lastWorkspace;
-      const json = JSON.stringify(data);
-      if (json === last) return;
-      last = json;
-      void invoke("layout_save", { data }).catch(() => {});
-    }, 800);
+    timer = setTimeout(doSaveLayout, 800);
   };
   backend.subscribe(save); // 워크스페이스 열기/닫기
   createRoot(() => {

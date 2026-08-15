@@ -46,17 +46,22 @@ export function GitPanelTab() {
   const [branches, setBranches] = createSignal<BranchInfo[]>([]);
   const [worktrees, setWorktrees] = createSignal<WorktreeInfo[]>([]);
 
+  let loadReq = 0; // 워크스페이스 전환·10초 폴링의 늦은 응답이 현재 저장소 표시를 덮지 않게
   const load = async () => {
     const target = ws();
     if (!target || target.pathMissing) {
       setReal(undefined);
       return;
     }
+    const req = ++loadReq;
     const o = await gitOverview(target.path);
+    if (req !== loadReq) return; // 그새 워크스페이스가 바뀌었다
     setReal(o);
     setFailed(o === undefined);
-    setBranches((await branchList(target.path)) ?? []);
-    setWorktrees((await worktreeList(target.path)) ?? []);
+    const [b, wt] = [await branchList(target.path), await worktreeList(target.path)];
+    if (req !== loadReq) return;
+    setBranches(b ?? []);
+    setWorktrees(wt ?? []);
   };
 
   onMount(() => {
