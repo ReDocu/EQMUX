@@ -7,7 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { createSignal } from "solid-js";
 import { backend } from "./mock";
-import { isTauri, writePty } from "./pty";
+import { echoPty, isTauri, writePty } from "./pty";
 import type { ConversationMessage } from "../types";
 
 export const MSG_MAX_BODY = 2000; // M6 — Rust MAX_BODY_CHARS와 같은 값
@@ -163,11 +163,12 @@ function fmt(m: ConversationMessage): string {
   return `[EQMUX 메시지·${m.type}] ${m.from}: ${m.body}\r`;
 }
 
-/** 기본 터미널용 포맷 — 일반 셸 프롬프트에 \r 주입은 그대로 실행되므로, 무해한 주석
- *  라인(pwsh·bash `#`, cmd `rem`)으로 보낸다. 터미널 히스토리에 남고 아무것도 실행하지 않는다. */
-function fmtShell(m: ConversationMessage, shell: string | undefined): string {
-  const prefix = shell === "cmd" ? "rem " : "# ";
-  return `${prefix}[EQMUX 메시지·${m.type}] ${m.from}: ${m.body}\r`;
+/** 기본 터미널용 표시 전용 라인 (P-2) — PTY 입력에 넣지 않는다. 주석 접두(`#`)를 붙여도
+ *  사용자가 치던 미제출 명령 뒤에 이어 붙어 \r이 그 명령을 그대로 실행하므로,
+ *  화면·로컬 버퍼에만 에코한다. 원문은 어차피 대화 원장(message 테이블)에 있다. */
+function fmtEcho(m: ConversationMessage): string {
+  const body = m.body.replace(/\r?\n/g, "\r\n");
+  return `\r\n\x1b[2m[EQMUX 메시지·${m.type}] ${m.from}: ${body}\x1b[0m\r\n`;
 }
 
 /** 수신 세션 결정 (M4) — "@all"이면 그 워크스페이스의 살아 있는 참여자 전원.
@@ -186,7 +187,7 @@ function deliver(wsId: string, m: ConversationMessage): void {
   for (const s of recipients(wsId, m.to)) {
     if (s.id === m.from) continue; // 에이전트 발신(@all)이 자기 자신에게 되돌아가지 않게
     if (!s.personaId) {
-      writePty(s.id, fmtShell(m, s.shell)); // 기본 터미널 — 주석 라인으로 즉시 표시
+      echoPty(s.id, fmtEcho(m)); // 기본 터미널 — 표시 전용, 셸 입력에는 닿지 않는다 (P-2)
     } else if (s.status === "idle") {
       writePty(s.id, fmt(m)); // 유휴 = 프롬프트가 비어 있다 → 즉시 (M3)
     } else {

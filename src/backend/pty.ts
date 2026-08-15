@@ -116,6 +116,22 @@ export function writePty(id: string, data: string): void {
   void invoke("pty_write", { id, data }).catch(() => {});
 }
 
+/** 표시 전용 에코 (P-2) — PTY 입력을 거치지 않고 페인 화면·로컬 버퍼에만 쓴다.
+ *  일반 셸에 키 입력으로 주입하면 뒤따르는 \r이 사용자가 치던 미제출 명령을 그대로
+ *  실행하므로, 기본 터미널로 가는 메시지는 이 경로로만 표시한다. */
+export function echoPty(id: string, data: string): void {
+  const buf = (buffers.get(id) ?? "") + data;
+  buffers.set(id, buf.length > BUFFER_CAP ? buf.slice(-BUFFER_CAP) : buf);
+  outputSubs.get(id)?.forEach((cb) => cb(data));
+}
+
+/** 세션 영구 제거 시 백엔드 잔류 상태 정리 (P-9) — 추적 맵·알림 게이트·IPC 토큰.
+ *  killPty(중지)와 별개다 — 제거 경로에서만 부른다. */
+export function forgetAgent(id: string): void {
+  if (!isTauri()) return;
+  void invoke("agent_forget", { id }).catch(() => {});
+}
+
 export function resizePty(id: string, cols: number, rows: number): void {
   if (!isTauri()) return;
   void invoke("pty_resize", { id, cols, rows }).catch(() => {});

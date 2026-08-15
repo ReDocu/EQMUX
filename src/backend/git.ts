@@ -64,9 +64,10 @@ export function worktreeAdd(wsPath: string, name: string, base?: string): Promis
 // ── diff 에디터 (PRD H) — HEAD ↔ 워크트리, 읽기 전용 ──
 
 export interface ChangedFile {
-  status: "A" | "M" | "D";
+  status: "A" | "M" | "D" | "R";
   path: string;
   stat: string;
+  renamedFrom?: string | null; // 이름변경 (P-9) — 스테이징된 rename의 원래 경로
 }
 
 export interface DiffLine {

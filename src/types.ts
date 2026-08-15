@@ -23,6 +23,7 @@ export interface Job {
   permissions: Permissions;
   responsibility: string;
   forbidden: string;
+  mtimeMs?: number; // 읽은 시점의 파일 mtime (P-7) — 저장 시 외부 변경 충돌 감지
 }
 
 export interface Persona {
@@ -30,6 +31,7 @@ export interface Persona {
   name: string;
   hint: string; // 판단 성향 1줄 (P3 예산)
   color: "blue" | "purple" | "green" | "amber";
+  mtimeMs?: number; // 읽은 시점의 파일 mtime (P-7) — 저장 시 외부 변경 충돌 감지
 }
 
 /** 세션 = 에이전트 1명 = 페인 1개 (도메인 모델 불변 규칙) */

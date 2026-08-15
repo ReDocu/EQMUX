@@ -19,6 +19,9 @@ pub struct JobInfo {
     pub permissions: crate::roles::RolePermissions,
     pub responsibility: String,
     pub forbidden: String,
+    /// 읽은 시점의 파일 mtime (P-7) — 저장 시 외부 변경 충돌 감지에 쓴다 (fsx와 같은 규칙)
+    #[serde(default)]
+    pub mtime_ms: i64,
 }
 
 /// 페르소나 — frontmatter(id·name·color) + 본문(판단 성향) (FR-E-23)
@@ -29,6 +32,9 @@ pub struct PersonaInfo {
     pub name: String,
     pub hint: String,
     pub color: String,
+    /// 읽은 시점의 파일 mtime (P-7) — 저장 시 외부 변경 충돌 감지에 쓴다
+    #[serde(default)]
+    pub mtime_ms: i64,
 }
 
 #[derive(Serialize)]
@@ -105,6 +111,15 @@ fn parse_job_body(body: &str) -> (String, String) {
     (responsibility.join(" "), forbidden.join(" "))
 }
 
+fn file_mtime_ms(path: &Path) -> i64 {
+    fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
 fn parse_job(path: &Path) -> Option<JobInfo> {
     let text = fs::read_to_string(path).ok()?;
     let stem = path.file_stem()?.to_string_lossy().into_owned();
@@ -120,6 +135,7 @@ fn parse_job(path: &Path) -> Option<JobInfo> {
         },
         responsibility,
         forbidden,
+        mtime_ms: file_mtime_ms(path),
     })
 }
 
@@ -135,6 +151,7 @@ fn parse_persona(path: &Path) -> Option<PersonaInfo> {
         name: fm_value(&fm, "name").unwrap_or(stem),
         hint: body.trim().to_string(),
         color,
+        mtime_ms: file_mtime_ms(path),
     })
 }
 
@@ -234,13 +251,30 @@ fn render_persona(p: &PersonaInfo) -> String {
     format!("---\nid: {}\nname: {}\ncolor: {}\n---\n\n{}\n", p.id, p.name, p.color, p.hint)
 }
 
-/// 전역 계층에 저장 (FR-E-28) — 워크스페이스 오버라이드 편집은 파일로 직접 한다
-pub fn save_persona(app_root: &Path, p: &PersonaInfo) -> Result<(), String> {
-    atomic_write(&personas_dir(app_root).join(format!("{}.md", safe_id(&p.id))), &render_persona(p))
+/// 외부 변경 충돌 감지 (P-7) — 편집을 시작한 시점의 mtime과 다르면 거부한다 (fsx와 같은 규칙).
+/// expected가 None이면(새 항목·복제·구버전 호출) 검사 없이 저장한다.
+fn check_conflict(path: &Path, expected_mtime_ms: Option<i64>) -> Result<(), String> {
+    let Some(exp) = expected_mtime_ms else { return Ok(()) };
+    if !path.exists() {
+        return Ok(()); // 삭제된 파일 위에 저장 — 되살리는 것이 사용자 의도에 가깝다
+    }
+    if file_mtime_ms(path) != exp {
+        return Err("CONFLICT — 파일이 밖에서 바뀌었습니다".into());
+    }
+    Ok(())
 }
 
-pub fn save_job(app_root: &Path, j: &JobInfo) -> Result<(), String> {
-    atomic_write(&jobs_dir(app_root).join(format!("{}.md", safe_id(&j.id))), &render_job(j))
+/// 전역 계층에 저장 (FR-E-28) — 워크스페이스 오버라이드 편집은 파일로 직접 한다
+pub fn save_persona(app_root: &Path, p: &PersonaInfo, expected_mtime_ms: Option<i64>) -> Result<(), String> {
+    let path = personas_dir(app_root).join(format!("{}.md", safe_id(&p.id)));
+    check_conflict(&path, expected_mtime_ms)?;
+    atomic_write(&path, &render_persona(p))
+}
+
+pub fn save_job(app_root: &Path, j: &JobInfo, expected_mtime_ms: Option<i64>) -> Result<(), String> {
+    let path = jobs_dir(app_root).join(format!("{}.md", safe_id(&j.id)));
+    check_conflict(&path, expected_mtime_ms)?;
+    atomic_write(&path, &render_job(j))
 }
 
 pub fn delete_persona(app_root: &Path, id: &str) -> Result<(), String> {
@@ -266,13 +300,13 @@ pub fn seed(app_root: &Path) {
     if !jobs_dir(app_root).exists() {
         let perms = |w, c, p| crate::roles::RolePermissions { write: w, commit: c, push: p };
         let seeds = [
-            JobInfo { id: "lead".into(), name: "리드".into(), permissions: perms(true, true, false), responsibility: "전체 구조 · 임무 분해 · 최종 판단".into(), forbidden: "검증 없이 완료 선언 · 원격 push".into() },
-            JobInfo { id: "impl".into(), name: "구현".into(), permissions: perms(true, false, false), responsibility: "작은 단위 구현과 자체 검증".into(), forbidden: "검증 없이 커밋 요청".into() },
-            JobInfo { id: "verify".into(), name: "검증".into(), permissions: perms(false, false, false), responsibility: "테스트 · 증거 수집".into(), forbidden: "증거 없는 통과 판정".into() },
-            JobInfo { id: "review".into(), name: "리뷰".into(), permissions: perms(false, false, false), responsibility: "변경 검토 · 품질 기준".into(), forbidden: "리뷰 없이 승인".into() },
+            JobInfo { id: "lead".into(), name: "리드".into(), permissions: perms(true, true, false), responsibility: "전체 구조 · 임무 분해 · 최종 판단".into(), forbidden: "검증 없이 완료 선언 · 원격 push".into(), mtime_ms: 0 },
+            JobInfo { id: "impl".into(), name: "구현".into(), permissions: perms(true, false, false), responsibility: "작은 단위 구현과 자체 검증".into(), forbidden: "검증 없이 커밋 요청".into(), mtime_ms: 0 },
+            JobInfo { id: "verify".into(), name: "검증".into(), permissions: perms(false, false, false), responsibility: "테스트 · 증거 수집".into(), forbidden: "증거 없는 통과 판정".into(), mtime_ms: 0 },
+            JobInfo { id: "review".into(), name: "리뷰".into(), permissions: perms(false, false, false), responsibility: "변경 검토 · 품질 기준".into(), forbidden: "리뷰 없이 승인".into(), mtime_ms: 0 },
         ];
         for j in &seeds {
-            let _ = save_job(app_root, j);
+            let _ = save_job(app_root, j, None);
         }
     }
     // 편성 프리셋 시드 (FR-E-26) — 디렉터리가 없을 때만. PRD의 탐색(리서치·문서)은
@@ -309,7 +343,8 @@ pub fn seed(app_root: &Path) {
         for (id, name, color, hint) in seeds {
             let _ = save_persona(
                 app_root,
-                &PersonaInfo { id: id.into(), name: name.into(), hint: hint.into(), color: color.into() },
+                &PersonaInfo { id: id.into(), name: name.into(), hint: hint.into(), color: color.into(), mtime_ms: 0 },
+                None,
             );
         }
     }
@@ -341,7 +376,7 @@ mod tests {
         let mut edited = kai.clone();
         edited.hint = "위험 우선 · 되돌릴 수 없는 결정을 늦춘다".into();
         edited.color = "amber".into();
-        save_persona(&root, &edited).unwrap();
+        save_persona(&root, &edited, None).unwrap();
         let again = list(&root, None);
         let kai2 = again.personas.iter().find(|p| p.id == "kai").unwrap();
         assert_eq!(kai2.hint, edited.hint);
@@ -355,8 +390,9 @@ mod tests {
             permissions: crate::roles::RolePermissions { write: true, commit: true, push: true },
             responsibility: "최종 판단".into(),
             forbidden: "독단 push".into(),
+            mtime_ms: 0,
         };
-        save_job(&root, &lead2).unwrap();
+        save_job(&root, &lead2, None).unwrap();
         let lib2 = list(&root, None);
         let lead2r = lib2.jobs.iter().find(|j| j.id == "lead").unwrap();
         assert_eq!(lead2r.name, "수석");
@@ -364,6 +400,28 @@ mod tests {
         delete_job(&root, "lead").unwrap();
         assert!(list(&root, None).jobs.iter().all(|j| j.id != "lead"));
         delete_job(&root, "lead").unwrap(); // 없는 파일 삭제 = 멱등
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// 외부 변경 충돌 (P-7) — 편집 시작 mtime이 어긋나면 저장을 거부한다 (마지막 저장 승리 방지)
+    #[test]
+    fn save_rejects_stale_mtime() {
+        let root = temp_root("conflict");
+        seed(&root);
+        let kai = list(&root, None).personas.into_iter().find(|p| p.id == "kai").unwrap();
+        assert!(kai.mtime_ms > 0); // 목록이 mtime을 싣는다
+        // 그 사이 외부 편집 흉내 — mtime이 달라진다
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        fs::write(root.join("personas").join("kai.md"), "---\nid: kai\nname: 카이\ncolor: blue\n---\n\n밖에서 고침\n").unwrap();
+        let mut edited = kai.clone();
+        edited.hint = "앱에서 고침".into();
+        let err = save_persona(&root, &edited, Some(kai.mtime_ms)).unwrap_err();
+        assert!(err.contains("CONFLICT"));
+        // 외부 변경이 살아남는다
+        assert!(list(&root, None).personas.iter().any(|p| p.id == "kai" && p.hint == "밖에서 고침"));
+        // 다시 읽은 mtime으로는 저장된다
+        let fresh = list(&root, None).personas.into_iter().find(|p| p.id == "kai").unwrap();
+        assert!(save_persona(&root, &edited, Some(fresh.mtime_ms)).is_ok());
         fs::remove_dir_all(&root).ok();
     }
 

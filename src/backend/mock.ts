@@ -3,7 +3,7 @@
 // 컬렉션은 createMutable 프록시다 — in-place 변경이 곧 반응성이라, 상세 모달·<For> 행처럼
 // tick()을 다시 읽지 않는 표면도 즉시 갱신된다 (B1~B4 재발 방지).
 import { createMutable } from "solid-js/store";
-import { isTauri, killPty } from "./pty";
+import { forgetAgent, isTauri, killPty } from "./pty";
 import type {
   AgentStateApply,
   ConversationMessage,
@@ -580,22 +580,46 @@ export class MockBackend implements Backend {
   }
 
   applyCasting(wsId: string, slots: { personaId: string; jobId: string }[]) {
-    slots.slice(0, 4).forEach((slot, i) => {
-      const n = (i + 1) as 1 | 2 | 3 | 4;
-      const existing = SESSIONS.find((x) => x.workspaceId === wsId && x.slot === n);
+    // 재캐스팅은 대치(reconcile)다 (P-5) — 슬롯의 기존 세션을 제자리에서 다른 페르소나로
+    // 덮으면 세션 id(`페르소나@ws` 관례)·상태가 옛 값으로 남아, 자동 배정(id로 찾는다)이
+    // 빗나가고 살아 있는 PTY가 옛 정체성에 붙는다. 같은 페르소나는 유지·이동하고,
+    // 밀려나는 세션은 PTY·백엔드 잔류 상태까지 함께 끝낸다.
+    const ws = WORKSPACES.find((x) => x.id === wsId);
+    const wanted = slots.slice(0, 4).map((slot, i) => ({ ...slot, slot: (i + 1) as 1 | 2 | 3 | 4 }));
+    const wantedIds = new Set(wanted.map((w) => `${w.personaId}@${wsId}`));
+    const targetSlots = new Set(wanted.map((w) => w.slot));
+    for (let i = SESSIONS.length - 1; i >= 0; i--) {
+      const sess = SESSIONS[i];
+      if (sess.workspaceId !== wsId || !targetSlots.has(sess.slot) || wantedIds.has(sess.id)) continue;
+      killPty(sess.id);
+      forgetAgent(sess.id);
+      SESSIONS.splice(i, 1);
+      for (const m of MISSIONS) {
+        const j = m.assigned.indexOf(sess.id);
+        if (j >= 0) m.assigned.splice(j, 1);
+      }
+    }
+    for (const w of wanted) {
+      const id = `${w.personaId}@${wsId}`;
+      const existing = SESSIONS.find((x) => x.workspaceId === wsId && x.id === id);
       if (existing) {
-        existing.personaId = slot.personaId;
-        existing.jobId = slot.jobId;
+        existing.slot = w.slot;
+        if (existing.jobId !== w.jobId) {
+          existing.jobId = w.jobId;
+          existing.permOverride = undefined; // 직무가 바뀌면 이전 직무 기준 오버라이드는 무의미
+          existing.restartNeeded = true; // 권한 원천이 바뀌었다 (E11′)
+        }
       } else {
         SESSIONS.push(
-          s(`${slot.personaId}@${wsId}`, wsId, n, slot.personaId, slot.jobId, {
+          s(id, wsId, w.slot, w.personaId, w.jobId, {
             status: "starting",
+            cwd: ws?.path ?? `C:\\workspace\\${wsId}`, // 실물 경로 — 목 기본값이 Tauri로 새지 않게
             sinceMs: 0,
             lastOutput: "세션 시작 중",
           }),
         );
       }
-    });
+    }
     this.logEvent("app", "캐스팅 적용 · team.json 저장");
     this.broadcast();
   }
@@ -645,6 +669,7 @@ export class MockBackend implements Backend {
     if (i < 0) return;
     const sess = SESSIONS[i];
     SESSIONS.splice(i, 1);
+    forgetAgent(id); // 제거 = 정체성의 끝 — 추적 맵·알림 게이트·토큰 잔류 정리 (P-9)
     for (const m of MISSIONS) {
       const j = m.assigned.indexOf(id);
       if (j >= 0) m.assigned.splice(j, 1);
@@ -981,6 +1006,7 @@ export class MockBackend implements Backend {
     for (let i = SESSIONS.length - 1; i >= 0; i--) {
       if (!valid.has(SESSIONS[i].workspaceId)) {
         killPty(SESSIONS[i].id);
+        forgetAgent(SESSIONS[i].id); // P-9 — 추적 맵·게이트·토큰까지 함께
         SESSIONS.splice(i, 1);
       }
     }
@@ -998,6 +1024,7 @@ export class MockBackend implements Backend {
     for (let j = SESSIONS.length - 1; j >= 0; j--) {
       if (SESSIONS[j].workspaceId === id) {
         killPty(SESSIONS[j].id); // 등록 해제 = 세션도 끝 — PTY 고아 방지
+        forgetAgent(SESSIONS[j].id); // P-9 — 추적 맵·게이트·토큰까지 함께
         SESSIONS.splice(j, 1);
       }
     }

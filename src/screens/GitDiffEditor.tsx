@@ -31,7 +31,7 @@ export function GitDiffEditor(props: { wsId?: string }) {
   );
   const [selected, setSelected] = createSignal<string | undefined>(undefined);
   const [query, setQuery] = createSignal("");
-  const [statusFilter, setStatusFilter] = createSignal<"A" | "M" | "D" | undefined>(undefined); // U12
+  const [statusFilter, setStatusFilter] = createSignal<"A" | "M" | "D" | "R" | undefined>(undefined); // U12
   const [real, setReal] = createSignal<FileDiff | undefined>(undefined);
   const [diffErr, setDiffErr] = createSignal<string | undefined>(undefined);
   const [filesErr, setFilesErr] = createSignal(false); // 목록 읽기 실패 ≠ 깨끗한 워크트리 (B9)
@@ -358,12 +358,12 @@ export function GitDiffEditor(props: { wsId?: string }) {
           />
           {/* 상태 칩 (U12) — 다시 누르면 해제 */}
           <div class="gde-filter-chips">
-            <For each={["A", "M", "D"] as const}>
+            <For each={["A", "M", "D", "R"] as const}>
               {(st) => (
                 <button
                   class="btn ghost mono"
                   classList={{ on: statusFilter() === st }}
-                  title={st === "A" ? "새 파일만" : st === "M" ? "수정만" : "삭제만"}
+                  title={st === "A" ? "새 파일만" : st === "M" ? "수정만" : st === "D" ? "삭제만" : "이름변경만"}
                   onClick={() => setStatusFilter(statusFilter() === st ? undefined : st)}
                 >
                   {st}
@@ -381,14 +381,15 @@ export function GitDiffEditor(props: { wsId?: string }) {
                 >
                   <span
                     class="gde-st mono"
-                    classList={{ add: f.status === "A", del: f.status === "D", mod: f.status === "M" }}
+                    classList={{ add: f.status === "A", del: f.status === "D", mod: f.status === "M" || f.status === "R" }}
                   >
                     {f.status}
                   </span>
                   <div style={{ "min-width": 0, flex: 1 }}>
                     <div class="mono gde-file-path">{f.path}</div>
                     <div class="mono muted" style={{ "font-size": "10px" }}>
-                      {f.stat}
+                      {/* 이름변경 (P-9) — 어디서 왔는지 함께 보여준다 */}
+                      {f.renamedFrom ? `${f.renamedFrom} → · ${f.stat}` : f.stat}
                     </div>
                   </div>
                 </button>

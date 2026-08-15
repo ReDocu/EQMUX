@@ -81,14 +81,18 @@ export function RoleLibrary() {
     setDraftHint(p.hint);
     setDraftColor(p.color);
     setSaved(false);
+    setSaveErr(undefined);
   };
 
+  const [saveErr, setSaveErr] = createSignal<string | undefined>(undefined);
   const save = async () => {
     const p = sel();
     if (!p || selIsWs()) return;
-    await savePersonaFile({ id: p.id, name: draftName(), hint: draftHint(), color: draftColor() });
+    // mtimeMs — 편집을 시작한 시점의 파일 상태 (P-7). 그 사이 밖에서 바뀌면 저장이 거부된다
+    const err = await savePersonaFile({ id: p.id, name: draftName(), hint: draftHint(), color: draftColor(), mtimeMs: p.mtimeMs });
+    setSaveErr(err ?? undefined);
     reloadScope();
-    setSaved(true);
+    setSaved(!err);
   };
 
   const hintLines = () => draftHint().split("\n").filter((l) => l.trim()).length;
@@ -128,21 +132,25 @@ export function RoleLibrary() {
       forbidden: j.forbidden,
     });
     setJobSaved(false);
+    setJobSaveErr(undefined);
   };
 
+  const [jobSaveErr, setJobSaveErr] = createSignal<string | undefined>(undefined);
   const saveJob = async () => {
     const j = selJob();
     if (!j || selJobIsWs()) return;
     const d = jDraft();
-    await saveJobFile({
+    const err = await saveJobFile({
       id: j.id,
       name: d.name,
       permissions: { write: d.write, commit: d.commit, push: d.push },
       responsibility: d.responsibility,
       forbidden: d.forbidden,
+      mtimeMs: j.mtimeMs, // 편집 시작 시점의 파일 상태 (P-7)
     });
+    setJobSaveErr(err ?? undefined);
     reloadScope();
-    setJobSaved(true);
+    setJobSaved(!err);
   };
 
   // 캐스팅된 직무는 삭제를 막는다 — 세션의 실행 권한 번역(§4.5.1)이 이 항목을 참조한다
@@ -319,6 +327,11 @@ export function RoleLibrary() {
                       전역에만 씁니다 (FR-E-28) — 파일을 직접 고치거나 탐색기에서 편집하세요
                     </div>
                   </Show>
+                  <Show when={jobSaveErr()}>
+                    <div class="mono st-waiting" style={{ "font-size": "10px" }}>
+                      {jobSaveErr()}
+                    </div>
+                  </Show>
                   <button class="btn primary" disabled={selJobIsWs()} onClick={() => void saveJob()}>
                     {jobSaved() ? "저장됨 ✓" : "저장"}
                   </button>
@@ -386,6 +399,11 @@ export function RoleLibrary() {
                 <div class="mono st-waiting" style={{ "font-size": "10px" }}>
                   오버라이드 항목 — 원본은 워크스페이스 .eqmux/personas/{sel()!.id}.md 파일입니다. 편집 커맨드는
                   전역에만 씁니다 (FR-E-28) — 파일을 직접 고치거나 탐색기에서 편집하세요
+                </div>
+              </Show>
+              <Show when={saveErr()}>
+                <div class="mono st-waiting" style={{ "font-size": "10px" }}>
+                  {saveErr()}
                 </div>
               </Show>
               <button class="btn primary" disabled={selIsWs()} onClick={() => void save()}>

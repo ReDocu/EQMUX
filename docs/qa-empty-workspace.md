@@ -1,6 +1,6 @@
 # QA 버그리포트 — EQMUX
 
-**1부**: 워크스페이스가 비었을 때의 충돌 상태 (4건, 수정 완료) · **2부**: 치명 버그 전수 점검 (2026-08-15 병렬 감사)
+**1부**: 워크스페이스가 비었을 때의 충돌 상태 (4건, 수정 완료) · **2부**: 치명 버그 전수 점검 (2026-08-15 병렬 감사) · **3부**: 심화 감사 — 보류분(P-#) 포함 전량 수정 완료 (4부 참조)
 
 ---
 
@@ -236,19 +236,78 @@ TerminalPane이 pty 구독 해제 함수를 버려 disposed 터미널(스크롤�
 ### D-12 · 워크스페이스/스코프 전환 stale-response
 `GitDiffEditor`·`GitPanelTab`(10초 폴링)·`RoleLibrary` — 느린 저장소 A→B 전환 시 A의 늦은 응답이 B 화면을 덮음. **수정**: 요청 토큰(req 세대)으로 낡은 응답 폐기, GitDiffEditor는 파일 동일 시에도 diff 재로드.
 
-## 미수정 — 설계·흐름 추적 필요 (P-#)
+## 보류분 (P-#) — 4부에서 전량 수정 완료
 
-| # | 내용 | 왜 보류 |
-|---|------|---------|
-| P-1 | **IPC 세션 사칭** — EQMUX_SESSION이 추측 가능한 평문 id뿐이라, 같은 OS 사용자의 다른 에이전트가 임의 세션을 사칭해 메시지·상태·OS 알림 본문을 위조 | 세션별 논스 발급+대조로 근본 수정 필요(CLI 계약 변경). "같은 OS 사용자"는 수용 위협이나 에이전트 간 사칭은 실버그 — 별도 작업 |
-| P-2 | **PTY `\r` 주입이 미제출 입력을 실행** — 기본 터미널에 `rm -rf build` 치던 중 메시지 주입되면 그대로 실행 | 셸은 입력 줄 상태를 알 수 없음. 셸 주입 자체를 막을지(기능 변경) 제품 결정 필요 |
-| P-3 | 레지스트리 2초 재스캔이 더 신선한 훅 상태를 스테일 값으로 되돌림 → 가짜 idle이 M3 인박스 오주입 유발 | 소스 간 타임스탬프/우선순위 도입 필요. 성급한 수정은 상태 머신 회귀 위험 |
-| P-4 | 스냅숏 vs 실시간 이벤트 순서 역전 가드 없음 (웹뷰 재시작마다 짧은 창) | P-3과 같은 버전/순서 표식으로 함께 처리 |
-| P-5 | 재캐스팅 시 세션 id·status가 옛 값 유지 → 자동 배정 누락·shell 상태 고착 | id 변경이 살아있는 PTY를 고아로 만들 수 있어 casting→spawn 흐름 전체 추적 필요 |
-| P-6 | 임무 파일명 ↔ frontmatter id 불일치(탐색기 rename 후) 시 상태·배정 무반응 | missions.rs를 id 일관 동작으로 재작업 또는 rename 차단 — 범위 큼 |
-| P-7 | 역할 라이브러리 편집이 외부 변경을 mtime 검사 없이 덮어씀 | fsx처럼 expected_mtime 배선 필요 |
-| P-8 | agent_spawn이 살아있는 PTY 위에 새 uuid로 Tracked 교체(이중 호출) → 재개 정보 파괴 | spawn 재부착 신호 전달 필요, 엣지 |
-| P-9 | by_uuid·notify_gate 세션 제거 후 잔류(누수, 기능 영향 없음) · diff rename 표시 품질 | 경미 |
+| # | 내용 | 상태 |
+|---|------|------|
+| P-1 | IPC 세션 사칭 — EQMUX_SESSION이 추측 가능한 평문 id | ✅ 수정 (4부 참조) |
+| P-2 | PTY `\r` 주입이 미제출 입력을 실행 | ✅ 수정 |
+| P-3 | 레지스트리 2초 재스캔이 신선한 훅 상태를 되돌림 | ✅ 수정 |
+| P-4 | 스냅숏 vs 실시간 이벤트 순서 역전 가드 없음 | ✅ 수정 |
+| P-5 | 재캐스팅 시 세션 id·status가 옛 값 유지 | ✅ 수정 |
+| P-6 | 임무 파일명 ↔ frontmatter id 불일치 시 무반응 | ✅ 수정 |
+| P-7 | 역할 라이브러리 편집이 외부 변경을 덮어씀 | ✅ 수정 |
+| P-8 | agent_spawn 이중 호출이 재개 정보 파괴 | ✅ 수정 |
+| P-9 | by_uuid·notify_gate 잔류 · diff rename 표시 품질 | ✅ 수정 |
 
 ## 검증
 `cargo test` 29/29 통과(transcript_path 이스케이프 회귀 테스트 추가) · `npm run build` 통과.
+
+---
+
+# 4부 — 보류분(P-#) 해소 (2026-08-15, 3차)
+
+설계 결정이 필요해 보류했던 9건을 전부 수정했다. 결정 내역과 구현:
+
+### P-1 · IPC 세션 사칭 → 세션별 논스 토큰
+스폰마다 `EQMUX_TOKEN`(uuid v4 논스)을 발급해 환경변수로 주입하고(`agent.rs claude_builders`),
+파이프 서버가 send·report·hook·statusline 4종 전부에서 session 주장과 토큰을 대조한다
+(`ipc.rs verify_session` — 불일치는 `BAD_TOKEN`). CLI는 env의 토큰을 요청에 동봉한다(`cli.rs to_line`).
+세션 id는 여전히 공개 관례(`이름@ws`)지만 id만으로는 더 이상 신원이 아니다.
+잔여 한계: 같은 OS 사용자가 프로세스 env를 직접 뒤지는 것은 계속 수용 위협(파이프 DACL과 동일 경계).
+
+### P-2 · 셸 `\r` 주입 → 표시 전용 에코로 전환 (제품 결정)
+기본 터미널로 가는 메시지는 PTY 입력에 넣지 않는다. `pty.ts echoPty` — 페인 화면·로컬 버퍼에만
+쓰는 표시 전용 경로를 만들고 `conversation.ts deliver`가 이를 쓴다. 주석 접두(`#`) 방식도
+사용자가 치던 미제출 명령 뒤에 붙으면 `\r`이 그 명령을 실행하므로 폐기했다. 원문은 대화
+원장(message 테이블)이 보존한다 — 에코는 휘발이어도 기록은 남는다.
+
+### P-3·P-4 · 상태 소스 신선도/순서 표식
+- P-3: `Tracked.hook_ms` — 훅이 상태를 바꾼 시각. 레지스트리 재스캔은 파일 mtime이 이보다
+  새로울 때만 상태를 덮는다 (`agent.rs scan`). 가짜 idle → M3 인박스 오주입 경로 차단.
+- P-4: `AgentStateEvt.seq` — 전역 단조 증가 순번. 모든 상태 방송·스냅숏에 실리고, 프런트
+  `agent.ts applyEvt`가 세션별 마지막 순번보다 오래된 페이로드를 버린다.
+
+### P-5 · 재캐스팅 → 대치(reconcile)로 재작성
+`mock.ts applyCasting` — 같은 페르소나는 유지·슬롯 이동, 밀려나는 세션(다른 페르소나·기본
+터미널)은 PTY kill + `agent_forget` + 임무 배정 해제까지 함께 끝낸다. 직무만 바뀐 세션은
+`restartNeeded` 표시(E11′)와 오버라이드 해제. 세션 id가 항상 `페르소나@ws` 관례와 일치하므로
+자동 배정(`autoAssignDefault`)이 더 이상 빗나가지 않는다. 새 세션 cwd도 실물 경로로 고정.
+
+### P-6 · 임무 id 일관 동작
+`missions.rs find_path` — 파일명 우선, 없으면 frontmatter id 스캔. set_status·get·set_default가
+전부 이 경로를 타고, create의 충돌 검사도 frontmatter id까지 본다. 탐색기 rename 후에도
+상태·기본 임무·배정이 동작한다 (회귀 테스트 추가).
+
+### P-7 · 역할 라이브러리 mtime 충돌 감지
+`library.rs` — 목록이 파일 mtime을 싣고(`mtime_ms`), 저장이 `expected_mtime_ms`와 대조해
+어긋나면 `CONFLICT` 거부 (fsx 편집 저장과 같은 규칙). 화면은 거부 시 재실측으로 따라잡고
+문구를 표시한다 (`RoleLibrary.tsx`). 새 항목·복제는 검사 없이 저장.
+
+### P-8 · agent_spawn 이중 호출 가드
+`lib.rs agent_spawn_inner` — 같은 id의 PTY가 살아 있고 dead 아닌 Tracked가 있으면 스폰 없이
+기존 uuid를 반환(재부착). 살아 있는 셸 PTY 위에 에이전트를 시작하면 셸을 정리 후 스폰
+(이전에는 셸 PTY에 Tracked만 얹혀 claude가 아예 뜨지 않는 잠복 버그도 있었다).
+
+### P-9 · 잔류 정리 + diff rename
+- `agent.rs forget_session` + `agent_forget` 커맨드 — 세션 영구 제거 시 by_uuid·notify_gate·
+  토큰 정리. 프런트 제거 경로 4곳(removeTerminal·removeWorkspace·hydrateWorkspaces·재캐스팅)에 배선.
+  expected_exit는 남긴다 — 진행 중 kill의 EOF 처리가 스스로 소비한다.
+- diff rename: 목록이 `R` 상태 + 원래 경로(`renamedFrom`)를 싣고, numstat의 rename 표기
+  (`old => new`·`dir/{a => b}`)를 새 경로로 정규화, diff는 `HEAD:<old>` ↔ 워크트리 `<new>`를
+  비교한다 (이전에는 전체 add로 보였다). 화면에 R 필터 칩·원래 경로 표시 추가.
+
+## 검증
+`cargo test` 34/34 통과 (임무 rename 해석 · 라이브러리 mtime 충돌 · diff rename · CLI 토큰 동봉
+회귀 테스트 4건 추가) · `npm run build`(tsc + vite) 통과. P-3·P-4는 타이밍 의존이라 코드 경로
+검증 기준 (가드 조건: mtime ≤ hook_ms 스킵 · seq < last 폐기).

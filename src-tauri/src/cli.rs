@@ -75,24 +75,29 @@ pub fn parse(args: &[String], session: Option<&str>) -> Result<Req, String> {
     }
 }
 
-fn to_line(req: &Req) -> String {
+fn to_line(req: &Req, token: Option<&str>) -> String {
+    // 세션 토큰 (P-1) — EQMUX_TOKEN 논스를 동봉해야 앱이 session 주장을 인정한다.
+    // 세션이 필요한 요청 전부에 붙인다 (ping 제외).
+    let with_token = |mut v: serde_json::Value| {
+        if let (Some(t), Some(obj)) = (token, v.as_object_mut()) {
+            obj.insert("token".into(), serde_json::Value::String(t.to_string()));
+        }
+        v.to_string()
+    };
     match req {
         Req::Ping => serde_json::json!({"cmd": "ping"}).to_string(),
-        Req::Send { session, to, kind, body } => serde_json::json!({
+        Req::Send { session, to, kind, body } => with_token(serde_json::json!({
             "cmd": "send", "session": session, "to": to, "type": kind, "body": body
-        })
-        .to_string(),
-        Req::Report { session, body } => serde_json::json!({
+        })),
+        Req::Report { session, body } => with_token(serde_json::json!({
             "cmd": "report", "session": session, "body": body
-        })
-        .to_string(),
+        })),
         Req::Hook { session, event } => {
             // 훅 입력(JSON)은 stdin으로 온다 — 64KB 상한으로 읽어 payload로 동봉
             let payload = read_stdin_json();
-            serde_json::json!({
+            with_token(serde_json::json!({
                 "cmd": "hook", "session": session, "event": event, "payload": payload
-            })
-            .to_string()
+            }))
         }
         Req::StatusLine { session } => {
             // stdin JSON에 모델·비용이 온다 (§10.4). 첫 stdout 줄 = Claude Code 상태 줄 —
@@ -111,10 +116,9 @@ fn to_line(req: &Req) -> String {
                 Some(cost) => println!("EQMUX · {model} · ${cost:.2}"),
                 None => println!("EQMUX · {model}"),
             }
-            serde_json::json!({
+            with_token(serde_json::json!({
                 "cmd": "statusline", "session": session, "payload": payload
-            })
-            .to_string()
+            }))
         }
     }
 }
@@ -132,6 +136,7 @@ fn friendly(err: &str) -> String {
         e if e.contains("BAD_TYPE") => "타입은 ask·handoff·report·review·escalate 5종뿐입니다".into(),
         e if e.contains("UNKNOWN_RECIPIENT") => "수신자를 찾지 못했습니다 — 페르소나 이름으로 지정하세요".into(),
         e if e.contains("UNKNOWN_SESSION") => "이 세션을 앱이 추적하고 있지 않습니다".into(),
+        e if e.contains("BAD_TOKEN") => "세션 토큰이 일치하지 않습니다 — EQMUX가 시작한 에이전트 세션 안에서만 쓸 수 있습니다".into(),
         e => e.into(),
     }
 }
@@ -140,6 +145,7 @@ fn friendly(err: &str) -> String {
 /// (에이전트 흐름·상태 줄을 깨지 않는다).
 pub fn run(args: Vec<String>) -> i32 {
     let session = std::env::var("EQMUX_SESSION").ok().filter(|s| !s.is_empty());
+    let token = std::env::var("EQMUX_TOKEN").ok().filter(|s| !s.is_empty());
     let silent = matches!(args.first().map(String::as_str), Some("_hook") | Some("_statusline"));
     let req = match parse(&args, session.as_deref()) {
         Ok(r) => r,
@@ -151,7 +157,7 @@ pub fn run(args: Vec<String>) -> i32 {
             return 2;
         }
     };
-    match crate::ipc::request(&to_line(&req)) {
+    match crate::ipc::request(&to_line(&req, token.as_deref())) {
         Ok(resp) => {
             let v: serde_json::Value = serde_json::from_str(&resp).unwrap_or_default();
             if v["ok"].as_bool().unwrap_or(false) {
@@ -214,6 +220,17 @@ mod tests {
         // --to 없으면 @all, 플래그가 본문 뒤에 와도 된다
         let r = parse(&s(&["send", "한 줄", "--type", "report"]), Some("noel@ws")).unwrap();
         assert_eq!(r, Req::Send { session: "noel@ws".into(), to: "@all".into(), kind: "report".into(), body: "한 줄".into() });
+    }
+
+    /// 세션 토큰 동봉 (P-1) — 세션이 필요한 요청에는 token이 실리고 ping에는 없다
+    #[test]
+    fn to_line_carries_token() {
+        let line = to_line(&Req::Report { session: "kai@ws".into(), body: "진척".into() }, Some("nonce-1"));
+        let v: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(v["token"].as_str(), Some("nonce-1"));
+        assert_eq!(v["session"].as_str(), Some("kai@ws"));
+        let ping: serde_json::Value = serde_json::from_str(&to_line(&Req::Ping, Some("nonce-1"))).unwrap();
+        assert!(ping.get("token").is_none());
     }
 
     #[test]

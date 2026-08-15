@@ -31,13 +31,23 @@ export async function refreshLibrary(): Promise<void> {
   }
 }
 
-export async function savePersonaFile(p: Persona): Promise<void> {
+/** 외부 변경 충돌 (P-7) — 편집 시작 mtime이 어긋나면 Rust가 저장을 거부한다.
+ *  반환값은 사용자에게 보여줄 오류 문구 — null이면 성공. */
+export async function savePersonaFile(p: Persona): Promise<string | null> {
   if (!isTauri()) {
     backend.savePersona(p);
-    return;
+    return null;
   }
-  await invoke("library_save_persona", { persona: p }).catch(() => {});
+  try {
+    await invoke("library_save_persona", { persona: p, expectedMtimeMs: p.mtimeMs ?? null });
+  } catch (e) {
+    await refreshLibrary(); // 파일이 이긴다 (FR-E-74) — 밖의 변경으로 화면을 따라잡는다
+    return String(e).includes("CONFLICT")
+      ? "파일이 밖에서 바뀌었습니다 — 목록을 새로고침했으니 확인 후 다시 저장하세요"
+      : "저장 실패 — 로그 패널을 확인하세요";
+  }
   await refreshLibrary();
+  return null;
 }
 
 export async function addPersonaFile(): Promise<void> {
@@ -60,13 +70,22 @@ export async function deletePersonaFile(id: string): Promise<void> {
 
 // ── 직무 CRUD (FR-E-28) — 편집·복제·삭제. 복제 = 새 id로 저장, 같은 경로 하나다 ──
 
-export async function saveJobFile(j: Job): Promise<void> {
+/** 외부 변경 충돌 (P-7) — savePersonaFile과 같은 계약. null이면 성공. */
+export async function saveJobFile(j: Job): Promise<string | null> {
   if (!isTauri()) {
     backend.saveJob(j);
-    return;
+    return null;
   }
-  await invoke("library_save_job", { job: j }).catch(() => {});
+  try {
+    await invoke("library_save_job", { job: j, expectedMtimeMs: j.mtimeMs ?? null });
+  } catch (e) {
+    await refreshLibrary();
+    return String(e).includes("CONFLICT")
+      ? "파일이 밖에서 바뀌었습니다 — 목록을 새로고침했으니 확인 후 다시 저장하세요"
+      : "저장 실패 — 로그 패널을 확인하세요";
+  }
   await refreshLibrary();
+  return null;
 }
 
 export async function duplicateJobFile(src: Job): Promise<void> {

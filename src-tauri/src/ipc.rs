@@ -133,8 +133,23 @@ fn handle_conn(app: &AppHandle, file: std::fs::File) {
     }
 }
 
-/// 요청 디스패치 — 발신자 신원은 EQMUX_SESSION(세션 id)이고, 워크스페이스·cwd는
-/// 앱의 추적 맵(AgentRt)에서 푼다. 클라이언트가 주장하는 값은 세션 id 하나뿐이다.
+/// 세션 신원 검증 (P-1) — 세션 id는 공개 관례(`이름@ws`)라 추측 가능하다. 스폰 시 발급되어
+/// EQMUX_TOKEN으로 주입된 논스가 일치해야 그 세션의 발신으로 인정한다. 같은 OS 사용자는
+/// 수용 위협이지만(파이프 DACL), 에이전트가 다른 세션을 사칭하는 것은 여기서 막는다.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn verify_session(app: &AppHandle, session: &str, req: &serde_json::Value) -> Result<(), String> {
+    let claimed = req["token"].as_str().unwrap_or("");
+    let rt: State<crate::agent::AgentRt> = app.state();
+    let ok = rt
+        .session_tokens
+        .lock()
+        .map(|m| m.get(session).map(|t| !claimed.is_empty() && t == claimed).unwrap_or(false))
+        .unwrap_or(false);
+    if ok { Ok(()) } else { Err("BAD_TOKEN".into()) }
+}
+
+/// 요청 디스패치 — 발신자 신원은 EQMUX_SESSION(세션 id) + EQMUX_TOKEN(논스) 쌍이고,
+/// 워크스페이스·cwd는 앱의 추적 맵(AgentRt)에서 푼다.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn handle(app: &AppHandle, line: &str) -> Result<serde_json::Value, String> {
     let req: serde_json::Value = serde_json::from_str(line).map_err(|_| "BAD_JSON".to_string())?;
@@ -143,6 +158,7 @@ fn handle(app: &AppHandle, line: &str) -> Result<serde_json::Value, String> {
         "ping" => Ok(json!({"ok": true, "app": "eqmux", "version": env!("CARGO_PKG_VERSION")})),
         "send" => {
             let session = req["session"].as_str().ok_or("NO_SESSION")?;
+            verify_session(app, session, &req)?;
             let kind = req["type"].as_str().ok_or("BAD_TYPE")?;
             let body = req["body"].as_str().ok_or("EMPTY")?;
             let to_raw = req["to"].as_str().unwrap_or("@all");
@@ -153,6 +169,7 @@ fn handle(app: &AppHandle, line: &str) -> Result<serde_json::Value, String> {
         "report" => {
             // V4 자기 보고 (FR-G-88) — 스트림에는 report 타입으로, 세션 피드에는 event로
             let session = req["session"].as_str().ok_or("NO_SESSION")?;
+            verify_session(app, session, &req)?;
             let body = req["body"].as_str().ok_or("EMPTY")?;
             let (_, t) = crate::find_tracked(app, session).ok_or("UNKNOWN_SESSION")?;
             let store: State<crate::StoreState> = app.state();
@@ -167,6 +184,7 @@ fn handle(app: &AppHandle, line: &str) -> Result<serde_json::Value, String> {
         "hook" => {
             // 훅 2차 상태 소스 (D3 · FR-D-30 계열) — 모르는 이벤트는 조용히 무시
             let session = req["session"].as_str().ok_or("NO_SESSION")?;
+            verify_session(app, session, &req)?;
             let event = req["event"].as_str().ok_or("BAD_EVENT")?;
             crate::agent::apply_hook(app, session, event, &req["payload"]);
             Ok(json!({"ok": true}))
@@ -174,6 +192,7 @@ fn handle(app: &AppHandle, line: &str) -> Result<serde_json::Value, String> {
         "statusline" => {
             // statusLine 채널 (FR-D-19) — 세션 누적 비용 수집. 실패도 ok (상태 줄 불가침)
             let session = req["session"].as_str().ok_or("NO_SESSION")?;
+            verify_session(app, session, &req)?;
             crate::agent::apply_statusline(app, session, &req["payload"]);
             Ok(json!({"ok": true}))
         }

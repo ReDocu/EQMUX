@@ -654,6 +654,21 @@ fn agent_spawn_inner(
     if !Path::new(&cwd).is_dir() {
         return Err("워크스페이스 경로를 찾을 수 없습니다 — 재개는 같은 cwd에서만 성립합니다".into());
     }
+    // 이중 호출 가드 (P-8) — 같은 id의 PTY가 이미 살아 있으면 새 uuid로 Tracked를 교체하지
+    // 않는다. 교체하면 레지스트리 매칭(FR-D-12)·agent_session 매핑이 전부 실행된 적 없는
+    // uuid로 덮여 재개 정보가 파괴된다. 살아 있는 에이전트면 재부착, 셸 PTY면 정리 후 스폰.
+    {
+        let pty: State<PtyState> = app.state();
+        let alive = pty.0.lock().map(|s| s.contains_key(&id)).unwrap_or(false);
+        if alive {
+            if let Some((cur, t)) = find_tracked(&app, &id) {
+                if t.last_status != "dead" {
+                    return Ok(cur);
+                }
+            }
+            kill_pty_for_restart(&app, &id);
+        }
+    }
     // §4.1.1 커맨드라인 계약 — bypassPermissions는 어떤 경로로도 만들지 않는다
     let mut args: Vec<String> = Vec::new();
     if resume {
@@ -701,7 +716,16 @@ fn agent_spawn_inner(
     );
     args.push("--append-system-prompt".into());
     args.push(sys);
-    let builders = agent::claude_builders(&args, &cwd, &id, role_file.as_deref());
+    // 세션 토큰 발급 (P-1) — 파이프 IPC의 신원 증명. 스폰 전에 등록해 기동 직후의
+    // 훅 이벤트도 검증을 통과하게 한다. 재스폰마다 새로 발급된다.
+    let token = uuid::Uuid::new_v4().to_string();
+    {
+        let rt: State<agent::AgentRt> = app.state();
+        if let Ok(mut tokens) = rt.session_tokens.lock() {
+            tokens.insert(id.clone(), token.clone());
+        };
+    }
+    let builders = agent::claude_builders(&args, &cwd, &id, role_file.as_deref(), &token);
     let gen = spawn_pty_session(
         app.clone(),
         id.clone(),
@@ -713,6 +737,7 @@ fn agent_spawn_inner(
         rows,
     )?;
 
+    let seq = agent::next_seq();
     let rt: State<agent::AgentRt> = app.state();
     if let Ok(mut map) = rt.by_uuid.lock() {
         map.retain(|u, t| !(t.app_session == id && *u != uuid));
@@ -728,6 +753,7 @@ fn agent_spawn_inner(
                 last_status: "starting".into(),
                 last_waiting: None,
                 pty_gen: gen,
+                seq,
                 ..Default::default()
             },
         );
@@ -755,6 +781,7 @@ fn agent_spawn_inner(
             version: None,
             exit_code: None,
             degraded: false,
+            seq,
         },
     );
     Ok(uuid)
@@ -1100,10 +1127,15 @@ fn library_list(store_state: State<StoreState>, ws_path: Option<String>) -> libr
     library::list(&store_state.0.root(), ws_path.as_deref())
 }
 
-/// 페르소나 저장 (FR-E-28) — 전역 계층에 쓴다
+/// 페르소나 저장 (FR-E-28) — 전역 계층에 쓴다. expected_mtime_ms가 있으면 외부 변경
+/// 충돌을 검사한다 (P-7 — fsx의 편집 저장과 같은 규칙)
 #[tauri::command]
-fn library_save_persona(store_state: State<StoreState>, persona: library::PersonaInfo) -> Result<(), String> {
-    library::save_persona(&store_state.0.root(), &persona)
+fn library_save_persona(
+    store_state: State<StoreState>,
+    persona: library::PersonaInfo,
+    expected_mtime_ms: Option<i64>,
+) -> Result<(), String> {
+    library::save_persona(&store_state.0.root(), &persona, expected_mtime_ms)
 }
 
 #[tauri::command]
@@ -1113,8 +1145,12 @@ fn library_delete_persona(store_state: State<StoreState>, id: String) -> Result<
 
 /// 직무 저장 (FR-E-28) — 전역 계층에 쓴다. 편집·복제(새 id로 저장)가 이 경로 하나다
 #[tauri::command]
-fn library_save_job(store_state: State<StoreState>, job: library::JobInfo) -> Result<(), String> {
-    library::save_job(&store_state.0.root(), &job)
+fn library_save_job(
+    store_state: State<StoreState>,
+    job: library::JobInfo,
+    expected_mtime_ms: Option<i64>,
+) -> Result<(), String> {
+    library::save_job(&store_state.0.root(), &job, expected_mtime_ms)
 }
 
 #[tauri::command]
@@ -1467,8 +1503,16 @@ fn agent_snapshot(app: AppHandle) -> Vec<agent::AgentStateEvt> {
             version: None,
             exit_code: None,
             degraded: t.degraded,
+            seq: t.seq, // P-4 — 스냅숏은 마지막 발급 순번 그대로 (실시간 이벤트와 역전 판별)
         })
         .collect()
+}
+
+/// 세션 영구 제거 (P-9) — 추적 맵·알림 게이트·IPC 토큰의 잔류 항목을 걷어낸다.
+/// pty_kill과 별개다 — kill은 중지(재개 가능성 유지)일 수 있지만 제거는 정체성의 끝이다.
+#[tauri::command]
+fn agent_forget(app: AppHandle, id: String) {
+    agent::forget_session(&app, &id);
 }
 
 async fn tokio_sleep(d: std::time::Duration) {
@@ -1677,6 +1721,7 @@ pub fn run() {
             agent_spawn,
             agent_resume,
             agent_restart,
+            agent_forget,
             transcript_read,
             team_load,
             team_save,

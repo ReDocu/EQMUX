@@ -16,9 +16,11 @@ const MAX_LINES_PER_SIDE: usize = 3000;
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ChangedFile {
-    pub status: String, // "A" | "M" | "D"
+    pub status: String, // "A" | "M" | "D" | "R"
     pub path: String,
     pub stat: String, // "+18 −6"
+    /// 이름변경 (P-9) — 스테이징된 rename의 원래 경로. 표시·비교 기준용
+    pub renamed_from: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -38,16 +40,34 @@ pub struct FileDiff {
     pub truncated: bool,
 }
 
+/// numstat의 rename 표기 정규화 (P-9) — `old => new` 또는 `dir/{old => new}/rest`를
+/// 새 경로로 바꾼다. 이걸 놓치면 rename 파일의 ± 집계가 목록에서 비어 보인다.
+fn numstat_path(raw: &str) -> String {
+    if let (Some(open), Some(close)) = (raw.find('{'), raw.find('}')) {
+        if open < close {
+            if let Some((_, new)) = raw[open + 1..close].split_once(" => ") {
+                let joined = format!("{}{}{}", &raw[..open], new, &raw[close + 1..]);
+                return joined.replace("//", "/");
+            }
+        }
+    }
+    match raw.split_once(" => ") {
+        Some((_, new)) => new.to_string(),
+        None => raw.to_string(),
+    }
+}
+
 /// 변경 파일 목록 — status --porcelain(상태) + diff --numstat(±집계). 이름변경은 새 경로 기준.
 pub fn changed_files(ws_path: &str) -> Result<Vec<ChangedFile>, String> {
     let porcelain = git(&["status", "--porcelain"], ws_path)?;
     // 경로 → (+, −) — untracked는 numstat에 없으므로 파일 줄 수로 대체한다
     let mut stats: std::collections::HashMap<String, (String, String)> = std::collections::HashMap::new();
-    if let Ok(numstat) = git(&["diff", "--numstat", "HEAD"], ws_path) {
+    // --find-renames — porcelain(status)의 rename 판정과 numstat의 짝짓기를 일치시킨다 (P-9)
+    if let Ok(numstat) = git(&["diff", "--numstat", "--find-renames", "HEAD"], ws_path) {
         for line in numstat.lines() {
             let mut p = line.splitn(3, '\t');
             let (Some(a), Some(d), Some(path)) = (p.next(), p.next(), p.next()) else { continue };
-            stats.insert(path.to_string(), (a.to_string(), d.to_string()));
+            stats.insert(numstat_path(path), (a.to_string(), d.to_string()));
         }
     }
     let mut out = Vec::new();
@@ -58,12 +78,20 @@ pub fn changed_files(ws_path: &str) -> Result<Vec<ChangedFile>, String> {
         let Some(sp) = l.find(' ') else { continue };
         let code = &l[..sp];
         let raw_path = l[sp..].trim_start();
-        // 이름변경 "old -> new" — 새 경로를 쓴다
-        let path = raw_path.rsplit(" -> ").next().unwrap_or(raw_path).trim_matches('"').to_string();
+        // 이름변경 "old -> new" — 새 경로가 기준, 원래 경로는 표시용으로 함께 싣는다 (P-9)
+        let (path, renamed_from) = match raw_path.split_once(" -> ") {
+            Some((old, new)) => (
+                new.trim_matches('"').to_string(),
+                Some(old.trim_matches('"').to_string()),
+            ),
+            None => (raw_path.trim_matches('"').to_string(), None),
+        };
         if path.is_empty() || code.is_empty() {
             continue;
         }
-        let status = if code.contains('?') || code.contains('A') {
+        let status = if code.contains('R') {
+            "R"
+        } else if code.contains('?') || code.contains('A') {
             "A"
         } else if code.contains('D') {
             "D"
@@ -82,7 +110,7 @@ pub fn changed_files(ws_path: &str) -> Result<Vec<ChangedFile>, String> {
                 None => String::new(),
             }
         };
-        out.push(ChangedFile { status: status.into(), path, stat });
+        out.push(ChangedFile { status: status.into(), path, stat, renamed_from });
     }
     Ok(out)
 }
@@ -126,7 +154,21 @@ fn number_side(side: &mut [DiffLine]) {
 /// HEAD ↔ 워크트리 양측 라인 재구성. untracked = 전부 add, 삭제 = 전부 del, 바이너리 = Err.
 pub fn file_diff(ws_path: &str, path: &str) -> Result<FileDiff, String> {
     let base_label = git(&["rev-parse", "--short", "HEAD"], ws_path).unwrap_or_else(|_| "HEAD".into());
-    let in_head = git(&["cat-file", "-e", &format!("HEAD:{path}")], ws_path).is_ok();
+    // 이름변경 해석 (P-9) — 스테이징된 rename은 새 경로가 HEAD에 없어 전체 add로 보였다.
+    // porcelain에서 원래 경로를 찾아 HEAD:<old> ↔ 워크트리 <new>를 비교한다.
+    let renamed_from = git(&["status", "--porcelain"], ws_path).ok().and_then(|out| {
+        out.lines().find_map(|line| {
+            let l = line.trim_start();
+            let (code, rest) = l.split_once(' ')?;
+            if !code.contains('R') {
+                return None;
+            }
+            let (old, new) = rest.trim_start().split_once(" -> ")?;
+            (new.trim_matches('"') == path).then(|| old.trim_matches('"').to_string())
+        })
+    });
+    let head_path = renamed_from.as_deref().unwrap_or(path);
+    let in_head = git(&["cat-file", "-e", &format!("HEAD:{head_path}")], ws_path).is_ok();
 
     if !in_head {
         // untracked/새 파일 — BASE 없음, 현재 전체가 add.
@@ -143,15 +185,20 @@ pub fn file_diff(ws_path: &str, path: &str) -> Result<FileDiff, String> {
         return Ok(FileDiff { base_label, base: Vec::new(), current, truncated });
     }
 
-    let out = git(&["diff", "--no-color", "-U999999", "HEAD", "--", path], ws_path)?;
+    let out = if let Some(old) = renamed_from.as_deref() {
+        // rename은 양쪽 경로를 pathspec에 넣어야 rename 감지가 살아 old↔new 비교가 된다
+        git(&["diff", "--no-color", "--find-renames", "-U999999", "HEAD", "--", old, path], ws_path)?
+    } else {
+        git(&["diff", "--no-color", "-U999999", "HEAD", "--", path], ws_path)?
+    };
     // "Binary files …" 는 diff 헤더의 한 줄로만 판정한다 — 본문(변경된 코드)에 그 문자열이
     // 들어 있는 파일(이 diff.rs 자신 등)이 바이너리로 오탐되지 않게 줄 단위로 검사
     if out.lines().any(|l| l.starts_with("Binary files ") && l.ends_with(" differ")) {
         return Err("바이너리 파일 — 텍스트 비교 불가".into());
     }
-    if out.trim().is_empty() {
-        // 변경 없음 — 양측 동일 내용 (ctx)
-        let text = git(&["show", &format!("HEAD:{path}")], ws_path)?;
+    if out.trim().is_empty() || !out.lines().any(|l| l.starts_with("@@")) {
+        // 변경 없음(또는 내용 동일 rename — 헤더만 있고 헝크 없음) — 양측 동일 내용 (ctx)
+        let text = git(&["show", &format!("HEAD:{head_path}")], ws_path)?;
         let mk = |t: &str| {
             t.lines()
                 .take(MAX_LINES_PER_SIDE)
@@ -212,8 +259,8 @@ mod tests {
     use super::*;
     use std::fs;
 
-    fn temp_repo() -> (std::path::PathBuf, String) {
-        let dir = std::env::temp_dir().join(format!("eqmux-diff-{}", crate::workspace::now_ms()));
+    fn temp_repo(tag: &str) -> (std::path::PathBuf, String) {
+        let dir = std::env::temp_dir().join(format!("eqmux-diff-{tag}-{}", crate::workspace::now_ms()));
         fs::create_dir_all(&dir).unwrap();
         let path = dir.to_string_lossy().into_owned();
         git(&["init"], &path).unwrap();
@@ -224,7 +271,7 @@ mod tests {
 
     #[test]
     fn changed_files_and_side_by_side() {
-        let (dir, ws) = temp_repo();
+        let (dir, ws) = temp_repo("main");
         fs::write(dir.join("a.txt"), "하나\n둘\n셋\n").unwrap();
         fs::write(dir.join("gone.txt"), "지워질 파일\n").unwrap();
         git(&["add", "."], &ws).unwrap();
@@ -263,5 +310,47 @@ mod tests {
         assert_eq!(g.base[0].kind.as_deref(), Some("del"));
 
         fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 이름변경 (P-9) — 스테이징된 rename이 목록에 R + 원래 경로로 나오고,
+    /// diff가 전체 add가 아니라 HEAD의 옛 경로와 비교된다
+    #[test]
+    fn renamed_file_diffs_against_old_path() {
+        let (dir, ws) = temp_repo("rename");
+        fs::write(dir.join("old.txt"), "하나\n둘\n셋\n넷\n다섯\n").unwrap();
+        git(&["add", "."], &ws).unwrap();
+        git(&["commit", "-m", "first"], &ws).unwrap();
+        git(&["mv", "old.txt", "new.txt"], &ws).unwrap();
+        fs::write(dir.join("new.txt"), "하나\n둘\n셋\n넷\n다섯-고침\n").unwrap();
+
+        let files = changed_files(&ws).unwrap();
+        let f = files.iter().find(|f| f.path == "new.txt").expect("rename이 목록에 있다");
+        assert_eq!(f.status, "R");
+        assert_eq!(f.renamed_from.as_deref(), Some("old.txt"));
+        assert_eq!(f.stat, "+1 −1"); // numstat rename 표기가 새 경로로 정규화된다
+
+        let d = file_diff(&ws, "new.txt").unwrap();
+        assert_eq!(d.base.iter().filter(|l| l.kind.as_deref() == Some("del")).count(), 1);
+        assert_eq!(d.current.iter().filter(|l| l.kind.as_deref() == Some("add")).count(), 1);
+        assert!(d.base.iter().any(|l| l.text == "다섯")); // 옛 경로 내용이 BASE에 있다
+
+        // 내용 동일 rename — 헝크가 없어도 양측 동일 내용으로 보인다 (빈 화면 아님)
+        git(&["add", "."], &ws).unwrap();
+        git(&["commit", "-m", "second"], &ws).unwrap();
+        git(&["mv", "new.txt", "third.txt"], &ws).unwrap();
+        let p = file_diff(&ws, "third.txt").unwrap();
+        assert_eq!(p.base.len(), 5);
+        assert_eq!(p.base.len(), p.current.len());
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// numstat rename 표기 정규화 (P-9)
+    #[test]
+    fn numstat_path_normalizes_renames() {
+        assert_eq!(numstat_path("a.txt"), "a.txt");
+        assert_eq!(numstat_path("old.txt => new.txt"), "new.txt");
+        assert_eq!(numstat_path("src/{old.rs => new.rs}"), "src/new.rs");
+        assert_eq!(numstat_path("src/{ => sub}/mod.rs"), "src/sub/mod.rs");
     }
 }
