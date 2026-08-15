@@ -13,6 +13,7 @@ import { startTeamSync } from "./backend/team";
 import { startFileWatch } from "./backend/watch";
 import { refreshWorkspaces } from "./backend/workspaces";
 import { exitOpen, layoutPickerOpen, overlay, panelOpen, setExitOpen, setLayoutPickerOpen, setView, terminalFull, view } from "./state";
+import type { View } from "./state";
 import { ScreenOverlay } from "./components/ScreenOverlay";
 import { editorGuard, MissionExplorerTab } from "./components/MissionExplorerTab";
 import { ControlCenter } from "./screens/ControlCenter";
@@ -141,7 +142,10 @@ export function App() {
               <Missions wsId={(v() as { kind: "missions"; wsId: string }).wsId} />
             </Match>
             <Match when={v().kind === "gitdiff"}>
-              <GitDiffEditor wsId={(v() as { kind: "gitdiff"; wsId?: string }).wsId} />
+              <GitDiffEditor
+                wsId={(v() as Extract<View, { kind: "gitdiff" }>).wsId}
+                commit={(v() as Extract<View, { kind: "gitdiff" }>).commit}
+              />
             </Match>
           </Switch>
         </div>

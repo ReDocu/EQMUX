@@ -93,3 +93,16 @@ export async function diffFile(wsPath: string, path: string): Promise<FileDiff |
   if (!isTauri()) return "브라우저 dev — 실측 없음";
   return invoke<FileDiff>("diff_file", { wsPath, path }).catch((e) => String(e));
 }
+
+// ── 커밋 기준 diff (UI 리파인 §git) — 부모 커밋 ↔ 이 커밋, 읽기 전용 ──
+
+export async function commitChangedFiles(wsPath: string, hash: string): Promise<ChangedFile[] | undefined> {
+  if (!isTauri()) return undefined;
+  return invoke<ChangedFile[]>("commit_changed_files", { wsPath, hash }).catch(() => undefined);
+}
+
+/** 실패 사유(바이너리 등)를 문자열로 돌려준다 — diffFile과 같은 계약 */
+export async function commitFileDiff(wsPath: string, hash: string, path: string): Promise<FileDiff | string> {
+  if (!isTauri()) return "브라우저 dev — 실측 없음";
+  return invoke<FileDiff>("commit_file_diff", { wsPath, hash, path }).catch((e) => String(e));
+}

@@ -1,6 +1,7 @@
-// diff 에디터 실파싱 (PRD H) — HEAD ↔ 워크트리 비교를 읽기 전용으로 제공한다.
+// diff 에디터 실파싱 (PRD H) — HEAD ↔ 워크트리, 그리고 부모 커밋 ↔ 커밋(UI 리파인 §git)을
+// 읽기 전용으로 제공한다.
 // 원리: `git diff -U999999`로 파일 전체가 한 헝크에 들어오게 만들고,
-// ' '(양측) · '-'(BASE) · '+'(WORKTREE) 접두로 양측 라인 배열을 재구성한다.
+// ' '(양측) · '-'(BASE) · '+'(CURRENT) 접두로 양측 라인 배열을 재구성한다.
 // 양측 배열은 항상 같은 길이다 (B8) — 변경 런(-…+…)을 1:1로 짝짓고 짧은 쪽을
 // kind="pad" 필러 행으로 채워, 화면이 행 단위로 정렬된 side-by-side를 그릴 수 있게 한다.
 // 스테이지·커밋·편집은 제공하지 않는다 — 실행은 터미널에서 사람이 한다 (다른 패널과 같은 원칙).
@@ -151,65 +152,17 @@ fn number_side(side: &mut [DiffLine]) {
     }
 }
 
-/// HEAD ↔ 워크트리 양측 라인 재구성. untracked = 전부 add, 삭제 = 전부 del, 바이너리 = Err.
-pub fn file_diff(ws_path: &str, path: &str) -> Result<FileDiff, String> {
-    let base_label = git(&["rev-parse", "--short", "HEAD"], ws_path).unwrap_or_else(|_| "HEAD".into());
-    // 이름변경 해석 (P-9) — 스테이징된 rename은 새 경로가 HEAD에 없어 전체 add로 보였다.
-    // porcelain에서 원래 경로를 찾아 HEAD:<old> ↔ 워크트리 <new>를 비교한다.
-    let renamed_from = git(&["status", "--porcelain"], ws_path).ok().and_then(|out| {
-        out.lines().find_map(|line| {
-            let l = line.trim_start();
-            let (code, rest) = l.split_once(' ')?;
-            if !code.contains('R') {
-                return None;
-            }
-            let (old, new) = rest.trim_start().split_once(" -> ")?;
-            (new.trim_matches('"') == path).then(|| old.trim_matches('"').to_string())
-        })
-    });
-    let head_path = renamed_from.as_deref().unwrap_or(path);
-    let in_head = git(&["cat-file", "-e", &format!("HEAD:{head_path}")], ws_path).is_ok();
+/// 양측 동일 내용 (ctx) — 변경 없는 rename 등에서 같은 텍스트를 양 페인에 얹을 때
+fn ctx_lines(text: &str) -> Vec<DiffLine> {
+    text.lines()
+        .take(MAX_LINES_PER_SIDE)
+        .enumerate()
+        .map(|(i, l)| DiffLine { no: Some((i + 1) as u32), text: l.to_string(), kind: None })
+        .collect()
+}
 
-    if !in_head {
-        // untracked/새 파일 — BASE 없음, 현재 전체가 add.
-        // 워크스페이스 밖 탈출 방어 (fsx와 동일 규칙) — path가 절대경로/..면 join이 탈출한다
-        let base = std::fs::canonicalize(ws_path).map_err(|_| "워크스페이스 경로 없음".to_string())?;
-        let target = std::fs::canonicalize(base.join(path)).map_err(|_| "파일 없음".to_string())?;
-        if !target.starts_with(&base) {
-            return Err("워크스페이스 밖 경로".into());
-        }
-        let text = std::fs::read_to_string(&target)
-            .map_err(|_| "파일을 읽을 수 없습니다 (바이너리 또는 없음)".to_string())?;
-        let current = all_lines(&text, "add");
-        let truncated = text.lines().count() > MAX_LINES_PER_SIDE;
-        return Ok(FileDiff { base_label, base: Vec::new(), current, truncated });
-    }
-
-    let out = if let Some(old) = renamed_from.as_deref() {
-        // rename은 양쪽 경로를 pathspec에 넣어야 rename 감지가 살아 old↔new 비교가 된다
-        git(&["diff", "--no-color", "--find-renames", "-U999999", "HEAD", "--", old, path], ws_path)?
-    } else {
-        git(&["diff", "--no-color", "-U999999", "HEAD", "--", path], ws_path)?
-    };
-    // "Binary files …" 는 diff 헤더의 한 줄로만 판정한다 — 본문(변경된 코드)에 그 문자열이
-    // 들어 있는 파일(이 diff.rs 자신 등)이 바이너리로 오탐되지 않게 줄 단위로 검사
-    if out.lines().any(|l| l.starts_with("Binary files ") && l.ends_with(" differ")) {
-        return Err("바이너리 파일 — 텍스트 비교 불가".into());
-    }
-    if out.trim().is_empty() || !out.lines().any(|l| l.starts_with("@@")) {
-        // 변경 없음(또는 내용 동일 rename — 헤더만 있고 헝크 없음) — 양측 동일 내용 (ctx)
-        let text = git(&["show", &format!("HEAD:{head_path}")], ws_path)?;
-        let mk = |t: &str| {
-            t.lines()
-                .take(MAX_LINES_PER_SIDE)
-                .enumerate()
-                .map(|(i, l)| DiffLine { no: Some((i + 1) as u32), text: l.to_string(), kind: None })
-                .collect::<Vec<_>>()
-        };
-        let truncated = text.lines().count() > MAX_LINES_PER_SIDE;
-        return Ok(FileDiff { base_label, base: mk(&text), current: mk(&text), truncated });
-    }
-
+/// -U999999 unified diff 출력 → 정렬된 양측 라인 배열 (B8) — 워크트리·커밋 diff 공용 파서
+fn parse_sides(out: &str) -> (Vec<DiffLine>, Vec<DiffLine>, bool) {
     let mut base = Vec::new();
     let mut current = Vec::new();
     let mut dels: Vec<String> = Vec::new();
@@ -251,6 +204,170 @@ pub fn file_diff(ws_path: &str, path: &str) -> Result<FileDiff, String> {
     if !current.iter().any(|l| l.kind.as_deref() != Some("pad")) {
         current.clear();
     }
+    (base, current, truncated)
+}
+
+/// diff 헤더의 "Binary files … differ" 한 줄로만 바이너리를 판정한다 — 본문에 그 문자열이
+/// 들어 있는 파일(이 diff.rs 자신 등)이 오탐되지 않게 줄 단위로 검사
+fn is_binary_diff(out: &str) -> bool {
+    out.lines().any(|l| l.starts_with("Binary files ") && l.ends_with(" differ"))
+}
+
+/// HEAD ↔ 워크트리 양측 라인 재구성. untracked = 전부 add, 삭제 = 전부 del, 바이너리 = Err.
+pub fn file_diff(ws_path: &str, path: &str) -> Result<FileDiff, String> {
+    let base_label = git(&["rev-parse", "--short", "HEAD"], ws_path).unwrap_or_else(|_| "HEAD".into());
+    // 이름변경 해석 (P-9) — 스테이징된 rename은 새 경로가 HEAD에 없어 전체 add로 보였다.
+    // porcelain에서 원래 경로를 찾아 HEAD:<old> ↔ 워크트리 <new>를 비교한다.
+    let renamed_from = git(&["status", "--porcelain"], ws_path).ok().and_then(|out| {
+        out.lines().find_map(|line| {
+            let l = line.trim_start();
+            let (code, rest) = l.split_once(' ')?;
+            if !code.contains('R') {
+                return None;
+            }
+            let (old, new) = rest.trim_start().split_once(" -> ")?;
+            (new.trim_matches('"') == path).then(|| old.trim_matches('"').to_string())
+        })
+    });
+    let head_path = renamed_from.as_deref().unwrap_or(path);
+    let in_head = git(&["cat-file", "-e", &format!("HEAD:{head_path}")], ws_path).is_ok();
+
+    if !in_head {
+        // untracked/새 파일 — BASE 없음, 현재 전체가 add.
+        // 워크스페이스 밖 탈출 방어 (fsx와 동일 규칙) — path가 절대경로/..면 join이 탈출한다
+        let base = std::fs::canonicalize(ws_path).map_err(|_| "워크스페이스 경로 없음".to_string())?;
+        let target = std::fs::canonicalize(base.join(path)).map_err(|_| "파일 없음".to_string())?;
+        if !target.starts_with(&base) {
+            return Err("워크스페이스 밖 경로".into());
+        }
+        let text = std::fs::read_to_string(&target)
+            .map_err(|_| "파일을 읽을 수 없습니다 (바이너리 또는 없음)".to_string())?;
+        let current = all_lines(&text, "add");
+        let truncated = text.lines().count() > MAX_LINES_PER_SIDE;
+        return Ok(FileDiff { base_label, base: Vec::new(), current, truncated });
+    }
+
+    let out = if let Some(old) = renamed_from.as_deref() {
+        // rename은 양쪽 경로를 pathspec에 넣어야 rename 감지가 살아 old↔new 비교가 된다
+        git(&["diff", "--no-color", "--find-renames", "-U999999", "HEAD", "--", old, path], ws_path)?
+    } else {
+        git(&["diff", "--no-color", "-U999999", "HEAD", "--", path], ws_path)?
+    };
+    if is_binary_diff(&out) {
+        return Err("바이너리 파일 — 텍스트 비교 불가".into());
+    }
+    if out.trim().is_empty() || !out.lines().any(|l| l.starts_with("@@")) {
+        // 변경 없음(또는 내용 동일 rename — 헤더만 있고 헝크 없음) — 양측 동일 내용 (ctx)
+        let text = git(&["show", &format!("HEAD:{head_path}")], ws_path)?;
+        let truncated = text.lines().count() > MAX_LINES_PER_SIDE;
+        return Ok(FileDiff { base_label, base: ctx_lines(&text), current: ctx_lines(&text), truncated });
+    }
+
+    let (base, current, truncated) = parse_sides(&out);
+    Ok(FileDiff { base_label, base, current, truncated })
+}
+
+// ── 커밋 기준 diff (UI 리파인 §git) — 부모 커밋 ↔ 이 커밋. 읽기 전용은 동일하다 ──
+// 워크트리 diff(HEAD↔작업 트리)와 별개 진입점: 커밋 행 클릭이 연다. 이력은 여전히 바꾸지 않는다.
+
+/// 커밋 해시 검증 — 우리 커밋 목록에서 온 값이지만, git 인자로 들어가므로 hex만 허용한다
+fn valid_hash(hash: &str) -> bool {
+    (4..=64).contains(&hash.len()) && hash.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// 커밋의 변경 파일 목록 — diff-tree 부모↔커밋. 루트 커밋은 --root로 전체 A가 된다.
+pub fn commit_changed_files(ws_path: &str, hash: &str) -> Result<Vec<ChangedFile>, String> {
+    if !valid_hash(hash) {
+        return Err("잘못된 커밋 해시".into());
+    }
+    let args = |what: &'static str| ["diff-tree", "-r", "--no-commit-id", "--root", "--find-renames", what, hash];
+    let ns = git(&args("--name-status"), ws_path)?;
+    // 경로 → (+, −) — rename 표기는 numstat_path로 새 경로 기준 정규화 (P-9와 같은 규칙)
+    let mut stats: std::collections::HashMap<String, (String, String)> = std::collections::HashMap::new();
+    if let Ok(numstat) = git(&args("--numstat"), ws_path) {
+        for line in numstat.lines() {
+            let mut p = line.splitn(3, '\t');
+            let (Some(a), Some(d), Some(path)) = (p.next(), p.next(), p.next()) else { continue };
+            stats.insert(numstat_path(path), (a.to_string(), d.to_string()));
+        }
+    }
+    let mut out = Vec::new();
+    for line in ns.lines() {
+        let mut p = line.split('\t');
+        let Some(code) = p.next().map(str::trim) else { continue };
+        // R100·C75 등은 "코드\t옛 경로\t새 경로" 3열 — 새 경로가 기준, 옛 경로는 표시용 (P-9)
+        let (status, path, renamed_from) = if code.starts_with('R') || code.starts_with('C') {
+            let (Some(old), Some(new)) = (p.next(), p.next()) else { continue };
+            (if code.starts_with('R') { "R" } else { "A" }, new.to_string(), Some(old.to_string()))
+        } else {
+            let Some(path) = p.next() else { continue };
+            let st = match code.chars().next() {
+                Some('A') => "A",
+                Some('D') => "D",
+                _ => "M", // M·T(모드 변경) 등은 수정으로 묶는다
+            };
+            (st, path.to_string(), None)
+        };
+        if path.is_empty() {
+            continue;
+        }
+        let stat = match stats.get(&path) {
+            Some((a, _)) if a == "-" => "바이너리".into(),
+            Some((a, d)) => format!("+{a} −{d}"),
+            None => String::new(),
+        };
+        out.push(ChangedFile { status: status.into(), path, stat, renamed_from });
+    }
+    Ok(out)
+}
+
+/// 부모 커밋 ↔ 커밋 양측 재구성 — 워크트리 diff와 같은 정렬 규칙 (B8).
+/// 루트 커밋(부모 없음)·커밋에서 처음 생긴 파일은 BASE 없음 = 전부 add.
+pub fn commit_file_diff(ws_path: &str, hash: &str, path: &str) -> Result<FileDiff, String> {
+    if !valid_hash(hash) {
+        return Err("잘못된 커밋 해시".into());
+    }
+    let parent = format!("{hash}^");
+    // rename 해석 — diff-tree에서 이 경로의 옛 이름을 찾아 부모의 옛 경로와 비교한다 (P-9와 같은 원리)
+    let renamed_from = commit_changed_files(ws_path, hash)?
+        .into_iter()
+        .find(|f| f.path == path)
+        .and_then(|f| f.renamed_from);
+    let old_path = renamed_from.clone().unwrap_or_else(|| path.to_string());
+
+    let show_commit_side = || {
+        git(&["show", &format!("{hash}:{path}")], ws_path)
+            .map_err(|_| "파일을 읽을 수 없습니다 (바이너리 또는 없음)".to_string())
+    };
+    let Ok(base_label) = git(&["rev-parse", "--short", &parent], ws_path) else {
+        // 루트 커밋 — 부모가 없다. 전체가 이 커밋에서 태어난 내용
+        let text = show_commit_side()?;
+        let truncated = text.lines().count() > MAX_LINES_PER_SIDE;
+        return Ok(FileDiff { base_label: "∅ (루트 커밋)".into(), base: Vec::new(), current: all_lines(&text, "add"), truncated });
+    };
+
+    if git(&["cat-file", "-e", &format!("{parent}:{old_path}")], ws_path).is_err() {
+        // 이 커밋에서 처음 생긴 파일 — BASE 없음
+        let text = show_commit_side()?;
+        let truncated = text.lines().count() > MAX_LINES_PER_SIDE;
+        return Ok(FileDiff { base_label, base: Vec::new(), current: all_lines(&text, "add"), truncated });
+    }
+
+    let out = if renamed_from.is_some() {
+        git(&["diff", "--no-color", "--find-renames", "-U999999", &parent, hash, "--", &old_path, path], ws_path)?
+    } else {
+        git(&["diff", "--no-color", "-U999999", &parent, hash, "--", path], ws_path)?
+    };
+    if is_binary_diff(&out) {
+        return Err("바이너리 파일 — 텍스트 비교 불가".into());
+    }
+    if out.trim().is_empty() || !out.lines().any(|l| l.starts_with("@@")) {
+        // 내용 동일 rename — 양측 동일 내용 (ctx)
+        let text = git(&["show", &format!("{parent}:{old_path}")], ws_path)?;
+        let truncated = text.lines().count() > MAX_LINES_PER_SIDE;
+        return Ok(FileDiff { base_label, base: ctx_lines(&text), current: ctx_lines(&text), truncated });
+    }
+    let (base, current, truncated) = parse_sides(&out);
     Ok(FileDiff { base_label, base, current, truncated })
 }
 
@@ -341,6 +458,53 @@ mod tests {
         let p = file_diff(&ws, "third.txt").unwrap();
         assert_eq!(p.base.len(), 5);
         assert_eq!(p.base.len(), p.current.len());
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 커밋 기준 diff (UI 리파인 §git) — 부모↔커밋 목록·비교, 루트 커밋은 전체 A
+    #[test]
+    fn commit_diff_lists_and_compares() {
+        let (dir, ws) = temp_repo("commit");
+        fs::write(dir.join("a.txt"), "하나\n둘\n").unwrap();
+        git(&["add", "."], &ws).unwrap();
+        git(&["commit", "-m", "root"], &ws).unwrap();
+        let root = git(&["rev-parse", "HEAD"], &ws).unwrap().trim().to_string();
+        fs::write(dir.join("a.txt"), "하나\n둘-고침\n").unwrap();
+        fs::write(dir.join("b.txt"), "새 파일\n").unwrap();
+        git(&["add", "."], &ws).unwrap();
+        git(&["commit", "-m", "second"], &ws).unwrap();
+        let second = git(&["rev-parse", "HEAD"], &ws).unwrap().trim().to_string();
+
+        // 목록 — 부모↔커밋: a는 M(+1 −1), b는 A
+        let files = commit_changed_files(&ws, &second).unwrap();
+        let st = |p: &str| files.iter().find(|f| f.path == p).map(|f| f.status.clone());
+        assert_eq!(st("a.txt").as_deref(), Some("M"));
+        assert_eq!(st("b.txt").as_deref(), Some("A"));
+        assert_eq!(files.iter().find(|f| f.path == "a.txt").unwrap().stat, "+1 −1");
+
+        // 수정 파일 — del↔add가 같은 행에 정렬된다 (B8) · BASE 라벨은 부모 짧은 해시
+        let d = commit_file_diff(&ws, &second, "a.txt").unwrap();
+        assert_eq!(d.base.len(), d.current.len());
+        assert_eq!(d.base.iter().filter(|l| l.kind.as_deref() == Some("del")).count(), 1);
+        assert_eq!(d.current[1].text, "둘-고침");
+        assert!(root.starts_with(&d.base_label));
+
+        // 이 커밋에서 처음 생긴 파일 — BASE 없음, 전체 add
+        let n = commit_file_diff(&ws, &second, "b.txt").unwrap();
+        assert!(n.base.is_empty() && n.current.len() == 1);
+        assert_eq!(n.current[0].kind.as_deref(), Some("add"));
+
+        // 루트 커밋 — 부모가 없다: 목록 전체 A, 비교는 전부 add
+        let rf = commit_changed_files(&ws, &root).unwrap();
+        assert_eq!(rf.iter().map(|f| f.status.as_str()).collect::<Vec<_>>(), vec!["A"]);
+        let rd = commit_file_diff(&ws, &root, "a.txt").unwrap();
+        assert!(rd.base.is_empty() && rd.current.len() == 2);
+        assert_eq!(rd.base_label, "∅ (루트 커밋)");
+
+        // 해시가 아닌 값은 git 인자로 넘기지 않는다
+        assert!(commit_changed_files(&ws, "main").is_err());
+        assert!(commit_file_diff(&ws, "--exec=x", "a.txt").is_err());
 
         fs::remove_dir_all(&dir).ok();
     }

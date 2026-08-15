@@ -1321,11 +1321,35 @@
   padding: 0 12px;
 }
 
-/* ── git 패널 (PAlmZ) ── */
+/* ── git 패널 (PAlmZ · UI 리파인 §git) ── */
 .gitp {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+/* 타이틀바 — 아이콘+제목 왼쪽 · 출처(경로는 툴팁)·새로 읽기 오른쪽 */
+.gitp-titlebar {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.gitp-git-ic {
+  display: flex;
+  color: var(--eq-purple);
+}
+.gitp-src {
+  font-size: 10px;
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gitp-refresh {
+  font-size: 12px;
+  padding: 1px 7px;
+}
+.gitp-repo-wrap {
+  position: relative;
 }
 .gitp-repo,
 .gitp-branch {
@@ -1342,18 +1366,53 @@
 .gitp-branch:hover {
   border-color: var(--eq-muted);
 }
-.gitp-branch-row {
+/* 한 줄 툴바 — 브랜치 ▾ · ↑↓ · diff · pull · commit · push. 좁으면 줄바꿈 */
+.gitp-toolbar {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+  row-gap: 6px;
+  flex-wrap: wrap;
   position: relative;
+}
+.gitp-branch-wrap {
+  flex: 1 1 110px;
+  min-width: 0;
+  display: flex;
 }
 .gitp-branch {
   flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+}
+.gitp-branch-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .gitp-sync {
   font-size: 11px;
   white-space: nowrap;
+}
+.gitp-act {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  font-size: 11px;
+  white-space: nowrap;
+  color: var(--eq-text);
+  background: var(--eq-surface-2);
+  border: 1px solid var(--eq-line);
+  border-radius: var(--eq-r-sm);
+  cursor: pointer;
+}
+.gitp-act:hover {
+  border-color: var(--eq-blue);
+}
+.gitp-act .n {
+  color: var(--eq-blue);
+  font-weight: 700;
 }
 /* 팝오버 (시안 §05) — 브랜치 체크아웃·워크트리 생성 폼. 내용을 밀지 않고 위에 뜬다 */
 .gitp-pop {
@@ -1369,23 +1428,7 @@
   flex-direction: column;
   gap: 4px;
 }
-/* 변경 요약 한 줄 (시안 §05) — 타일 4개의 후신 */
-.gitp-sumline {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  font-size: 12px;
-  padding: 2px 2px 0;
-  font-variant-numeric: tabular-nums;
-}
-.gitp-sumline b {
-  font-size: 16px;
-  font-weight: 700;
-}
-.gitp-added {
-  color: var(--eq-green);
-}
-/* 워크트리 행 — 뱃지 박스 대신 우측 텍스트 라벨 */
+/* 워크트리 스트립 (UI 리파인 §git) — 한 줄. 경로·head·정책은 툴팁 */
 .gitp-wt-head {
   position: relative;
 }
@@ -1397,11 +1440,25 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 2px;
+  padding: 3px 2px;
   border-top: 1px solid var(--eq-line);
 }
 .gitp-wt:first-child {
   border-top: none;
+}
+.gitp-wt-name {
+  font-size: 11px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gitp-wt-path {
+  font-size: 9px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .gitp-wt-tag {
   font-size: 9px;
@@ -1419,75 +1476,106 @@
   padding-top: 8px;
   margin-top: 2px;
 }
+/* 커밋 리스트 (UI 리파인 §git) — 밀도 행: 뱃지+메시지 왼쪽 · 작성자·시간·해시 오른쪽 한 줄.
+   그래프 라인은 행을 관통해 이어진다. 행 클릭 = 부모 커밋 ↔ 이 커밋 diff */
 .gitp-commits {
   display: flex;
   flex-direction: column;
 }
 .gitp-commit {
   display: flex;
-  gap: 10px;
-  align-items: stretch;
+  gap: 8px;
+  align-items: center;
+  min-height: 38px;
+  padding: 0 2px;
+  border-bottom: 1px solid var(--eq-line);
+  cursor: pointer;
+}
+.gitp-commit:last-child {
+  border-bottom: none;
+}
+.gitp-commit:hover {
+  background: var(--eq-surface-2);
 }
 .gitp-graph {
   position: relative;
   width: 14px;
   flex-shrink: 0;
+  align-self: stretch;
 }
 .gitp-line {
   position: absolute;
   left: 6px;
   top: 0;
   bottom: 0;
-  width: 1px;
-  background: var(--eq-line);
+  width: 2px;
+  background: var(--eq-blue-mid);
 }
 .gitp-line.first {
-  top: 12px;
+  top: 50%;
 }
 .gitp-line.last {
-  bottom: calc(100% - 12px);
+  bottom: 50%;
 }
 .gitp-dot {
   position: absolute;
   left: 3px;
-  top: 9px;
+  top: 50%;
+  margin-top: -4px;
   width: 8px;
   height: 8px;
   border-radius: 50%;
   background: var(--eq-blue);
   border: 1px solid var(--eq-bg);
 }
-.gitp-commit-body {
+.gitp-commit-main {
   flex: 1;
   min-width: 0;
-  padding: 6px 0 10px;
-  border-bottom: 1px solid var(--eq-line);
-}
-.gitp-commit:last-child .gitp-commit-body {
-  border-bottom: none;
-}
-.gitp-commit-msg {
   display: flex;
   align-items: center;
   gap: 6px;
   font-size: 12px;
-  margin-bottom: 2px;
 }
-.gitp-diff-cta {
+.gitp-commit-txt {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* ref 뱃지 — 아웃라인 필. 원격(origin/…)은 보라 계열로 구분 */
+.gitp-ref {
+  flex-shrink: 0;
+  font-size: 9.5px;
+  font-weight: 600;
+  line-height: 16px;
+  padding: 0 6px;
+  border-radius: 5px;
+  color: var(--eq-blue);
+  border: 1px solid var(--eq-blue-mid);
+  background: var(--eq-blue-soft);
+}
+.gitp-ref.remote {
+  color: var(--eq-purple);
+  border-color: var(--eq-purple-soft);
+  background: var(--eq-purple-soft);
+}
+.gitp-commit-meta {
+  flex-shrink: 0;
   display: flex;
-  justify-content: space-between;
   align-items: center;
   gap: 8px;
-  padding: 10px 12px;
-  font-size: 12px;
-  font-weight: 600;
-  border-color: var(--eq-blue-mid);
-  background: var(--eq-blue-soft);
-  color: var(--eq-blue);
-  text-align: left;
+  font-size: 10px;
+  color: var(--eq-dim);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
-.gitp-diff-cta:hover {
-  border-color: var(--eq-blue);
+.gitp-commit-author {
+  max-width: 76px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.gitp-commit-hash {
+  color: var(--eq-blue);
+  opacity: 0.75;
 }
 
 /* ── 서버 로그 패널 (KcL3j) ── */
@@ -2069,6 +2157,11 @@
 .gde-sidebar-head {
   margin-bottom: 10px;
 }
+.gde-sidebar-sub {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .gde-files {
   flex: 1;
   min-height: 0;
@@ -2076,17 +2169,27 @@
   border: 1px solid var(--eq-line);
   background: var(--eq-surface);
 }
+/* 디렉터리 트리 (UI 리파인 §git) — 폴더 행 + 들여쓴 한 줄 파일 행 */
+.gde-dir {
+  padding: 2px 8px;
+  font-size: 11px;
+  color: var(--eq-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .gde-file {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   width: 100%;
-  padding: 7px 9px;
+  padding: 3px 8px;
   text-align: left;
-  border-bottom: 1px solid var(--eq-line);
 }
-.gde-file:last-child {
-  border-bottom: none;
+.gde-file-stat {
+  margin-left: auto;
+  font-size: 9px;
+  flex-shrink: 0;
 }
 .gde-file:hover {
   background: var(--eq-surface-2);
@@ -2122,7 +2225,8 @@
   background: var(--eq-red-soft);
 }
 .gde-file-path {
-  font-size: 10px;
+  font-size: 11px;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2195,6 +2299,13 @@
   padding: 8px 12px;
   border-bottom: 1px solid var(--eq-line);
   flex-shrink: 0;
+}
+/* 비교 방향 색 구분 (UI 리파인 §git) — 왼쪽(비교 대상)=붉은 계열, 오른쪽(현재)=초록 계열 */
+.gde-pane-head.old .gde-pane-title {
+  color: var(--eq-red);
+}
+.gde-pane-head.new .gde-pane-title {
+  color: var(--eq-green);
 }
 .gde-range {
   padding: 5px 12px;

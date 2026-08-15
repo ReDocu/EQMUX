@@ -12,7 +12,9 @@ export type View =
   | { kind: "casting"; wsId: string } // 레인 01 — 팀 캐스팅
   | { kind: "composition"; wsId: string } // 레인 01 — 팀 편성
   | { kind: "missions"; wsId: string } // 임무 배정 (화면 #8)
-  | { kind: "gitdiff"; wsId?: string; back?: View }; // Git Diff (AXXhV) — wsId 없으면 활성 워크스페이스, ✕/Esc는 back으로 복귀 (U11)
+  // Git Diff (AXXhV) — wsId 없으면 활성 워크스페이스, ✕/Esc는 back으로 복귀 (U11).
+  // commit이 있으면 부모 커밋 ↔ 이 커밋 비교(UI 리파인 §git), 없으면 HEAD ↔ 워크트리
+  | { kind: "gitdiff"; wsId?: string; back?: View; commit?: { hash: string; message: string } };
 // 워크스페이스 연결·역할 라이브러리·설정은 View가 아니라 팝업(OverlayKind)이다 — 아래 overlay 참조
 
 /** 전체 화면 팝업 (M25 확장) — NAV 도구 4종(임무·워크스페이스·역할·설정)이 전부 팝업이다.

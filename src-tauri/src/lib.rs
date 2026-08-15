@@ -1415,6 +1415,22 @@ async fn diff_file(ws_path: String, path: String) -> Result<diff::FileDiff, Stri
         .map_err(|e| e.to_string())?
 }
 
+/// 커밋의 변경 파일 목록 (UI 리파인 §git) — 부모 ↔ 커밋, 읽기 전용
+#[tauri::command]
+async fn commit_changed_files(ws_path: String, hash: String) -> Result<Vec<diff::ChangedFile>, String> {
+    tauri::async_runtime::spawn_blocking(move || diff::commit_changed_files(&ws_path, &hash))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// 부모 커밋 ↔ 커밋 양측 비교 (UI 리파인 §git) — 읽기 전용
+#[tauri::command]
+async fn commit_file_diff(ws_path: String, hash: String, path: String) -> Result<diff::FileDiff, String> {
+    tauri::async_runtime::spawn_blocking(move || diff::commit_file_diff(&ws_path, &hash, &path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 // 탐색기 트리·미리보기·파일 CRUD 커맨드는 fsx.rs가 소유한다 (M24 · 리팩토링으로 이동)
 
 // ── 종료 시퀀스 (FR-C-60~63) — ①입력 차단(프런트) → ②flush → ③정상 종료 신호 → ④유예 후 트리 종료 ──
@@ -1778,6 +1794,8 @@ pub fn run() {
             fsx::fs_delete,
             diff_changed_files,
             diff_file,
+            commit_changed_files,
+            commit_file_diff,
             shutdown_flush,
             app_exit,
             recovery::crash_recovery,
