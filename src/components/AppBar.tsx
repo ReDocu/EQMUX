@@ -103,7 +103,7 @@ export function AppBar() {
       <div class="tools">
         <button
           class="tool"
-          classList={{ active: panelOpen() && panelTab() === "conversation" }}
+          classList={{ active: panelOpen() }}
           title="대화 패널 토글 — 전체 화면에서도 열립니다"
           onClick={toggleConversation}
         >
