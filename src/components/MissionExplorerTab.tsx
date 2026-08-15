@@ -59,8 +59,33 @@ export function MissionExplorerTab() {
     setNodes(await fsTree(target.path));
   };
   onMount(() => {
-    createEffect(on(() => ws()?.id, () => void loadTree()));
+    createEffect(
+      on(() => ws()?.id, () => {
+        setCollapsed(new Set<string>()); // 워크스페이스가 바뀌면 접기 상태도 새로 — 다른 트리다
+        void loadTree();
+      }),
+    );
   });
+
+  // ── 폴더 접기 — 접힌 폴더의 rel 집합. 하위 항목은 조상 경로가 접혀 있으면 숨긴다.
+  // 검색 중에는 평면 결과라서 접기를 무시한다 (이름 일치가 우선).
+  const [collapsed, setCollapsed] = createSignal<Set<string>>(new Set());
+  const isCollapsed = (rel: string) => collapsed().has(rel);
+  const toggleFold = (rel: string) => {
+    const next = new Set(collapsed());
+    if (!next.delete(rel)) next.add(rel);
+    setCollapsed(next);
+  };
+  const hiddenByFold = (rel: string) => {
+    const c = collapsed();
+    if (c.size === 0) return false;
+    let i = rel.indexOf("/");
+    while (i > 0) {
+      if (c.has(rel.slice(0, i))) return true;
+      i = rel.indexOf("/", i + 1);
+    }
+    return false;
+  };
 
   // 브라우저 dev — 정적 목 트리에 이 워크스페이스의 임무 파일을 실측(MISSIONS)으로 합친다.
   // 임무 생성이 곧 파일 생성이라는 계약(FR-E-51)이 목에서도 보이게 한다 (B6).
@@ -83,7 +108,8 @@ export function MissionExplorerTab() {
   const tree = () => {
     const list = isTauri() ? (nodes() ?? []) : mockTree();
     const q = query().trim();
-    return q ? list.filter((n) => n.name.includes(q)) : list;
+    if (q) return list.filter((n) => n.name.includes(q)); // 검색 = 평면 — 접기 무시
+    return list.filter((n) => !hiddenByFold(n.rel));
   };
 
   const loadPreview = async (rel: string) => {
@@ -329,10 +355,14 @@ export function MissionExplorerTab() {
                   class="msnp-tree-row mono"
                   classList={{ selected: sel()?.rel === n.rel, folder: n.dir }}
                   style={{ "padding-left": `${8 + n.depth * 12}px` }}
-                  onClick={() => pick(n)}
+                  title={n.dir ? (isCollapsed(n.rel) ? "펼치기" : "접기") : undefined}
+                  onClick={() => {
+                    pick(n);
+                    if (n.dir) toggleFold(n.rel); // 폴더 클릭 = 선택 + 접기 토글 (탐색기 관례)
+                  }}
                 >
                   <span class="msnp-tree-icon">
-                    {n.dir ? "▸" : n.name.endsWith(".json") ? "{}" : n.name.endsWith(".md") ? "≡" : "·"}
+                    {n.dir ? (isCollapsed(n.rel) ? "▸" : "▾") : n.name.endsWith(".json") ? "{}" : n.name.endsWith(".md") ? "≡" : "·"}
                   </span>
                   {n.name}
                 </button>

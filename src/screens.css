@@ -389,6 +389,142 @@
 .rail-ms b {
   font-size: 12px;
 }
+/* 워크트리 레일 (orca식) — 임무 아래. 행 = 브랜치 + 귀속 세션, 생성은 팝오버 */
+.rail-wt-head {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px 0;
+}
+.rail-wt-head .eyebrow {
+  flex: 1;
+}
+.rail-wt-head b {
+  font-size: 12px;
+}
+.rail-wt-add {
+  flex-shrink: 0;
+  padding: 0 6px;
+  font-size: 13px;
+  color: var(--eq-dim);
+  border-radius: var(--eq-r-sm);
+  cursor: pointer;
+}
+.rail-wt-add:hover {
+  color: var(--eq-text);
+  background: var(--eq-surface-2);
+}
+.rail-wt-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 4px;
+  right: 4px;
+  z-index: 30;
+  border-color: var(--eq-line);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.45);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.rail-wt-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.rail-wt {
+  padding: 5px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--eq-r-sm);
+}
+.rail-wt:hover {
+  border-color: var(--eq-line);
+  background: var(--eq-surface);
+}
+.rail-wt-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.rail-wt-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rail-wt-tag {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--eq-dim);
+  flex-shrink: 0;
+}
+.rail-wt-tag.main {
+  color: var(--eq-blue);
+}
+.rail-wt-open {
+  opacity: 0;
+  flex-shrink: 0;
+  padding: 0 5px;
+  font-size: 10px;
+  color: var(--eq-dim);
+  border-radius: var(--eq-r-sm);
+  cursor: pointer;
+}
+.rail-wt:hover .rail-wt-open {
+  opacity: 1;
+}
+.rail-wt-open:hover {
+  color: var(--eq-text);
+  background: var(--eq-surface-2);
+}
+.rail-wt-path {
+  font-size: 9px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rail-wt-agents {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+}
+.rail-wt-agent {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  font-size: 10px;
+  padding: 2px 4px;
+  border-radius: var(--eq-r-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.rail-wt-agent:hover,
+.rail-wt-agent.sel {
+  background: var(--eq-surface-2);
+}
+.rail-wt-agent .sdot {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+}
+.rail-wt-agent-nm {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rail-wt-empty {
+  font-size: 10px;
+  padding: 2px 10px;
+}
 
 .terminal-slot {
   background: var(--eq-terminal);
