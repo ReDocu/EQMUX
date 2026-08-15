@@ -79,6 +79,7 @@ export function RoleLibrary() {
   const selIsWs = () => sel()?.source === "ws";
   const [draftName, setDraftName] = createSignal("");
   const [draftColor, setDraftColor] = createSignal<Persona["color"]>("blue");
+  const [draftJob, setDraftJob] = createSignal(""); // 기본 직무 — 역할 부여가 따라간다. "" = 미지정
   // ── 단계별 독립 프로필 3벌 — 단계 전환은 편집 대상 교체일 뿐, 다른 단계 값은 그대로 남는다 ──
   type DraftProfile = { hint: string; tone: string; personality: string };
   const emptyProf = (): DraftProfile => ({ hint: "", tone: "", personality: "" });
@@ -101,6 +102,7 @@ export function RoleLibrary() {
     setSelId(p.id);
     setDraftName(p.name);
     setDraftColor(p.color);
+    setDraftJob(p.job ?? "");
     setDraftProfiles({ basic: profileOf(p, "basic"), mid: profileOf(p, "mid"), adv: profileOf(p, "adv") });
     setEditLevel(personaLevel(p));
     setSaved(false);
@@ -126,6 +128,7 @@ export function RoleLibrary() {
       tone: active.tone,
       personality: active.personality,
       color: draftColor(),
+      job: draftJob(),
       mtimeMs: p.mtimeMs,
     });
     setSaveErr(err ?? undefined);
@@ -502,6 +505,17 @@ export function RoleLibrary() {
                   )}
                 </For>
               </div>
+              <label class="muted" style={{ "font-size": "11px" }}>
+                기본 직무 — 역할 부여가 직무 선택 없이 이 값을 따릅니다 (미지정이면 부여 시 개발)
+              </label>
+              <select
+                value={draftJob()}
+                onChange={(e) => setDraftJob(e.currentTarget.value)}
+                style={{ "align-self": "flex-start" }}
+              >
+                <option value="">미지정</option>
+                <For each={jobs()}>{(j) => <option value={j.id}>{j.name}</option>}</For>
+              </select>
               {/* ── 프로필 편집 — 단계마다 독립. 기본=성향만 · 중급=성향+말투+성격 · 고급=시트만 ── */}
               <Show when={editLevel() !== "adv"}>
                 <label class="muted" style={{ "font-size": "11px" }}>

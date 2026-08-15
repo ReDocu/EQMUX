@@ -62,6 +62,9 @@ struct PtySession {
     child: Box<dyn Child + Send + Sync>,
     gen: u64, // 같은 id로 재기동 시 이전 리더 스레드의 정리를 무효화하는 세대 표식
     job: Option<job::Job>, // FR-C-05 — 자식 트리 정리. drop = KILL_ON_JOB_CLOSE
+    /// 마지막 resize 시각 (epoch ms) — ConPTY는 리사이즈에 전체 리페인트로 응답하므로,
+    /// 코얼레서가 이 직후의 리페인트 버스트를 한 덩어리로 묶는 힌트로 쓴다 (줌/분할 깜빡임 방지)
+    resize_hint: Arc<std::sync::atomic::AtomicU64>,
 }
 
 static NEXT_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -99,6 +102,19 @@ fn epoch_secs() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
+fn epoch_ms() -> u64 {
+    workspace::now_ms() as u64 // 크레이트 공용 구현 하나만 둔다
+}
+
+/// 스토어 대기 배치 flush — ack 채널 왕복 (FR-C-62②·63 공용). true = 시한 안 완료.
+fn flush_store(store: &Store, timeout: std::time::Duration) -> bool {
+    let (ack_tx, ack_rx) = std::sync::mpsc::channel();
+    if store.sender().send(StoreMsg::Flush(ack_tx)).is_err() {
+        return false;
+    }
+    ack_rx.recv_timeout(timeout).is_ok()
+}
+
 fn resolve_cwd(cwd: Option<String>) -> String {
     if let Some(dir) = cwd {
         if Path::new(&dir).is_dir() {
@@ -118,6 +134,35 @@ fn shell_candidates(shell: Option<String>) -> Vec<String> {
     }
     v.extend(["pwsh.exe".into(), "powershell.exe".into(), "cmd.exe".into()]);
     v
+}
+
+/// PTY 자식 환경 위생 — 모든 스폰(셸·에이전트)의 단일 관문에서 적용한다.
+/// ① 색 계약: xterm.js 프런트는 truecolor를 그린다. 앱이 Claude Code 세션 안에서
+///    실행되면(개발 중 `npm run tauri dev`) TERM=dumb이 상속돼 CLI가 무채색으로 떨어진다.
+/// ② 세션 정체: 부모의 Claude 세션 마커가 상속되면 여기서 켠 claude가 자식 세션으로
+///    인식돼 트랜스크립트 저장을 꺼 버린다 — 페인은 1급 소스(JSONL, FR-G-80)를 잃고
+///    스크롤백 폴백으로 떨어진다. 마커를 걷어내고 저장을 강제한다.
+fn sanitize_pty_env(cmd: &mut CommandBuilder) {
+    cmd.env("TERM", "xterm-256color");
+    cmd.env("COLORTERM", "truecolor");
+    // NO_COLOR는 TERM보다 우선하는 표준 스위치 — 부모(Claude Code 도구 셸)가 켜 둔 값이
+    // 상속되면 TERM을 아무리 올려도 무채색이다. 색이 정체성인 터미널 앱이므로 걷어낸다.
+    cmd.env_remove("NO_COLOR");
+    for k in [
+        "CLAUDE_CODE_CHILD_SESSION",
+        "CLAUDECODE",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "CLAUDE_CODE_SSE_PORT",
+        "CLAUDE_CODE_SESSION_ID",
+        "CLAUDE_CODE_BRIDGE_SESSION_ID",
+        "CLAUDE_PID",
+    ] {
+        cmd.env_remove(k);
+    }
+    cmd.env("CLAUDE_CODE_FORCE_SESSION_PERSISTENCE", "1");
+    // 부모 도구 셸은 git 프롬프트를 꺼 둔다(끊김 방지) — 여기는 사람이 앉은 대화형
+    // 터미널이므로 되살린다. 안 그러면 자격 증명이 필요한 git이 묻지도 않고 실패한다.
+    cmd.env_remove("GIT_TERMINAL_PROMPT");
 }
 
 /// 공용 PTY 스폰 — 셸·에이전트가 같은 배관(로그·스토어 스필·수명 관리)을 탄다.
@@ -151,7 +196,8 @@ fn spawn_pty_session(
 
     let mut child = None;
     let mut last_err = String::new();
-    for cmd in builders.drain(..) {
+    for mut cmd in builders.drain(..) {
+        sanitize_pty_env(&mut cmd);
         let label = format!("{:?}", cmd.get_argv().first().cloned().unwrap_or_default());
         match pair.slave.spawn_command(cmd) {
             Ok(c) => {
@@ -174,6 +220,7 @@ fn spawn_pty_session(
     let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
     let gen = NEXT_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
+    let resize_hint = Arc::new(std::sync::atomic::AtomicU64::new(epoch_ms())); // 스폰 직후 첫 프레임도 크게 묶는다
     sessions.insert(
         id.clone(),
         PtySession {
@@ -182,6 +229,7 @@ fn spawn_pty_session(
             child,
             gen,
             job,
+            resize_hint: resize_hint.clone(),
         },
     );
     drop(sessions);
@@ -193,6 +241,41 @@ fn spawn_pty_session(
         id: id.clone(),
         cwd: dir.clone(),
         shell: shell_label,
+    });
+
+    // 출력 더블 버퍼링 — 리더의 8KB 청크를 그대로 내보내면 TUI의 지우기+재출력 프레임이
+    // 조각나 도착해 중간(지워진) 상태가 렌더되며 깜빡인다. 코얼레서 스레드가 3ms 무입력까지
+    // 조각을 묶어 최종 상태만 화면 이벤트로 보낸다. 25ms 시한·256KB 상한으로 지연을 막는다.
+    // 리사이즈 직후 400ms는 ConPTY 전체 리페인트가 띄엄띄엄 몰려오므로 25ms/250ms로 길게 묶는다
+    // (줌·분할·전체 화면 전환 깜빡임 방지 — 그 동안은 타이핑 지연이 문제되지 않는다).
+    let (out_tx, out_rx) = std::sync::mpsc::channel::<String>();
+    let emit_hint = resize_hint.clone();
+    let emit_app = app.clone();
+    let emit_id = id.clone();
+    let emitter = std::thread::spawn(move || {
+        use std::sync::atomic::Ordering;
+        use std::time::{Duration, Instant};
+        const QUIET: Duration = Duration::from_millis(3);
+        const DEADLINE: Duration = Duration::from_millis(25);
+        const CAP: usize = 256 * 1024;
+        while let Ok(first) = out_rx.recv() {
+            let mut batch = first;
+            let start = Instant::now();
+            let resizing = epoch_ms().saturating_sub(emit_hint.load(Ordering::Relaxed)) < 400;
+            let (quiet, deadline) = if resizing {
+                (Duration::from_millis(25), Duration::from_millis(250))
+            } else {
+                (QUIET, DEADLINE)
+            };
+            // recv_timeout은 큐에 있으면 즉시 돌아온다 — quiet 무입력 gap·시한·상한이 규칙의 전부다
+            while batch.len() < CAP && start.elapsed() < deadline {
+                match out_rx.recv_timeout(quiet) {
+                    Ok(c) => batch.push_str(&c),
+                    Err(_) => break, // 조용/끊김 → 프레임 완성으로 보고 방출
+                }
+            }
+            let _ = emit_app.emit("pty-output", PtyOutput { id: emit_id.clone(), data: batch });
+        }
     });
 
     // 출력 중계 스레드 — 로그 파일 append + VT 통과 줄을 스토어로 스필 + EOF 정리
@@ -231,10 +314,13 @@ fn spawn_pty_session(
                             styled: if sgr_on { styled } else { None },
                         });
                     });
-                    let _ = app.emit("pty-output", PtyOutput { id: id.clone(), data });
+                    let _ = out_tx.send(data);
                 }
             }
         }
+        // 코얼레서가 잔여 배치를 모두 방출한 뒤에 pty-exit가 나가야 한다 — 순서 보장
+        drop(out_tx);
+        let _ = emitter.join();
         // 세대가 일치할 때만 정리한다 — 같은 id로 재기동된 새 세션을 지우면 안 된다.
         // 잠금 안에서는 꺼내기만 하고 child.wait()는 잠금 밖에서 한다 (B14) —
         // 잠금을 쥔 채 기다리면 그동안 모든 세션의 pty_write/resize가 멈춘다
@@ -319,6 +405,8 @@ fn pty_write(state: State<PtyState>, id: String, data: String) -> Result<(), Str
 fn pty_resize(state: State<PtyState>, id: String, cols: u16, rows: u16) -> Result<(), String> {
     let sessions = state.0.lock().map_err(|e| e.to_string())?;
     let s = sessions.get(&id).ok_or("세션 없음")?;
+    // resize 호출 전에 힌트를 찍는다 — ConPTY 리페인트가 힌트보다 먼저 도착하는 경합 방지
+    s.resize_hint.store(epoch_ms(), std::sync::atomic::Ordering::Relaxed);
     s.master
         .resize(PtySize {
             rows,
@@ -576,6 +664,46 @@ fn scrollback_page(
     limit: u32,
 ) -> Result<Vec<store::SearchHit>, String> {
     store::page(&store_state.0.root(), &workspace, &session, before_seq, limit)
+}
+
+/// 내보내기 결과 — 저장 경로와 실제 기록된 줄 수
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExportResult {
+    path: String,
+    lines: u64,
+}
+
+/// 세션 기록 내보내기 — 저장 대화상자(rfd, ws_pick_folder와 같은 패턴)로 위치를 고른 뒤
+/// 스토어 대기 배치를 flush하고 스크롤백 전 줄(VT 제거 평문)을 텍스트로 쓴다.
+/// 취소하면 Ok(None) — 취소는 에러가 아니다.
+#[tauri::command]
+fn scrollback_export(
+    store_state: State<StoreState>,
+    workspace: String,
+    session: String,
+    suggested: String,
+) -> Result<Option<ExportResult>, String> {
+    let Some(dest) = rfd::FileDialog::new()
+        .set_title("세션 기록 저장")
+        .set_file_name(&suggested)
+        .add_filter("텍스트", &["txt"])
+        .save_file()
+    else {
+        return Ok(None);
+    };
+    // 방금 출력까지 포함되게 flush 먼저 — SQL·스키마는 store 모듈 몫 (search/page와 같은 위임)
+    let _ = flush_store(&store_state.0, std::time::Duration::from_secs(2));
+    let file = std::fs::File::create(&dest).map_err(|e| e.to_string())?;
+    // 수십만 줄 내보내기 — 기본 8KB 버퍼는 syscall이 너무 잦다
+    let mut w = std::io::BufWriter::with_capacity(256 * 1024, file);
+    let count = store::export_lines(&store_state.0.root(), &workspace, &session, |line| {
+        w.write_all(line.as_bytes())
+            .and_then(|_| w.write_all(b"\r\n"))
+            .map_err(|e| e.to_string())
+    })?;
+    w.flush().map_err(|e| e.to_string())?;
+    Ok(Some(ExportResult { path: dest.to_string_lossy().into_owned(), lines: count }))
 }
 
 #[derive(Serialize)]
@@ -1476,11 +1604,7 @@ async fn commit_file_diff(ws_path: String, hash: String, path: String) -> Result
 /// ② 스크롤백·세션 매핑 flush — 2초 목표 (FR-C-63). true = 완료, false = 시한 초과(진행은 계속).
 #[tauri::command]
 fn shutdown_flush(store_state: State<StoreState>) -> bool {
-    let (ack_tx, ack_rx) = std::sync::mpsc::channel();
-    if store_state.0.sender().send(StoreMsg::Flush(ack_tx)).is_err() {
-        return false;
-    }
-    ack_rx.recv_timeout(std::time::Duration::from_secs(2)).is_ok()
+    flush_store(&store_state.0, std::time::Duration::from_secs(2))
 }
 
 /// ③④ 전 세션에 Ctrl+C(정상 종료 신호) → 유예 → Job Object 트리 종료 → 앱 종료.
@@ -1520,10 +1644,7 @@ async fn app_exit(app: AppHandle) {
     tokio_sleep(std::time::Duration::from_millis(200)).await;
     // 세션 exit 기록까지 flush (최대 1초 — 이미 ②를 거쳤으므로 잔량은 적다)
     let store: State<StoreState> = app.state();
-    let (ack_tx, ack_rx) = std::sync::mpsc::channel();
-    if store.0.sender().send(StoreMsg::Flush(ack_tx)).is_ok() {
-        let _ = ack_rx.recv_timeout(std::time::Duration::from_secs(1));
-    }
+    let _ = flush_store(&store.0, std::time::Duration::from_secs(1));
     // 클린 종료 표식 제거 (FR-C-35) — 이 줄에 도달했다는 것이 곧 정상 종료의 정의다
     let _ = std::fs::remove_file(store.0.root().join("running.flag"));
     app.exit(0);
@@ -1807,6 +1928,7 @@ pub fn run() {
             scrollback_tail,
             scrollback_search,
             scrollback_page,
+            scrollback_export,
             store_usage_real,
             events_query,
             msg_list,

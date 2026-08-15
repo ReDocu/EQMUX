@@ -55,6 +55,9 @@ export interface Backend {
   addRoleSession(wsId: string, personaId: string, jobId: string, opts?: { cwd?: string; worktree?: boolean }): void;
   /** 슬롯에서 터미널 제거 — 세션을 삭제하고 임무 배정도 해제한다 */
   removeTerminal(id: string): void;
+  /** 셸 세션 cwd 변경 (브랜치 부여) — PTY 재스폰과 짝으로만 부른다.
+   *  역할 세션은 대상이 아니다 — cwd가 역할 파일·transcript와 묶여 있다 (FR-E-63) */
+  setSessionCwd(id: string, cwd: string): void;
   /** 역할 세션의 페르소나·직무 변경 — 직무가 바뀌면 권한 변경이므로 재시작 필요(E11′) */
   updateSessionRole(id: string, personaId: string, jobId: string): void;
   /** 슬롯 권한 오버라이드 (FR-E-34, M31) — undefined = 해제(직무 기본값 복귀).
@@ -704,6 +707,19 @@ export class MockBackend implements Backend {
       if (j >= 0) m.assigned.splice(j, 1);
     }
     this.logEvent("state", `터미널 제거 · SLOT ${sess.slot}`, id);
+    this.broadcast();
+  }
+
+  setSessionCwd(id: string, cwd: string) {
+    const sess = SESSIONS.find((x) => x.id === id);
+    if (!sess || sess.personaId) return; // 역할 세션 cwd는 역할 파일·transcript와 묶여 있다 (FR-E-63)
+    sess.cwd = cwd;
+    // 재스폰 직후 호출된다 — 이동 중 pty-exit가 남긴 dead를 산 셸로 되돌린다
+    sess.status = "shell";
+    sess.exitCode = undefined;
+    sess.sinceMs = 0;
+    sess.lastOutput = "브랜치 부여 · 워크트리 이동";
+    this.logEvent("state", `워크트리 이동 · ${cwd}`, id);
     this.broadcast();
   }
 

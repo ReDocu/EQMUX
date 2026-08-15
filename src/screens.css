@@ -278,6 +278,7 @@
 }
 .cc-center {
   min-height: 0;
+  min-width: 0; /* 1fr 트랙의 min-width:auto — 트랜스크립트 머리줄이 뷰포트 밖으로 밀어내지 않게 */
   display: flex;
   flex-direction: column;
 }
@@ -1089,6 +1090,13 @@
   height: 100%;
   max-width: 100%;
 }
+/* 줌 리사이즈 시 캔버스가 비워지는 한 프레임 동안 xterm 기본 검정(.xterm-viewport #000)이
+   비쳐 깜빡인다 — 플래시 레이어를 테마색으로 칠해 전환을 안 보이게 한다.
+   주의: -layer 캔버스(링크 등)는 메인 캔버스 위의 투명 오버레이라 불투명 배경을 주면 텍스트를 가린다 */
+.xterm-host .xterm-viewport,
+.xterm-host .xterm-screen canvas:not([class*="-layer"]) {
+  background-color: var(--eq-terminal);
+}
 .xterm-host.drop-target {
   outline: 1px solid var(--eq-blue);
   outline-offset: -1px;
@@ -1202,11 +1210,49 @@
 /* 트랜스크립트 검색 (FR-G-87) — 로드된 창 안 클라이언트 필터 */
 .transcript-search {
   width: 150px;
+  min-width: 50px;
+  flex-shrink: 1; /* 좁은 해상도에서 머리줄이 폭을 밀어내는 대신 검색창이 줄어든다 */
   font-size: 10px;
   padding: 1px 6px;
   background: var(--eq-surface);
   border: 1px solid var(--eq-line);
   color: var(--eq-text);
+}
+
+/* 트랜스크립트 머리줄 — 제목은 줄임표, 도구 묶음은 고정. 좁은 해상도에서
+   min-content 팽창 → 문서 가로 스크롤(포커스 시 오른쪽 밀림)을 차단한다 */
+.transcript .terminal-head {
+  gap: 10px;
+  align-items: center;
+}
+.transcript-head-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.transcript-head-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.transcript-count {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+/* 세션 저장 — 라인 카운터 옆. .btn 위에 크기 오버라이드만 얹는다 (.term-search .btn 관례) */
+.transcript-save {
+  flex-shrink: 0;
+  font-size: 10px;
+  padding: 1px 8px;
+}
+.transcript-save-msg {
+  font-size: 10px;
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--eq-line);
+  color: var(--eq-muted);
+  word-break: break-all;
 }
 
 /* ── 트랜스크립트 페인 (화면 #12) ── */
@@ -1221,6 +1267,8 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
+  overflow-wrap: anywhere; /* 긴 경로·URL이 pre-wrap에서도 폭을 밀어내지 않게 */
 }
 .turn {
   padding: 6px 8px;

@@ -456,6 +456,34 @@ pub fn page(
     Ok(rows.filter_map(|r| r.ok()).collect())
 }
 
+/// 세션 스크롤백 전 줄 순회 (내보내기용) — 스키마 지식은 search/page처럼 이 모듈이 소유한다.
+/// DB가 없으면 "기록 없음" 에러 — 호출부(FR-D-08)가 그대로 표시한다.
+pub fn export_lines(
+    root: &Path,
+    ws: &str,
+    session: &str,
+    mut on_line: impl FnMut(&str) -> Result<(), String>,
+) -> Result<u64, String> {
+    let path = db_path(root, ws);
+    if !path.exists() {
+        return Err("저장된 기록이 아직 없습니다".into());
+    }
+    let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT text FROM scrollback WHERE session_id = ?1 ORDER BY seq ASC")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![session], |r| r.get::<_, String>(0))
+        .map_err(|e| e.to_string())?;
+    let mut count: u64 = 0;
+    for line in rows.filter_map(|r| r.ok()) {
+        on_line(&line)?;
+        count += 1;
+    }
+    Ok(count)
+}
+
 /// TUI 리페인트 잔해 판정 — 상자 그리기 문자가 절반 이상인 줄은 스필하지 않는다.
 /// Claude Code처럼 인라인 박스를 다시 그리는 TUI의 프레임 조각이 스크롤백을 오염시키는 것을 막는다.
 pub fn is_tui_noise(line: &str) -> bool {

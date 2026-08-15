@@ -1,6 +1,6 @@
 // 컨트롤 센터 (bi8Au) — 워크스페이스 탭의 기준 화면. 팀·세션 카드 / 터미널·저장·이벤트 / 인스펙터.
 // 터미널 텍스트는 목 출력이다 — M1에서 xterm.js + Rust PTY로 실물이 된다.
-import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { backend } from "../backend/mock";
 import {
   defaultShell,
@@ -19,19 +19,20 @@ import {
   tick,
 } from "../state";
 import { ContextMenu, Eyebrow, PersonaDot, StatusLabel } from "../components/ui";
+import type { MenuGroup } from "../components/ui";
 import { resumeAgent } from "../backend/agent";
 import { queryEvents } from "../backend/events";
 import type { FeedEvent } from "../backend/events";
 import { branchList, worktreeAdd, worktreeAttach, worktreeList } from "../backend/git";
 import type { BranchInfo, WorktreeInfo } from "../backend/git";
 import { autoAssignDefault, refreshMissions } from "../backend/missions";
-import { clipWriteText, isTauri, killPty, storeUsageReal } from "../backend/pty";
+import { clipWriteText, echoPty, isTauri, killPty, storeUsageReal } from "../backend/pty";
 import type { StoreUsageReal } from "../backend/pty";
 import { removeRoleFile } from "../backend/roles";
 import { ensureWorktree } from "../backend/team";
 import { gridTemplateStyle, PaneDividers } from "../components/PaneDividers";
 import { SidePanel } from "../components/SidePanel";
-import { disposeSessionTerminal, sessionTermSize, TerminalPane } from "../components/TerminalPane";
+import { disposeSessionTerminal, respawnSessionShell, sessionTermSize, syncSessionTerminal, TerminalPane } from "../components/TerminalPane";
 import { SessionDetailPanel } from "./SessionDetailPanel";
 import { TranscriptPane } from "./TranscriptPane";
 import type { Session, Workspace } from "../types";
@@ -49,13 +50,14 @@ function mockLines(s: Session, personaName: string): string[] {
 }
 
 export function ControlCenter(props: { workspace: Workspace }) {
-  const sessions = () => {
+  // 상태바·레일·메뉴 등 수십 곳이 읽는다 — 메모로 브로드캐스트(tick)당 1회만 필터·정렬한다
+  const sessions = createMemo(() => {
     tick();
     return backend
       .listSessions()
       .filter((s) => s.workspaceId === props.workspace.id)
       .sort((a, b) => a.slot - b.slot);
-  };
+  });
   const missions = () => {
     tick();
     return backend.listMissions().filter((m) => m.workspaceId === props.workspace.id);
@@ -63,10 +65,17 @@ export function ControlCenter(props: { workspace: Workspace }) {
   const usage = () => backend.storeUsage(props.workspace.name);
   const persona = (id: string) => backend.listPersonas().find((p) => p.id === id);
   const job = (id: string) => backend.listJobs().find((j) => j.id === id);
-  const selected = () => sessions().find((s) => s.id === selectedSession()) ?? sessions()[0];
+  const selected = createMemo(() => sessions().find((s) => s.id === selectedSession()) ?? sessions()[0]);
 
   const [centerTab, setCenterTab] = createSignal<"terminal" | "transcript">("terminal");
   const [zoomed, setZoomed] = createSignal<string | undefined>(undefined); // B1 — 줌 토글
+  // 줌 전환 — 이산 크기 변화이므로 RO 디바운스(100ms)를 기다리지 않고 레이아웃 확정 직후
+  // 바로 fit→PTY resize 한다. ConPTY 리페인트 스왑이 전환 동작 안에 흡수돼 늦은 깜빡임이 안 된다.
+  const applyZoom = (next: string | undefined) => {
+    const affected = next ?? zoomed(); // 줌 인이면 대상, 줌 아웃이면 직전 줌 페인이 크기가 변한다
+    setZoomed(next);
+    if (affected) requestAnimationFrame(() => syncSessionTerminal(affected));
+  };
   // 세션 상세 팝업 — 우측 고정 인스펙터의 후신. 아바타 레일·페인 메뉴 "세션 상세"가 연다
   const [detailOpen, setDetailOpen] = createSignal(false);
   // 팀 도구 메뉴 (시안 §04) — 임무·캐스팅·팀 편성 버튼 3개의 후신
@@ -117,7 +126,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
       }
       if (terminalFull()) {
         e.preventDefault();
-        if (zoomed()) setZoomed(undefined);
+        if (zoomed()) applyZoom(undefined);
         else setTerminalFull(false);
       }
     };
@@ -138,7 +147,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
   const loadWorktrees = async () => {
     if (!isTauri() || props.workspace.pathMissing) return;
     const req = ++wtReq;
-    const [wt, b] = [await worktreeList(props.workspace.path), await branchList(props.workspace.path)];
+    const [wt, b] = await Promise.all([worktreeList(props.workspace.path), branchList(props.workspace.path)]);
     if (req !== wtReq) return;
     setWorktrees(wt ?? []);
     setWtBranches(b ?? []);
@@ -207,6 +216,50 @@ export function ControlCenter(props: { workspace: Workspace }) {
   // 행 우클릭 메뉴 — 셸 열기·경로 복사. 없는 액션은 정책상 없는 것 (G7·FR-E-64)
   const [wtMenu, setWtMenu] = createSignal<{ x: number; y: number; wt: WorktreeInfo } | undefined>(undefined);
 
+  // 브랜치 부여 (터미널 우클릭 §브랜치) — 셸 터미널을 그 브랜치의 워크트리로 옮긴다.
+  // 트리가 없으면 attach로 만들고(레일 §워크트리와 같은 계약), PTY는 같은 세션 id로 새 cwd에서 재스폰한다.
+  const assignBranch = async (s: Session, branch: string) => {
+    if (!isTauri()) return; // 브라우저 dev — 메뉴에 note로 명시된다
+    try {
+      const wt = worktrees().find((w) => w.branch === branch);
+      const path = wt ? wt.path : await worktreeAttach(props.workspace.path, branch);
+      if (normPath(path) === normPath(s.cwd)) return;
+      await respawnSessionShell(s.id, path, props.workspace.id, shellCmdFor(s));
+      backend.setSessionCwd(s.id, path);
+      await loadWorktrees();
+    } catch (err) {
+      // 실패는 그 페인에 정직하게 표시 (FR-D-08) — PTY 입력을 거치지 않는 표시 전용 에코
+      echoPty(s.id, `\r\n\x1b[31m브랜치 부여 실패 — ${String(err)}\x1b[0m\r\n`);
+    }
+  };
+  // 기본 터미널 전용 메뉴 그룹 — 역할 세션 cwd는 역할 파일·transcript와 묶여 있어 옮기지 않는다 (FR-E-63)
+  const branchAssignGroup = (s: Session): MenuGroup[] => {
+    if (s.personaId) return [];
+    const local = wtBranches().filter((b) => !b.remote);
+    const cwd = normPath(s.cwd); // 브랜치 × 워크트리 이중 순회 방지 — 한 번씩만 정규화·색인한다
+    const byBranch = new Map(worktrees().map((w) => [w.branch, w]));
+    return [
+      [
+        {
+          label: "브랜치 부여",
+          sub:
+            local.length === 0
+              ? [{ label: isTauri() ? "로컬 브랜치 없음" : "브라우저 dev — 실측 없음", note: true }]
+              : local.map((b) => {
+                  const wt = byBranch.get(b.name);
+                  const cur = !!wt && normPath(wt.path) === cwd;
+                  return {
+                    label: wt ? `⎇ ${b.name}` : `⎇ ${b.name} · 새 워크트리`,
+                    checked: cur,
+                    disabled: cur,
+                    action: () => void assignBranch(s, b.name),
+                  };
+                }),
+        },
+      ],
+    ];
+  };
+
   // 슬롯 단위 세션 추가 — 기본 터미널 / 역할 세션 2택 (C). 캐스팅은 팀 전체 프리셋 도구로 남는다.
   const [addOpen, setAddOpen] = createSignal(false);
   const [addPersona, setAddPersona] = createSignal("");
@@ -273,6 +326,24 @@ export function ControlCenter(props: { workspace: Workspace }) {
     e.stopPropagation();
     setSessMenu({ x: e.clientX, y: e.clientY, s });
   };
+  // 레일 우클릭·페인 헤더 메뉴가 공유하는 항목 — 한 곳만 고치면 두 메뉴가 같이 맞는다
+  const detailItem = (s: Session) => ({
+    label: "세션 상세",
+    action: () => {
+      setSelectedSession(s.id);
+      setDetailOpen(true);
+    },
+  });
+  const transcriptItem = (s: Session) => ({
+    label: "트랜스크립트 열기",
+    action: () => {
+      setSelectedSession(s.id);
+      setCenterTab("transcript");
+    },
+  });
+  const removeGroup = (s: Session): MenuGroup => [
+    { label: s.personaId ? "역할 세션 제거…" : "터미널 제거", danger: true, action: () => removeTerminal(s) },
+  ];
   const sessMenuGroups = (s: Session) => [
     [
       {
@@ -283,20 +354,8 @@ export function ControlCenter(props: { workspace: Workspace }) {
           setCenterTab("terminal");
         },
       },
-      {
-        label: "세션 상세",
-        action: () => {
-          setSelectedSession(s.id);
-          setDetailOpen(true);
-        },
-      },
-      {
-        label: "트랜스크립트 열기",
-        action: () => {
-          setSelectedSession(s.id);
-          setCenterTab("transcript");
-        },
-      },
+      detailItem(s),
+      transcriptItem(s),
     ],
     [
       {
@@ -313,12 +372,14 @@ export function ControlCenter(props: { workspace: Workspace }) {
         },
       },
     ],
-    [{ label: s.personaId ? "역할 세션 제거…" : "터미널 제거", danger: true, action: () => removeTerminal(s) }],
+    // 브랜치 부여 (기본 터미널 전용) — 그 브랜치의 워크트리로 이동, 없으면 만들어 연결
+    ...branchAssignGroup(s),
+    removeGroup(s),
   ];
   const doRemove = (s: Session) => {
     killPty(s.id);
     disposeSessionTerminal(s.id);
-    if (zoomed() === s.id) setZoomed(undefined);
+    if (zoomed() === s.id) applyZoom(undefined);
     // 역할 파일은 세션 cwd 규약 (FR-E-63) — 워크트리 세션은 자기 사본에서 지운다.
     // 워크트리 자체는 남긴다 (FR-E-64 — 커밋 안 된 작업이 있을 수 있다)
     if (s.personaId && !props.workspace.pathMissing) removeRoleFile(s.cwd || props.workspace.path, s.id);
@@ -361,7 +422,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
               title="클릭하면 줌 토글 (B1) · 우클릭 세션 메뉴"
               onClick={(e) => {
                 e.stopPropagation();
-                setZoomed(zoomed() === s.id ? undefined : s.id);
+                applyZoom(zoomed() === s.id ? undefined : s.id);
               }}
               onContextMenu={(e) => openSessMenu(e, s)}
             >
@@ -405,28 +466,15 @@ export function ControlCenter(props: { workspace: Workspace }) {
                       action: () => setPaneLayout(l.key),
                     })),
                   },
-                  { label: zoomed() === s.id ? "줌 해제" : "줌", action: () => setZoomed(zoomed() === s.id ? undefined : s.id) },
+                  { label: zoomed() === s.id ? "줌 해제" : "줌", action: () => applyZoom(zoomed() === s.id ? undefined : s.id) },
                   { label: "전체 화면", kbd: "ESC 종료", action: () => setTerminalFull(true) },
                 ],
-                // 이동 — 상세 팝업·트랜스크립트
-                [
-                  {
-                    label: "세션 상세",
-                    action: () => {
-                      setSelectedSession(s.id);
-                      setDetailOpen(true);
-                    },
-                  },
-                  {
-                    label: "트랜스크립트 열기",
-                    action: () => {
-                      setSelectedSession(s.id);
-                      setCenterTab("transcript");
-                    },
-                  },
-                ],
+                // 이동 — 상세 팝업·트랜스크립트 (레일 메뉴와 공유)
+                [detailItem(s), transcriptItem(s)],
+                // 브랜치 부여 (기본 터미널 전용) — 그 브랜치의 워크트리로 이동, 없으면 만들어 연결
+                ...branchAssignGroup(s),
                 // 위험 — 컴포넌트가 마지막 그룹으로 강제한다
-                [{ label: s.personaId ? "역할 세션 제거…" : "터미널 제거", danger: true, action: () => removeTerminal(s) }],
+                removeGroup(s),
               ]}
             />
             {/* dead 페인 인라인 재개 (U8) — 상세 모달 2단계를 거치지 않는다 */}
@@ -460,6 +508,10 @@ export function ControlCenter(props: { workspace: Workspace }) {
   );
 
   // 상태바 한 줄 (시안 §04) — 저장 상태·SessionService 카드 2장을 흡수. 상세는 이벤트 팝오버로
+  const memSession = () => {
+    const s = selected();
+    return s && s.status !== "dead" && s.memoryMb !== undefined ? s : undefined;
+  };
   const statusBar = () => (
     <div class="terminal-statusbar mono">
       <span>
@@ -472,6 +524,14 @@ export function ControlCenter(props: { workspace: Workspace }) {
           ? `WAL ${(realUsage()!.db_size_bytes / 1024).toFixed(0)} KB · ${realUsage()!.total_lines.toLocaleString()} lines`
           : `WAL ${usage().walLatencyMs}ms · DB ${usage().dbSizeMb} MB`}
       </span>
+      {/* 활성 세션 메모리 (FR-C-09 · C11) — Job Object 트리 실측, 10초 주기. dead는 마지막 샘플이 남으므로 숨긴다 */}
+      <Show when={memSession()}>
+        {(s) => (
+          <span title={`활성 세션 프로세스 트리 메모리 · peak ${s().memoryPeakMb ?? "—"} MB`}>
+            MEM {s().memoryMb} MB
+          </span>
+        )}
+      </Show>
       <button
         class="sb-ev"
         title="SessionService 이벤트 · 저장 상태"
@@ -557,7 +617,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
           </Show>
         </div>
         <Show when={zoomed()}>
-          <button class="btn ghost" onClick={() => setZoomed(undefined)}>
+          <button class="btn ghost" onClick={() => applyZoom(undefined)}>
             ▦ 그리드로 복귀
           </button>
         </Show>
@@ -625,6 +685,17 @@ export function ControlCenter(props: { workspace: Workspace }) {
                   label: "이 워크트리에서 셸 열기",
                   disabled: m().wt.isMain,
                   action: () => openWtShell(m().wt),
+                },
+                {
+                  // 브랜치 부여 역방향 진입점 — 선택 중인 기본 터미널을 이 트리의 브랜치로 옮긴다.
+                  // 역할 세션·detached 트리·이미 이 트리인 경우는 비활성 (터미널 메뉴와 같은 계약)
+                  label: `선택 터미널에 브랜치 부여${selected() && !selected()!.personaId ? ` — ${sessionDisplayName(selected()!, personaName(selected()!.personaId))}` : ""}`,
+                  disabled:
+                    !m().wt.branch ||
+                    !selected() ||
+                    !!selected()!.personaId ||
+                    normPath(selected()!.cwd) === normPath(m().wt.path),
+                  action: () => void assignBranch(selected()!, m().wt.branch!),
                 },
                 { label: "경로 복사", action: () => clipWriteText(m().wt.path) },
               ],
@@ -899,7 +970,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
             </span>
             <div style={{ display: "flex", gap: "6px", "align-items": "center" }}>
               <Show when={zoomed()}>
-                <button class="btn ghost" onClick={() => setZoomed(undefined)}>
+                <button class="btn ghost" onClick={() => applyZoom(undefined)}>
                   ▦ 그리드로 복귀
                 </button>
               </Show>

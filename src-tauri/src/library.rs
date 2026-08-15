@@ -64,6 +64,9 @@ pub struct PersonaInfo {
     #[serde(default)]
     pub personality: String,
     pub color: String,
+    /// 기본 직무 — 역할 부여가 직무 선택 없이 따라가는 값. 빈 값 = 미지정 (프런트가 기본값으로 받친다)
+    #[serde(default)]
+    pub job: String,
     /// 고급 캐릭터 시트 절대 경로 — personas/<id>.character.md, 존재가 곧 고급 단계
     #[serde(default)]
     pub character_path: Option<String>,
@@ -336,6 +339,7 @@ fn parse_persona(path: &Path) -> Option<PersonaInfo> {
         tone: active.tone,
         personality: active.personality,
         color,
+        job: fm_value(&fm, "job").unwrap_or_default(),
         character_path,
         character_name,
         character_source,
@@ -460,7 +464,9 @@ fn render_profile(out: &mut String, title: &str, p: &PersonaProfile) {
 fn render_persona(p: &PersonaInfo) -> String {
     // level은 유효한 값일 때만 기록 — 빈 값(구 경로·목)은 생략, 읽기에서 유추가 받친다
     let level_line = if LEVELS.contains(&p.level.as_str()) { format!("level: {}\n", p.level) } else { String::new() };
-    let mut s = format!("---\nid: {}\nname: {}\ncolor: {}\n{}---\n", p.id, p.name, p.color, level_line);
+    // job도 값이 있을 때만 기록 — 미지정 페르소나 파일을 불필요한 키로 더럽히지 않는다
+    let job_line = if p.job.is_empty() { String::new() } else { format!("job: {}\n", p.job) };
+    let mut s = format!("---\nid: {}\nname: {}\ncolor: {}\n{}{}---\n", p.id, p.name, p.color, level_line, job_line);
     // 저장의 원본은 프로필 3벌 — 최상위 편의 필드(hint 등)는 쓰지 않는다.
     // 단, 구 호출 경로(프로필 없이 hint만 온 페이로드)는 세 프로필에 복사해 받아준다.
     // 고급 섹션은 쓰지 않는다 — 고급은 캐릭터 시트(<id>.character.md)가 전부다

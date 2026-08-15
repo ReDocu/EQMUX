@@ -6,6 +6,7 @@ import { queryEvents } from "../backend/events";
 import type { FeedEvent } from "../backend/events";
 import { autoAssignDefault } from "../backend/missions";
 import { backend } from "../backend/mock";
+import { exportSessionScrollback } from "../backend/panels";
 import { nudgeRoleReload, removeRoleFile, saveRoleFile } from "../backend/roles";
 import { isTauri, killPty, openLogDir } from "../backend/pty";
 import { sessionTermSize } from "../components/TerminalPane";
@@ -81,14 +82,23 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
     );
     return backend.listPersonas().filter((p) => !used.has(p.id));
   };
+  // 페르소나의 저장 직무 — 역할 부여는 직무 선택 없이 이 값을 따른다 (라이브러리 `job:` 키).
+  // 미지정·삭제된 직무면 개발(dev) → 첫 직무 순으로 받친다
+  const personaJob = (pid: string) => {
+    const jobs = backend.listJobs();
+    const saved = backend.listPersonas().find((p) => p.id === pid)?.job;
+    return jobs.find((j) => j.id === saved)?.id ?? jobs.find((j) => j.id === "dev")?.id ?? jobs[0]?.id ?? "";
+  };
   const [pendPersona, setPendPersona] = createSignal(s().personaId);
   const [pendJob, setPendJob] = createSignal(s().jobId);
   createEffect(
     on(
       () => `${s().id}:${s().personaId}:${s().jobId}`,
       () => {
-        setPendPersona(s().personaId || (availablePersonas()[0]?.id ?? ""));
-        setPendJob(s().jobId || (backend.listJobs()[0]?.id ?? ""));
+        const pid = s().personaId || (availablePersonas()[0]?.id ?? "");
+        setPendPersona(pid);
+        // 기본 터미널(부여 전)은 직무도 페르소나에서 유도한다 — 역할 세션은 현 직무 유지
+        setPendJob(s().jobId || personaJob(pid));
       },
     ),
   );
@@ -113,6 +123,25 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
   };
 
   const [actionErr, setActionErr] = createSignal<string | undefined>(undefined);
+
+  // 기록 저장 — 스크롤백 전체(디스크 포함, VT 제거 평문)를 .txt로 내보낸다.
+  // 대화상자·파일 쓰기는 Rust(scrollback_export) 몫, 여기선 결과·에러 표시만 한다
+  const [exporting, setExporting] = createSignal(false);
+  const [exportMsg, setExportMsg] = createSignal<string | undefined>(undefined);
+  createEffect(on(() => s().id, () => setExportMsg(undefined)));
+  const doExport = async () => {
+    setActionErr(undefined);
+    setExportMsg(undefined);
+    setExporting(true);
+    try {
+      const msg = await exportSessionScrollback(s(), persona()?.name ?? "기본 터미널");
+      if (msg) setExportMsg(msg);
+    } catch (err) {
+      setActionErr(String(err));
+    } finally {
+      setExporting(false);
+    }
+  };
 
   // 세션 이름 분리 (P5 · FR-E-36) — 빈 값 저장 = 페르소나 이름으로 복귀. team.json에 영속된다
   const [nameDraft, setNameDraft] = createSignal(s().name ?? "");
@@ -343,15 +372,25 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
           <div class="card inset role-edit">
             <Eyebrow>역할 부여</Eyebrow>
             <div class="muted" style={{ "font-size": "11px", margin: "4px 0 0" }}>
-              기본 터미널입니다. 페르소나·직무를 붙이면 역할 세션이 됩니다.
+              기본 터미널입니다. 저장된 페르소나를 붙이면 역할 세션이 됩니다 — 직무는 페르소나의 저장 직무를 따릅니다.
             </div>
             <div class="role-edit-row">
-              <select value={pendPersona()} onChange={(e) => setPendPersona(e.currentTarget.value)}>
+              <select
+                value={pendPersona()}
+                onChange={(e) => {
+                  setPendPersona(e.currentTarget.value);
+                  setPendJob(personaJob(e.currentTarget.value));
+                }}
+              >
                 <For each={availablePersonas()}>{(p) => <option value={p.id}>{p.name}</option>}</For>
               </select>
-              <select value={pendJob()} onChange={(e) => setPendJob(e.currentTarget.value)}>
-                <For each={backend.listJobs()}>{(j) => <option value={j.id}>{j.name}</option>}</For>
-              </select>
+              <span
+                class="mono muted"
+                style={{ "font-size": "11px", "white-space": "nowrap" }}
+                title="페르소나의 저장 직무 (미지정이면 기본값) — 라이브러리의 페르소나 편집에서 바꿉니다"
+              >
+                직무 {backend.listJobs().find((j) => j.id === pendJob())?.name ?? "—"}
+              </span>
               <button class="btn primary" disabled={!pendPersona() || !pendJob()} onClick={applyRole}>
                 역할 부여
               </button>
@@ -400,6 +439,24 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
                 </button>
               }
             />
+            <KV
+              k="기록 저장"
+              v={
+                <button
+                  class="setting-v"
+                  title="스크롤백 전체(디스크 포함)를 평문 텍스트로 저장"
+                  disabled={exporting()}
+                  onClick={() => void doExport()}
+                >
+                  {exporting() ? "저장 중…" : ".txt로 내보내기…"}
+                </button>
+              }
+            />
+            <Show when={exportMsg()}>
+              <div class="mono muted" style={{ "font-size": "11px", "line-height": 1.7, "word-break": "break-all" }}>
+                {exportMsg()}
+              </div>
+            </Show>
           </Show>
         </div>
         <Show when={isTauri() && feed().length > 0}>

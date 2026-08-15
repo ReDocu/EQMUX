@@ -8,6 +8,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import { WebLinksAddon } from "@xterm/addon-web-links";
+import { WebglAddon } from "@xterm/addon-webgl";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import "@xterm/xterm/css/xterm.css";
 import { pageScrollback } from "../backend/panels";
@@ -17,6 +18,7 @@ import {
   clipSaveImage,
   clipWriteText,
   isTauri,
+  killPty,
   onPtyExit,
   onPtyOutput,
   openExternal,
@@ -28,7 +30,7 @@ import {
 import { resumeAgent, spawnAgent } from "../backend/agent";
 import { backend } from "../backend/mock";
 import { settings } from "../backend/settings";
-import { tick } from "../state";
+import { selectedSession, tick } from "../state";
 import { ContextMenu } from "./ui";
 import type { MenuGroup } from "./ui";
 import type { Permissions } from "../types";
@@ -47,6 +49,14 @@ const EQ_THEME = {
   red: "#ef6b73",
   yellow: "#ddb34c",
   white: "#e8eef8",
+  brightBlack: "#5c6f85",
+  brightBlue: "#8fb5ff",
+  brightCyan: "#7ce4e2",
+  brightGreen: "#8fe2ab",
+  brightMagenta: "#cfaef7",
+  brightRed: "#ff8d94",
+  brightWhite: "#f2f7ff",
+  brightYellow: "#eec96f",
 };
 
 interface TermEntry {
@@ -61,6 +71,8 @@ interface TermEntry {
   pendingRestore?: { resumable: boolean; reason?: string };
   /** pty 구독 해제 — dispose 시 함께 정리하지 않으면 disposed 터미널이 클로저로 영구 잔류한다 */
   unsubs?: (() => void)[];
+  /** 마운트 중인 페인의 즉시 fit — 줌 같은 이산 크기 변화가 RO 디바운스를 건너뛰게 한다 */
+  sync?: () => void;
 }
 
 const REGISTRY = new Map<string, TermEntry>();
@@ -76,10 +88,49 @@ function setPendingRestore(entry: TermEntry, v: TermEntry["pendingRestore"]) {
 // 상태는 모듈 시그널에 둔다 — 키 핸들러는 initSession(1회)에 등록되고 페인 컴포넌트는 리마운트되기 때문.
 const [searchSession, setSearchSession] = createSignal<string | undefined>(undefined);
 
+/** 즉시 fit — 줌/레이아웃 전환처럼 이산적인 크기 변화 직후 호출한다.
+ *  RO 디바운스(100ms)를 기다리면 ConPTY 리페인트 스왑이 늦게 일어나 별개의 깜빡임으로 보인다. */
+export function syncSessionTerminal(id: string): void {
+  REGISTRY.get(id)?.sync?.();
+}
+
 /** 세션의 현재 터미널 크기 — 재개/재시작 커맨드가 PTY 크기를 맞추는 데 쓴다 */
 export function sessionTermSize(id: string): { cols: number; rows: number } {
   const e = REGISTRY.get(id);
   return e ? { cols: e.term.cols, rows: e.term.rows } : { cols: 120, rows: 30 };
+}
+
+/** 브랜치 부여 (워크트리 이동) — 기존 셸 PTY를 끝내고 같은 세션 id로 새 cwd에서 다시 연다.
+ *  출력·종료 구독은 세션 id 키라 재스폰 후에도 그대로 이어진다. pty-exit(→ dead 전이)가
+ *  새 스폰 뒤에 늦게 도착해 산 세션을 dead로 덮지 않게, 종료 수신을 기다린 뒤 스폰한다. */
+export async function respawnSessionShell(id: string, cwd: string, wsId?: string, shell?: string): Promise<void> {
+  if (!isTauri()) return;
+  const e = REGISTRY.get(id); // 페인 미마운트 세션도 이동은 된다 — 크기만 기본값 폴백
+  const alive = backend.listSessions().find((x) => x.id === id)?.status !== "dead";
+  if (alive) {
+    await new Promise<void>((resolve) => {
+      let done = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        unsub();
+        clearTimeout(timer);
+        resolve();
+      };
+      const unsub = onPtyExit(id, finish);
+      timer = setTimeout(finish, 2000); // exit 유실 폴백 — Rust는 세대 추적으로 같은 id 재기동을 허용한다
+      killPty(id);
+    });
+  }
+  e?.term.writeln(`\x1b[90m─── 브랜치 부여 → ${cwd} ───\x1b[0m`);
+  const size = sessionTermSize(id); // 재개/재시작과 같은 크기 규약 — 미마운트면 기본값 폴백
+  await spawnPty(id, cwd, size.cols, size.rows, wsId, shell);
+  if (e) {
+    e.lastCols = e.term.cols;
+    e.lastRows = e.term.rows;
+    e.term.focus();
+  }
 }
 
 /** 세션 제거 시 호출 — PTY와 함께 터미널 인스턴스도 폐기한다 */
@@ -107,6 +158,19 @@ async function pasteFromClipboard(sessionId: string, term: Terminal): Promise<vo
 
 function copySelection(term: Terminal): void {
   if (term.hasSelection()) clipWriteText(term.getSelection());
+}
+
+/**
+ * 지금 사용자가 터미널 밖 입력 요소에 타이핑 중인가.
+ * 다이얼로그가 떠 있거나 input/textarea/select·contenteditable에 커서가 있으면 참.
+ * 다른 터미널의 히든 textarea(.xterm 안)는 넘겨받아도 되므로 제외한다.
+ */
+function isTypingOutsideTerminal(): boolean {
+  if (document.querySelector(".overlay")) return true;
+  const el = document.activeElement as HTMLElement | null;
+  if (!el || el === document.body) return false;
+  if (el.closest(".xterm")) return false;
+  return el.matches("input, textarea, select") || el.isContentEditable;
 }
 
 // ── 파일 끌어다 놓기 — Tauri가 OS 드래그를 가로채므로 웹 drop 대신 webview 이벤트를 쓴다 ──
@@ -188,13 +252,19 @@ async function initSession(
 ) {
   const term = entry.term;
 
-  // Ctrl+Shift+C = 선택 복사 · Ctrl(+Shift)+V = 붙여넣기(이미지 포함). Ctrl+C는 그대로 SIGINT.
-  // Tauri에서는 Ctrl+V도 네이티브 클립보드 경로로 가로챈다 (WebView2 웹 API 우회).
+  // Ctrl+C = 선택 있으면 복사, 없으면 SIGINT (Windows Terminal 방식) · Ctrl+Shift+C = 항상 선택 복사.
+  // Ctrl(+Shift)+V = 붙여넣기(이미지 포함) — Tauri에서는 Ctrl+V도 네이티브 클립보드 경로로 가로챈다
+  // (WebView2 웹 API 우회).
   term.attachCustomKeyEventHandler((ev) => {
     if (ev.type === "keydown" && ev.ctrlKey) {
       const k = ev.key.toLowerCase();
       if (ev.shiftKey && k === "c") {
         copySelection(term);
+        return false;
+      }
+      if (k === "c" && !ev.shiftKey && !ev.altKey && term.hasSelection()) {
+        copySelection(term);
+        term.clearSelection();
         return false;
       }
       if (k === "v" && (ev.shiftKey || isTauri())) {
@@ -412,6 +482,15 @@ export function TerminalPane(props: {
     if (searchOpen()) requestAnimationFrame(() => searchInput?.focus());
   });
 
+  // 선택된 세션이 되면 터미널로 포커스를 옮긴다 (대시보드 1클릭 점프·페인 클릭) — 단,
+  // 사용자가 다른 입력 요소에 타이핑 중이거나 다이얼로그가 떠 있으면 뺏지 않는다.
+  // 규칙은 이 함수 하나 — 선택 효과와 attach 마무리가 같은 판정을 쓴다.
+  const focusIfSelected = () => {
+    const e = REGISTRY.get(props.sessionId);
+    if (e?.opened && selectedSession() === props.sessionId && !isTypingOutsideTerminal()) e.term.focus();
+  };
+  createEffect(focusIfSelected);
+
   // ── 디스크 스크롤백 (FR-C-13·14) — 링버퍼 최상단에서만 칩이 뜬다 ──
   const [atTop, setAtTop] = createSignal(false);
   const [history, setHistory] = createSignal<ScrollbackHit[] | null>(null);
@@ -458,16 +537,19 @@ export function TerminalPane(props: {
 
     const syncSize = () => {
       if (host.clientWidth < 40 || host.clientHeight < 24) return; // 0-크기 측정 방지
-      const prevCols = e.term.cols;
-      const prevRows = e.term.rows;
-      e.fit.fit();
+      // 렌더러가 아직 셀 크기를 못 재면 fit이 비정상 값(cols<2)을 내놓는다 — 그 프레임은 건너뛴다
+      const dims = e.fit.proposeDimensions();
+      if (!dims || !isFinite(dims.cols) || dims.cols < 2 || dims.rows < 1) return;
+      // fit()은 내부에서 proposeDimensions를 다시 돌린다(강제 레이아웃 2회) — 이미 잰 값으로 직접 resize
+      const changed = dims.cols !== e.term.cols || dims.rows !== e.term.rows;
+      if (changed) e.term.resize(dims.cols, dims.rows);
       if (isTauri() && e.initialized && (e.term.cols !== e.lastCols || e.term.rows !== e.lastRows)) {
         e.lastCols = e.term.cols;
         e.lastRows = e.term.rows;
         resizePty(props.sessionId, e.term.cols, e.term.rows);
       }
       // 크기가 실제로 바뀌었으면 전체 리페인트 — 리사이즈 직후 렌더 찌꺼기 방지
-      if (e.term.cols !== prevCols || e.term.rows !== prevRows) {
+      if (changed) {
         try {
           e.term.refresh(0, Math.max(0, e.term.rows - 1));
         } catch {
@@ -476,6 +558,8 @@ export function TerminalPane(props: {
         e.term.scrollToBottom();
       }
     };
+
+    e.sync = syncSize;
 
     // 컨테이너가 실제 크기를 가진 뒤에만 open/재부착한다 — 0-크기에서 열면 렌더러 측정이 깨진다
     const attach = (tries: number) => {
@@ -487,6 +571,14 @@ export function TerminalPane(props: {
       if (!e.opened) {
         e.term.open(host);
         e.opened = true;
+        // WebGL 렌더러 — 컨텍스트가 유실되면 애드온을 폐기해 기본 렌더러로 폴백한다
+        try {
+          const webgl = new WebglAddon();
+          webgl.onContextLoss(() => webgl.dispose());
+          e.term.loadAddon(webgl);
+        } catch {
+          /* WebGL 미지원 환경 — 기본 렌더러 사용 */
+        }
       } else if (e.term.element && e.term.element.parentElement !== host) {
         host.appendChild(e.term.element); // 리마운트 = DOM 재부착만
       }
@@ -502,6 +594,8 @@ export function TerminalPane(props: {
         /* 렌더러 미준비 시 무시 */
       }
       e.term.scrollToBottom();
+      // 마운트 시점에 이미 선택된 세션이면 포커스 — 선택 효과는 open 전에 지나갔을 수 있다
+      focusIfSelected();
     };
     requestAnimationFrame(() => attach(60));
 
@@ -524,6 +618,7 @@ export function TerminalPane(props: {
 
     onCleanup(() => {
       cancelled = true;
+      if (e.sync === syncSize) e.sync = undefined;
       scrollDisp?.dispose();
       clearTimeout(resizeTimer);
       clearTimeout(settleTimer);

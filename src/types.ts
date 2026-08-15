@@ -45,6 +45,7 @@ export interface Persona {
   personality?: string;
   // 직무 8색 팔레트와 정렬 (jobs.ts JOB_META) — amber는 구 데이터 호환용으로만 남는다
   color: "blue" | "cyan" | "purple" | "pink" | "green" | "red" | "slate" | "orange" | "amber";
+  job?: string; // 기본 직무 — 역할 부여가 직무 선택 없이 따라간다. 빈/없음 = 미지정(부여 시 기본값)
   characterPath?: string; // 고급 캐릭터 시트 절대 경로 — personas/<id>.character.md, 존재가 곧 고급
   characterName?: string; // 시트 frontmatter name — 역할 파일 정체성 줄에 쓴다
   characterSource?: string; // 시트 frontmatter source (원전 — 게임·역사·창작)

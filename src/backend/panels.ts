@@ -1,6 +1,8 @@
 // 포트·탐색기 패널 브리지 (PRD H) — 관측 전용 실측. 브라우저 dev에서는 목 폴백.
 import { invoke } from "@tauri-apps/api/core";
 import { isTauri } from "./pty";
+import { sessionDisplayName } from "../types";
+import type { Session } from "../types";
 
 export interface PortRow {
   port: number;
@@ -107,4 +109,35 @@ export async function pageScrollback(
     beforeSeq,
     limit,
   }).catch(() => []);
+}
+
+export interface ScrollbackExportResult {
+  path: string;
+  lines: number;
+}
+
+/** 세션 기록 내보내기 — 저장 대화상자(Rust rfd)에서 위치를 고르면 스크롤백 전 줄을 텍스트로 쓴다.
+ *  취소 시 null. 실패는 던진다 — 호출부가 정직하게 표시한다 (FR-D-08) */
+export async function exportScrollback(
+  wsId: string,
+  session: string,
+  suggested: string,
+): Promise<ScrollbackExportResult | null> {
+  if (!isTauri()) return null;
+  return invoke<ScrollbackExportResult | null>("scrollback_export", {
+    workspace: wsId,
+    session,
+    suggested,
+  });
+}
+
+/** 세션 기록 내보내기 공용 흐름 — 파일명 제안(표시 이름 정리 + 시각)과 결과 문구까지 소유한다.
+ *  세션 상세·트랜스크립트 페인이 같은 경로를 탄다. 취소 시 null, 실패는 던진다 (FR-D-08) */
+export async function exportSessionScrollback(session: Session, personaName: string): Promise<string | null> {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const stamp = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}`;
+  const name = sessionDisplayName(session, personaName).replace(/[\\/:*?"<>|]/g, "_");
+  const r = await exportScrollback(session.workspaceId, session.id, `${name}-${stamp}.txt`);
+  return r ? `${r.lines.toLocaleString()}줄 저장됨 — ${r.path}` : null;
 }
