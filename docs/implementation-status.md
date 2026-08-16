@@ -205,7 +205,7 @@
 
 ### PRD K — 배포 (M16 부분 실물)
 - `bundle.active` + NSIS 타깃 (K1 Windows 우선) — `npm run tauri build` → `src-tauri/target/release/bundle/nsis/EQMUX_<버전>_x64-setup.exe`
-- 설치 모드 currentUser (관리자 불요) · 한국어/영어 · publisher EQMENT Studio
+- 설치 모드 currentUser (관리자 불요) · 한국어/영어 · publisher EQMUX
 - 단일 바이너리라 설치 폴더의 `eqmux.exe`가 곧 CLI(PRD I)다 — 별도 배포물 없음
 - 미착수: 코드 서명(K4) · 자동 업데이트(K3) · 크기 최적화(K6) · WebView2 오프라인 번들(K7)
 

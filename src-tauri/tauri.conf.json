@@ -29,7 +29,7 @@
     "active": true,
     "targets": ["nsis"],
     "icon": ["icons/icon.ico"],
-    "publisher": "EQMENT Studio",
+    "publisher": "EQMUX",
     "shortDescription": "EQMUX — 멀티 에이전트 관제 MUX",
     "windows": {
       "nsis": {
