@@ -2,18 +2,19 @@
 
 *[한국어](README.md) · English*
 
-**A desktop app where a team of four AI agents works one git repo together, and a human runs the control tower.**
+**A desktop app where a team of AI agents works one git repo together, and a human runs the control tower.**
 
 EQMUX is a Windows desktop app that puts agent-team supervision on top of a terminal multiplexer (MUX).
-Each workspace (= 1 git repo = 1 team = 1 tab) runs up to four Claude Code sessions in parallel; you watch
-their state from the control dashboard, assign missions, and step in when needed.
+Each workspace (= 1 git repo = 1 team = 1 tab) runs four Claude Code sessions in parallel by default — six or
+eight if you raise it in settings. You watch their state from the control dashboard, assign missions, and
+step in when needed.
 
 ![Control dashboard](docs/screenshots/readme/dashboard.png)
 
 ## Core principles
 
 - **Supervision is the point.** See team state (busy / waiting / dead) on the dashboard, assign missions, intervene.
-- **Four terminals are the workspace.** The actual work is done by the agent CLI (Claude Code) in each pane.
+- **The terminal panes are the workspace.** The actual work is done by the agent CLI (Claude Code) in each pane.
 - **The app holds no API key.** It has no AI loop of its own — it only launches an external CLI.
 - **Files are the source of truth.** Teams, roles, and missions live as files under `.eqmux/`; the DB is a cache. On conflict, the file wins.
 - **There is no automatic execution path.** A user's button is always what changes state. Even after a restart, you get a **resume suggestion** rather than an automatic resume.
@@ -23,13 +24,15 @@ their state from the control dashboard, assign missions, and step in when needed
 ```
 App  ──────────────── up to 10 workspaces open at once
 └─ Workspace ──────── = 1 git repo · 1 team · 1 tab
-   ├─ Session 1–4 ─── = 1 agent · 1 terminal pane
+   ├─ Session 1–N ─── = 1 agent · 1 terminal pane
    │  └─ Role ─────── = job + persona
    └─ Mission ─────── = a unit of work in the repo (branch + goal)
 ```
 
-The cap of four sessions is about **legibility**, not resources — at 1920×1080, a 2×2 split is the limit at
-which an agent TUI stays readable. Auxiliary panes (editor, diff, browser) do not consume session slots.
+N is four session slots by default, raisable to six or eight in settings. The default of four is about
+**legibility**, not resources — at 1920×1080, a 2×2 split is the limit at which an agent TUI stays readable.
+Team composition (`team.json`) allows up to eight slots regardless of this setting.
+Auxiliary panes (editor, diff, browser) do not consume session slots.
 
 ## Features
 
@@ -42,13 +45,13 @@ which an agent TUI stays readable. Auxiliary panes (editor, diff, browser) do no
 - **Dev tool panels** — git (status · worktrees · checkout), explorer (file CRUD), ports, logs, diff viewer, localhost browser
 - **Transcript view** — read Claude Code JSONL logs turn by turn (reference only), collapsible tool calls, scrollback fallback
 - **External interface** — `eqmux send · report · ping` CLI over a named pipe, statusLine cost collection
-- **Settings · themes** — dark/light/system themes, notification routing, replay line count, all persisted to settings.json
+- **Settings · themes** — dark/light/system themes, notification routing, session slot count (4 · 6 · 8), replay line count, all persisted to settings.json
 
 ## Screens
 
 > Screenshots render the current UI with demo data.
 
-**Workspace** — the four-way terminal split is where work happens. Sessions and missions on the left; the
+**Workspace** — the terminal split is where work happens (the screenshot shows the default four-way). Sessions and missions on the left; the
 inspector on the right shows the selected session's state, launch flags, memory, and whether it can resume,
 and lets you adjust slot permissions.
 
@@ -65,7 +68,7 @@ Read-only by default; staging and committing happen in the terminal.
 
 ![Git diff & editor](docs/screenshots/readme/gitdiff.png)
 
-**Team casting** — assign a job + persona to each of the four slots using a preset (standard / focused build /
+**Team casting** — assign a job + persona to each slot using a preset (standard / focused build /
 review-heavy / exploration). Each slot carries a preview of its execution permissions (write / commit / push).
 
 ![Team casting](docs/screenshots/readme/casting.png)
