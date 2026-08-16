@@ -131,6 +131,13 @@ npm run tauri build   # NSIS 인스톨러 산출 (EQMUX_x64-setup.exe)
 
 사용자의 `CLAUDE.md`는 수정하지 않습니다 — 역할은 `--append-system-prompt` 포인터 2줄로만 전달됩니다.
 
+## 문의 · 피드백
+
+버그 신고와 개선 제안을 받고 있습니다. 아직 1.0 이전이라 어떤 이야기든 도움이 됩니다.
+
+- [한글 문의 폼](https://docs.google.com/forms/d/e/1FAIpQLScn7JEfOpWv1W7FPJwDIFluvRkK_y6_dpOPCe6E-opf-YHHKw/viewform)
+- [English feedback form](https://docs.google.com/forms/d/e/1FAIpQLSdGjEUhbjNoMhi3BiYAeTRnTOPoxqKNKsN4_m0_6Ta_6KcMNw/viewform)
+
 ## 라이선스
 
 MIT — 자세한 내용은 [LICENSE](LICENSE) 참고.
