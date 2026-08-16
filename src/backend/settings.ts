@@ -18,7 +18,16 @@ export interface AppSettings {
   memBannerMb: number;
   /** SGR 색 저장 (FR-C-15, M32) — 스크롤백에 색 시퀀스 보존. 끄면 평문만 (용량 절감) */
   sgrStore: boolean;
+  /** 워크스페이스당 세션 슬롯 상한 — 4(기본)·6·8. 줄여도 이미 열린 세션은 닫지 않는다 */
+  maxSlots: number;
+  /** UI 언어 — 한국어(기본)·영어. 코드의 한국어 원문이 키이고 영어는 사전 치환(i18n.ts) */
+  language: "ko" | "en";
 }
+
+/** 슬롯 수 옵션 — 설정 화면·검증이 공유한다 */
+export const SLOT_OPTIONS = [4, 6, 8] as const;
+/** 절대 상한 — team.json 복원 등은 설정과 무관하게 이 값까지 받는다 (설정을 줄여도 데이터를 버리지 않는다) */
+export const HARD_MAX_SLOTS = 8;
 
 export const DEFAULT_SETTINGS: AppSettings = {
   startView: "control", // FR-G-02 — 기본 포커스는 관제 탭
@@ -29,10 +38,15 @@ export const DEFAULT_SETTINGS: AppSettings = {
   theme: "dark", // terminal-first 기본
   memBannerMb: 0, // FR-G-67 — 기본 꺼짐
   sgrStore: true, // FR-C-15 — 기본 켜짐, 끄면 용량 절감
+  maxSlots: 4, // 세션 슬롯 상한 — 기본 4, 옵션으로 6·8
+  language: "ko", // UI 언어 — 기본 한국어
 };
 
 const [settings, setSettings] = createSignal<AppSettings>(DEFAULT_SETTINGS);
 export { settings };
+
+/** 현재 세션 슬롯 상한 — 그리드·세션 추가·캐스팅이 전부 이 값을 본다 */
+export const maxSlots = (): number => settings().maxSlots;
 
 function sanitize(raw: unknown): AppSettings {
   const v = (raw ?? {}) as Partial<AppSettings>;
@@ -48,6 +62,8 @@ function sanitize(raw: unknown): AppSettings {
     theme: v.theme === "light" || v.theme === "system" ? v.theme : "dark",
     memBannerMb: [0, 2048, 4096, 8192].includes(v.memBannerMb as number) ? (v.memBannerMb as number) : 0,
     sgrStore: v.sgrStore !== false,
+    maxSlots: (SLOT_OPTIONS as readonly number[]).includes(v.maxSlots as number) ? (v.maxSlots as number) : 4,
+    language: v.language === "en" ? "en" : "ko",
   };
 }
 

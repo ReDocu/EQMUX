@@ -396,7 +396,8 @@ pub fn list(app_root: &Path, ws_path: Option<&str>) -> LibraryData {
 }
 
 /// 프리셋 목록 (FR-E-26) — 파일명 정렬(숫자 접두로 순서 제어). 깨진 파일은 건너뛰고
-/// 빠진 필드는 파일명으로 채운다 (FR-E-72와 같은 관용 파싱). 직무 수는 세션 상한 4 (B2).
+/// 빠진 필드는 파일명으로 채운다 (FR-E-72와 같은 관용 파싱).
+/// 직무 수는 절대 상한 8까지 — 설정 슬롯 상한(4·6·8)의 최종 컷은 프런트 캐스팅이 한다.
 pub fn list_presets(root: &Path) -> Vec<PresetInfo> {
     let Ok(entries) = fs::read_dir(presets_dir(root)) else {
         return Vec::new();
@@ -421,7 +422,7 @@ pub fn list_presets(root: &Path) -> Vec<PresetInfo> {
         if p.name.is_empty() {
             p.name = stem;
         }
-        p.jobs.truncate(4);
+        p.jobs.truncate(8);
         if !p.jobs.is_empty() {
             out.push(p);
         }
@@ -909,15 +910,19 @@ mod tests {
         assert_eq!(presets[0].name, "표준"); // 01- 접두 = 첫 번째
         assert_eq!(presets[0].jobs, vec!["lead", "dev", "dev", "qa"]);
         assert_eq!(presets[1].jobs, vec!["lead", "dev", "dev", "dev"]);
-        // 깨진 JSON·빈 구성은 건너뛰고, 5개 직무는 4로 자른다 (B2)
+        // 깨진 JSON·빈 구성은 건너뛴다. 직무 수는 절대 상한 8까지 살리고
+        // (설정 슬롯 상한 4·6·8의 최종 컷은 프런트 캐스팅이 한다) 그 위만 자른다
         let dir = root.join("presets");
         fs::write(dir.join("05-broken.json"), "{ not json").unwrap();
         fs::write(dir.join("06-empty.json"), r#"{"name":"빈"}"#).unwrap();
         fs::write(dir.join("07-five.json"), r#"{"jobs":["a","b","c","d","e"]}"#).unwrap();
+        fs::write(dir.join("08-nine.json"), r#"{"jobs":["a","b","c","d","e","f","g","h","i"]}"#).unwrap();
         let again = list_presets(&root);
-        assert_eq!(again.len(), 5);
+        assert_eq!(again.len(), 6);
         let five = again.iter().find(|p| p.id == "07-five").unwrap(); // id 없음 → 파일명
-        assert_eq!(five.jobs.len(), 4);
+        assert_eq!(five.jobs.len(), 5);
+        let nine = again.iter().find(|p| p.id == "08-nine").unwrap();
+        assert_eq!(nine.jobs.len(), 8);
         fs::remove_dir_all(&root).ok();
     }
 

@@ -4,6 +4,7 @@
 // tick()을 다시 읽지 않는 표면도 즉시 갱신된다 (B1~B4 재발 방지).
 import { createMutable } from "solid-js/store";
 import { forgetAgent, isTauri, killPty } from "./pty";
+import { HARD_MAX_SLOTS, maxSlots } from "./settings";
 import type {
   AgentStateApply,
   ConversationMessage,
@@ -242,7 +243,7 @@ const WORKSPACES: Workspace[] = createMutable<Workspace[]>([
 const s = (
   id: string,
   ws: string,
-  slot: 1 | 2 | 3 | 4,
+  slot: number, // 1..HARD_MAX_SLOTS
   personaId: string,
   jobId: string,
   patch: Partial<Session>,
@@ -265,6 +266,13 @@ const s = (
   lastOutput: "",
   ...patch,
 });
+
+/** 워크스페이스의 첫 빈 슬롯 — 상한은 설정 maxSlots (기본 4 · 옵션 6·8). 없으면 undefined */
+function freeSlot(wsId: string): number | undefined {
+  const used = new Set(SESSIONS.filter((x) => x.workspaceId === wsId).map((x) => x.slot));
+  for (let n = 1; n <= maxSlots(); n++) if (!used.has(n)) return n;
+  return undefined;
+}
 
 const SESSIONS: Session[] = createMutable<Session[]>([
   s("kai@academy", "academy", 1, "kai", "lead", {
@@ -624,7 +632,7 @@ export class MockBackend implements Backend {
     // 빗나가고 살아 있는 PTY가 옛 정체성에 붙는다. 같은 페르소나는 유지·이동하고,
     // 밀려나는 세션은 PTY·백엔드 잔류 상태까지 함께 끝낸다.
     const ws = WORKSPACES.find((x) => x.id === wsId);
-    const wanted = slots.slice(0, 4).map((slot, i) => ({ ...slot, slot: (i + 1) as 1 | 2 | 3 | 4 }));
+    const wanted = slots.slice(0, maxSlots()).map((slot, i) => ({ ...slot, slot: i + 1 }));
     const wantedIds = new Set(wanted.map((w) => `${w.personaId}@${wsId}`));
     const targetSlots = new Set(wanted.map((w) => w.slot));
     for (let i = SESSIONS.length - 1; i >= 0; i--) {
@@ -684,10 +692,9 @@ export class MockBackend implements Backend {
   addTerminal(wsId: string, shell?: string, cwd?: string) {
     const ws = WORKSPACES.find((x) => x.id === wsId);
     if (!ws) return;
-    const used = new Set(SESSIONS.filter((x) => x.workspaceId === wsId).map((x) => x.slot));
-    const slot = ([1, 2, 3, 4] as const).find((n) => !used.has(n));
+    const slot = freeSlot(wsId);
     if (!slot) {
-      this.logEvent("app", `세션 슬롯 가득 참 (4/4) · ${ws.name}`);
+      this.logEvent("app", `세션 슬롯 가득 참 (${maxSlots()}/${maxSlots()}) · ${ws.name}`);
       this.broadcast();
       return;
     }
@@ -735,10 +742,9 @@ export class MockBackend implements Backend {
   addRoleSession(wsId: string, personaId: string, jobId: string, opts?: { cwd?: string; worktree?: boolean }) {
     const ws = WORKSPACES.find((x) => x.id === wsId);
     if (!ws) return;
-    const used = new Set(SESSIONS.filter((x) => x.workspaceId === wsId).map((x) => x.slot));
-    const slot = ([1, 2, 3, 4] as const).find((n) => !used.has(n));
+    const slot = freeSlot(wsId);
     if (!slot) {
-      this.logEvent("app", `세션 슬롯 가득 참 (4/4) · ${ws.name}`);
+      this.logEvent("app", `세션 슬롯 가득 참 (${maxSlots()}/${maxSlots()}) · ${ws.name}`);
       this.broadcast();
       return;
     }
@@ -764,9 +770,10 @@ export class MockBackend implements Backend {
     let added = 0;
     let revivedCount = 0;
     for (const sl of slots) {
-      const slot = sl.slot as 1 | 2 | 3 | 4;
+      const slot = sl.slot;
       const used = SESSIONS.some((x) => x.workspaceId === wsId && x.slot === slot);
-      if (used || slot < 1 || slot > 4) continue;
+      // 복원은 설정 상한이 아니라 절대 상한을 본다 — 슬롯 수를 줄여도 저장된 팀을 버리지 않는다
+      if (used || slot < 1 || slot > HARD_MAX_SLOTS) continue;
       const id = `${sl.persona}@${wsId}`;
       // PTY 생존 = 웹뷰만 재시작한 것 (FR-C-06) — 재개 대기가 아니라 재부착 대상.
       // 상태는 agent_snapshot이 곧바로 덮는다 (restoreTeams에서 이어 호출).
@@ -815,11 +822,11 @@ export class MockBackend implements Backend {
     if (!ws || SESSIONS.some((x) => x.id === id)) return;
     const used = new Set(SESSIONS.filter((x) => x.workspaceId === wsId).map((x) => x.slot));
     // `shell<N>@ws` 이름 관례를 따르는 세션은 원래 슬롯을 되찾고, 아니면 빈 슬롯
-    const m = /^shell([1-4])@/.exec(id);
-    const preferred = m ? (Number(m[1]) as 1 | 2 | 3 | 4) : undefined;
-    const slot = preferred && !used.has(preferred) ? preferred : ([1, 2, 3, 4] as const).find((n) => !used.has(n));
+    const m = /^shell([1-8])@/.exec(id);
+    const preferred = m ? Number(m[1]) : undefined;
+    const slot = preferred && !used.has(preferred) ? preferred : freeSlot(wsId);
     if (!slot) {
-      this.logEvent("app", `재부착 불가 · 슬롯 가득 참 (4/4) · ${id}`);
+      this.logEvent("app", `재부착 불가 · 슬롯 가득 참 (${maxSlots()}/${maxSlots()}) · ${id}`);
       this.broadcast();
       return;
     }

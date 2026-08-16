@@ -5,6 +5,7 @@ import { backend } from "../backend/mock";
 import { createMission, cycleMissionStatus, refreshMissions, setDefaultMission, toggleAssign } from "../backend/missions";
 import { isTauri } from "../backend/pty";
 import { checkoutBranch } from "../backend/workspaces";
+import { t } from "../i18n";
 import { setView, tick } from "../state";
 import { Eyebrow, PersonaDot } from "../components/ui";
 
@@ -24,14 +25,14 @@ export function Missions(props: { wsId: string }) {
     }
     setCoConfirm(undefined);
     if (!isTauri() || !ws()) {
-      setCoNote({ id: missionId, text: "브라우저 dev — 실제 체크아웃 없음" });
+      setCoNote({ id: missionId, text: t("브라우저 dev — 실제 체크아웃 없음") });
       return;
     }
     try {
       await checkoutBranch(ws()!.path, branch);
-      setCoNote({ id: missionId, text: `⎇ ${branch} 체크아웃 완료 — 공유 세션 전체에 적용됨` });
+      setCoNote({ id: missionId, text: `⎇ ${branch} ${t("체크아웃 완료 — 공유 세션 전체에 적용됨")}` });
     } catch (err) {
-      setCoNote({ id: missionId, text: `체크아웃 실패 — ${String(err)}` });
+      setCoNote({ id: missionId, text: `${t("체크아웃 실패")} — ${String(err)}` });
     }
   };
   const missions = () => {
@@ -60,16 +61,16 @@ export function Missions(props: { wsId: string }) {
     <div class="screen">
       <div class="screen-head">
         <div>
-          <h1>임무 배정 · {ws()?.name}</h1>
-          <div class="sub">.eqmux/missions/*.md 가 원본 · 상태 뱃지 클릭 = 단계 전환 · 세션 클릭 = 배정 토글</div>
+          <h1>{t("임무 배정")} · {ws()?.name}</h1>
+          <div class="sub">{t(".eqmux/missions/*.md 가 원본 · 상태 뱃지 클릭 = 단계 전환 · 세션 클릭 = 배정 토글")}</div>
         </div>
         <button class="btn" onClick={() => setView({ kind: "workspace", id: props.wsId })}>
-          ← 컨트롤 센터
+          {t("← 컨트롤 센터")}
         </button>
       </div>
       <div class="screen-body conn-body">
         <div>
-          <Eyebrow>임무 · {missions().length}</Eyebrow>
+          <Eyebrow>{t("임무")} · {missions().length}</Eyebrow>
           <For each={missions()}>
             {(m) => (
               <div class="card" style={{ padding: "12px", "margin-top": "8px" }}>
@@ -79,7 +80,7 @@ export function Missions(props: { wsId: string }) {
                     class="badge"
                     classList={{ blue: m.status === "in-progress", purple: m.status === "in-review", green: m.status === "done" }}
                     style={{ cursor: "pointer" }}
-                    title="클릭하면 다음 단계로"
+                    title={t("클릭하면 다음 단계로")}
                     onClick={() => void cycleMissionStatus(props.wsId, m.id)}
                   >
                     {m.status.toUpperCase()}
@@ -89,27 +90,27 @@ export function Missions(props: { wsId: string }) {
                     class="badge"
                     classList={{ amber: !!m.isDefault }}
                     style={{ cursor: "pointer" }}
-                    title={
+                    title={t(
                       m.isDefault
                         ? "기본 임무 해제 (FR-E-56)"
-                        : "기본 임무로 지정 — 임무 없는 새 역할 세션이 자동 배정받습니다"
-                    }
+                        : "기본 임무로 지정 — 임무 없는 새 역할 세션이 자동 배정받습니다",
+                    )}
                     onClick={() => void setDefaultMission(props.wsId, m.id, !m.isDefault)}
                   >
-                    {m.isDefault ? "★ 기본" : "☆"}
+                    {m.isDefault ? t("★ 기본") : "☆"}
                   </button>
                   <span class="mono muted" style={{ "margin-left": "auto", "font-size": "10px" }}>
-                    {m.branch ?? "브랜치 미연결"}
+                    {m.branch ?? t("브랜치 미연결")}
                   </span>
                   <Show when={m.branch}>
                     <button
                       class="btn ghost"
                       classList={{ danger: coConfirm() === m.id }}
                       style={{ "font-size": "10px", padding: "1px 8px" }}
-                      title="공유 repo의 현재 브랜치를 바꿉니다 — 워크트리 세션은 영향 없음 (FR-E-52)"
+                      title={t("공유 repo의 현재 브랜치를 바꿉니다 — 워크트리 세션은 영향 없음 (FR-E-52)")}
                       onClick={() => void doCheckout(m.id, m.branch!)}
                     >
-                      {coConfirm() === m.id ? "공유 repo 전환 확정?" : "⎇ 체크아웃"}
+                      {t(coConfirm() === m.id ? "공유 repo 전환 확정?" : "⎇ 체크아웃")}
                     </button>
                   </Show>
                 </div>
@@ -123,7 +124,7 @@ export function Missions(props: { wsId: string }) {
                 </div>
                 <Show when={m.outputs.length > 0}>
                   <div class="mono muted" style={{ "font-size": "11px", "margin-bottom": "6px" }}>
-                    산출물 · {m.outputs.join(" · ")}
+                    {t("산출물")} · {m.outputs.join(" · ")}
                   </div>
                 </Show>
                 <div style={{ display: "flex", gap: "6px", "flex-wrap": "wrap" }}>
@@ -142,7 +143,7 @@ export function Missions(props: { wsId: string }) {
                   </For>
                   <Show when={sessions().length === 0}>
                     <span class="muted" style={{ "font-size": "11px" }}>
-                      세션 없음 — 캐스팅을 먼저 하세요
+                      {t("세션 없음 — 캐스팅을 먼저 하세요")}
                     </span>
                   </Show>
                 </div>
@@ -152,23 +153,22 @@ export function Missions(props: { wsId: string }) {
         </div>
 
         <div class="conn-detail">
-          <Eyebrow>새 임무</Eyebrow>
+          <Eyebrow>{t("새 임무")}</Eyebrow>
           <div style={{ display: "flex", "flex-direction": "column", gap: "8px", "margin-top": "8px" }}>
-            <input placeholder="임무 이름" value={name()} onInput={(e) => setName(e.currentTarget.value)} />
-            <textarea rows={3} placeholder="목표 — 완료 조건을 측정 가능하게" value={goal()} onInput={(e) => setGoal(e.currentTarget.value)} />
+            <input placeholder={t("임무 이름")} value={name()} onInput={(e) => setName(e.currentTarget.value)} />
+            <textarea rows={3} placeholder={t("목표 — 완료 조건을 측정 가능하게")} value={goal()} onInput={(e) => setGoal(e.currentTarget.value)} />
             <input
-              placeholder="브랜치 (선택 · E12)"
+              placeholder={t("브랜치 (선택 · E12)")}
               class="mono"
               value={branch()}
               onInput={(e) => setBranch(e.currentTarget.value)}
             />
             <button class="btn primary" onClick={create} disabled={!name().trim()}>
-              임무 생성
+              {t("임무 생성")}
             </button>
             <div class="card inset" style={{ padding: "10px" }}>
               <div class="muted" style={{ "font-size": "11px" }}>
-                생성하면 .eqmux/missions/&lt;id&gt;.md 파일이 만들어지고 DB는 캐시로 따라갑니다. 불일치 시 파일이
-                이깁니다 (불변 규칙 4).
+                {t("생성하면 .eqmux/missions/<id>.md 파일이 만들어지고 DB는 캐시로 따라갑니다. 불일치 시 파일이 이깁니다 (불변 규칙 4).")}
               </div>
             </div>
           </div>

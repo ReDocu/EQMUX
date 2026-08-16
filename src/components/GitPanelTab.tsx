@@ -12,6 +12,7 @@ import type { BranchInfo, GitOverview, WorktreeInfo } from "../backend/git";
 import { GIT_STATE, backend } from "../backend/mock";
 import { clipWriteText, isTauri } from "../backend/pty";
 import { checkoutBranch } from "../backend/workspaces";
+import { t, tf } from "../i18n";
 import { defaultShell, scopeWorkspace, setPanelOpen, setView, tick, view } from "../state";
 import { ContextMenu, Eyebrow } from "./ui";
 
@@ -84,17 +85,17 @@ export function GitPanelTab() {
     setCoArm(undefined);
     const target = ws();
     if (!isTauri() || !target) {
-      setCoNote("브라우저 dev — 실제 체크아웃 없음");
+      setCoNote(t("브라우저 dev — 실제 체크아웃 없음"));
       return;
     }
     try {
       await checkoutBranch(target.path, branch);
-      setCoNote(`⎇ ${branch} 체크아웃 완료 — 공유 세션 전체에 적용됨`);
+      setCoNote(tf("⎇ {branch} 체크아웃 완료 — 공유 세션 전체에 적용됨", { branch }));
       setBranchMenu(false);
       setNewBranch("");
       await load();
     } catch (err) {
-      setCoNote(`체크아웃 실패 — ${String(err)}`);
+      setCoNote(tf("체크아웃 실패 — {err}", { err: String(err) }));
     }
   };
 
@@ -211,7 +212,7 @@ export function GitPanelTab() {
   const copyCmd = (cmd: string) => {
     void clipWriteText(cmd);
     clearTimeout(actTimer);
-    setActNote(`\`${cmd}\` 복사됨 — 실행은 터미널에서 (G7)`);
+    setActNote(tf("`{cmd}` 복사됨 — 실행은 터미널에서 (G7)", { cmd }));
     actTimer = setTimeout(() => setActNote(undefined), 3000);
   };
 
@@ -236,17 +237,17 @@ export function GitPanelTab() {
         </span>
         <span class="panel-title">git</span>
         <span class="mono muted gitp-src" title={ws()?.path ?? ""}>
-          {g().real ? "실측" : "목 데이터"}
+          {t(g().real ? "실측" : "목 데이터")}
         </span>
         <span style={{ flex: 1 }} />
-        <button class="btn ghost gitp-refresh" title="새로 읽기" onClick={() => void load()}>
+        <button class="btn ghost gitp-refresh" title={t("새로 읽기")} onClick={() => void load()}>
           ⟳
         </button>
       </div>
 
       <Show when={isTauri() && (failed() || !ws())}>
         <div class="card conn-error mono" style={{ "font-size": "11px" }}>
-          {ws() ? "저장소를 읽을 수 없습니다 — git 저장소가 아니거나 git CLI가 없습니다" : "워크스페이스 문맥이 없습니다 — 워크스페이스 탭을 먼저 여세요"}
+          {t(ws() ? "저장소를 읽을 수 없습니다 — git 저장소가 아니거나 git CLI가 없습니다" : "워크스페이스 문맥이 없습니다 — 워크스페이스 탭을 먼저 여세요")}
         </div>
       </Show>
 
@@ -255,7 +256,7 @@ export function GitPanelTab() {
         <button
           class="card inset gitp-repo mono"
           style={{ cursor: "pointer" }}
-          title={ws()?.path ?? "저장소 = 활성 워크스페이스"}
+          title={ws()?.path ?? t("저장소 = 활성 워크스페이스")}
           onClick={() => setRepoMenu(!repoMenu())}
         >
           <span>{g().repo}</span>
@@ -280,7 +281,7 @@ export function GitPanelTab() {
               )}
             </For>
             <div class="muted" style={{ "font-size": "10px" }}>
-              저장소 선택 = 워크스페이스 전환 — 패널 스코프가 함께 바뀝니다
+              {t("저장소 선택 = 워크스페이스 전환 — 패널 스코프가 함께 바뀝니다")}
             </div>
           </div>
         </Show>
@@ -293,7 +294,7 @@ export function GitPanelTab() {
           <button
             class="card inset gitp-branch mono"
             style={{ cursor: "pointer", "text-align": "left" }}
-            title="브랜치 체크아웃 (M36) — 공유 repo 전체에 적용, 2단 확인"
+            title={t("브랜치 체크아웃 (M36) — 공유 repo 전체에 적용, 2단 확인")}
             onClick={() => {
               setBranchMenu(!branchMenu());
               setCoArm(undefined);
@@ -303,13 +304,13 @@ export function GitPanelTab() {
             <span class="muted">▾</span>
           </button>
         </div>
-        <span class="mono gitp-sync" title="업스트림 대비 ahead / behind">
+        <span class="mono gitp-sync" title={t("업스트림 대비 ahead / behind")}>
           <span class="st-waiting">↑{g().ahead}</span> <span class="muted">↓{g().behind}</span>
         </span>
         <span style={{ flex: 1 }} />
         <button
           class="gitp-act mono"
-          title={`${g().changed}개 변경 파일 — +${g().added} ~${g().modified} −${g().deleted} · HEAD ↔ 워크트리 나란히 비교`}
+          title={tf("{n}개 변경 파일 — +{a} ~{m} −{d} · HEAD ↔ 워크트리 나란히 비교", { n: g().changed, a: g().added, m: g().modified, d: g().deleted })}
           onClick={openDiff}
         >
           diff
@@ -317,17 +318,17 @@ export function GitPanelTab() {
             <span class="n">{g().changed}</span>
           </Show>
         </button>
-        <button class="gitp-act mono" title="`git pull` 복사 — 실행은 터미널에서 (G7)" onClick={() => copyCmd("git pull")}>
+        <button class="gitp-act mono" title={t("`git pull` 복사 — 실행은 터미널에서 (G7)")} onClick={() => copyCmd("git pull")}>
           ↓ pull
         </button>
         <button
           class="gitp-act mono"
-          title="`git add -A && git commit` 복사 — 실행은 터미널에서 (G7)"
+          title={t("`git add -A && git commit` 복사 — 실행은 터미널에서 (G7)")}
           onClick={() => copyCmd("git add -A && git commit")}
         >
           commit
         </button>
-        <button class="gitp-act mono" title="`git push` 복사 — 실행은 터미널에서 (G7)" onClick={() => copyCmd("git push")}>
+        <button class="gitp-act mono" title={t("`git push` 복사 — 실행은 터미널에서 (G7)")} onClick={() => copyCmd("git push")}>
           ↑ push
           <Show when={g().ahead > 0}>
             <span class="n">{g().ahead}</span>
@@ -342,15 +343,15 @@ export function GitPanelTab() {
                   classList={{ danger: coArm() === b.name }}
                   style={{ "justify-content": "flex-start", "font-size": "11px", padding: "2px 6px", display: "flex", gap: "6px" }}
                   disabled={b.current}
-                  title={b.remote ? "원격 브랜치 — 체크아웃하면 추적 브랜치가 만들어집니다" : ""}
+                  title={b.remote ? t("원격 브랜치 — 체크아웃하면 추적 브랜치가 만들어집니다") : ""}
                   onClick={() => void doCheckout(b.name)}
                 >
                   <span>{b.current ? "●" : coArm() === b.name ? "⚠" : "○"}</span>
                   <span style={{ flex: 1, "text-align": "left" }}>
-                    {coArm() === b.name ? `${b.name} — 공유 repo 전환 확정?` : b.name}
+                    {coArm() === b.name ? tf("{name} — 공유 repo 전환 확정?", { name: b.name }) : b.name}
                   </span>
                   <Show when={b.remote}>
-                    <span class="badge">원격</span>
+                    <span class="badge">{t("원격")}</span>
                   </Show>
                 </button>
               )}
@@ -359,7 +360,7 @@ export function GitPanelTab() {
               <input
                 class="mono"
                 style={{ flex: 1, "font-size": "11px", padding: "2px 6px" }}
-                placeholder="새 브랜치 이름 — checkout -b"
+                placeholder={t("새 브랜치 이름 — checkout -b")}
                 value={newBranch()}
                 onInput={(e) => setNewBranch(e.currentTarget.value)}
               />
@@ -370,11 +371,11 @@ export function GitPanelTab() {
                 disabled={!newBranch().trim()}
                 onClick={() => void doCheckout(newBranch().trim())}
               >
-                {coArm() === newBranch().trim() && newBranch().trim() ? "확정?" : "생성·전환"}
+                {coArm() === newBranch().trim() && newBranch().trim() ? t("확정?") : t("생성·전환")}
               </button>
             </div>
             <div class="muted" style={{ "font-size": "10px" }}>
-              공유 repo의 현재 브랜치를 바꿉니다 — 워크트리 세션은 영향 없음 (FR-E-52)
+              {t("공유 repo의 현재 브랜치를 바꿉니다 — 워크트리 세션은 영향 없음 (FR-E-52)")}
             </div>
           </div>
         </Show>
@@ -400,7 +401,7 @@ export function GitPanelTab() {
                 setWtFormOpen(!wtFormOpen());
               }}
             >
-              + 워크트리
+              {t("+ 워크트리")}
             </button>
           </div>
           <Show when={wtFormOpen()}>
@@ -408,7 +409,7 @@ export function GitPanelTab() {
               {/* 모드 — 새 브랜치를 만들거나, 이미 있는 브랜치를 트리에 연결하거나 (레일 §워크트리) */}
               <div class="wt-mode-toggle">
                 <button classList={{ on: wtMode() === "new" }} onClick={() => setWtMode("new")}>
-                  새 브랜치
+                  {t("새 브랜치")}
                 </button>
                 <button
                   classList={{ on: wtMode() === "attach" }}
@@ -417,7 +418,7 @@ export function GitPanelTab() {
                     if (!wtAttachBranch()) setWtAttachBranch(attachable()[0]?.name ?? "");
                   }}
                 >
-                  기존 브랜치
+                  {t("기존 브랜치")}
                 </button>
               </div>
               <Show
@@ -427,21 +428,21 @@ export function GitPanelTab() {
                     <div style={{ display: "flex", gap: "4px" }}>
                       <select
                         style={{ flex: 1, "font-size": "11px" }}
-                        title="이 브랜치를 체크아웃하는 워크트리를 만든다 — 새 브랜치 없음"
+                        title={t("이 브랜치를 체크아웃하는 워크트리를 만든다 — 새 브랜치 없음")}
                         value={wtAttachBranch()}
                         onChange={(e) => setWtAttachBranch(e.currentTarget.value)}
                       >
                         <Show when={attachable().length === 0}>
-                          <option value="">연결 가능한 로컬 브랜치 없음</option>
+                          <option value="">{t("연결 가능한 로컬 브랜치 없음")}</option>
                         </Show>
                         <For each={attachable()}>{(b) => <option value={b.name}>{b.name}</option>}</For>
                       </select>
                       <button class="btn primary" style={{ "font-size": "10px" }} disabled={!wtAttachBranch() || wtBusy()} onClick={() => void createWorktree()}>
-                        {wtBusy() ? "연결 중…" : "연결"}
+                        {wtBusy() ? t("연결 중…") : t("연결")}
                       </button>
                     </div>
                     <div class="muted" style={{ "font-size": "10px" }}>
-                      체크아웃 중인 브랜치는 목록에서 빠집니다 — 같은 브랜치는 한 트리에만 (git)
+                      {t("체크아웃 중인 브랜치는 목록에서 빠집니다 — 같은 브랜치는 한 트리에만 (git)")}
                     </div>
                   </>
                 }
@@ -449,26 +450,26 @@ export function GitPanelTab() {
                 <input
                   class="mono"
                   style={{ "font-size": "11px", padding: "2px 6px" }}
-                  placeholder="이름 → .eqmux/worktrees/<이름> · 브랜치 eqmux/<이름>"
+                  placeholder={t("이름 → .eqmux/worktrees/<이름> · 브랜치 eqmux/<이름>")}
                   value={wtName()}
                   onInput={(e) => setWtName(e.currentTarget.value)}
                 />
                 <div style={{ display: "flex", gap: "4px" }}>
                   <select
                     style={{ flex: 1, "font-size": "11px" }}
-                    title="분기 기준 ref (start-from)"
+                    title={t("분기 기준 ref (start-from)")}
                     value={wtBase()}
                     onChange={(e) => setWtBase(e.currentTarget.value)}
                   >
-                    <option value="">HEAD (현재)</option>
+                    <option value="">{t("HEAD (현재)")}</option>
                     {/* 커밋 메뉴에서 열면 해시가 기준 ref로 잡힌다 */}
                     <Show when={wtBase() && !branches().some((b) => b.name === wtBase())}>
-                      <option value={wtBase()}>{wtBase()} (커밋)</option>
+                      <option value={wtBase()}>{wtBase()} {t("(커밋)")}</option>
                     </Show>
                     <For each={branches()}>{(b) => <option value={b.name}>{b.name}</option>}</For>
                   </select>
                   <button class="btn primary" style={{ "font-size": "10px" }} disabled={!wtName().trim() || wtBusy()} onClick={() => void createWorktree()}>
-                    {wtBusy() ? "생성 중…" : "생성"}
+                    {wtBusy() ? t("생성 중…") : t("생성")}
                   </button>
                 </div>
               </Show>
@@ -484,14 +485,14 @@ export function GitPanelTab() {
         <div class="gitp-wt-list">
           <For each={worktrees()}>
             {(wt) => (
-              <div class="gitp-wt" title={`${wt.path} · ${wt.head} — 삭제는 제공하지 않습니다 (FR-E-64) · git worktree remove`}>
+              <div class="gitp-wt" title={tf("{path} · {head} — 삭제는 제공하지 않습니다 (FR-E-64) · git worktree remove", { path: wt.path, head: wt.head })}>
                 <span class="mono gitp-wt-name">{wtLabel(wt)}</span>
                 <span
                   class="gitp-wt-tag mono"
                   classList={{ main: wt.isMain }}
-                  title={wt.isMain ? "메인 작업 트리" : wt.isSession ? "앱이 만든 워크트리 (.eqmux/worktrees/)" : "외부에서 만든 워크트리 — 순수 git 호환"}
+                  title={t(wt.isMain ? "메인 작업 트리" : wt.isSession ? "앱이 만든 워크트리 (.eqmux/worktrees/)" : "외부에서 만든 워크트리 — 순수 git 호환")}
                 >
-                  {wt.isMain ? "MAIN" : wt.isSession ? "세션" : "외부"}
+                  {wt.isMain ? "MAIN" : t(wt.isSession ? "세션" : "외부")}
                 </span>
                 <span class="mono muted gitp-wt-path">{wtTail(wt.path)}</span>
                 <span style={{ flex: 1 }} />
@@ -499,10 +500,10 @@ export function GitPanelTab() {
                   <button
                     class="btn ghost"
                     style={{ "font-size": "10px", padding: "1px 8px" }}
-                    title="이 워크트리에서 기본 터미널 열기 — 역할 부여는 세션 상세에서"
+                    title={t("이 워크트리에서 기본 터미널 열기 — 역할 부여는 세션 상세에서")}
                     onClick={() => openShell(wt)}
                   >
-                    셸 열기
+                    {t("셸 열기")}
                   </button>
                 </Show>
               </div>
@@ -520,7 +521,7 @@ export function GitPanelTab() {
             <div
               class="gitp-commit"
               role="button"
-              title={`${c.message} — 클릭: 부모 커밋과 나란히 비교(diff)`}
+              title={tf("{msg} — 클릭: 부모 커밋과 나란히 비교(diff)", { msg: c.message })}
               onClick={() => openCommitDiff(c)}
               onContextMenu={(e) => {
                 e.preventDefault();
@@ -551,13 +552,13 @@ export function GitPanelTab() {
         </For>
         <Show when={g().commits.length === 0}>
           <div class="muted" style={{ "font-size": "11px", padding: "8px" }}>
-            커밋이 없습니다
+            {t("커밋이 없습니다")}
           </div>
         </Show>
       </div>
 
       {/* 정책 고지 1회 — G7. 버튼은 복사만 한다는 것을 여기서 못박는다 */}
-      <div class="gitp-foot mono muted">pull · push · commit 버튼은 명령 복사만 — 실행은 터미널에서 (G7)</div>
+      <div class="gitp-foot mono muted">{t("pull · push · commit 버튼은 명령 복사만 — 실행은 터미널에서 (G7)")}</div>
 
       <Show when={cmMenu()}>
         {(m) => (
@@ -568,15 +569,15 @@ export function GitPanelTab() {
             onClose={() => setCmMenu(undefined)}
             groups={[
               [
-                { label: "해시 복사", action: () => clipWriteText(m().c.hash) },
-                { label: "메시지 복사", action: () => clipWriteText(m().c.message) },
+                { label: t("해시 복사"), action: () => clipWriteText(m().c.hash) },
+                { label: t("메시지 복사"), action: () => clipWriteText(m().c.message) },
               ],
               [
                 // 커밋 기준 diff (UI 리파인 §git) — 행 클릭과 같은 동작. B11의 "워크트리 비교만"은 여기서 풀렸다
-                { label: "부모 커밋과 비교 (diff)", action: () => openCommitDiff(m().c) },
-                { label: "워크트리 diff 열기", action: openDiff },
+                { label: t("부모 커밋과 비교 (diff)"), action: () => openCommitDiff(m().c) },
+                { label: t("워크트리 diff 열기"), action: openDiff },
                 {
-                  label: "이 커밋에서 워크트리 생성…",
+                  label: t("이 커밋에서 워크트리 생성…"),
                   disabled: !isTauri(),
                   action: () => {
                     setWtErr(undefined);
@@ -588,7 +589,7 @@ export function GitPanelTab() {
                 },
               ],
               // 메뉴에 없는 것 = 정책상 없는 것 (G7)
-              [{ label: "checkout · revert는 두지 않는다 — 터미널에서", note: true }],
+              [{ label: t("checkout · revert는 두지 않는다 — 터미널에서"), note: true }],
             ]}
           />
         )}

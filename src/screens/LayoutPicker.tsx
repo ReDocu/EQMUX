@@ -1,6 +1,7 @@
 // 페인 배치 (srpYm) — 6종 배치 선택 모달. 선택 즉시 미리보기, 적용 시 터미널 그리드에 반영.
 import { createSignal, For, Show } from "solid-js";
 import { backend } from "../backend/mock";
+import { t, tf } from "../i18n";
 import { PANE_LAYOUTS, paneLayout, setLayoutPickerOpen, setPaneLayout, view } from "../state";
 import type { PaneLayout as PaneLayoutKey } from "../state";
 
@@ -37,9 +38,9 @@ export function LayoutPicker() {
       <div class="dialog lp-dialog" onClick={(e) => e.stopPropagation()}>
         <div class="lp-head">
           <div>
-            <div style={{ "font-weight": 800, "font-size": "15px" }}>페인 배치</div>
+            <div style={{ "font-weight": 800, "font-size": "15px" }}>{t("페인 배치")}</div>
             <div class="muted" style={{ "font-size": "11px", "margin-top": "2px" }}>
-              현재 워크스페이스 · {sessionCount()}개 세션 · 선택 즉시 미리보기
+              {tf("현재 워크스페이스 · {n}개 세션 · 선택 즉시 미리보기", { n: sessionCount() })}
             </div>
           </div>
           <button class="btn ghost" onClick={() => setLayoutPickerOpen(false)}>
@@ -53,13 +54,13 @@ export function LayoutPicker() {
               <button class="card lp-option" classList={{ selected: pending() === o.key }} onClick={() => setPending(o.key)}>
                 <Preview mode={o.key} />
                 <div class="lp-option-title">
-                  <span style={{ "font-weight": 700, "font-size": "12px" }}>{o.name}</span>
+                  <span style={{ "font-weight": 700, "font-size": "12px" }}>{t(o.name)}</span>
                   <span class="badge" classList={{ blue: pending() === o.key }}>
-                    {pending() === o.key ? "선택됨" : `${sessionCount()} PANES`}
+                    {pending() === o.key ? t("선택됨") : `${sessionCount()} PANES`}
                   </span>
                 </div>
                 <div class="muted" style={{ "font-size": "11px" }}>
-                  {o.desc}
+                  {t(o.desc)}
                 </div>
               </button>
             )}
@@ -69,7 +70,7 @@ export function LayoutPicker() {
         <div class="lp-footer">
           <div>
             <div class="muted" style={{ "font-size": "11px" }}>
-              적용 후 분할선을 드래그해 비율을 조정할 수 있습니다.
+              {t("적용 후 분할선을 드래그해 비율을 조정할 수 있습니다.")}
             </div>
             <div class="mono muted" style={{ "font-size": "10px", "margin-top": "2px" }}>
               CTRL + SHIFT + L
@@ -77,10 +78,10 @@ export function LayoutPicker() {
           </div>
           <div style={{ display: "flex", gap: "8px" }}>
             <button class="btn" onClick={() => setLayoutPickerOpen(false)}>
-              취소
+              {t("취소")}
             </button>
             <button class="btn primary" onClick={apply}>
-              배치 적용
+              {t("배치 적용")}
             </button>
           </div>
         </div>

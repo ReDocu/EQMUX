@@ -8,6 +8,7 @@ import type { FsNode } from "../backend/panels";
 import { refreshMissions } from "../backend/missions";
 import { sendConversation } from "../backend/conversation";
 import { isTauri } from "../backend/pty";
+import { t } from "../i18n";
 import { openPanel, scopeWorkspace, selectedSession, setOverlay, setView, tick } from "../state";
 
 // 브라우저 dev 폴백 트리 (기존 목)
@@ -123,7 +124,7 @@ export function MissionExplorerTab() {
     // 미저장 이탈 보호 — 편집 중 다른 파일 클릭은 1회 경고, 같은 파일 재클릭이 곧 확인
     if (editing() !== undefined && dirty() && pendingSwitch() !== n.rel) {
       setPendingSwitch(n.rel);
-      setFsErr("미저장 변경이 있습니다 — 한 번 더 클릭하면 버리고 이동합니다");
+      setFsErr(t("미저장 변경이 있습니다 — 한 번 더 클릭하면 버리고 이동합니다"));
       return;
     }
     setPendingSwitch(undefined);
@@ -275,9 +276,9 @@ export function MissionExplorerTab() {
   return (
     <div class="msnp">
       <div class="panel-head-row">
-        <span class="panel-title">임무 · 파일 탐색기</span>
+        <span class="panel-title">{t("임무 · 파일 탐색기")}</span>
         <span class="mono muted" style={{ "font-size": "9px", "letter-spacing": "0.06em" }}>
-          {isTauri() ? "FS 실측 · CRUD" : "목 데이터"}
+          {t(isTauri() ? "FS 실측 · CRUD" : "목 데이터")}
         </span>
       </div>
 
@@ -285,10 +286,10 @@ export function MissionExplorerTab() {
         <span class="msnp-status-dot" />
         <div style={{ flex: 1, "min-width": 0 }}>
           <div style={{ "font-weight": 700, "font-size": "11px" }}>
-            {persona()?.name ?? "세션 없음"} · {job()?.name ?? "—"}
+            {persona()?.name ?? t("세션 없음")} · {job()?.name ?? "—"}
           </div>
           <div class="mono muted" style={{ "font-size": "10px" }}>
-            {ws()?.path ?? "워크스페이스 없음"}
+            {ws()?.path ?? t("워크스페이스 없음")}
           </div>
         </div>
         <span class="badge blue mono">⎇ {ws()?.branch ?? "—"}</span>
@@ -298,36 +299,36 @@ export function MissionExplorerTab() {
         <div class="msnp-tree">
           <input
             class="panel-search mono"
-            placeholder="파일 검색"
+            placeholder={t("파일 검색")}
             value={query()}
             onInput={(e) => setQuery(e.currentTarget.value)}
           />
           {/* 파일 CRUD (M24) — 대상: 선택 폴더 안 / 선택 파일 옆 / 루트 */}
           <div class="msnp-crud">
-            <button class="btn ghost" disabled={!isTauri() || !ws()} title={`새 파일 — ${createDir() || "루트"}`} onClick={() => openName("file")}>
-              +파일
+            <button class="btn ghost" disabled={!isTauri() || !ws()} title={`${t("새 파일")} — ${createDir() || t("루트")}`} onClick={() => openName("file")}>
+              {t("+파일")}
             </button>
-            <button class="btn ghost" disabled={!isTauri() || !ws()} title={`새 폴더 — ${createDir() || "루트"}`} onClick={() => openName("dir")}>
-              +폴더
+            <button class="btn ghost" disabled={!isTauri() || !ws()} title={`${t("새 폴더")} — ${createDir() || t("루트")}`} onClick={() => openName("dir")}>
+              {t("+폴더")}
             </button>
-            <button class="btn ghost" disabled={!isTauri() || !sel()} title="이름 변경 (같은 폴더 안)" onClick={() => openName("rename")}>
-              이름
+            <button class="btn ghost" disabled={!isTauri() || !sel()} title={t("이름 변경 (같은 폴더 안)")} onClick={() => openName("rename")}>
+              {t("이름")}
             </button>
             <button
               class="btn ghost"
               classList={{ danger: confirmDel() }}
               disabled={!isTauri() || !sel()}
-              title="휴지통으로 이동 — 영구 삭제 아님"
+              title={t("휴지통으로 이동 — 영구 삭제 아님")}
               onClick={() => void doDelete()}
             >
-              {confirmDel() ? "휴지통 확정?" : "삭제"}
+              {t(confirmDel() ? "휴지통 확정?" : "삭제")}
             </button>
           </div>
           <Show when={nameMode()}>
             <div class="msnp-name-row">
               <input
                 class="mono"
-                placeholder={nameMode() === "rename" ? "새 이름" : nameMode() === "dir" ? "폴더 이름" : "파일 이름"}
+                placeholder={t(nameMode() === "rename" ? "새 이름" : nameMode() === "dir" ? "폴더 이름" : "파일 이름")}
                 value={nameVal()}
                 onInput={(e) => setNameVal(e.currentTarget.value)}
                 onKeyDown={(e) => {
@@ -337,7 +338,7 @@ export function MissionExplorerTab() {
                 ref={(el) => setTimeout(() => el.focus())}
               />
               <button class="btn primary" style={{ padding: "2px 8px" }} onClick={() => void submitName()}>
-                확인
+                {t("확인")}
               </button>
               <button class="btn ghost" style={{ padding: "2px 6px" }} onClick={() => setNameMode(undefined)}>
                 ✕
@@ -356,7 +357,7 @@ export function MissionExplorerTab() {
                   class="msnp-tree-row mono"
                   classList={{ selected: sel()?.rel === n.rel, folder: n.dir }}
                   style={{ "padding-left": `${8 + n.depth * 12}px` }}
-                  title={n.dir ? (isCollapsed(n.rel) ? "펼치기" : "접기") : undefined}
+                  title={n.dir ? t(isCollapsed(n.rel) ? "펼치기" : "접기") : undefined}
                   onClick={() => {
                     pick(n);
                     if (n.dir) toggleFold(n.rel); // 폴더 클릭 = 선택 + 접기 토글 (탐색기 관례)
@@ -371,7 +372,7 @@ export function MissionExplorerTab() {
             </For>
             <Show when={tree().length === 0}>
               <div class="muted" style={{ padding: "8px", "font-size": "11px" }}>
-                {isTauri() ? "파일이 없거나 워크스페이스가 없습니다" : "검색 결과 없음"}
+                {t(isTauri() ? "파일이 없거나 워크스페이스가 없습니다" : "검색 결과 없음")}
               </div>
             </Show>
           </div>
@@ -381,9 +382,9 @@ export function MissionExplorerTab() {
           <div class="msnp-preview-head">
             <div style={{ "min-width": 0 }}>
               <div class="mono" style={{ "font-weight": 700, "font-size": "11px" }}>
-                {sel()?.name ?? "파일을 선택하세요"}
+                {sel()?.name ?? t("파일을 선택하세요")}
                 <Show when={editing() !== undefined}>
-                  <span class="st-waiting"> · 편집 중{dirty() ? " *" : ""}</span>
+                  <span class="st-waiting"> · {t("편집 중")}{dirty() ? " *" : ""}</span>
                 </Show>
               </div>
               <div class="mono muted" style={{ "font-size": "10px" }}>
@@ -392,19 +393,19 @@ export function MissionExplorerTab() {
             </div>
             <div style={{ display: "flex", gap: "4px" }}>
               <Show when={isTauri() && sel() && !sel()!.dir && editing() === undefined}>
-                <button class="btn ghost" title="원문 편집 (1MB 상한)" style={{ padding: "2px 6px" }} onClick={() => void startEdit()}>
-                  편집
+                <button class="btn ghost" title={t("원문 편집 (1MB 상한)")} style={{ padding: "2px 6px" }} onClick={() => void startEdit()}>
+                  {t("편집")}
                 </button>
               </Show>
               <Show when={editing() !== undefined}>
                 <button class="btn primary" style={{ padding: "2px 8px" }} onClick={() => void saveEdit()}>
-                  저장
+                  {t("저장")}
                 </button>
                 <button class="btn ghost" style={{ padding: "2px 6px" }} onClick={() => setEditing(undefined)}>
-                  취소
+                  {t("취소")}
                 </button>
               </Show>
-              <button class="btn ghost" title="트리 새로 읽기" style={{ padding: "2px 6px" }} onClick={() => void loadTree()}>
+              <button class="btn ghost" title={t("트리 새로 읽기")} style={{ padding: "2px 6px" }} onClick={() => void loadTree()}>
                 ⟳
               </button>
             </div>
@@ -420,11 +421,13 @@ export function MissionExplorerTab() {
                     when={preview() !== undefined}
                     fallback={
                       <div class="muted" style={{ padding: "14px 10px", "font-size": "11px" }}>
-                        {sel() && !sel()!.dir
-                          ? "미리보기를 불러올 수 없습니다 (바이너리 또는 읽기 실패)"
-                          : sel()?.dir
-                            ? "폴더 선택됨 — +파일/+폴더는 이 안에 만들어집니다"
-                            : "파일을 선택하면 원문이 표시됩니다. 임무 파일(.eqmux/missions/*.md)은 구조화되어 보입니다."}
+                        {t(
+                          sel() && !sel()!.dir
+                            ? "미리보기를 불러올 수 없습니다 (바이너리 또는 읽기 실패)"
+                            : sel()?.dir
+                              ? "폴더 선택됨 — +파일/+폴더는 이 안에 만들어집니다"
+                              : "파일을 선택하면 원문이 표시됩니다. 임무 파일(.eqmux/missions/*.md)은 구조화되어 보입니다.",
+                        )}
                       </div>
                     }
                   >
@@ -463,10 +466,10 @@ export function MissionExplorerTab() {
                     </div>
                     <div class="msnp-md">
                       <div class="msnp-md-h1"># {m().name}</div>
-                      <div class="msnp-md-h2">목표</div>
+                      <div class="msnp-md-h2">{t("목표")}</div>
                       <div class="msnp-md-p">{m().goal || "—"}</div>
                       <Show when={m().outputs.length > 0}>
-                        <div class="msnp-md-h2">산출물</div>
+                        <div class="msnp-md-h2">{t("산출물")}</div>
                         <For each={m().outputs}>{(o) => <div class="msnp-md-p mono">□ {o}</div>}</For>
                       </Show>
                     </div>
@@ -493,10 +496,10 @@ export function MissionExplorerTab() {
       <div class="msnp-footer">
         <div>
           <div class="mono" style={{ "font-size": "10px", color: "var(--eq-green)" }}>
-            {isTauri() ? "실측 · 열 때 새로 읽음" : "WATCHING · .eqmux/ (목)"}
+            {t(isTauri() ? "실측 · 열 때 새로 읽음" : "WATCHING · .eqmux/ (목)")}
           </div>
           <div class="muted" style={{ "font-size": "10px" }}>
-            파일 우선 · 삭제는 휴지통 · .git 불가침
+            {t("파일 우선 · 삭제는 휴지통 · .git 불가침")}
           </div>
         </div>
         <div style={{ display: "flex", gap: "6px" }}>
@@ -508,10 +511,10 @@ export function MissionExplorerTab() {
               setView({ kind: "missions", wsId: ws()!.id }); // setView가 팝업을 접는다
             }}
           >
-            임무 관리
+            {t("임무 관리")}
           </button>
           <button class="btn primary" onClick={sendBrief}>
-            브리프 전달
+            {t("브리프 전달")}
           </button>
         </div>
       </div>

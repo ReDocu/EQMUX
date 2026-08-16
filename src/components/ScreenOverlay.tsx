@@ -4,6 +4,7 @@
 import { onCleanup, onMount } from "solid-js";
 import type { JSX } from "solid-js";
 import { setOverlay } from "../state";
+import { t } from "../i18n";
 
 export function ScreenOverlay(props: {
   title: string;
@@ -32,10 +33,10 @@ export function ScreenOverlay(props: {
         </span>
         <div style={{ display: "flex", gap: "6px", "align-items": "center" }}>
           <span class="mono muted" style={{ "font-size": "10px" }}>
-            ESC 닫기
+            {t("ESC 닫기")}
           </span>
           <button class="btn" onClick={() => setOverlay(undefined)}>
-            ✕ 닫기
+            ✕ {t("닫기")}
           </button>
         </div>
       </div>

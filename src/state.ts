@@ -2,6 +2,7 @@
 // 상태를 바꾸는 것은 언제나 사용자 버튼이며, 자동 실행 경로는 없다.
 import { createSignal } from "solid-js";
 import { backend } from "./backend/mock";
+import { settings } from "./backend/settings";
 import type { Workspace } from "./types";
 
 export type View =
@@ -102,20 +103,34 @@ export interface PaneRatio {
   cols?: number[];
   rows?: number[];
 }
-export const DEFAULT_RATIOS: Record<PaneLayout, PaneRatio> = {
-  "grid-col": { cols: [0.5, 0.5], rows: [0.5, 0.5] },
-  "grid-row": { cols: [0.5, 0.5], rows: [0.5, 0.5] },
-  "stack-v": { rows: [0.25, 0.25, 0.25, 0.25] },
-  "row-h": { cols: [0.25, 0.25, 0.25, 0.25] },
-  "main-right": { cols: [2 / 3, 1 / 3] },
-  "main-bottom": { rows: [2 / 3, 1 / 3] },
-};
+/** 균등 n분할 비율 */
+const even = (n: number): number[] => Array.from({ length: n }, () => 1 / n);
+/** 배치별 기본 비율 — 트랙 수가 슬롯 상한(설정 maxSlots)을 따라간다.
+ *  그리드는 2행 고정 · 열이 늘어난다 (4→2×2, 6→3×2, 8→4×2). */
+export function defaultRatios(layout: PaneLayout): PaneRatio {
+  const max = settings().maxSlots; // 4 | 6 | 8
+  switch (layout) {
+    case "grid-col":
+    case "grid-row":
+      return { cols: even(max / 2), rows: even(2) };
+    case "stack-v":
+      return { rows: even(max) };
+    case "row-h":
+      return { cols: even(max) };
+    case "main-right":
+      return { cols: [2 / 3, 1 / 3] };
+    case "main-bottom":
+      return { rows: [2 / 3, 1 / 3] };
+  }
+}
 export const [paneRatios, setPaneRatios] = createSignal<Partial<Record<PaneLayout, PaneRatio>>>({});
-/** 현재 배치의 유효 비율 — 저장본이 없으면 기본값 */
+/** 현재 배치의 유효 비율 — 저장본이 없거나 트랙 수가 다르면(슬롯 상한 변경) 기본값 */
 export function ratioFor(layout: PaneLayout): PaneRatio {
-  const d = DEFAULT_RATIOS[layout];
+  const d = defaultRatios(layout);
   const o = paneRatios()[layout];
-  return { cols: o?.cols ?? d.cols, rows: o?.rows ?? d.rows };
+  const axis = (ov: number[] | undefined, def: number[] | undefined) =>
+    ov && def && ov.length === def.length ? ov : def;
+  return { cols: axis(o?.cols, d.cols), rows: axis(o?.rows, d.rows) };
 }
 /** 한 축 갱신 — 분할선 드래그가 부른다 */
 export function setRatioAxis(layout: PaneLayout, axis: "cols" | "rows", fractions: number[]): void {

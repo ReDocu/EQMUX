@@ -6,6 +6,7 @@ import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Sh
 import { backend } from "../backend/mock";
 import { cleanScrollback, exportSessionScrollback } from "../backend/panels";
 import { isTauri, scrollbackTail, writePty } from "../backend/pty";
+import { t as tr, tf } from "../i18n";
 import { readTranscript } from "../backend/transcript";
 import type { TranscriptData } from "../backend/transcript";
 import { tick } from "../state";
@@ -80,7 +81,7 @@ export function TranscriptPane(props: { session: Session }) {
   const saveSession = async () => {
     setSaving(true);
     try {
-      const msg = await exportSessionScrollback(props.session, persona()?.name ?? "기본 터미널");
+      const msg = await exportSessionScrollback(props.session, persona()?.name ?? tr("기본 터미널"));
       if (msg) showSaveMsg(msg, false);
     } catch (err) {
       showSaveMsg(String(err), true);
@@ -103,28 +104,28 @@ export function TranscriptPane(props: { session: Session }) {
 
   const sourceLabel = () => {
     const d = data();
-    if (!isTauri()) return "목 데이터";
+    if (!isTauri()) return tr("목 데이터");
     if (d) {
-      const parts = [`JSONL ${d.guessed ? "· cwd 최신 추정" : "실측"}${d.windowed ? " · 끝 2MB 창" : ""}`];
-      if (d.skipped > 0) parts.push(`건너뜀 ${d.skipped}줄`);
+      const parts = [`JSONL ${d.guessed ? tr("cwd 최신 추정") : tr("실측")}${d.windowed ? ` · ${tr("끝 2MB 창")}` : ""}`];
+      if (d.skipped > 0) parts.push(tf("건너뜀 {n}줄", { n: d.skipped }));
       return parts.join(" · ");
     }
-    return "스크롤백 폴백 (FR-G-86)";
+    return tr("스크롤백 폴백 (FR-G-86)");
   };
 
   const roleLabel = (role: string) =>
-    role === "user" ? "▸ 사람" : role === "tool" ? "⚙ 도구" : `◂ ${persona()?.name ?? "에이전트"}`;
+    role === "user" ? tr("▸ 사람") : role === "tool" ? tr("⚙ 도구") : `◂ ${persona()?.name ?? tr("에이전트")}`;
 
   return (
     <div class="card terminal-slot transcript">
       <div class="terminal-head mono">
         <span class="transcript-head-title" title={`${persona()?.name ?? props.session.id} · ${sourceLabel()}`}>
-          ☰ TRANSCRIPT · {persona()?.name ?? props.session.id} · 참조만 저장 (V2) · {sourceLabel()}
+          ☰ TRANSCRIPT · {persona()?.name ?? props.session.id} · {tr("참조만 저장 (V2)")} · {sourceLabel()}
         </span>
         <span class="transcript-head-tools">
           <input
             class="transcript-search mono"
-            placeholder="검색 (FR-G-87)"
+            placeholder={tr("검색 (FR-G-87)")}
             value={query()}
             onInput={(e) => setQuery(e.currentTarget.value)}
           />
@@ -142,11 +143,11 @@ export function TranscriptPane(props: { session: Session }) {
           </span>
           <button
             class="btn mono transcript-save"
-            title="세션 저장 — 스크롤백 전체(디스크 포함, VT 제거 평문)를 .txt로 내보낸다"
+            title={tr("세션 저장 — 스크롤백 전체(디스크 포함, VT 제거 평문)를 .txt로 내보낸다")}
             disabled={saving() || !isTauri()}
             onClick={() => void saveSession()}
           >
-            {saving() ? "저장 중…" : "💾 세션 저장"}
+            {saving() ? tr("저장 중…") : `💾 ${tr("세션 저장")}`}
           </button>
         </span>
       </div>
@@ -210,10 +211,10 @@ export function TranscriptPane(props: { session: Session }) {
         <Show when={isTauri() && !data()}>
           <Show
             when={(fallback()?.length ?? 0) > 0}
-            fallback={<div class="muted">트랜스크립트 없음 — 에이전트 로그도 스크롤백도 아직 없습니다</div>}
+            fallback={<div class="muted">{tr("트랜스크립트 없음 — 에이전트 로그도 스크롤백도 아직 없습니다")}</div>}
           >
             <div class="mono st-waiting" style={{ "font-size": "10px", "margin-bottom": "6px" }}>
-              트랜스크립트를 인식할 수 없어 스크롤백으로 표시합니다 (FR-G-86)
+              {tr("트랜스크립트를 인식할 수 없어 스크롤백으로 표시합니다 (FR-G-86)")}
             </div>
             <For each={shownFallback()}>
               {(line) => (
@@ -227,12 +228,12 @@ export function TranscriptPane(props: { session: Session }) {
 
         {/* 브라우저 dev — 목 턴 */}
         <Show when={!isTauri()}>
-          <Show when={mockTurns().length > 0} fallback={<div class="muted">트랜스크립트 없음 (목)</div>}>
+          <Show when={mockTurns().length > 0} fallback={<div class="muted">{tr("트랜스크립트 없음 (목)")}</div>}>
             <For each={shownMock()}>
               {(t) => (
                 <div class="turn" classList={{ user: t.role === "user" }}>
                   <div class="mono muted" style={{ "font-size": "10px" }}>
-                    {t.role === "user" ? "▸ 사람" : `◂ ${persona()?.name}`} · {t.time}
+                    {t.role === "user" ? tr("▸ 사람") : `◂ ${persona()?.name}`} · {t.time}
                   </div>
                   <div style={{ "font-size": "12px" }}>{t.text}</div>
                 </div>
@@ -244,14 +245,14 @@ export function TranscriptPane(props: { session: Session }) {
       <div class="transcript-input">
         <input
           style={{ flex: 1, "min-width": 0 }}
-          placeholder={`${persona()?.name ?? "세션"}의 PTY로 입력 전달 (V3)`}
+          placeholder={tf("{name}의 PTY로 입력 전달 (V3)", { name: persona()?.name ?? tr("세션") })}
           value={draft()}
           onInput={(e) => setDraft(e.currentTarget.value)}
           onKeyDown={(e) => e.key === "Enter" && send()}
           disabled={props.session.status === "dead"}
         />
         <button class="btn primary" onClick={send} disabled={props.session.status === "dead"}>
-          전송
+          {tr("전송")}
         </button>
       </div>
     </div>

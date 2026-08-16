@@ -14,6 +14,7 @@ import {
   unregisterWorkspace,
 } from "../backend/workspaces";
 import { setView, tick } from "../state";
+import { t, tf } from "../i18n";
 import { Eyebrow, KV } from "../components/ui";
 
 export function WorkspaceConnection() {
@@ -84,7 +85,7 @@ export function WorkspaceConnection() {
       setCloneOpen(false);
       setCloneUrl("");
     } catch (e) {
-      setError(`clone 실패 · ${String(e)}`);
+      setError(`${t("clone 실패")} · ${String(e)}`);
     } finally {
       setCloneBusy(false);
     }
@@ -125,24 +126,24 @@ export function WorkspaceConnection() {
     <div class="screen">
       <div class="screen-head">
         <div>
-          <h1>워크스페이스 연결</h1>
-          <div class="sub">git repo 1개 = 팀 1개 = 탭 1개 · 등록 무제한 · 동시 오픈 10개</div>
+          <h1>{t("워크스페이스 연결")}</h1>
+          <div class="sub">{t("git repo 1개 = 팀 1개 = 탭 1개 · 등록 무제한 · 동시 오픈 10개")}</div>
         </div>
         <div style={{ display: "flex", gap: "8px" }}>
           <button class="btn" onClick={() => setCloneOpen(true)}>
-            원격에서 Clone
+            {t("원격에서 Clone")}
           </button>
           <button class="btn primary" onClick={() => void connectLocal()}>
-            + 로컬 저장소 연결
+            {t("+ 로컬 저장소 연결")}
           </button>
         </div>
       </div>
       <div class="screen-body conn-body">
         <div class="conn-list">
           <div class="conn-list-head">
-            <Eyebrow>등록된 저장소 {isTauri() ? "· workspaces.json" : "· 목"}</Eyebrow>
+            <Eyebrow>{t("등록된 저장소")} {isTauri() ? "· workspaces.json" : t("· 목")}</Eyebrow>
             <span class="mono muted">
-              {workspaces().length} 등록 · {openCount()} 열림
+              {tf("{n} 등록 · {m} 열림", { n: workspaces().length, m: openCount() })}
             </span>
           </div>
           <Show when={error()}>
@@ -170,7 +171,7 @@ export function WorkspaceConnection() {
                       else if (!ws.open) backend.openWorkspace(ws.id);
                     }}
                   >
-                    {ws.pathMissing ? "재지정" : ws.open ? "열림" : "열기"}
+                    {t(ws.pathMissing ? "재지정" : ws.open ? "열림" : "열기")}
                   </span>
                 </div>
                 <div class="mono muted" style={{ "font-size": "11px" }}>
@@ -185,14 +186,14 @@ export function WorkspaceConnection() {
           <Show when={workspaces().length === 0}>
             <div class="card inset" style={{ padding: "16px", "text-align": "center" }}>
               <div class="muted" style={{ "font-size": "12px" }}>
-                등록된 저장소가 없습니다. "+ 로컬 저장소 연결"로 시작하세요.
+                {t('등록된 저장소가 없습니다. "+ 로컬 저장소 연결"로 시작하세요.')}
               </div>
             </div>
           </Show>
         </div>
 
         <div class="conn-detail">
-          <Show when={selected()} fallback={<div class="muted">저장소를 선택하세요</div>}>
+          <Show when={selected()} fallback={<div class="muted">{t("저장소를 선택하세요")}</div>}>
             {(ws) => (
               <>
                 <Eyebrow>SELECTED REPOSITORY</Eyebrow>
@@ -201,16 +202,15 @@ export function WorkspaceConnection() {
                   {ws().path}
                 </div>
                 <div class="card inset" style={{ padding: "4px 10px", margin: "12px 0" }}>
-                  <KV k="브랜치" v={ws().branch ?? "—"} />
-                  <KV k="원격" v={ws().remote ?? "—"} />
-                  <KV k="팀 편성" v={ws().teamFile} />
-                  <KV k="마지막 사용" v={ws().lastUsed ?? "—"} />
+                  <KV k={t("브랜치")} v={ws().branch ?? "—"} />
+                  <KV k={t("원격")} v={ws().remote ?? "—"} />
+                  <KV k={t("팀 편성")} v={ws().teamFile} />
+                  <KV k={t("마지막 사용")} v={ws().lastUsed ?? "—"} />
                 </div>
                 <div class="card inset" style={{ padding: "10px" }}>
-                  <div style={{ "font-weight": 700, "font-size": "12px" }}>파일이 원본입니다</div>
+                  <div style={{ "font-weight": 700, "font-size": "12px" }}>{t("파일이 원본입니다")}</div>
                   <div class="muted" style={{ "font-size": "11px", "margin-top": "4px" }}>
-                    .eqmux/team.json · team.md를 로드하고 역할 파일을 실측합니다. DB는 캐시이며 불일치 시
-                    파일이 이깁니다.
+                    {t(".eqmux/team.json · team.md를 로드하고 역할 파일을 실측합니다. DB는 캐시이며 불일치 시 파일이 이깁니다.")}
                   </div>
                 </div>
                 <button
@@ -219,15 +219,15 @@ export function WorkspaceConnection() {
                   disabled={ws().pathMissing}
                   onClick={() => open(ws().id)}
                 >
-                  {ws().pathMissing ? "경로 재지정 필요" : `${ws().name} 열기`}
+                  {ws().pathMissing ? t("경로 재지정 필요") : tf("{name} 열기", { name: ws().name })}
                 </button>
                 <button
                   class="btn ghost"
                   style={{ "margin-top": "8px", width: "100%", "justify-content": "center" }}
-                  title="레지스트리에서만 제거 — 디스크의 저장소는 그대로 (FR-E-09)"
+                  title={t("레지스트리에서만 제거 — 디스크의 저장소는 그대로 (FR-E-09)")}
                   onClick={() => void unregister(ws().id)}
                 >
-                  등록 해제 (디스크는 그대로)
+                  {t("등록 해제 (디스크는 그대로)")}
                 </button>
               </>
             )}
@@ -239,19 +239,19 @@ export function WorkspaceConnection() {
       <Show when={initTarget()}>
         <div class="overlay" onClick={() => setInitTarget(undefined)}>
           <div class="dialog" style={{ width: "440px", padding: "16px 18px" }} onClick={(e) => e.stopPropagation()}>
-            <div style={{ "font-weight": 800, "font-size": "14px" }}>git 저장소가 아닙니다</div>
+            <div style={{ "font-weight": 800, "font-size": "14px" }}>{t("git 저장소가 아닙니다")}</div>
             <div class="mono muted" style={{ "font-size": "11px", margin: "6px 0 10px" }}>
               {initTarget()}
             </div>
             <div class="card inset" style={{ padding: "8px 10px", "font-size": "11px", "line-height": 1.6 }}>
-              이 폴더에서 `git init`을 실행해 저장소로 만든 뒤 등록할까요? 기존 파일은 변경되지 않습니다.
+              {t("이 폴더에서 `git init`을 실행해 저장소로 만든 뒤 등록할까요? 기존 파일은 변경되지 않습니다.")}
             </div>
             <div style={{ display: "flex", gap: "8px", "justify-content": "flex-end", "margin-top": "14px" }}>
               <button class="btn" onClick={() => setInitTarget(undefined)}>
-                취소
+                {t("취소")}
               </button>
               <button class="btn primary" onClick={() => void confirmInit()}>
-                git init 후 등록
+                {t("git init 후 등록")}
               </button>
             </div>
           </div>
@@ -262,9 +262,9 @@ export function WorkspaceConnection() {
       <Show when={cloneOpen()}>
         <div class="overlay" onClick={() => !cloneBusy() && setCloneOpen(false)}>
           <div class="dialog" style={{ width: "480px", padding: "16px 18px" }} onClick={(e) => e.stopPropagation()}>
-            <div style={{ "font-weight": 800, "font-size": "14px" }}>원격에서 Clone</div>
+            <div style={{ "font-weight": 800, "font-size": "14px" }}>{t("원격에서 Clone")}</div>
             <div class="muted" style={{ "font-size": "11px", margin: "4px 0 10px" }}>
-              URL 입력 → 부모 폴더 선택 → clone 후 자동 등록
+              {t("URL 입력 → 부모 폴더 선택 → clone 후 자동 등록")}
             </div>
             <input
               class="mono"
@@ -277,10 +277,10 @@ export function WorkspaceConnection() {
             />
             <div style={{ display: "flex", gap: "8px", "justify-content": "flex-end", "margin-top": "14px" }}>
               <button class="btn" disabled={cloneBusy()} onClick={() => setCloneOpen(false)}>
-                취소
+                {t("취소")}
               </button>
               <button class="btn primary" disabled={cloneBusy() || !cloneUrl().trim()} onClick={() => void runClone()}>
-                {cloneBusy() ? "clone 중…" : "폴더 선택 후 Clone"}
+                {t(cloneBusy() ? "clone 중…" : "폴더 선택 후 Clone")}
               </button>
             </div>
           </div>

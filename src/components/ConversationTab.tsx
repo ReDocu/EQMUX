@@ -11,6 +11,7 @@ import {
   sendConversation,
 } from "../backend/conversation";
 import { backend } from "../backend/mock";
+import { t, tf } from "../i18n";
 import { scopeWorkspace, tick } from "../state";
 import { Eyebrow } from "./ui";
 import { sessionDisplayName } from "../types";
@@ -40,7 +41,7 @@ export function ConversationTab() {
   // 기본 터미널(역할 없음)도 대화 참여자다 — 수신은 셸 프롬프트의 주석 라인 (conversation.ts)
   const wsSessions = () => backend.listSessions().filter((s) => s.workspaceId === ws()?.id);
   const nameOf = (s: Session) =>
-    sessionDisplayName(s, s.personaId ? personaName(s.personaId) : "기본 터미널");
+    sessionDisplayName(s, s.personaId ? personaName(s.personaId) : t("기본 터미널"));
   const sessionName = (id: string) => {
     const s = backend.listSessions().find((x) => x.id === id);
     return s ? nameOf(s) : id;
@@ -86,7 +87,7 @@ export function ConversationTab() {
     if (m && m[1] !== "all") {
       const t = target(m[1]);
       if (!t) {
-        setError(`수신자 없음: @${m[1]} — 이 워크스페이스의 페르소나·세션 이름으로`);
+        setError(tf("수신자 없음: @{name} — 이 워크스페이스의 페르소나·세션 이름으로", { name: m[1] }));
         return;
       }
       to = t.id;
@@ -102,29 +103,29 @@ export function ConversationTab() {
     <div class="conv-tab">
       <div class="conv-head">
         <Eyebrow>
-          팀 대화{ws() ? ` · ${ws()!.name}` : ""} · {unread()} 미확인
+          {t("팀 대화")}{ws() ? ` · ${ws()!.name}` : ""} · {unread()} {t("미확인")}
         </Eyebrow>
         <div style={{ display: "flex", gap: "4px" }}>
           <For each={["전체", "미확인"] as const}>
             {(f) => (
               <button class="btn ghost" classList={{ primary: filter() === f }} onClick={() => setFilter(f)}>
-                {f}
+                {t(f)}
               </button>
             )}
           </For>
           <button class="btn ghost" onClick={() => markConversationRead(ws()?.id)}>
-            모두 읽음
+            {t("모두 읽음")}
           </button>
         </div>
       </div>
       <Show when={waitingInbox().length > 0}>
         <div class="card inset" style={{ padding: "6px 10px", "font-size": "11px" }}>
-          <span class="muted">인박스 대기 (M3 — 턴 종료 시 전달): </span>
+          <span class="muted">{t("인박스 대기 (M3 — 턴 종료 시 전달)")}: </span>
           <For each={waitingInbox()}>
             {(p, i) => (
               <span class="mono">
                 {i() > 0 ? " · " : ""}
-                {sessionName(p.sessionId)} {p.count}건
+                {sessionName(p.sessionId)} {tf("{n}건", { n: p.count })}
               </span>
             )}
           </For>
@@ -135,9 +136,9 @@ export function ConversationTab() {
           when={shown().length > 0}
           fallback={
             <div class="muted" style={{ padding: "16px", "font-size": "12px", "text-align": "center" }}>
-              아직 메시지가 없습니다 — 아래에서 타입을 골라 팀에 보내보세요.
+              {t("아직 메시지가 없습니다 — 아래에서 타입을 골라 팀에 보내보세요.")}
               <div class="mono" style={{ "font-size": "10px", "margin-top": "6px" }}>
-                idle 세션에는 즉시, 작업 중이면 턴 종료 시 전달됩니다 (M3)
+                {t("idle 세션에는 즉시, 작업 중이면 턴 종료 시 전달됩니다 (M3)")}
               </div>
             </div>
           }
@@ -147,7 +148,7 @@ export function ConversationTab() {
               <div class="card conv-msg" classList={{ unread: m.unread }}>
                 <div style={{ display: "flex", "align-items": "center", gap: "6px" }}>
                   <span style={{ "font-weight": 700, "font-size": "12px" }}>
-                    {m.from === "나" ? "나" : sessionName(m.from)} → {displayTo(m.to)}
+                    {m.from === "나" ? t("나") : sessionName(m.from)} → {displayTo(m.to)}
                   </span>
                   <span class={`badge ${TYPE_COLOR[m.type]}`}>{m.type.toUpperCase()}</span>
                   <span class="mono muted" style={{ "margin-left": "auto", "font-size": "10px" }}>
@@ -177,7 +178,7 @@ export function ConversationTab() {
         <div style={{ display: "flex", gap: "6px" }}>
           <input
             style={{ flex: 1, "min-width": 0 }}
-            placeholder={ws() ? "@카이 질문… (@ 없으면 @all)" : "워크스페이스 탭을 먼저 여세요"}
+            placeholder={t(ws() ? "@카이 질문… (@ 없으면 @all)" : "워크스페이스 탭을 먼저 여세요")}
             disabled={!ws()}
             maxLength={MSG_MAX_BODY}
             value={draft()}
@@ -185,7 +186,7 @@ export function ConversationTab() {
             onKeyDown={(e) => e.key === "Enter" && void send()}
           />
           <button class="btn primary" disabled={!ws()} onClick={() => void send()}>
-            보내기
+            {t("보내기")}
           </button>
         </div>
         <Show when={error()}>

@@ -1,6 +1,7 @@
 // git 패널 브리지 (PRD H) — 활성 워크스페이스의 저장소 개요를 읽기 전용으로 실측한다.
 // 쓰기 작업(pull·push·commit)은 제공하지 않는다 — 실행은 터미널 페인에서 사람이 한다 (G7과 같은 원칙).
 import { invoke } from "@tauri-apps/api/core";
+import { t } from "../i18n";
 import { isTauri } from "./pty";
 
 export interface GitCommitInfo {
@@ -96,7 +97,7 @@ export async function diffChangedFiles(wsPath: string): Promise<ChangedFile[] | 
 
 /** 실패 사유(바이너리 등)를 문자열로 돌려준다 */
 export async function diffFile(wsPath: string, path: string): Promise<FileDiff | string> {
-  if (!isTauri()) return "브라우저 dev — 실측 없음";
+  if (!isTauri()) return t("브라우저 dev — 실측 없음");
   return invoke<FileDiff>("diff_file", { wsPath, path }).catch((e) => String(e));
 }
 
@@ -109,6 +110,6 @@ export async function commitChangedFiles(wsPath: string, hash: string): Promise<
 
 /** 실패 사유(바이너리 등)를 문자열로 돌려준다 — diffFile과 같은 계약 */
 export async function commitFileDiff(wsPath: string, hash: string, path: string): Promise<FileDiff | string> {
-  if (!isTauri()) return "브라우저 dev — 실측 없음";
+  if (!isTauri()) return t("브라우저 dev — 실측 없음");
   return invoke<FileDiff>("commit_file_diff", { wsPath, hash, path }).catch((e) => String(e));
 }

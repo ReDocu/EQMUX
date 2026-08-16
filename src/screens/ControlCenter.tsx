@@ -29,10 +29,12 @@ import { autoAssignDefault, refreshMissions } from "../backend/missions";
 import { clipWriteText, echoPty, isTauri, killPty, storeUsageReal } from "../backend/pty";
 import type { StoreUsageReal } from "../backend/pty";
 import { removeRoleFile } from "../backend/roles";
+import { maxSlots } from "../backend/settings";
 import { ensureWorktree } from "../backend/team";
 import { gridTemplateStyle, PaneDividers } from "../components/PaneDividers";
 import { SidePanel } from "../components/SidePanel";
 import { disposeSessionTerminal, respawnSessionShell, sessionTermSize, syncSessionTerminal, TerminalPane } from "../components/TerminalPane";
+import { t } from "../i18n";
 import { SessionDetailPanel } from "./SessionDetailPanel";
 import { TranscriptPane } from "./TranscriptPane";
 import type { Session, Workspace } from "../types";
@@ -135,8 +137,8 @@ export function ControlCenter(props: { workspace: Workspace }) {
   });
 
   // 역할 없는 셸 세션(기본 터미널)은 페르소나·직무 대신 고정 라벨을 쓴다
-  const personaName = (id: string) => persona(id)?.name ?? "기본 터미널";
-  const jobName = (id: string) => job(id)?.name ?? "셸";
+  const personaName = (id: string) => persona(id)?.name ?? t("기본 터미널");
+  const jobName = (id: string) => job(id)?.name ?? t("셸");
 
   // ── 워크트리 레일 (orca식) — 임무 아래에 작업 트리별 현황을 상주시킨다.
   // 행 = 브랜치 + 귀속 세션(cwd 일치, 상태 점 포함) — orca의 worktree 카드 + agents 목록에 대응.
@@ -192,7 +194,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
     const attach = wtMode() === "attach";
     if (wtBusy() || (attach ? !wtAttachBranch() : !wtName().trim())) return;
     if (!isTauri()) {
-      setWtErr("브라우저 dev — 실제 생성 없음");
+      setWtErr(t("브라우저 dev — 실제 생성 없음"));
       return;
     }
     setWtErr(undefined);
@@ -229,7 +231,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
       await loadWorktrees();
     } catch (err) {
       // 실패는 그 페인에 정직하게 표시 (FR-D-08) — PTY 입력을 거치지 않는 표시 전용 에코
-      echoPty(s.id, `\r\n\x1b[31m브랜치 부여 실패 — ${String(err)}\x1b[0m\r\n`);
+      echoPty(s.id, `\r\n\x1b[31m${t("브랜치 부여 실패")} — ${String(err)}\x1b[0m\r\n`);
     }
   };
   // 기본 터미널 전용 메뉴 그룹 — 역할 세션 cwd는 역할 파일·transcript와 묶여 있어 옮기지 않는다 (FR-E-63)
@@ -241,15 +243,15 @@ export function ControlCenter(props: { workspace: Workspace }) {
     return [
       [
         {
-          label: "브랜치 부여",
+          label: t("브랜치 부여"),
           sub:
             local.length === 0
-              ? [{ label: isTauri() ? "로컬 브랜치 없음" : "브라우저 dev — 실측 없음", note: true }]
+              ? [{ label: t(isTauri() ? "로컬 브랜치 없음" : "브라우저 dev — 실측 없음"), note: true }]
               : local.map((b) => {
                   const wt = byBranch.get(b.name);
                   const cur = !!wt && normPath(wt.path) === cwd;
                   return {
-                    label: wt ? `⎇ ${b.name}` : `⎇ ${b.name} · 새 워크트리`,
+                    label: wt ? `⎇ ${b.name}` : `⎇ ${b.name} · ${t("새 워크트리")}`,
                     checked: cur,
                     disabled: cur,
                     action: () => void assignBranch(s, b.name),
@@ -328,26 +330,26 @@ export function ControlCenter(props: { workspace: Workspace }) {
   };
   // 레일 우클릭·페인 헤더 메뉴가 공유하는 항목 — 한 곳만 고치면 두 메뉴가 같이 맞는다
   const detailItem = (s: Session) => ({
-    label: "세션 상세",
+    label: t("세션 상세"),
     action: () => {
       setSelectedSession(s.id);
       setDetailOpen(true);
     },
   });
   const transcriptItem = (s: Session) => ({
-    label: "트랜스크립트 열기",
+    label: t("트랜스크립트 열기"),
     action: () => {
       setSelectedSession(s.id);
       setCenterTab("transcript");
     },
   });
   const removeGroup = (s: Session): MenuGroup => [
-    { label: s.personaId ? "역할 세션 제거…" : "터미널 제거", danger: true, action: () => removeTerminal(s) },
+    { label: t(s.personaId ? "역할 세션 제거…" : "터미널 제거"), danger: true, action: () => removeTerminal(s) },
   ];
   const sessMenuGroups = (s: Session) => [
     [
       {
-        label: "페인으로 점프",
+        label: t("페인으로 점프"),
         action: () => {
           setSelectedSession(s.id);
           backend.markSeen(s.id);
@@ -359,12 +361,12 @@ export function ControlCenter(props: { workspace: Workspace }) {
     ],
     [
       {
-        label: "재개",
+        label: t("재개"),
         disabled: !s.resumable || (s.status !== "dead" && !s.restored),
         action: () => void resumeInline(s),
       },
       {
-        label: "중지",
+        label: t("중지"),
         disabled: s.status === "dead",
         action: () => {
           if (isTauri()) killPty(s.id);
@@ -405,7 +407,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
   // 트랙 비율은 인라인 fr 템플릿(M30 분할선 드래그) — 줌은 .zoomed !important가 이긴다.
   const paneGrid = () => (
     <div
-      class={`terminal-grid layout-${paneLayout()}`}
+      class={`terminal-grid layout-${paneLayout()} slots-${maxSlots()}`}
       classList={{ zoomed: !!zoomed() }}
       style={zoomed() ? undefined : gridTemplateStyle(paneLayout())}
     >
@@ -419,7 +421,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
             <button
               class="terminal-head mono"
               style={{ width: "100%", "text-align": "left", cursor: "zoom-in" }}
-              title="클릭하면 줌 토글 (B1) · 우클릭 세션 메뉴"
+              title={t("클릭하면 줌 토글 (B1) · 우클릭 세션 메뉴")}
               onClick={(e) => {
                 e.stopPropagation();
                 applyZoom(zoomed() === s.id ? undefined : s.id);
@@ -431,7 +433,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
               <span style={{ display: "inline-flex", "align-items": "center", gap: "8px" }}>
                 {/* 승인 대기 문맥 (U5) — 도착 즉시 어떤 도구 요청인지 헤더에서 보인다 */}
                 <Show when={s.status === "waiting" && s.waitingFor}>
-                  <span class="badge amber pane-wait-badge" title="승인 대기 중인 도구 요청 — y/n은 이 페인에 입력">
+                  <span class="badge amber pane-wait-badge" title={t("승인 대기 중인 도구 요청 — y/n은 이 페인에 입력")}>
                     {s.waitingFor}
                   </span>
                 </Show>
@@ -452,15 +454,15 @@ export function ControlCenter(props: { workspace: Workspace }) {
                 // 보기 — 배치·줌·전체 화면 (페인 헤더에서 버튼을 내려놓는 자리, 시안 §06)
                 [
                   {
-                    label: "배치",
+                    label: t("배치"),
                     sub: PANE_LAYOUTS.map((l) => ({
-                      label: l.name,
+                      label: t(l.name),
                       checked: paneLayout() === l.key,
                       action: () => setPaneLayout(l.key),
                     })),
                   },
-                  { label: zoomed() === s.id ? "줌 해제" : "줌", action: () => applyZoom(zoomed() === s.id ? undefined : s.id) },
-                  { label: "전체 화면", kbd: "ESC 종료", action: () => setTerminalFull(true) },
+                  { label: t(zoomed() === s.id ? "줌 해제" : "줌"), action: () => applyZoom(zoomed() === s.id ? undefined : s.id) },
+                  { label: t("전체 화면"), kbd: t("ESC 종료"), action: () => setTerminalFull(true) },
                 ],
                 // 이동 — 상세 팝업·트랜스크립트 (레일 메뉴와 공유)
                 [detailItem(s), transcriptItem(s)],
@@ -474,22 +476,22 @@ export function ControlCenter(props: { workspace: Workspace }) {
             <Show when={s.status === "dead" && s.resumable}>
               <button
                 class="btn pane-resume mono"
-                title="이 자리에서 재개 — --resume · 대화 복원 (FR-D-21)"
+                title={t("이 자리에서 재개 — --resume · 대화 복원 (FR-D-21)")}
                 onClick={(e) => {
                   e.stopPropagation();
                   void resumeInline(s);
                 }}
               >
-                ▶ 재개 — 대화 복원
+                ▶ {t("재개 — 대화 복원")}
               </button>
             </Show>
           </div>
         )}
       </For>
-      <For each={Array.from({ length: zoomed() ? 0 : Math.max(0, 4 - sessions().length) })}>
+      <For each={Array.from({ length: zoomed() ? 0 : Math.max(0, maxSlots() - sessions().length) })}>
         {() => (
-          <button class="terminal-pane pane-empty pane-add mono" title="빈 슬롯에 세션 추가" onClick={openAdd}>
-            + 세션 추가
+          <button class="terminal-pane pane-empty pane-add mono" title={t("빈 슬롯에 세션 추가")} onClick={openAdd}>
+            {t("+ 세션 추가")}
           </button>
         )}
       </For>
@@ -510,7 +512,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
       <span>
         <span style={{ color: "var(--eq-green)" }}>◉</span> PTY {sessions().filter((x) => x.status !== "dead").length}
       </span>
-      <span>▦ {PANE_LAYOUTS.find((l) => l.key === paneLayout())?.name}</span>
+      <span>▦ {t(PANE_LAYOUTS.find((l) => l.key === paneLayout())?.name ?? "")}</span>
       <span>OUTPUT {(sessions().reduce((a, x) => a + x.scrollbackLines, 0) / 1000).toFixed(1)}K</span>
       <span>
         {realUsage()
@@ -520,25 +522,25 @@ export function ControlCenter(props: { workspace: Workspace }) {
       {/* 활성 세션 메모리 (FR-C-09 · C11) — Job Object 트리 실측, 10초 주기. dead는 마지막 샘플이 남으므로 숨긴다 */}
       <Show when={memSession()}>
         {(s) => (
-          <span title={`활성 세션 프로세스 트리 메모리 · peak ${s().memoryPeakMb ?? "—"} MB`}>
+          <span title={`${t("활성 세션 프로세스 트리 메모리")} · peak ${s().memoryPeakMb ?? "—"} MB`}>
             MEM {s().memoryMb} MB
           </span>
         )}
       </Show>
       <button
         class="sb-ev"
-        title="SessionService 이벤트 · 저장 상태"
+        title={t("SessionService 이벤트 · 저장 상태")}
         onMouseDown={(e) => e.stopPropagation()}
         onClick={() => setEvOpen(!evOpen())}
       >
-        이벤트 {evOpen() ? "▾" : "▸"}
+        {t("이벤트")} {evOpen() ? "▾" : "▸"}
       </button>
       <span class="muted" style={{ "margin-left": "auto" }}>
         {selected()?.cwd ?? props.workspace.path}
       </span>
       <Show when={evOpen()}>
         <div class="card sb-pop" onMouseDown={(e) => e.stopPropagation()}>
-          <Eyebrow>SessionService 이벤트 {isTauri() ? "(실측)" : "(목)"}</Eyebrow>
+          <Eyebrow>SessionService {t("이벤트")} {t(isTauri() ? "(실측)" : "(목)")}</Eyebrow>
           <For each={stripEvents()}>
             {(e) => (
               <div class="mono muted" style={{ "font-size": "11px", "line-height": 1.7 }}>
@@ -547,9 +549,9 @@ export function ControlCenter(props: { workspace: Workspace }) {
             )}
           </For>
           <div class="sb-pop-store mono muted">
-            저장 {realUsage() ? "(실측)" : "(목)"} ·{" "}
+            {t(realUsage() ? "저장 (실측)" : "저장 (목)")} ·{" "}
             {realUsage()
-              ? `workspaces/${props.workspace.id}/session.db · 100ms 배치 · 30일/10만줄 보존`
+              ? `workspaces/${props.workspace.id}/session.db · ${t("100ms 배치 · 30일/10만줄 보존")}`
               : `${usage().dbFile} · ${usage().dbSizeMb} MB · ${usage().dbPercent}%`}
           </div>
         </div>
@@ -565,25 +567,25 @@ export function ControlCenter(props: { workspace: Workspace }) {
         <div class="cc-title" title={props.workspace.path}>
           <h1>{props.workspace.name}</h1>
           <span class="mono muted">
-            {props.workspace.branch ?? "—"} · {sessions().length}/4
+            {props.workspace.branch ?? "—"} · {sessions().length}/{maxSlots()}
           </span>
         </div>
         <div class="cc-seg">
           <button classList={{ on: centerTab() === "terminal" }} onClick={() => setCenterTab("terminal")}>
-            터미널
+            {t("터미널")}
           </button>
           <button
             classList={{ on: centerTab() === "transcript" }}
             disabled={!selected()}
             onClick={() => setCenterTab("transcript")}
           >
-            트랜스크립트
+            {t("트랜스크립트")}
           </button>
         </div>
         <div style={{ flex: 1 }} />
         {/* 셸 선택 — 새로 추가하는 터미널부터 적용된다 */}
         <div class="shell-picker">
-          <button class="btn ghost mono" title="새 터미널 셸 선택" onClick={() => setShellMenuOpen(!shellMenuOpen())}>
+          <button class="btn ghost mono" title={t("새 터미널 셸 선택")} onClick={() => setShellMenuOpen(!shellMenuOpen())}>
             &gt;_ {defaultShell().name} ▾
           </button>
           <Show when={shellMenuOpen()}>
@@ -605,33 +607,33 @@ export function ControlCenter(props: { workspace: Workspace }) {
                   </button>
                 )}
               </For>
-              <div class="muted shell-menu-note">새로 추가하는 터미널부터 적용됩니다</div>
+              <div class="muted shell-menu-note">{t("새로 추가하는 터미널부터 적용됩니다")}</div>
             </div>
           </Show>
         </div>
         <Show when={zoomed()}>
           <button class="btn ghost" onClick={() => applyZoom(undefined)}>
-            ▦ 그리드로 복귀
+            ▦ {t("그리드로 복귀")}
           </button>
         </Show>
         <Show when={!zoomed()}>
-          <button class="btn ghost mono" title="페인 배치 (srpYm)" onClick={() => setLayoutPickerOpen(true)}>
-            ▦ {PANE_LAYOUTS.find((l) => l.key === paneLayout())?.name}
+          <button class="btn ghost mono" title={t("페인 배치 (srpYm)")} onClick={() => setLayoutPickerOpen(true)}>
+            ▦ {t(PANE_LAYOUTS.find((l) => l.key === paneLayout())?.name ?? "")}
           </button>
         </Show>
-        <button class="btn ghost" title="터미널 전체 화면 — ESC로 종료" onClick={() => setTerminalFull(true)}>
+        <button class="btn ghost" title={t("터미널 전체 화면 — ESC로 종료")} onClick={() => setTerminalFull(true)}>
           ⛶
         </button>
         <button
           class="btn"
-          title="임무 · 캐스팅 · 팀 편성"
+          title={t("임무 · 캐스팅 · 팀 편성")}
           onMouseDown={(e) => e.stopPropagation()}
           onClick={(e) => {
             const r = e.currentTarget.getBoundingClientRect();
             setTeamMenu(teamMenu() ? undefined : { x: r.right - 232, y: r.bottom + 4 });
           }}
         >
-          팀 ▾
+          {t("팀")} ▾
         </button>
       </div>
       <Show when={teamMenu()}>
@@ -642,9 +644,9 @@ export function ControlCenter(props: { workspace: Workspace }) {
             onClose={() => setTeamMenu(undefined)}
             groups={[
               [
-                { label: "임무 배정…", action: () => setView({ kind: "missions", wsId: props.workspace.id }) },
-                { label: "팀 캐스팅…", action: () => setView({ kind: "casting", wsId: props.workspace.id }) },
-                { label: "팀 편성…", action: () => setView({ kind: "composition", wsId: props.workspace.id }) },
+                { label: t("임무 배정…"), action: () => setView({ kind: "missions", wsId: props.workspace.id }) },
+                { label: t("팀 캐스팅…"), action: () => setView({ kind: "casting", wsId: props.workspace.id }) },
+                { label: t("팀 편성…"), action: () => setView({ kind: "composition", wsId: props.workspace.id }) },
               ],
             ]}
           />
@@ -670,19 +672,19 @@ export function ControlCenter(props: { workspace: Workspace }) {
           <ContextMenu
             x={m().x}
             y={m().y}
-            header={`⎇ ${wtLabel(m().wt)} · ${m().wt.isMain ? "MAIN" : m().wt.isSession ? "세션" : "외부"}`}
+            header={`⎇ ${wtLabel(m().wt)} · ${m().wt.isMain ? "MAIN" : t(m().wt.isSession ? "세션" : "외부")}`}
             onClose={() => setWtMenu(undefined)}
             groups={[
               [
                 {
-                  label: "이 워크트리에서 셸 열기",
+                  label: t("이 워크트리에서 셸 열기"),
                   disabled: m().wt.isMain,
                   action: () => openWtShell(m().wt),
                 },
                 {
                   // 브랜치 부여 역방향 진입점 — 선택 중인 기본 터미널을 이 트리의 브랜치로 옮긴다.
                   // 역할 세션·detached 트리·이미 이 트리인 경우는 비활성 (터미널 메뉴와 같은 계약)
-                  label: `선택 터미널에 브랜치 부여${selected() && !selected()!.personaId ? ` — ${sessionDisplayName(selected()!, personaName(selected()!.personaId))}` : ""}`,
+                  label: `${t("선택 터미널에 브랜치 부여")}${selected() && !selected()!.personaId ? ` — ${sessionDisplayName(selected()!, personaName(selected()!.personaId))}` : ""}`,
                   disabled:
                     !m().wt.branch ||
                     !selected() ||
@@ -690,9 +692,9 @@ export function ControlCenter(props: { workspace: Workspace }) {
                     normPath(selected()!.cwd) === normPath(m().wt.path),
                   action: () => void assignBranch(selected()!, m().wt.branch!),
                 },
-                { label: "경로 복사", action: () => clipWriteText(m().wt.path) },
+                { label: t("경로 복사"), action: () => clipWriteText(m().wt.path) },
               ],
-              [{ label: "삭제는 두지 않는다 — git worktree remove (FR-E-64)", note: true }],
+              [{ label: t("삭제는 두지 않는다 — git worktree remove (FR-E-64)"), note: true }],
             ]}
           />
         )}
@@ -737,7 +739,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
                 </span>
                 <button
                   class="rail-info mono"
-                  title="세션 상세"
+                  title={t("세션 상세")}
                   onClick={(e) => {
                     e.stopPropagation();
                     setSelectedSession(s.id);
@@ -748,29 +750,29 @@ export function ControlCenter(props: { workspace: Workspace }) {
                 </button>
                 <span class={`sdot ${s.status}`} />
                 <Show when={s.unseen}>
-                  <span class="unread-dot rail-unread" title="미확인" />
+                  <span class="unread-dot rail-unread" title={t("미확인")} />
                 </Show>
               </div>
             )}
           </For>
-          <Show when={sessions().length < 4}>
-            <button class="rail-av add mono" title="빈 슬롯에 세션 추가 — 기본 터미널 또는 역할 세션" onClick={openAdd}>
-              + 세션 추가
+          <Show when={sessions().length < maxSlots()}>
+            <button class="rail-av add mono" title={t("빈 슬롯에 세션 추가 — 기본 터미널 또는 역할 세션")} onClick={openAdd}>
+              {t("+ 세션 추가")}
             </button>
           </Show>
           <div class="rail-sep" />
-          <button class="rail-ms" title="임무 관리" onClick={() => setView({ kind: "missions", wsId: props.workspace.id })}>
-            <span class="eyebrow">임무</span>
+          <button class="rail-ms" title={t("임무 관리")} onClick={() => setView({ kind: "missions", wsId: props.workspace.id })}>
+            <span class="eyebrow">{t("임무")}</span>
             <b class="mono">{missions().length}</b>
           </button>
           <div class="rail-sep" />
           {/* 워크트리 (orca식) — 작업 트리별 브랜치·귀속 세션 현황. 생성은 팝오버, 삭제는 없다 (FR-E-64) */}
           <div class="rail-wt-head">
-            <span class="eyebrow">워크트리</span>
+            <span class="eyebrow">{t("워크트리")}</span>
             <b class="mono">{wtRows().length}</b>
             <button
               class="rail-wt-add mono"
-              title="워크트리 생성 — 새 브랜치(eqmux/<이름>) 또는 기존 브랜치 연결"
+              title={t("워크트리 생성 — 새 브랜치(eqmux/<이름>) 또는 기존 브랜치 연결")}
               onClick={() => {
                 setWtErr(undefined);
                 setWtFormOpen(!wtFormOpen());
@@ -783,7 +785,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
                 {/* 모드 — 새 브랜치를 만들거나, 이미 있는 브랜치를 트리에 연결하거나 (레일 §워크트리) */}
                 <div class="wt-mode-toggle">
                   <button classList={{ on: wtMode() === "new" }} onClick={() => setWtMode("new")}>
-                    새 브랜치
+                    {t("새 브랜치")}
                   </button>
                   <button
                     classList={{ on: wtMode() === "attach" }}
@@ -792,7 +794,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
                       if (!wtAttachBranch()) setWtAttachBranch(attachable()[0]?.name ?? "");
                     }}
                   >
-                    기존 브랜치
+                    {t("기존 브랜치")}
                   </button>
                 </div>
                 <Show
@@ -801,17 +803,17 @@ export function ControlCenter(props: { workspace: Workspace }) {
                     <>
                       <select
                         style={{ "font-size": "11px" }}
-                        title="이 브랜치를 체크아웃하는 워크트리를 만든다 — 새 브랜치 없음"
+                        title={t("이 브랜치를 체크아웃하는 워크트리를 만든다 — 새 브랜치 없음")}
                         value={wtAttachBranch()}
                         onChange={(e) => setWtAttachBranch(e.currentTarget.value)}
                       >
                         <Show when={attachable().length === 0}>
-                          <option value="">연결 가능한 로컬 브랜치 없음</option>
+                          <option value="">{t("연결 가능한 로컬 브랜치 없음")}</option>
                         </Show>
                         <For each={attachable()}>{(b) => <option value={b.name}>{b.name}</option>}</For>
                       </select>
                       <div class="mono muted" style={{ "font-size": "10px" }}>
-                        체크아웃 중인 브랜치는 목록에서 빠집니다 — 같은 브랜치는 한 트리에만 (git)
+                        {t("체크아웃 중인 브랜치는 목록에서 빠집니다 — 같은 브랜치는 한 트리에만 (git)")}
                       </div>
                     </>
                   }
@@ -819,7 +821,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
                   <input
                     class="mono"
                     style={{ "font-size": "11px", padding: "2px 6px" }}
-                    placeholder="이름 → .eqmux/worktrees/<이름>"
+                    placeholder={t("이름 → .eqmux/worktrees/<이름>")}
                     value={wtName()}
                     onInput={(e) => setWtName(e.currentTarget.value)}
                     onKeyDown={(e) => {
@@ -829,17 +831,17 @@ export function ControlCenter(props: { workspace: Workspace }) {
                   />
                   <select
                     style={{ "font-size": "11px" }}
-                    title="분기 기준 ref (start-from)"
+                    title={t("분기 기준 ref (start-from)")}
                     value={wtBase()}
                     onChange={(e) => setWtBase(e.currentTarget.value)}
                   >
-                    <option value="">HEAD (현재)</option>
+                    <option value="">{t("HEAD (현재)")}</option>
                     <For each={wtBranches()}>{(b) => <option value={b.name}>{b.name}</option>}</For>
                   </select>
                 </Show>
                 <label class="mono muted" style={{ "font-size": "10px", display: "flex", gap: "5px", "align-items": "center", cursor: "pointer" }}>
                   <input type="checkbox" checked={wtOpenShell()} onChange={(e) => setWtOpenShell(e.currentTarget.checked)} />
-                  생성 후 이 트리에서 셸 열기
+                  {t("생성 후 이 트리에서 셸 열기")}
                 </label>
                 <button
                   class="btn primary"
@@ -847,7 +849,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
                   disabled={wtBusy() || (wtMode() === "attach" ? !wtAttachBranch() : !wtName().trim())}
                   onClick={() => void createWt()}
                 >
-                  {wtBusy() ? (wtMode() === "attach" ? "연결 중…" : "생성 중…") : wtMode() === "attach" ? "연결" : "생성"}
+                  {t(wtBusy() ? (wtMode() === "attach" ? "연결 중…" : "생성 중…") : wtMode() === "attach" ? "연결" : "생성")}
                 </button>
                 <Show when={wtErr()}>
                   <div class="mono st-dead" style={{ "font-size": "10px" }}>
@@ -874,17 +876,17 @@ export function ControlCenter(props: { workspace: Workspace }) {
                     <span
                       class="rail-wt-tag mono"
                       classList={{ main: wt.isMain }}
-                      title={wt.isMain ? "메인 작업 트리" : wt.isSession ? "앱이 만든 워크트리 (.eqmux/worktrees/)" : "외부에서 만든 워크트리 — 순수 git 호환"}
+                      title={t(wt.isMain ? "메인 작업 트리" : wt.isSession ? "앱이 만든 워크트리 (.eqmux/worktrees/)" : "외부에서 만든 워크트리 — 순수 git 호환")}
                     >
-                      {wt.isMain ? "MAIN" : wt.isSession ? "세션" : "외부"}
+                      {wt.isMain ? "MAIN" : t(wt.isSession ? "세션" : "외부")}
                     </span>
                     <Show when={!wt.isMain}>
                       <button
                         class="rail-wt-open mono"
-                        title="이 워크트리에서 기본 터미널 열기 — 역할 부여는 세션 상세에서"
+                        title={t("이 워크트리에서 기본 터미널 열기 — 역할 부여는 세션 상세에서")}
                         onClick={() => openWtShell(wt)}
                       >
-                        + 셸
+                        + {t("셸")}
                       </button>
                     </Show>
                   </div>
@@ -918,7 +920,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
               )}
             </For>
             <Show when={wtRows().length === 0}>
-              <div class="rail-wt-empty mono muted">{isTauri() ? "실측 대기 — git 저장소가 아니면 비어 있습니다" : "워크트리 없음"}</div>
+              <div class="rail-wt-empty mono muted">{t(isTauri() ? "실측 대기 — git 저장소가 아니면 비어 있습니다" : "워크트리 없음")}</div>
             </Show>
           </div>
         </div>
@@ -944,7 +946,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
         {(s) => (
           <div class="overlay detail-overlay" onClick={() => setDetailOpen(false)}>
             <div class="dialog detail-dialog" onClick={(e) => e.stopPropagation()}>
-              <button class="detail-dialog-x" title="닫기 (ESC)" onClick={() => setDetailOpen(false)}>
+              <button class="detail-dialog-x" title={t("닫기 (ESC)")} onClick={() => setDetailOpen(false)}>
                 ✕
               </button>
               <SessionDetailPanel session={s()} onClose={() => setDetailOpen(false)} />
@@ -959,24 +961,24 @@ export function ControlCenter(props: { workspace: Workspace }) {
         <div class="terminal-fullscreen">
           <div class="tf-head">
             <span class="mono tf-title">
-              ⛶ {props.workspace.name} <span class="muted">· {sessions().length}/4 SESSIONS · TERMINAL FOCUS</span>
+              ⛶ {props.workspace.name} <span class="muted">· {sessions().length}/{maxSlots()} SESSIONS · TERMINAL FOCUS</span>
             </span>
             <div style={{ display: "flex", gap: "6px", "align-items": "center" }}>
               <Show when={zoomed()}>
                 <button class="btn ghost" onClick={() => applyZoom(undefined)}>
-                  ▦ 그리드로 복귀
+                  ▦ {t("그리드로 복귀")}
                 </button>
               </Show>
               <Show when={!zoomed()}>
-                <button class="btn ghost mono" title="페인 배치" onClick={() => setLayoutPickerOpen(true)}>
-                  ▦ {PANE_LAYOUTS.find((l) => l.key === paneLayout())?.name}
+                <button class="btn ghost mono" title={t("페인 배치")} onClick={() => setLayoutPickerOpen(true)}>
+                  ▦ {t(PANE_LAYOUTS.find((l) => l.key === paneLayout())?.name ?? "")}
                 </button>
               </Show>
               <span class="mono muted" style={{ "font-size": "10px" }}>
-                ESC 종료
+                {t("ESC 종료")}
               </span>
               <button class="btn" onClick={() => setTerminalFull(false)}>
-                ✕ 전체 화면 종료
+                ✕ {t("전체 화면 종료")}
               </button>
             </div>
           </div>
@@ -996,16 +998,16 @@ export function ControlCenter(props: { workspace: Workspace }) {
       <Show when={addOpen()}>
         <div class="overlay" onClick={() => setAddOpen(false)}>
           <div class="dialog" style={{ width: "460px", padding: "16px 18px" }} onClick={(e) => e.stopPropagation()}>
-            <div style={{ "font-weight": 800, "font-size": "14px" }}>빈 슬롯에 세션 추가</div>
+            <div style={{ "font-weight": 800, "font-size": "14px" }}>{t("빈 슬롯에 세션 추가")}</div>
             <div class="muted" style={{ "font-size": "11px", margin: "4px 0 12px" }}>
-              {props.workspace.name} · {sessions().length}/4 슬롯 사용 중
+              {props.workspace.name} · {sessions().length}/{maxSlots()} {t("슬롯 사용 중")}
             </div>
 
             <button class="card add-choice" onClick={addTerminal}>
               <div>
-                <div style={{ "font-weight": 700, "font-size": "12px" }}>&gt;_ 기본 터미널</div>
+                <div style={{ "font-weight": 700, "font-size": "12px" }}>&gt;_ {t("기본 터미널")}</div>
                 <div class="muted" style={{ "font-size": "11px" }}>
-                  역할 없이 즉시 시작 · 언제든 역할 부여 가능
+                  {t("역할 없이 즉시 시작 · 언제든 역할 부여 가능")}
                 </div>
               </div>
               <span class="mono muted">→</span>
@@ -1013,13 +1015,13 @@ export function ControlCenter(props: { workspace: Workspace }) {
 
             <div class="card add-choice role" onClick={(e) => e.stopPropagation()}>
               <div style={{ width: "100%" }}>
-                <div style={{ "font-weight": 700, "font-size": "12px" }}>⛬ 역할 세션</div>
+                <div style={{ "font-weight": 700, "font-size": "12px" }}>⛬ {t("역할 세션")}</div>
                 <div class="muted" style={{ "font-size": "11px", "margin-bottom": "8px" }}>
-                  페르소나·직무를 정해 시작 · 권한 플래그는 스폰 시점에 적용
+                  {t("페르소나·직무를 정해 시작 · 권한 플래그는 스폰 시점에 적용")}
                 </div>
                 <Show
                   when={availablePersonas().length > 0}
-                  fallback={<div class="muted mono" style={{ "font-size": "11px" }}>남은 페르소나가 없습니다</div>}
+                  fallback={<div class="muted mono" style={{ "font-size": "11px" }}>{t("남은 페르소나가 없습니다")}</div>}
                 >
                   <div class="role-edit-row">
                     <select value={addPersona()} onChange={(e) => setAddPersona(e.currentTarget.value)}>
@@ -1029,17 +1031,17 @@ export function ControlCenter(props: { workspace: Workspace }) {
                       <For each={backend.listJobs()}>{(j) => <option value={j.id}>{j.name}</option>}</For>
                     </select>
                     <button class="btn primary" onClick={() => void addRoleSession()}>
-                      생성
+                      {t("생성")}
                     </button>
                   </div>
                   {/* 세션 격리 (FR-E-62 · E1′) — 기본은 repo 공유 (FR-E-60) */}
                   <label class="mono muted" style={{ display: "flex", gap: "6px", "align-items": "center", "font-size": "11px", "margin-top": "8px", cursor: "pointer" }}>
                     <input type="checkbox" checked={addWorktree()} onChange={(e) => setAddWorktree(e.currentTarget.checked)} />
-                    워크트리 격리 — .eqmux/worktrees/&lt;세션&gt; · 전용 브랜치 eqmux/&lt;세션&gt;
+                    {t("워크트리 격리 — .eqmux/worktrees/<세션> · 전용 브랜치 eqmux/<세션>")}
                   </label>
                   <Show when={addWorktree()}>
                     <div class="muted" style={{ "font-size": "10px", "margin-top": "4px" }}>
-                      의존성(node_modules 등)은 워크트리마다 별도입니다. 제거 시 워크트리는 남습니다 — 머지·정리는 사람이 합니다 (FR-E-64)
+                      {t("의존성(node_modules 등)은 워크트리마다 별도입니다. 제거 시 워크트리는 남습니다 — 머지·정리는 사람이 합니다 (FR-E-64)")}
                     </div>
                   </Show>
                   <Show when={addErr()}>
@@ -1053,7 +1055,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
 
             <div style={{ display: "flex", "justify-content": "flex-end", "margin-top": "12px" }}>
               <button class="btn" onClick={() => setAddOpen(false)}>
-                취소
+                {t("취소")}
               </button>
             </div>
           </div>
@@ -1062,23 +1064,22 @@ export function ControlCenter(props: { workspace: Workspace }) {
 
       {/* 역할 세션 제거 확인 — 기본 터미널과 달리 편성 슬롯·임무 배정에 영향이 있다 */}
       <Show when={removeTarget()}>
-        {(t) => (
+        {(rt) => (
           <div class="overlay" onClick={() => setRemoveTarget(undefined)}>
             <div class="dialog" style={{ width: "440px", padding: "16px 18px" }} onClick={(e) => e.stopPropagation()}>
-              <div style={{ "font-weight": 800, "font-size": "14px" }}>역할 세션 제거</div>
+              <div style={{ "font-weight": 800, "font-size": "14px" }}>{t("역할 세션 제거")}</div>
               <div class="muted" style={{ "font-size": "12px", margin: "6px 0 10px" }}>
-                {personaName(t().personaId)} · {jobName(t().jobId)} — SLOT {t().slot}
+                {personaName(rt().personaId)} · {jobName(rt().jobId)} — SLOT {rt().slot}
               </div>
               <div class="card inset" style={{ padding: "8px 10px", "font-size": "11px", "line-height": 1.6 }}>
-                제거하면 팀 편성의 이 슬롯이 비워지고 임무 배정이 해제되며 PTY 프로세스가 종료됩니다.
-                변경은 다음 캐스팅 저장 때 .eqmux/team.json에 반영됩니다.
+                {t("제거하면 팀 편성의 이 슬롯이 비워지고 임무 배정이 해제되며 PTY 프로세스가 종료됩니다. 변경은 다음 캐스팅 저장 때 .eqmux/team.json에 반영됩니다.")}
               </div>
               <div style={{ display: "flex", gap: "8px", "justify-content": "flex-end", "margin-top": "14px" }}>
                 <button class="btn" onClick={() => setRemoveTarget(undefined)}>
-                  취소
+                  {t("취소")}
                 </button>
-                <button class="btn danger" onClick={() => doRemove(t())}>
-                  세션 제거
+                <button class="btn danger" onClick={() => doRemove(rt())}>
+                  {t("세션 제거")}
                 </button>
               </div>
             </div>

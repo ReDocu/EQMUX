@@ -734,6 +734,20 @@
   grid-template-columns: repeat(4, 1fr);
   gap: 10px;
 }
+/* 슬롯 추가 카드 — 빈 슬롯 자리의 고스트 버튼 (설정 maxSlots까지) */
+.cast-slot-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-style: dashed;
+  color: var(--eq-muted);
+  cursor: pointer;
+  min-height: 120px;
+}
+.cast-slot-add:hover {
+  color: var(--eq-text);
+  border-color: var(--eq-blue);
+}
 .cast-slot,
 .comp-member {
   display: flex;
@@ -2649,9 +2663,22 @@
 .terminal-grid.layout-main-right .terminal-pane:first-child {
   grid-row: 1 / span 3;
 }
+/* 슬롯 상한 6·8 (설정 maxSlots) — 메인 페인이 나머지 슬롯 수만큼 스택을 덮는다 */
+.terminal-grid.slots-6.layout-main-right .terminal-pane:first-child {
+  grid-row: 1 / span 5;
+}
+.terminal-grid.slots-8.layout-main-right .terminal-pane:first-child {
+  grid-row: 1 / span 7;
+}
 .terminal-grid.layout-main-bottom {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   grid-template-rows: minmax(0, 2fr) minmax(0, 1fr);
+}
+.terminal-grid.slots-6.layout-main-bottom {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+.terminal-grid.slots-8.layout-main-bottom {
+  grid-template-columns: repeat(7, minmax(0, 1fr));
 }
 .terminal-grid.layout-main-bottom .terminal-pane:first-child {
   grid-column: 1 / -1;

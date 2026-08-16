@@ -56,7 +56,9 @@ pub fn save(ws_path: &str, slots: &[TeamSlot]) -> Result<(), String> {
     crate::workspace::atomic_write(&dir.join("team.json"), json.as_bytes())?;
 
     let mut md = String::from("# 팀 편성\n\n| 슬롯 | 페르소나 | 직무 |\n|---|---|---|\n");
-    for n in 1u8..=4 {
+    // 표 행 수 — 기본 4행, 슬롯 상한 옵션(6·8)으로 그 위 슬롯이 있으면 거기까지 (절대 상한 8)
+    let max_slot = slots.iter().map(|s| s.slot).max().unwrap_or(0).min(8).max(4);
+    for n in 1u8..=max_slot {
         match slots.iter().find(|s| s.slot == n) {
             Some(s) => {
                 let iso = if s.worktree { " · 워크트리" } else { "" };

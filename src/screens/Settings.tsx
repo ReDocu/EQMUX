@@ -2,9 +2,10 @@
 // 동작에 연결된 항목(시작 화면·알림 라우팅·사운드·재생 줄 수)은 settings.json에 즉시 저장되고,
 // 고정 정책 항목은 클릭해도 바뀌지 않는 선언으로 남는다. Tauri 밖에서는 저장 없이 순환만 한다.
 import { For, Show } from "solid-js";
-import { DEFAULT_SETTINGS, settings, updateSettings } from "../backend/settings";
+import { DEFAULT_SETTINGS, settings, SLOT_OPTIONS, updateSettings } from "../backend/settings";
 import type { AppSettings } from "../backend/settings";
 import { isTauri } from "../backend/pty";
+import { t } from "../i18n";
 import { Eyebrow } from "../components/ui";
 
 type Wired = {
@@ -24,10 +25,26 @@ function pick<T>(options: T[], value: T): number {
 const START_VIEWS: AppSettings["startView"][] = ["control", "last"];
 const NOTI: AppSettings["notifications"][] = ["waiting-dead", "waiting", "off"];
 const REPLAY = [500, 1000, 2000];
+const SLOTS = [...SLOT_OPTIONS]; // 4 · 6 · 8
 const THEMES: AppSettings["theme"][] = ["dark", "light", "system"];
 const MEM_BANNER = [0, 2048, 4096, 8192]; // FR-G-67 — 0 = 꺼짐 (기본)
+const LANGS: AppSettings["language"][] = ["ko", "en"];
 
+// 문자열은 한국어 원문 그대로 둔다 — 렌더 지점의 t()가 언어를 푼다 (i18n.ts 규칙)
 const SECTIONS: Section[] = [
+  {
+    title: "언어",
+    desc: "UI 언어 — 한국어(기본)·영어. 코드·데이터의 한국어 원문은 그대로 두고 화면 표시만 바꿉니다.",
+    wired: [
+      {
+        k: "표시 언어",
+        labels: ["한국어 (기본)", "English"],
+        current: () => pick(LANGS, settings().language),
+        apply: (i) => updateSettings({ language: LANGS[i] }),
+      },
+    ],
+    fixed: [{ k: "이벤트 로그·생성 파일", label: "원문 유지 (데이터 불변)" }],
+  },
   {
     title: "화면",
     desc: "테마는 디자인 토큰만 바꿉니다 (M29). 터미널 페인은 TUI·ANSI 가독성을 위해 항상 다크입니다.",
@@ -40,6 +57,19 @@ const SECTIONS: Section[] = [
       },
     ],
     fixed: [{ k: "터미널 페인", label: "항상 다크 (ANSI 팔레트 전제)" }],
+  },
+  {
+    title: "세션 슬롯",
+    desc: "워크스페이스당 세션(터미널 페인) 수의 상한입니다. 줄여도 이미 열린 세션은 닫지 않습니다.",
+    wired: [
+      {
+        k: "슬롯 수",
+        labels: ["4개 (기본)", "6개", "8개"],
+        current: () => pick(SLOTS, settings().maxSlots),
+        apply: (i) => updateSettings({ maxSlots: SLOTS[i] }),
+      },
+    ],
+    fixed: [{ k: "복원 허용", label: "team.json 최대 8슬롯 — 설정과 무관" }],
   },
   {
     title: "시작과 복원",
@@ -136,35 +166,35 @@ export function Settings() {
     <div class="screen">
       <div class="screen-head">
         <div>
-          <h1>설정</h1>
+          <h1>{t("설정")}</h1>
           <div class="sub">
-            {isTauri() ? "settings.json 즉시 저장" : "브라우저 dev — 저장 없음"} · 값을 클릭하면 다음 옵션으로
+            {t(isTauri() ? "settings.json 즉시 저장" : "브라우저 dev — 저장 없음")} · {t("값을 클릭하면 다음 옵션으로")}
           </div>
         </div>
         <button class="btn" disabled={isDefault()} onClick={() => updateSettings(DEFAULT_SETTINGS)}>
-          기본값 복원
+          {t("기본값 복원")}
         </button>
       </div>
       <div class="screen-body settings-grid">
         <For each={SECTIONS}>
           {(sec) => (
             <div class="card" style={{ padding: "12px 14px" }}>
-              <Eyebrow>{sec.title}</Eyebrow>
+              <Eyebrow>{t(sec.title)}</Eyebrow>
               <div class="muted" style={{ "font-size": "11px", margin: "4px 0 8px" }}>
-                {sec.desc}
+                {t(sec.desc)}
               </div>
               <Show when={sec.wired}>
                 <For each={sec.wired}>
                   {(it) => (
                     <div class="kv">
-                      <span class="k">{it.k}</span>
+                      <span class="k">{t(it.k)}</span>
                       <button
                         class="v mono setting-v"
                         classList={{ changed: it.current() !== 0 }}
                         onClick={() => it.apply((it.current() + 1) % it.labels.length)}
-                        title="클릭하면 다음 옵션 — 즉시 저장"
+                        title={t("클릭하면 다음 옵션 — 즉시 저장")}
                       >
-                        {it.labels[it.current()]}
+                        {t(it.labels[it.current()])}
                       </button>
                     </div>
                   )}
@@ -174,9 +204,9 @@ export function Settings() {
                 <For each={sec.fixed}>
                   {(it) => (
                     <div class="kv">
-                      <span class="k">{it.k}</span>
-                      <span class="v mono setting-v fixed" title="고정 정책 — 설정으로 바꾸지 않습니다">
-                        {it.label}
+                      <span class="k">{t(it.k)}</span>
+                      <span class="v mono setting-v fixed" title={t("고정 정책 — 설정으로 바꾸지 않습니다")}>
+                        {t(it.label)}
                       </span>
                     </div>
                   )}

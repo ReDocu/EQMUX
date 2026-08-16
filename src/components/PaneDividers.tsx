@@ -3,7 +3,8 @@
 // 비율은 state.paneRatios에 살고 layout.json으로 영속된다. 페인 크기 변화는
 // TerminalPane의 ResizeObserver가 받아 PTY resize로 이어진다 — 여기서 따로 하지 않는다.
 import { For } from "solid-js";
-import { DEFAULT_RATIOS, paneLayout, ratioFor, setRatioAxis } from "../state";
+import { t } from "../i18n";
+import { defaultRatios, paneLayout, ratioFor, setRatioAxis } from "../state";
 import type { PaneLayout } from "../state";
 
 const GAP = 8; // .terminal-grid gap과 일치해야 한다
@@ -50,7 +51,7 @@ function startDrag(ev: PointerEvent, layout: PaneLayout, axis: Axis, k: number):
 
 /** 그리드 인라인 스타일 — 비율을 fr 템플릿으로. 축이 없는 배치는 그 축을 클래스 규칙에 맡긴다 */
 export function gridTemplateStyle(layout: PaneLayout): Record<string, string> {
-  const d = DEFAULT_RATIOS[layout];
+  const d = defaultRatios(layout);
   const r = ratioFor(layout);
   const tpl = (f: number[]) => f.map((x) => `minmax(0, ${x.toFixed(4)}fr)`).join(" ");
   const st: Record<string, string> = {};
@@ -63,7 +64,7 @@ export function gridTemplateStyle(layout: PaneLayout): Record<string, string> {
 export function PaneDividers() {
   const dividers = (axis: Axis) => {
     const layout = paneLayout();
-    if (!DEFAULT_RATIOS[layout][axis]) return [];
+    if (!defaultRatios(layout)[axis]) return [];
     const fr = ratioFor(layout)[axis] ?? [];
     return Array.from({ length: Math.max(0, fr.length - 1) }, (_, k) => ({ layout, k, fr }));
   };
@@ -74,9 +75,9 @@ export function PaneDividers() {
           <div
             class="pane-divider v"
             style={{ left: edgePos(d.fr, d.k) }}
-            title="드래그 — 페인 폭 조정 · 더블클릭 — 초기화"
+            title={t("드래그 — 페인 폭 조정 · 더블클릭 — 초기화")}
             onPointerDown={(ev) => startDrag(ev, d.layout, "cols", d.k)}
-            onDblClick={() => setRatioAxis(d.layout, "cols", DEFAULT_RATIOS[d.layout].cols!)}
+            onDblClick={() => setRatioAxis(d.layout, "cols", defaultRatios(d.layout).cols!)}
           />
         )}
       </For>
@@ -85,9 +86,9 @@ export function PaneDividers() {
           <div
             class="pane-divider h"
             style={{ top: edgePos(d.fr, d.k) }}
-            title="드래그 — 페인 높이 조정 · 더블클릭 — 초기화"
+            title={t("드래그 — 페인 높이 조정 · 더블클릭 — 초기화")}
             onPointerDown={(ev) => startDrag(ev, d.layout, "rows", d.k)}
-            onDblClick={() => setRatioAxis(d.layout, "rows", DEFAULT_RATIOS[d.layout].rows!)}
+            onDblClick={() => setRatioAxis(d.layout, "rows", defaultRatios(d.layout).rows!)}
           />
         )}
       </For>

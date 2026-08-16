@@ -8,7 +8,7 @@ import { backend } from "./mock";
 import { isTauri } from "./pty";
 import { settings } from "./settings";
 import {
-  DEFAULT_RATIOS,
+  defaultRatios,
   defaultShell,
   PANE_LAYOUTS,
   paneLayouts,
@@ -42,7 +42,8 @@ const isLayoutKey = (v: unknown): v is PaneLayout =>
 
 /** 저장본 비율 검증 — 길이·합·범위가 맞는 축만 받는다. 깨진 값은 기본 비율로 조용히 폴백 */
 function sanitizeRatio(layout: PaneLayout, raw: unknown): PaneRatio | undefined {
-  const d = DEFAULT_RATIOS[layout];
+  const d = defaultRatios(layout); // 트랙 수가 현재 슬롯 상한과 다른 저장본은 여기서 걸러진다
+
   const v = (raw ?? {}) as PaneRatio;
   const axis = (def: number[] | undefined, got: unknown): number[] | undefined =>
     def &&

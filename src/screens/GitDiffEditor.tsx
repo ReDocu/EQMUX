@@ -11,6 +11,7 @@ import { commitChangedFiles, commitFileDiff, diffChangedFiles, diffFile, gitOver
 import type { ChangedFile, DiffLine, FileDiff } from "../backend/git";
 import { backend, DIFF_BRANCH, DIFF_CONTENT, DIFF_FILES, GIT_STATE } from "../backend/mock";
 import { isTauri } from "../backend/pty";
+import { t, tf } from "../i18n";
 import { openPanel, scopeWorkspace, setView, tick, view } from "../state";
 
 const FOLD_CONTEXT = 3; // 변경 주변에 남기는 문맥 줄 수 (U10)
@@ -114,7 +115,7 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
   const [refreshNote, setRefreshNote] = createSignal<string | undefined>(undefined);
   const refresh = async () => {
     if (!isTauri()) {
-      setRefreshNote("목 데이터 — 실측 없음");
+      setRefreshNote(t("목 데이터 — 실측 없음"));
       setTimeout(() => setRefreshNote(undefined), 1800);
       return;
     }
@@ -327,7 +328,7 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
       {(r) =>
         r.type === "fold" ? (
           <button class="gde-fold mono" onClick={() => setExpandedFolds([...expandedFolds(), r.start])}>
-            ⋯ {r.end - r.start + 1}줄 접힘 — 펼치기
+            ⋯ {tf("{n}줄 접힘 — 펼치기", { n: r.end - r.start + 1 })}
           </button>
         ) : (
           <Show when={side()[r.i]} keyed>
@@ -365,9 +366,9 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
         <div class="gde-sidebar">
           <div class="gde-sidebar-head">
             <div style={{ display: "flex", "justify-content": "space-between", "align-items": "baseline" }}>
-              <span style={{ "font-weight": 800 }}>{commit() ? <>diff — <span class="mono">{commit()!.hash}</span></> : "변경 파일"}</span>
+              <span style={{ "font-weight": 800 }}>{commit() ? <>diff — <span class="mono">{commit()!.hash}</span></> : t("변경 파일")}</span>
               <span class="mono muted" style={{ "font-size": "10px" }}>
-                {files().length} CHANGES {isTauri() ? "· 실측" : "· 목"}
+                {files().length} CHANGES {t(isTauri() ? "· 실측" : "· 목")}
               </span>
             </div>
             <div class="mono muted gde-sidebar-sub" style={{ "font-size": "10px", "margin-top": "3px" }} title={commit()?.message}>
@@ -376,7 +377,7 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
           </div>
           <input
             class="panel-search mono"
-            placeholder="파일 필터…"
+            placeholder={t("파일 필터…")}
             value={query()}
             onInput={(e) => setQuery(e.currentTarget.value)}
           />
@@ -387,7 +388,7 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
                 <button
                   class="btn ghost mono"
                   classList={{ on: statusFilter() === st }}
-                  title={st === "A" ? "새 파일만" : st === "M" ? "수정만" : st === "D" ? "삭제만" : "이름변경만"}
+                  title={t(st === "A" ? "새 파일만" : st === "M" ? "수정만" : st === "D" ? "삭제만" : "이름변경만")}
                   onClick={() => setStatusFilter(statusFilter() === st ? undefined : st)}
                 >
                   {st}
@@ -426,9 +427,9 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
             <Show when={filesErr()}>
               {/* 실패는 깨끗한 워크트리가 아니다 (B9) — git 패널과 같은 오류 카드로 말한다 */}
               <div class="card conn-error mono" style={{ margin: "8px", "font-size": "11px" }}>
-                <div>변경 파일을 읽을 수 없습니다 — git 저장소가 아니거나 git CLI가 없습니다</div>
+                <div>{t("변경 파일을 읽을 수 없습니다 — git 저장소가 아니거나 git CLI가 없습니다")}</div>
                 <button class="btn" style={{ "margin-top": "6px", width: "100%" }} onClick={() => void loadFiles()}>
-                  다시 시도
+                  {t("다시 시도")}
                 </button>
               </div>
             </Show>
@@ -436,15 +437,15 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
               <div class="muted" style={{ padding: "10px", "font-size": "11px" }}>
                 {isTauri() && !query().trim() && !statusFilter()
                   ? commit()
-                    ? "이 커밋에는 변경 파일이 없습니다"
-                    : "변경된 파일이 없습니다 — 워크트리가 깨끗합니다"
-                  : "검색 결과 없음"}
+                    ? t("이 커밋에는 변경 파일이 없습니다")
+                    : t("변경된 파일이 없습니다 — 워크트리가 깨끗합니다")
+                  : t("검색 결과 없음")}
               </div>
             </Show>
           </div>
           <div class="gde-sidebar-actions">
             <button class="btn" style={{ flex: 1 }} disabled={refreshing()} onClick={() => void refresh()}>
-              {refreshing() ? "읽는 중…" : refreshNote() ?? "⟳ 새로 읽기"}
+              {refreshing() ? t("읽는 중…") : refreshNote() ?? t("⟳ 새로 읽기")}
             </button>
           </div>
         </div>
@@ -454,41 +455,41 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
           <div class="gde-toolbar">
             <div>
               <div class="mono" style={{ "font-weight": 700, "font-size": "12px" }}>
-                {selected()?.split("/").join(" / ") ?? "파일을 선택하세요"}
+                {selected()?.split("/").join(" / ") ?? t("파일을 선택하세요")}
               </div>
               <div class="mono muted" style={{ "font-size": "10px" }}>
                 {commit()
-                  ? `COMPARE · 부모 커밋 ${baseLabel()} ↔ ${commit()!.hash} · ${stat()} · 읽기 전용`
-                  : `COMPARE · ${baseLabel()} (${branch()}) ↔ WORKTREE · ${stat()} · 읽기 전용 — 커밋·편집은 터미널에서`}
+                  ? tf("COMPARE · 부모 커밋 {base} ↔ {hash} · {stat} · 읽기 전용", { base: baseLabel(), hash: commit()!.hash, stat: stat() })
+                  : tf("COMPARE · {base} ({branch}) ↔ WORKTREE · {stat} · 읽기 전용 — 커밋·편집은 터미널에서", { base: baseLabel(), branch: branch(), stat: stat() })}
               </div>
             </div>
             <div class="gde-toolbar-actions">
               {/* 변경 내비게이션 (U10) */}
               <span class="mono muted" style={{ "font-size": "10px", "align-self": "center" }}>
                 {changeBlocks().length
-                  ? `변경 ${blockIdx() >= 0 ? Math.min(blockIdx() + 1, changeBlocks().length) : "–"}/${changeBlocks().length}`
-                  : "변경 없음"}
+                  ? tf("변경 {cur}/{total}", { cur: blockIdx() >= 0 ? Math.min(blockIdx() + 1, changeBlocks().length) : "–", total: changeBlocks().length })
+                  : t("변경 없음")}
               </span>
-              <button class="btn ghost" title="이전 변경 (p)" onClick={() => jumpTo(blockIdx() - 1)}>
+              <button class="btn ghost" title={t("이전 변경 (p)")} onClick={() => jumpTo(blockIdx() - 1)}>
                 ↑
               </button>
-              <button class="btn ghost" title="다음 변경 (n)" onClick={() => jumpTo(blockIdx() + 1)}>
+              <button class="btn ghost" title={t("다음 변경 (n)")} onClick={() => jumpTo(blockIdx() + 1)}>
                 ↓
               </button>
               <button
                 class="btn ghost"
-                title={foldCtx() ? "전체 문맥 보기" : `변경 ±${FOLD_CONTEXT}줄만 보기`}
+                title={foldCtx() ? t("전체 문맥 보기") : tf("변경 ±{n}줄만 보기", { n: FOLD_CONTEXT })}
                 onClick={() => {
                   setFoldCtx(!foldCtx());
                   setExpandedFolds([]);
                 }}
               >
-                {foldCtx() ? "전체 문맥" : "변경만"}
+                {foldCtx() ? t("전체 문맥") : t("변경만")}
               </button>
-              <button class="btn ghost" classList={{ on: wrap() }} title="줄바꿈 (U13)" onClick={() => setWrap(!wrap())}>
-                ↩ 줄바꿈
+              <button class="btn ghost" classList={{ on: wrap() }} title={t("줄바꿈 (U13)")} onClick={() => setWrap(!wrap())}>
+                ↩ {t("줄바꿈")}
               </button>
-              <button class="btn ghost" title="닫기 (Esc) — 진입한 화면으로 복귀" onClick={close}>
+              <button class="btn ghost" title={t("닫기 (Esc) — 진입한 화면으로 복귀")} onClick={close}>
                 ✕
               </button>
             </div>
@@ -506,13 +507,13 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
               <div class="gde-pane-head old">
                 <div>
                   <div class="mono gde-pane-title" style={{ "font-weight": 700, "font-size": "11px" }}>
-                    {commit() ? `비교 대상 — 부모 커밋 (${baseLabel()})` : `비교 대상 — BASE (${baseLabel()})`}
+                    {commit() ? tf("비교 대상 — 부모 커밋 ({base})", { base: baseLabel() }) : tf("비교 대상 — BASE ({base})", { base: baseLabel() })}
                   </div>
                   <div class="muted" style={{ "font-size": "10px" }}>
-                    {commit() ? "커밋 직전 내용" : "HEAD 커밋 시점 내용"}
+                    {t(commit() ? "커밋 직전 내용" : "HEAD 커밋 시점 내용")}
                   </div>
                 </div>
-                <span class="badge">🔒 읽기 전용</span>
+                <span class="badge">{t("🔒 읽기 전용")}</span>
               </div>
               <div class="gde-codewrap">
                 <div
@@ -524,15 +525,15 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
                   {paneRows(baseLines, "del")}
                   {/* 빈 상태를 침묵시키지 않는다 (B5) — 읽는 중(B10)·새 파일·내용 불가를 구분해 말한다 */}
                   <Show when={diffLoading()}>
-                    <div class="muted" style={{ padding: "10px", "font-size": "11px" }}>읽는 중…</div>
+                    <div class="muted" style={{ padding: "10px", "font-size": "11px" }}>{t("읽는 중…")}</div>
                   </Show>
                   <Show when={!diffLoading() && selected() && baseLines().length === 0}>
                     <div class="muted" style={{ padding: "10px", "font-size": "11px" }}>
                       {curLines().length > 0
                         ? commit()
-                          ? "(이 시점에는 파일이 없습니다 — 새 파일)"
-                          : "BASE 없음 — 새 파일입니다"
-                        : "이 파일의 내용을 표시할 수 없습니다"}
+                          ? t("(이 시점에는 파일이 없습니다 — 새 파일)")
+                          : t("BASE 없음 — 새 파일입니다")
+                        : t("이 파일의 내용을 표시할 수 없습니다")}
                     </div>
                   </Show>
                 </div>
@@ -544,13 +545,13 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
               <div class="gde-pane-head new">
                 <div>
                   <div class="mono gde-pane-title" style={{ "font-weight": 700, "font-size": "11px" }}>
-                    {commit() ? `현재 — 이 커밋 (${commit()!.hash})` : "현재 — 워크트리"}
+                    {commit() ? tf("현재 — 이 커밋 ({hash})", { hash: commit()!.hash }) : t("현재 — 워크트리")}
                   </div>
                   <div class="muted" style={{ "font-size": "10px" }}>
-                    {commit() ? "커밋된 내용" : "현재 파일 내용"}
+                    {t(commit() ? "커밋된 내용" : "현재 파일 내용")}
                   </div>
                 </div>
-                <span class="badge">🔒 읽기 전용</span>
+                <span class="badge">{t("🔒 읽기 전용")}</span>
               </div>
               <div class="gde-codewrap">
                 <div
@@ -561,15 +562,15 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
                 >
                   {paneRows(curLines, "add")}
                   <Show when={diffLoading()}>
-                    <div class="muted" style={{ padding: "10px", "font-size": "11px" }}>읽는 중…</div>
+                    <div class="muted" style={{ padding: "10px", "font-size": "11px" }}>{t("읽는 중…")}</div>
                   </Show>
                   <Show when={!diffLoading() && selected() && curLines().length === 0}>
                     <div class="muted" style={{ padding: "10px", "font-size": "11px" }}>
                       {baseLines().length > 0
                         ? commit()
-                          ? "(이 커밋에서 삭제된 파일입니다)"
-                          : "워크트리에 없음 — 삭제된 파일입니다"
-                        : "이 파일의 내용을 표시할 수 없습니다"}
+                          ? t("(이 커밋에서 삭제된 파일입니다)")
+                          : t("워크트리에 없음 — 삭제된 파일입니다")
+                        : t("이 파일의 내용을 표시할 수 없습니다")}
                     </div>
                   </Show>
                 </div>
@@ -588,7 +589,7 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
                           class="gde-marker"
                           classList={{ addm: hasAdd(), delm: !hasAdd(), active: bi() === blockIdx() }}
                           style={{ top: `${top()}%`, height: `${h()}%` }}
-                          title={`변경 ${bi() + 1}로 이동`}
+                          title={tf("변경 {n}로 이동", { n: bi() + 1 })}
                           onClick={() => jumpTo(bi())}
                         />
                       );
@@ -603,14 +604,21 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
             <div class="gde-status-left">
               <span class="muted">BASE {baseLabel()} · READ ONLY</span>
               {/* 숫자는 위치로 이어진다 (U10) — 클릭 시 첫 변경으로 점프 */}
-              <button class="gde-stat-jump mono" title="첫 변경으로 이동" onClick={() => jumpTo(0)}>
-                {commit() ? commit()!.hash : "WORKTREE"} · {curLines().filter((l) => l.kind === "add").length} 추가 ·{" "}
-                {baseLines().filter((l) => l.kind === "del").length} 삭제
-                <Show when={real()?.truncated}> · 3,000줄에서 잘림</Show>
+              <button class="gde-stat-jump mono" title={t("첫 변경으로 이동")} onClick={() => jumpTo(0)}>
+                {commit() ? commit()!.hash : "WORKTREE"} ·{" "}
+                {tf("{a} 추가 · {d} 삭제", {
+                  a: curLines().filter((l) => l.kind === "add").length,
+                  d: baseLines().filter((l) => l.kind === "del").length,
+                })}
+                <Show when={real()?.truncated}> · {t("3,000줄에서 잘림")}</Show>
               </button>
             </div>
             <span class="muted">
-              {isTauri() ? (commit() ? `git diff ${commit()!.hash}^ ${commit()!.hash} 실측` : "git diff -U999999 실측") : "목 데이터"}
+              {isTauri()
+                ? commit()
+                  ? tf("git diff {a}^ {b} 실측", { a: commit()!.hash, b: commit()!.hash })
+                  : t("git diff -U999999 실측")
+                : t("목 데이터")}
             </span>
           </div>
         </div>

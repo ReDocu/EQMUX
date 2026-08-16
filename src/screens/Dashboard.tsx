@@ -7,11 +7,16 @@ import { queryGlobalEvents } from "../backend/events";
 import type { FeedEvent } from "../backend/events";
 import { backend } from "../backend/mock";
 import { isTauri, killPty } from "../backend/pty";
-import { settings } from "../backend/settings";
+import { maxSlots, settings } from "../backend/settings";
+import { t, tf } from "../i18n";
 import { jumpToSession, openPanel, setOverlay, setView, tick } from "../state";
 import { ContextMenu, StatusLabel } from "../components/ui";
 import type { Session } from "../types";
 import { ATTENTION_ORDER, fmtSince, sessionDisplayName } from "../types";
+
+/** 빈 슬롯 고스트의 열 span — 셀 그리드는 4열 고정이라 마지막 줄의 남은 칸만 채운다 */
+const ghostSpan = (len: number): number =>
+  len % 4 === 0 ? Math.min(4, maxSlots() - len) : 4 - (len % 4);
 
 export function Dashboard() {
   const sessions = () => {
@@ -53,12 +58,12 @@ export function Dashboard() {
   const subagents = () => sessions().reduce((n, s) => n + s.subagents, 0);
   const waitingSession = () => sessions().find((s) => s.status === "waiting");
   const personaName = (s: Session) =>
-    sessionDisplayName(s, backend.listPersonas().find((p) => p.id === s.personaId)?.name ?? (s.personaId || "기본 터미널"));
-  const jobName = (s: Session) => backend.listJobs().find((j) => j.id === s.jobId)?.name ?? "셸";
+    sessionDisplayName(s, backend.listPersonas().find((p) => p.id === s.personaId)?.name ?? (s.personaId || t("기본 터미널")));
+  const jobName = (s: Session) => backend.listJobs().find((j) => j.id === s.jobId)?.name ?? t("셸");
   const missionName = (s: Session) => missions().find((m) => m.id === s.missionId)?.name;
   // 피드 행의 발신자 — 이미 사라진 세션의 이벤트도 남으므로 안전 조회
   const eventName = (sessionId?: string) => {
-    if (!sessionId) return "앱";
+    if (!sessionId) return t("앱");
     const s = sessions().find((x) => x.id === sessionId);
     return s ? personaName(s) : sessionId.split("@")[0];
   };
@@ -71,9 +76,9 @@ export function Dashboard() {
       .sort((a, b) => ATTENTION_ORDER[a.status] - ATTENTION_ORDER[b.status]);
 
   const cellLine2 = (s: Session) => {
-    if (s.status === "waiting") return s.waitingFor ?? "승인 대기";
-    if (s.status === "dead") return s.resumable ? "재개 가능" : "재개 불가";
-    return missionName(s) ?? "미배정";
+    if (s.status === "waiting") return s.waitingFor ?? t("승인 대기");
+    if (s.status === "dead") return t(s.resumable ? "재개 가능" : "재개 불가");
+    return missionName(s) ?? t("미배정");
   };
 
   // 세션 셀 우클릭 메뉴 (§06) — G7 준수: 승인·거부 없음, 점프·이동·중지만
@@ -100,19 +105,19 @@ export function Dashboard() {
     <div class="screen">
       <div class="screen-head">
         <div>
-          <h1>관제 대시보드</h1>
+          <h1>{t("관제 대시보드")}</h1>
           <div class="sub">
-            등록 {workspaces().length} · 열림 {openWs().length} · 정렬: 주의 필요 순
+            {tf("등록 {n} · 열림 {m} · 정렬: 주의 필요 순", { n: workspaces().length, m: openWs().length })}
           </div>
         </div>
         {/* 요약 한 줄 (시안 §03 — 타일 4개의 후신). 색은 waiting·dead에만 (FR-G-06) */}
-        <div class="dash-sum mono" title="폴링 없음 · 상태 스트림 구독 (FR-G-09)">
+        <div class="dash-sum mono" title={t("폴링 없음 · 상태 스트림 구독 (FR-G-09)")}>
           <span>
-            세션 <b>{sessions().length}</b>
+            {t("세션")} <b>{sessions().length}</b>
           </span>
           <span>
             <span class="sdot busy" /> busy <b>{count("busy")}</b>
-            <Show when={subagents() > 0}> · 서브 {subagents()}</Show>
+            <Show when={subagents() > 0}> · {t("서브")} {subagents()}</Show>
           </span>
           <span classList={{ "st-waiting": count("waiting") > 0 }}>
             <span class="sdot waiting" /> waiting <b>{count("waiting")}</b>
@@ -125,18 +130,17 @@ export function Dashboard() {
       {/* 과부하 소프트 경고 (D11 · FR-G-36) — 상단 배너, 알림이 아니며 아무것도 막지 않는다 */}
       <Show when={busyCount() >= BUSY_SOFT_LIMIT}>
         <div class="card inset dash-overload mono">
-          ⚠ 동시 작업 중 에이전트 {busyCount()}개 — 소프트 경고 (D11 · 임계값 {BUSY_SOFT_LIMIT}, 실측 전 잠정).
-          시스템이 느려지면 일부 세션을 중지하세요.
+          {tf("⚠ 동시 작업 중 에이전트 {n}개 — 소프트 경고 (D11 · 임계값 {limit}, 실측 전 잠정). 시스템이 느려지면 일부 세션을 중지하세요.", { n: busyCount(), limit: BUSY_SOFT_LIMIT })}
         </div>
       </Show>
       {/* 세션 메모리 임계 배너 (FR-G-67, M30) — 설정 임계값 초과 세션 나열. 강제 종료·자동 개입 없음 */}
       <Show when={memOffenders().length > 0}>
         <div class="card inset dash-overload mono">
-          ⚠ 세션 메모리 임계 초과 —{" "}
+          ⚠ {t("세션 메모리 임계 초과")} —{" "}
           {memOffenders()
             .map((s) => `${personaName(s)} ${((s.memoryMb ?? 0) / 1024).toFixed(1)}GB`)
             .join(" · ")}{" "}
-          (임계 {(memLimitMb() / 1024).toFixed(0)}GB · 소프트 경고). 세션 상세에서 현재·피크를 확인하세요.
+          ({t("임계")} {(memLimitMb() / 1024).toFixed(0)}GB · {t("소프트 경고")}). {t("세션 상세에서 현재·피크를 확인하세요.")}
         </div>
       </Show>
       <div class="screen-body dash-body">
@@ -151,7 +155,7 @@ export function Dashboard() {
                     {ws.branch ?? "—"} · {ws.path}
                   </span>
                   <span class="mono muted" style={{ "margin-left": "auto" }}>
-                    {wsSessions(ws.id).length}/4
+                    {wsSessions(ws.id).length}/{maxSlots()}
                   </span>
                 </div>
                 <div class="ws-cells">
@@ -168,13 +172,13 @@ export function Dashboard() {
                           e.preventDefault();
                           setCellMenu({ x: e.clientX, y: e.clientY, s });
                         }}
-                        title="클릭하면 해당 페인으로 점프 (FR-G-50) · 우클릭 메뉴"
+                        title={t("클릭하면 해당 페인으로 점프 (FR-G-50) · 우클릭 메뉴")}
                       >
                         <div class="cell-name">
                           {personaName(s)}
                           <span class="cell-role muted">{jobName(s)}</span>
                           <Show when={s.unseen}>
-                            <span class="unread-dot" title="미확인 — 열람하면 해제 (FR-G-44)" />
+                            <span class="unread-dot" title={t("미확인 — 열람하면 해제 (FR-G-44)")} />
                           </Show>
                         </div>
                         <div class="cell-status">
@@ -182,7 +186,7 @@ export function Dashboard() {
                           <StatusLabel session={s} />
                           {/* 감지된 에이전트 (셸 우선 모델) — Job 트리 실측. 없으면 표시하지 않는다 */}
                           <Show when={s.agent}>
-                            <span class="badge blue" style={{ "margin-left": "auto" }} title="터미널에서 실행 중인 에이전트 CLI — 프로세스 트리 실측">
+                            <span class="badge blue" style={{ "margin-left": "auto" }} title={t("터미널에서 실행 중인 에이전트 CLI — 프로세스 트리 실측")}>
                               {s.agent}
                             </span>
                           </Show>
@@ -191,15 +195,16 @@ export function Dashboard() {
                       </button>
                     )}
                   </For>
-                  {/* 빈 슬롯 병합 (시안 §03) — 슬롯당 카드 대신 고스트 하나 */}
-                  <Show when={wsSessions(ws.id).length < 4}>
+                  {/* 빈 슬롯 병합 (시안 §03) — 슬롯당 카드 대신 고스트 하나. 셀 그리드는 4열이라
+                      고스트는 마지막 줄의 남은 칸만 채운다 (슬롯 상한 6·8이면 세션이 다음 줄로 감긴다) */}
+                  <Show when={wsSessions(ws.id).length < maxSlots()}>
                     <button
                       class="cell-ghost mono"
-                      style={{ "grid-column": `span ${4 - wsSessions(ws.id).length}` }}
-                      title="팀 캐스팅으로 이동"
+                      style={{ "grid-column": `span ${ghostSpan(wsSessions(ws.id).length)}` }}
+                      title={t("팀 캐스팅으로 이동")}
                       onClick={() => setView({ kind: "casting", wsId: ws.id })}
                     >
-                      + 빈 슬롯 {4 - wsSessions(ws.id).length} · 캐스팅
+                      {tf("+ 빈 슬롯 {n} · 캐스팅", { n: maxSlots() - wsSessions(ws.id).length })}
                     </button>
                   </Show>
                 </div>
@@ -208,20 +213,20 @@ export function Dashboard() {
           </For>
           <Show when={openWs().length === 0}>
             <div class="card" style={{ padding: "16px" }}>
-              <div class="muted">열린 워크스페이스가 없습니다 — 상단 + 또는 워크스페이스 연결에서 git 저장소를 열어주세요</div>
+              <div class="muted">{t("열린 워크스페이스가 없습니다 — 상단 + 또는 워크스페이스 연결에서 git 저장소를 열어주세요")}</div>
             </div>
           </Show>
           {/* 닫힌 워크스페이스 — 한 줄 강등은 유지하되 항목을 카드로 (U4).
               이름·상태 배지·경로가 구조로 읽히고, 경로 소실은 열기 대신 재지정으로 보낸다 */}
           <Show when={closedWs().length > 0}>
             <div class="ws-closed">
-              <span class="eyebrow">닫힘 · {closedWs().length}</span>
+              <span class="eyebrow">{t("닫힘")} · {closedWs().length}</span>
               <For each={closedWs()}>
                 {(ws) => (
                   <div class="card ws-closed-card">
                     <span class="ws-closed-name">{ws.name}</span>
                     <span class="badge" classList={{ amber: ws.pathMissing }}>
-                      {ws.pathMissing ? "경로 소실" : "닫힘"}
+                      {t(ws.pathMissing ? "경로 소실" : "닫힘")}
                     </span>
                     <span class="mono muted ws-closed-path" title={ws.path}>
                       {ws.path}
@@ -229,13 +234,13 @@ export function Dashboard() {
                     <Show
                       when={!ws.pathMissing}
                       fallback={
-                        <button class="btn ghost" title="워크스페이스 연결에서 경로 재지정" onClick={() => setOverlay("connect")}>
-                          재지정 →
+                        <button class="btn ghost" title={t("워크스페이스 연결에서 경로 재지정")} onClick={() => setOverlay("connect")}>
+                          {t("재지정")} →
                         </button>
                       }
                     >
                       <button class="btn ghost" onClick={() => backend.openWorkspace(ws.id)}>
-                        열기
+                        {t("열기")}
                       </button>
                     </Show>
                   </div>
@@ -249,11 +254,11 @@ export function Dashboard() {
         <div class="dash-side">
           <div style={{ display: "flex", "align-items": "center", "margin-bottom": "8px", gap: "8px" }}>
             <div class="eyebrow" style={{ flex: 1 }}>
-              주의 & 이벤트 · 전역
+              {t("주의 & 이벤트 · 전역")}
             </div>
             <Show when={unseenCount() > 0}>
-              <button class="btn ghost" title="모든 세션의 미확인 해제 (FR-G-47)" onClick={() => backend.markAllSeen()}>
-                모두 확인 ({unseenCount()})
+              <button class="btn ghost" title={t("모든 세션의 미확인 해제 (FR-G-47)")} onClick={() => backend.markAllSeen()}>
+                {t("모두 확인")} ({unseenCount()})
               </button>
             </Show>
           </div>
@@ -267,7 +272,7 @@ export function Dashboard() {
                   ● WAITING · {fmtSince(w().sinceMs)}
                 </div>
                 <div style={{ "font-weight": 700, "margin-top": "4px" }}>
-                  {personaName(w())} · 승인 대기
+                  {personaName(w())} · {t("승인 대기")}
                 </div>
                 <div class="mono muted">{w().waitingFor}</div>
               </button>
@@ -285,7 +290,7 @@ export function Dashboard() {
             </For>
             <Show when={events().length === 0}>
               <div class="muted" style={{ "font-size": "11px", padding: "6px" }}>
-                아직 이벤트가 없습니다
+                {t("아직 이벤트가 없습니다")}
               </div>
             </Show>
           </div>
@@ -301,14 +306,14 @@ export function Dashboard() {
             header={`${personaName(m().s)} · ${jobName(m().s)} — ${m().s.status}`}
             onClose={() => setCellMenu(undefined)}
             groups={[
-              [{ label: "페인으로 이동", action: () => jumpToSession(m().s.workspaceId, m().s.id) }],
+              [{ label: t("페인으로 이동"), action: () => jumpToSession(m().s.workspaceId, m().s.id) }],
               [
-                { label: "대화 패널 열기", action: () => openPanel("conversation") },
-                { label: "임무 배정…", action: () => setView({ kind: "missions", wsId: m().s.workspaceId }) },
-                { label: "팀 편성…", action: () => setView({ kind: "composition", wsId: m().s.workspaceId }) },
+                { label: t("대화 패널 열기"), action: () => openPanel("conversation") },
+                { label: t("임무 배정…"), action: () => setView({ kind: "missions", wsId: m().s.workspaceId }) },
+                { label: t("팀 편성…"), action: () => setView({ kind: "composition", wsId: m().s.workspaceId }) },
               ],
-              [{ label: "승인·거부는 터미널 페인에서 (G7)", note: true }],
-              [{ label: "중지", danger: true, disabled: m().s.status === "dead", action: () => stopSession(m().s) }],
+              [{ label: t("승인·거부는 터미널 페인에서 (G7)"), note: true }],
+              [{ label: t("중지"), danger: true, disabled: m().s.status === "dead", action: () => stopSession(m().s) }],
             ]}
           />
         )}

@@ -30,6 +30,7 @@ import {
 import { resumeAgent, spawnAgent } from "../backend/agent";
 import { backend } from "../backend/mock";
 import { settings } from "../backend/settings";
+import { t, tf } from "../i18n";
 import { selectedSession, tick } from "../state";
 import { ContextMenu } from "./ui";
 import type { MenuGroup } from "./ui";
@@ -618,7 +619,7 @@ export function TerminalPane(props: {
             <input
               ref={searchInput}
               value={query()}
-              placeholder="터미널 검색"
+              placeholder={t("터미널 검색")}
               spellcheck={false}
               onInput={(ev) => {
                 setQuery(ev.currentTarget.value);
@@ -636,20 +637,20 @@ export function TerminalPane(props: {
                 }
               }}
             />
-            <button class="btn ghost" title="이전 일치 (Shift+Enter)" onClick={findPrev}>
+            <button class="btn ghost" title={t("이전 일치 (Shift+Enter)")} onClick={findPrev}>
               ↑
             </button>
-            <button class="btn ghost" title="다음 일치 (Enter)" onClick={() => findNext()}>
+            <button class="btn ghost" title={t("다음 일치 (Enter)")} onClick={() => findNext()}>
               ↓
             </button>
-            <button class="btn ghost" title="닫기 (ESC)" onClick={closeSearch}>
+            <button class="btn ghost" title={t("닫기 (ESC)")} onClick={closeSearch}>
               ✕
             </button>
           </div>
         </Show>
         <Show when={isTauri() && atTop() && !history()}>
           <button class="btn term-history-chip" onClick={() => void openHistory()}>
-            ▲ 디스크 기록 보기 — 링버퍼 위 기록 (FR-C-13)
+            {t("▲ 디스크 기록 보기 — 링버퍼 위 기록 (FR-C-13)")}
           </button>
         </Show>
         {/* 재개 제안 (FR-C-33) — 자동 실행 없음. 재개 불가는 명시한다 (FR-C-34) */}
@@ -661,27 +662,27 @@ export function TerminalPane(props: {
                 <div class="mono" style={{ "font-size": "11px", "font-weight": 700 }}>
                   <Show
                     when={r().resumable}
-                    fallback={<span class="st-dead">재개 불가 — {r().reason ?? "트랜스크립트 없음"}</span>}
+                    fallback={<span class="st-dead">{t("재개 불가")} — {t(r().reason ?? "트랜스크립트 없음")}</span>}
                   >
-                    <span class="st-busy">이전 에이전트 세션 발견 — 재개 대기</span>
+                    <span class="st-busy">{t("이전 에이전트 세션 발견 — 재개 대기")}</span>
                   </Show>
                 </div>
                 <div class="muted" style={{ "font-size": "10px" }}>
                   {r().resumable
-                    ? "같은 대화를 --resume으로 이어갑니다. 자동 실행하지 않습니다 (C5)."
-                    : "이전 대화를 이어갈 수 없습니다 — 새 대화 또는 셸로 시작하세요."}
+                    ? t("같은 대화를 --resume으로 이어갑니다. 자동 실행하지 않습니다 (C5).")
+                    : t("이전 대화를 이어갈 수 없습니다 — 새 대화 또는 셸로 시작하세요.")}
                 </div>
                 <div class="pane-restore-actions">
                   <Show when={r().resumable}>
                     <button class="btn primary" onClick={() => void restoreAction("resume")}>
-                      ▶ 이전 대화 재개
+                      {t("▶ 이전 대화 재개")}
                     </button>
                   </Show>
                   <button class="btn" classList={{ primary: !r().resumable }} onClick={() => void restoreAction("fresh")}>
-                    새 대화 시작
+                    {t("새 대화 시작")}
                   </button>
                   <button class="btn ghost" onClick={() => void restoreAction("shell")}>
-                    셸로 시작
+                    {t("셸로 시작")}
                   </button>
                 </div>
                 <Show when={restoreErr()}>
@@ -697,7 +698,7 @@ export function TerminalPane(props: {
           {(h) => (
             <div class="card term-history" onMouseDown={(ev) => ev.stopPropagation()}>
               <div style={{ display: "flex", "align-items": "center", padding: "3px 8px", gap: "6px" }}>
-                <span class="eyebrow">디스크 스크롤백 · {h().length}줄 로드됨</span>
+                <span class="eyebrow">{tf("디스크 스크롤백 · {n}줄 로드됨", { n: h().length })}</span>
                 <button
                   class="btn ghost"
                   style={{ "margin-left": "auto", padding: "1px 6px" }}
@@ -707,13 +708,13 @@ export function TerminalPane(props: {
                 </button>
               </div>
               <button class="btn ghost" style={{ padding: "2px" }} onClick={() => void loadOlderHistory()}>
-                ▲ 더 이전 200줄
+                {t("▲ 더 이전 200줄")}
               </button>
               <div class="mono term-history-lines" ref={historyEl}>
                 <For each={h()}>{(l) => <div>{l.text}</div>}</For>
                 <Show when={h().length === 0}>
                   <div class="muted" style={{ padding: "8px" }}>
-                    디스크에 저장된 확정 줄이 없습니다
+                    {t("디스크에 저장된 확정 줄이 없습니다")}
                   </div>
                 </Show>
               </div>
@@ -726,20 +727,20 @@ export function TerminalPane(props: {
           <ContextMenu
             x={m().x}
             y={m().y}
-            header={props.agent ? `${props.agent.name} · 터미널` : "기본 터미널"}
+            header={props.agent ? `${props.agent.name} · ${t("터미널")}` : t("기본 터미널")}
             onClose={() => setMenu(undefined)}
             groups={[
               // 주 동작 — 편집
               [
-                { label: "복사", kbd: "Ctrl+Shift+C", disabled: !m().hasSel, action: () => menuAction(copySelection) },
-                { label: "붙여넣기", kbd: "Ctrl+Shift+V", action: () => menuAction((t) => void pasteFromClipboard(props.sessionId, t)) },
-                { label: "모두 선택", action: () => menuAction((t) => t.selectAll()) },
-                { label: "검색", kbd: "Ctrl+F", action: () => menuAction(() => setSearchSession(props.sessionId)) },
-                { label: "화면 지우기", action: () => menuAction((t) => t.clear()) },
+                { label: t("복사"), kbd: "Ctrl+Shift+C", disabled: !m().hasSel, action: () => menuAction(copySelection) },
+                { label: t("붙여넣기"), kbd: "Ctrl+Shift+V", action: () => menuAction((term) => void pasteFromClipboard(props.sessionId, term)) },
+                { label: t("모두 선택"), action: () => menuAction((term) => term.selectAll()) },
+                { label: t("검색"), kbd: "Ctrl+F", action: () => menuAction(() => setSearchSession(props.sessionId)) },
+                { label: t("화면 지우기"), action: () => menuAction((term) => term.clear()) },
               ],
               // 보기·이동·세션 — 소유 화면이 얹는다 (danger 항목은 컴포넌트가 마지막으로 모은다)
               ...(props.extraMenu?.() ?? []),
-              [{ label: "이미지 붙여넣기 → 파일 저장 후 경로 삽입", note: true }],
+              [{ label: t("이미지 붙여넣기 → 파일 저장 후 경로 삽입"), note: true }],
             ]}
           />
         )}

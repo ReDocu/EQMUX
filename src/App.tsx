@@ -15,6 +15,7 @@ import { startFileWatch } from "./backend/watch";
 import { refreshWorkspaces } from "./backend/workspaces";
 import { exitOpen, layoutPickerOpen, overlay, panelOpen, setExitOpen, setLayoutPickerOpen, setView, terminalFull, view } from "./state";
 import type { View } from "./state";
+import { t } from "./i18n";
 import { ScreenOverlay } from "./components/ScreenOverlay";
 import { editorGuard, MissionExplorerTab } from "./components/MissionExplorerTab";
 import { ControlCenter } from "./screens/ControlCenter";
@@ -159,22 +160,22 @@ export function App() {
       </div>
       {/* 전체 화면 팝업 4종 — overlay 신호 하나라서 동시에 하나만 열린다 (M25 확장) */}
       <Show when={overlay() === "explorer"}>
-        <ScreenOverlay title="임무 · 파일 탐색기" icon="≡" guard={editorGuard}>
+        <ScreenOverlay title={t("임무 · 파일 탐색기")} icon="≡" guard={editorGuard}>
           <MissionExplorerTab />
         </ScreenOverlay>
       </Show>
       <Show when={overlay() === "connect"}>
-        <ScreenOverlay title="워크스페이스 연결" icon="⌂">
+        <ScreenOverlay title={t("워크스페이스 연결")} icon="⌂">
           <WorkspaceConnection />
         </ScreenOverlay>
       </Show>
       <Show when={overlay() === "roles"}>
-        <ScreenOverlay title="역할 라이브러리" icon="◇">
+        <ScreenOverlay title={t("역할 라이브러리")} icon="◇">
           <RoleLibrary />
         </ScreenOverlay>
       </Show>
       <Show when={overlay() === "settings"}>
-        <ScreenOverlay title="설정" icon="⚙">
+        <ScreenOverlay title={t("설정")} icon="⚙">
           <Settings />
         </ScreenOverlay>
       </Show>

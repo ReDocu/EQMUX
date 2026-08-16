@@ -6,6 +6,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { createSignal } from "solid-js";
+import { t, tf } from "../i18n";
 import { backend } from "./mock";
 import { echoPty, isTauri, writePty } from "./pty";
 import type { ConversationMessage } from "../types";
@@ -80,10 +81,10 @@ export async function sendConversation(
     return null;
   } catch (e) {
     const s = String(e);
-    if (s.includes("RATE_LIMIT")) return "분당 발신 상한에 닿았습니다 (M6) — 잠시 후 다시";
-    if (s.includes("TOO_LONG")) return `본문이 너무 깁니다 — ${MSG_MAX_BODY}자 상한`;
-    if (s.includes("EMPTY") || s.includes("BAD_TYPE")) return "타입 5종과 본문이 필요합니다 (M2)";
-    return "전송 실패 — 로그 패널을 확인하세요";
+    if (s.includes("RATE_LIMIT")) return t("분당 발신 상한에 닿았습니다 (M6) — 잠시 후 다시");
+    if (s.includes("TOO_LONG")) return tf("본문이 너무 깁니다 — {n}자 상한", { n: MSG_MAX_BODY });
+    if (s.includes("EMPTY") || s.includes("BAD_TYPE")) return t("타입 5종과 본문이 필요합니다 (M2)");
+    return t("전송 실패 — 로그 패널을 확인하세요");
   }
 }
 

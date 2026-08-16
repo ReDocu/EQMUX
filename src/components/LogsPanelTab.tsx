@@ -10,6 +10,7 @@ import type { ServerLog } from "../backend/mock";
 import { pageScrollback, searchScrollback } from "../backend/panels";
 import type { ScrollbackHit } from "../backend/panels";
 import { isTauri, openLogDir } from "../backend/pty";
+import { t, tf } from "../i18n";
 
 const LEVELS = ["전체", "INFO", "WARN", "ERROR"] as const;
 
@@ -121,7 +122,7 @@ export function LogsPanelTab() {
   return (
     <div class="logsp">
       <div class="panel-head-row">
-        <span class="panel-title">서버 로그</span>
+        <span class="panel-title">{t("서버 로그")}</span>
         <span class="mono muted" style={{ "font-size": "10px" }}>
           {metrics().total} LINES
         </span>
@@ -130,16 +131,16 @@ export function LogsPanelTab() {
           value={level()}
           onChange={(e) => setLevel(e.currentTarget.value as (typeof LEVELS)[number])}
         >
-          <For each={LEVELS}>{(l) => <option value={l}>{l}</option>}</For>
+          <For each={LEVELS}>{(l) => <option value={l}>{t(l)}</option>}</For>
         </select>
-        <button class="btn ghost" style={{ padding: "2px 7px" }} title="표시 중인 로그를 파일로 저장" onClick={exportLogs}>
-          ⤓ 저장
+        <button class="btn ghost" style={{ padding: "2px 7px" }} title={t("표시 중인 로그를 파일로 저장")} onClick={exportLogs}>
+          ⤓ {t("저장")}
         </button>
       </div>
 
       <input
         class="panel-search mono"
-        placeholder={isTauri() ? "필터 입력 · Enter = 디스크 전문 검색(FTS)" : "분류 · 세션 · 내용 검색"}
+        placeholder={t(isTauri() ? "필터 입력 · Enter = 디스크 전문 검색(FTS)" : "분류 · 세션 · 내용 검색")}
         value={query()}
         onInput={(e) => {
           setQuery(e.currentTarget.value);
@@ -171,12 +172,12 @@ export function LogsPanelTab() {
         fallback={
           <div class="logsp-list">
             <div class="panel-head-row" style={{ padding: "4px 0" }}>
-              <span class="eyebrow">디스크 검색 · {hits()!.length}건 (전체 스크롤백 FTS)</span>
+              <span class="eyebrow">{tf("디스크 검색 · {n}건 (전체 스크롤백 FTS)", { n: hits()!.length })}</span>
               <button class="btn ghost" style={{ "margin-left": "auto", padding: "2px 7px" }} onClick={() => { setHits(null); setCtx(null); }}>
-                ✕ 결과 닫기
+                ✕ {t("결과 닫기")}
               </button>
             </div>
-            <Show when={!searching()} fallback={<div class="muted" style={{ padding: "8px" }}>검색 중…</div>}>
+            <Show when={!searching()} fallback={<div class="muted" style={{ padding: "8px" }}>{t("검색 중…")}</div>}>
               <For each={hits()!}>
                 {(h) => (
                   <div class="logsp-row" style={{ cursor: "pointer" }} onClick={() => void openContext(h)}>
@@ -188,7 +189,7 @@ export function LogsPanelTab() {
               </For>
               <Show when={hits()!.length === 0}>
                 <div class="muted" style={{ padding: "12px", "font-size": "11px" }}>
-                  디스크 스크롤백에서 찾지 못했습니다
+                  {t("디스크 스크롤백에서 찾지 못했습니다")}
                 </div>
               </Show>
             </Show>
@@ -197,14 +198,14 @@ export function LogsPanelTab() {
                 <div class="card inset" style={{ "margin-top": "6px", padding: "6px 8px" }}>
                   <div class="panel-head-row" style={{ padding: "0 0 4px" }}>
                     <span class="eyebrow">
-                      {c().session} · 문맥 {c().lines.length}줄 (디스크 페이징)
+                      {c().session} · {tf("문맥 {n}줄 (디스크 페이징)", { n: c().lines.length })}
                     </span>
                     <button class="btn ghost" style={{ "margin-left": "auto", padding: "1px 6px" }} onClick={() => setCtx(null)}>
                       ✕
                     </button>
                   </div>
                   <button class="btn ghost" style={{ width: "100%", padding: "2px" }} onClick={() => void loadOlder()}>
-                    ▲ 더 이전 60줄
+                    ▲ {t("더 이전 60줄")}
                   </button>
                   <div class="mono" style={{ "max-height": "180px", overflow: "auto", "font-size": "10.5px", "line-height": "1.5" }}>
                     <For each={c().lines}>
@@ -226,7 +227,7 @@ export function LogsPanelTab() {
             {(l) => (
               <div class="logsp-row" classList={{ error: l.level === "error", warn: l.level === "warn" }}>
                 <span class="mono muted logsp-time">{l.time}</span>
-                <span class="badge logsp-type">{l.type}</span>
+                <span class="badge logsp-type">{t(l.type)}</span>
                 <span class="logsp-msg">{l.message}</span>
                 <Show when={l.expandable}>
                   <span class="mono muted">›</span>
@@ -236,7 +237,7 @@ export function LogsPanelTab() {
           </For>
           <Show when={logs().length === 0}>
             <div class="muted" style={{ padding: "12px", "font-size": "11px" }}>
-              조건에 맞는 로그가 없습니다
+              {t("조건에 맞는 로그가 없습니다")}
             </div>
           </Show>
         </div>
@@ -245,21 +246,21 @@ export function LogsPanelTab() {
       <div class="card inset logsp-footer">
         <span class="logsp-live">
           <span class="logsp-live-dot" />
-          {isTauri() ? "event 테이블 스트림 연결됨" : "실시간 스트림 (목)"}
+          {t(isTauri() ? "event 테이블 스트림 연결됨" : "실시간 스트림 (목)")}
         </span>
-        <span class="mono muted">{metrics().rate}</span>
+        <span class="mono muted">{t(metrics().rate)}</span>
       </div>
 
       <Show when={isTauri()}>
         <div class="card inset logsp-session-logs">
           <div>
-            <div style={{ "font-weight": 700, "font-size": "11px" }}>세션 로그 (PTY 원문)</div>
+            <div style={{ "font-weight": 700, "font-size": "11px" }}>{t("세션 로그 (PTY 원문)")}</div>
             <div class="mono muted" style={{ "font-size": "10px" }}>
-              ~/.eqmux/logs/&lt;세션&gt;.log · 실시간 append
+              {t("~/.eqmux/logs/<세션>.log · 실시간 append")}
             </div>
           </div>
           <button class="btn" onClick={openLogDir}>
-            폴더 열기
+            {t("폴더 열기")}
           </button>
         </div>
       </Show>

@@ -5,6 +5,7 @@
 import { For, Show } from "solid-js";
 import { panelSide, panelTab, setPanelOpen, setPanelSide, setPanelTab } from "../state";
 import type { PanelTab } from "../state";
+import { t } from "../i18n";
 import { BrowserPanelTab } from "./BrowserPanelTab";
 import { ConversationTab } from "./ConversationTab";
 import { GitPanelTab } from "./GitPanelTab";
@@ -24,15 +25,15 @@ export function SidePanel() {
     <div class="side-panel" classList={{ left: panelSide() === "left" }} style={{ order: panelSide() === "left" ? "-1" : "1" }}>
       <div class="panel-tabs">
         <For each={TABS}>
-          {(t) => (
-            <button class="panel-tab" classList={{ active: panelTab() === t.key }} onClick={() => setPanelTab(t.key)}>
-              {t.label}
+          {(tb) => (
+            <button class="panel-tab" classList={{ active: panelTab() === tb.key }} onClick={() => setPanelTab(tb.key)}>
+              {t(tb.label)}
             </button>
           )}
         </For>
         <button
           class="panel-tab side-toggle mono"
-          title={panelSide() === "right" ? "패널을 왼쪽으로" : "패널을 오른쪽으로"}
+          title={t(panelSide() === "right" ? "패널을 왼쪽으로" : "패널을 오른쪽으로")}
           onClick={() => setPanelSide(panelSide() === "right" ? "left" : "right")}
         >
           {panelSide() === "right" ? "◧" : "◨"}

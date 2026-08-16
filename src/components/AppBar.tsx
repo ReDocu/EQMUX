@@ -15,6 +15,7 @@ import {
   toggleOverlay,
   view,
 } from "../state";
+import { t } from "../i18n";
 import { ATTENTION_ORDER } from "../types";
 
 export function AppBar() {
@@ -61,7 +62,7 @@ export function AppBar() {
           classList={{ active: view().kind === "control" }}
           onClick={() => setView({ kind: "control" })}
         >
-          관제
+          {t("관제")}
           <Show when={anyUnseen()}>
             <span class="unread-dot" />
           </Show>
@@ -82,7 +83,7 @@ export function AppBar() {
               </Show>
               <span
                 class="tab-close"
-                title="워크스페이스 닫기 (세션은 백그라운드 유지)"
+                title={t("워크스페이스 닫기 (세션은 백그라운드 유지)")}
                 onClick={(e) => {
                   e.stopPropagation();
                   backend.closeWorkspace(ws.id);
@@ -96,7 +97,7 @@ export function AppBar() {
             </button>
           )}
         </For>
-        <button class="tab tab-add" title="워크스페이스 연결" onClick={() => toggleOverlay("connect")}>
+        <button class="tab tab-add" title={t("워크스페이스 연결")} onClick={() => toggleOverlay("connect")}>
           +
         </button>
       </div>
@@ -104,10 +105,10 @@ export function AppBar() {
         <button
           class="tool"
           classList={{ active: panelOpen() }}
-          title="대화 패널 토글 — 전체 화면에서도 열립니다"
+          title={t("대화 패널 토글 — 전체 화면에서도 열립니다")}
           onClick={toggleConversation}
         >
-          대화
+          {t("대화")}
           <Show when={unreadMsgs()}>
             <span class="unread-dot" />
           </Show>
@@ -116,37 +117,37 @@ export function AppBar() {
         <button
           class="tool"
           classList={{ active: overlay() === "explorer" }}
-          title="임무 · 파일 탐색기 — 전체 화면 팝업 (M25)"
+          title={t("임무 · 파일 탐색기 — 전체 화면 팝업 (M25)")}
           onClick={() => toggleOverlay("explorer")}
         >
-          임무
+          {t("임무")}
         </button>
         <button
           class="tool"
           classList={{ active: overlay() === "connect" }}
-          title="워크스페이스 연결 — 전체 화면 팝업"
+          title={t("워크스페이스 연결 — 전체 화면 팝업")}
           onClick={() => toggleOverlay("connect")}
         >
-          워크스페이스
+          {t("워크스페이스")}
         </button>
         <button
           class="tool"
           classList={{ active: overlay() === "roles" }}
-          title="역할 라이브러리 — 전체 화면 팝업"
+          title={t("역할 라이브러리 — 전체 화면 팝업")}
           onClick={() => toggleOverlay("roles")}
         >
-          역할
+          {t("역할")}
         </button>
         <button
           class="tool"
           classList={{ active: overlay() === "settings" }}
-          title="설정 — 전체 화면 팝업"
+          title={t("설정 — 전체 화면 팝업")}
           onClick={() => toggleOverlay("settings")}
         >
-          설정
+          {t("설정")}
         </button>
         <button class="tool" onClick={() => setExitOpen(true)}>
-          종료
+          {t("종료")}
         </button>
       </div>
     </div>

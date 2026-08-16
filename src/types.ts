@@ -1,5 +1,6 @@
 // EQMUX 도메인 타입 — PRD C §7.1 · PRD D §4.2.1/§7.1 · PRD G §7.1 스키마의 TS 대응.
 // 백엔드(Tauri Rust)와 주고받는 계약이므로 여기 외의 곳에서 도메인 형태를 재정의하지 않는다.
+import { t, tf } from "./i18n";
 
 /** PRD D §4.2.1 — 에이전트 어휘 6종을 그대로 채택 (G2) */
 export type AgentStatus = "starting" | "busy" | "waiting" | "shell" | "idle" | "dead";
@@ -81,7 +82,7 @@ export const personaTagline = (p: Persona): string => {
 export interface Session {
   id: string;
   workspaceId: string;
-  slot: 1 | 2 | 3 | 4;
+  slot: number; // 1..8 — 상한은 설정 maxSlots (기본 4 · 옵션 6·8), 절대 상한 HARD_MAX_SLOTS=8
   personaId: string;
   jobId: string;
   name?: string; // 세션 표시 이름 (P5 · FR-E-36) — 비우면 페르소나 이름을 쓴다
@@ -248,7 +249,7 @@ export const ATTENTION_ORDER: Record<AgentStatus, number> = {
 
 export function fmtSince(ms: number): string {
   const m = Math.floor(ms / 60000);
-  if (m < 1) return "방금";
-  if (m < 60) return `${m}분째`;
-  return `${Math.floor(m / 60)}시간째`;
+  if (m < 1) return t("방금");
+  if (m < 60) return tf("{m}분째", { m });
+  return tf("{h}시간째", { h: Math.floor(m / 60) });
 }
