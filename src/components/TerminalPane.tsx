@@ -332,26 +332,10 @@ async function initSession(
       setPendingRestore(entry, props.restore);
       return;
     }
-    // 역할 세션 = Claude Code 에이전트 기동 (PRD D) / 기본 터미널 = 일반 셸
-    if (props.agent) {
-      try {
-        await spawnAgent(
-          props.sessionId,
-          props.wsId ?? "default",
-          props.cwd,
-          props.agent.name,
-          props.agent.permissions,
-          term.cols,
-          term.rows,
-        );
-      } catch (err) {
-        // 기동 실패 이유를 페인에 정직하게 표시 (FR-D-08)
-        term.writeln(`\r\n\x1b[31m에이전트 기동 실패 — ${String(err)}\x1b[0m`);
-        term.writeln("\x1b[90mclaude CLI 설치/로그인 상태를 확인하세요\x1b[0m");
-      }
-    } else {
-      await spawnPty(props.sessionId, props.cwd, term.cols, term.rows, props.wsId, props.shell);
-    }
+    // 셸 우선 모델 — 처음 켜는 세션은 역할이 있어도 전부 일반 셸이다. 여기는 유일한
+    // 자동 스폰 게이트라, 이 자리에서 에이전트를 띄우지 않는 것이 "자동 실행 없음"의 구조적 보장이다.
+    // 에이전트 기동은 명시 액션(재개 버튼·세션 상세)만 남는다.
+    await spawnPty(props.sessionId, props.cwd, term.cols, term.rows, props.wsId, props.shell);
     entry.lastCols = term.cols;
     entry.lastRows = term.rows;
   } else {
