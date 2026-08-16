@@ -3,6 +3,7 @@ name = "eqmux"
 version = "0.3.0"
 description = "EQMUX — 멀티 에이전트 관제 MUX"
 edition = "2021"
+license = "MIT"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
