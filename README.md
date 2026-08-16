@@ -133,4 +133,4 @@ npm run tauri build   # NSIS 인스톨러 산출 (EQMUX_x64-setup.exe)
 
 ## 라이선스
 
-비공개 (private) — EQMENT Studio.
+MIT — 자세한 내용은 [LICENSE](LICENSE) 참고.
