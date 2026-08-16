@@ -4,7 +4,7 @@
 import { For, Show } from "solid-js";
 import { DEFAULT_SETTINGS, settings, SLOT_OPTIONS, updateSettings } from "../backend/settings";
 import type { AppSettings } from "../backend/settings";
-import { isTauri } from "../backend/pty";
+import { isTauri, openExternal } from "../backend/pty";
 import { t } from "../i18n";
 import { Eyebrow } from "../components/ui";
 
@@ -15,7 +15,8 @@ type Wired = {
   apply: (idx: number) => void;
 };
 type Fixed = { k: string; label: string };
-type Section = { title: string; desc: string; wired?: Wired[]; fixed?: Fixed[] };
+type Link = { k: string; label: string; url: () => string };
+type Section = { title: string; desc: string; wired?: Wired[]; fixed?: Fixed[]; links?: Link[] };
 
 function pick<T>(options: T[], value: T): number {
   const i = options.indexOf(value);
@@ -29,6 +30,12 @@ const SLOTS = [...SLOT_OPTIONS]; // 4 · 6 · 8
 const THEMES: AppSettings["theme"][] = ["dark", "light", "system"];
 const MEM_BANNER = [0, 2048, 4096, 8192]; // FR-G-67 — 0 = 꺼짐 (기본)
 const LANGS: AppSettings["language"][] = ["ko", "en"];
+
+// 문의 폼 (README·릴리스 노트와 같은 주소) — UI 언어에 맞는 쪽을 연다
+const FEEDBACK_FORM: Record<AppSettings["language"], string> = {
+  ko: "https://docs.google.com/forms/d/e/1FAIpQLScn7JEfOpWv1W7FPJwDIFluvRkK_y6_dpOPCe6E-opf-YHHKw/viewform",
+  en: "https://docs.google.com/forms/d/e/1FAIpQLSdGjEUhbjNoMhi3BiYAeTRnTOPoxqKNKsN4_m0_6Ta_6KcMNw/viewform",
+};
 
 // 문자열은 한국어 원문 그대로 둔다 — 렌더 지점의 t()가 언어를 푼다 (i18n.ts 규칙)
 const SECTIONS: Section[] = [
@@ -157,6 +164,17 @@ const SECTIONS: Section[] = [
       { k: "repo .claude / CLAUDE.md", label: "수정 안 함 (읽기만)" },
     ],
   },
+  {
+    title: "문의 · 피드백",
+    desc: "버그와 개선 제안을 받고 있습니다. 아직 1.0 이전이라 어떤 이야기든 도움이 됩니다.",
+    links: [
+      {
+        k: "문의 폼",
+        label: "브라우저에서 열기",
+        url: () => FEEDBACK_FORM[settings().language],
+      },
+    ],
+  },
 ];
 
 export function Settings() {
@@ -208,6 +226,22 @@ export function Settings() {
                       <span class="v mono setting-v fixed" title={t("고정 정책 — 설정으로 바꾸지 않습니다")}>
                         {t(it.label)}
                       </span>
+                    </div>
+                  )}
+                </For>
+              </Show>
+              <Show when={sec.links}>
+                <For each={sec.links}>
+                  {(it) => (
+                    <div class="kv">
+                      <span class="k">{t(it.k)}</span>
+                      <button
+                        class="v mono setting-v"
+                        onClick={() => openExternal(it.url())}
+                        title={t("기본 브라우저로 엽니다")}
+                      >
+                        {t(it.label)} ↗
+                      </button>
                     </div>
                   )}
                 </For>

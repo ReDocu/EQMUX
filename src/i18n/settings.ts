@@ -97,4 +97,12 @@ export const dict: Record<string, string> = {
   "개인 Claude 설정은 수정하지 않습니다 (D3 · FR-E-70).": "Personal Claude settings are never modified (D3 · FR-E-70).",
   "수정 안 함": "Never modified",
   "수정 안 함 (읽기만)": "Never modified (read-only)",
+
+  // 문의 · 피드백
+  "문의 · 피드백": "Feedback",
+  "버그와 개선 제안을 받고 있습니다. 아직 1.0 이전이라 어떤 이야기든 도움이 됩니다.":
+    "Bug reports and feature requests are welcome — it's still pre-1.0, so anything helps.",
+  "문의 폼": "Feedback form",
+  "브라우저에서 열기": "Open in browser",
+  "기본 브라우저로 엽니다": "Opens in your default browser",
 };
