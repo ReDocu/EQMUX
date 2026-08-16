@@ -143,6 +143,33 @@ pub fn transcript_path(cwd: &str, uuid: &str) -> PathBuf {
         .join(format!("{uuid}.jsonl"))
 }
 
+/// cwd의 Claude projects 디렉터리에서 가장 최근에 수정된 트랜스크립트 (셸 우선 모델) —
+/// 사용자가 터미널에 직접 띄운 에이전트는 uuid 매핑이 없으므로 cwd로 추정한다.
+/// 같은 cwd를 쓰는 세션들은 같은 파일을 보게 된다 — 표시(참조만, V2)라서 감수한다.
+pub fn latest_transcript(cwd: &str) -> Option<PathBuf> {
+    let with_dummy = transcript_path(cwd, "x");
+    latest_jsonl_in(with_dummy.parent()?)
+}
+
+fn latest_jsonl_in(dir: &std::path::Path) -> Option<PathBuf> {
+    let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
+    for e in fs::read_dir(dir).ok()?.flatten() {
+        let p = e.path();
+        if p.extension().and_then(|x| x.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let Ok(meta) = e.metadata() else { continue };
+        if meta.len() == 0 {
+            continue;
+        }
+        let Ok(t) = meta.modified() else { continue };
+        if best.as_ref().is_none_or(|(bt, _)| t > *bt) {
+            best = Some((t, p));
+        }
+    }
+    best.map(|(_, p)| p)
+}
+
 /// 재개 가능 판정 = 트랜스크립트 존재 + 비어 있지 않음 (FR-D-20). 추정하지 않고 실측한다.
 pub fn resumable(cwd: &str, uuid: &str) -> bool {
     fs::metadata(transcript_path(cwd, uuid))
@@ -683,6 +710,21 @@ mod tests {
         assert_eq!(esc("D:\\ClaudeProject.EQMent"), "D--ClaudeProject-EQMent");
         assert_eq!(esc("D:\\my_proj v2"), "D--my-proj-v2"); // 밑줄·공백도 '-'
         assert_eq!(esc("D:\\팀"), "D---"); // 한글은 ASCII 영숫자가 아니라 '-'
+    }
+
+    /// cwd 최신 트랜스크립트 추정 (셸 우선 모델) — 빈 파일·jsonl 아닌 파일은 제외, 최신 수정본
+    #[test]
+    fn latest_jsonl_picks_newest_nonempty() {
+        let dir = std::env::temp_dir().join(format!("eqmux-lt-{}", crate::workspace::now_ms()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("old.jsonl"), "x").unwrap();
+        std::fs::write(dir.join("empty.jsonl"), "").unwrap();
+        std::fs::write(dir.join("note.txt"), "x").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(30)); // mtime 해상도 확보
+        std::fs::write(dir.join("new.jsonl"), "y").unwrap();
+        let p = super::latest_jsonl_in(&dir).unwrap();
+        assert_eq!(p.file_name().unwrap(), "new.jsonl");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

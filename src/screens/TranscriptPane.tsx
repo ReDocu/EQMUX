@@ -4,7 +4,7 @@
 // 도구 호출은 접힌 상태가 기본이다 (FR-G-83).
 import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
 import { backend } from "../backend/mock";
-import { exportSessionScrollback } from "../backend/panels";
+import { cleanScrollback, exportSessionScrollback } from "../backend/panels";
 import { isTauri, scrollbackTail, writePty } from "../backend/pty";
 import { readTranscript } from "../backend/transcript";
 import type { TranscriptData } from "../backend/transcript";
@@ -25,9 +25,10 @@ export function TranscriptPane(props: { session: Session }) {
       const d = await readTranscript(props.session);
       setData(d);
       if (!d) {
-        // 스크롤백 폴백 (FR-G-86) — 로그가 없거나 스키마 인식 불가. 여기는 평문만 쓴다
+        // 스크롤백 폴백 (FR-G-86) — 로그가 없거나 스키마 인식 불가. 여기는 평문만 쓴다.
+        // TUI 잔해(프레임·로고 조각·연속 중복)는 걸러낸다 — 재생 필터와 같은 판정
         const lines = await scrollbackTail(props.session.workspaceId, props.session.id, 200);
-        setFallback(lines.map((l) => l.text));
+        setFallback(cleanScrollback(lines).map((l) => l.text));
       }
     };
     createEffect(on(() => props.session.id, () => void load()));
@@ -104,7 +105,7 @@ export function TranscriptPane(props: { session: Session }) {
     const d = data();
     if (!isTauri()) return "목 데이터";
     if (d) {
-      const parts = [`JSONL 실측${d.windowed ? " · 끝 2MB 창" : ""}`];
+      const parts = [`JSONL ${d.guessed ? "· cwd 최신 추정" : "실측"}${d.windowed ? " · 끝 2MB 창" : ""}`];
       if (d.skipped > 0) parts.push(`건너뜀 ${d.skipped}줄`);
       return parts.join(" · ");
     }

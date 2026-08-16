@@ -40,12 +40,12 @@ import { sessionDisplayName } from "../types";
 
 // 세션 상태별 목 터미널 출력 — 2×2 그리드 시각 검증용 (Tauri 밖 폴백 전용)
 function mockLines(s: Session, personaName: string): string[] {
-  if (!s.personaId) return ["PowerShell 7.6.4", `PS ${s.cwd}> _`]; // 기본 터미널 (역할 없음)
-  const base = [`PS ${s.cwd}> claude --resume`, `Claude Code ${s.agentVersion ?? "2.1.226"} · ${personaName}`];
+  // 셸 우선 모델 — 역할 세션도 셸 프롬프트로 시작한다. 에이전트 출력은 직접 띄운 뒤의 모습.
+  if (!s.personaId || s.status === "shell") return ["PowerShell 7.6.4", `PS ${s.cwd}> _`];
+  const base = [`PS ${s.cwd}> claude`, `Claude Code ${s.agentVersion ?? "2.1.226"} · ${personaName}`];
   if (s.status === "waiting") return [...base, "⏸ 승인 대기 — " + (s.waitingFor ?? ""), "y/n 을 입력하세요"];
   if (s.status === "dead") return [...base, `프로세스 종료 · exit ${s.exitCode ?? "?"}`, s.resumable ? "재개 가능 — --resume" : "재개 불가"];
   if (s.status === "busy") return [...base, `⚙ ${s.lastOutput}`, `서브에이전트 ${s.subagents} · ${(s.scrollbackLines / 1000).toFixed(1)}K lines`];
-  if (s.status === "shell") return [...base, `PS ${s.cwd}> _`];
   return [...base, `● ${s.lastOutput || "대기 중"}`];
 }
 
@@ -443,16 +443,9 @@ export function ControlCenter(props: { workspace: Workspace }) {
               cwd={s.cwd}
               wsId={props.workspace.id}
               shell={shellCmdFor(s)}
-              agent={
-                s.personaId && job(s.jobId)
-                  ? {
-                      name: persona(s.personaId)?.name ?? s.personaId,
-                      // 유효 권한 (FR-E-34) — 슬롯 오버라이드가 있으면 그것으로 스폰한다
-                      permissions: s.permOverride ?? job(s.jobId)!.permissions,
-                    }
-                  : undefined
-              }
-              restore={s.restored ? { resumable: s.resumable, reason: s.resumeReason } : undefined}
+              // 셸 우선 모델 — 역할 세션도 agent 프로퍼티 없이 셸로 시작한다. 에이전트는
+              // 사용자가 터미널에서 직접 띄우고, 관제가 Job 트리 감지로 표시한다.
+              // 재개(FR-C-33)는 제안 게이트 대신 세션 상세·페인 메뉴의 명시 액션으로 남는다.
               revive={s.revived}
               mockLines={mockLines(s, persona(s.personaId)?.name ?? "?")}
               extraMenu={() => [

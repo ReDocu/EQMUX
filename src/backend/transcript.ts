@@ -16,6 +16,8 @@ export interface TranscriptData {
   turns: TranscriptTurnReal[];
   skipped: number;
   windowed: boolean;
+  /** 셸 우선 폴백 — 세션 매핑 없이 cwd의 최신 트랜스크립트로 추정했다 (표시용) */
+  guessed: boolean;
 }
 
 export async function readTranscript(s: Session): Promise<TranscriptData | undefined> {

@@ -74,9 +74,11 @@ export interface Backend {
   renameSession(id: string, name?: string): void;
   /** 세션 메모리 실측 반영 (FR-C-09) — 최신값·피크만 유지, 이벤트 적재 없음 */
   applyMemory(samples: { id: string; mb: number; peakMb: number }[]): void;
+  /** 세션 에이전트 감지 반영 (셸 우선 모델) — Job 트리 실측. 목록에 없는 세션은 표시를 내린다 */
+  applyAgents(list: { id: string; agent: string }[]): void;
   /** 실물 에이전트 상태 반영 (PRD D agent-state 이벤트) — Tauri에서만 호출된다 */
   applyAgentState(evt: AgentStateApply): void;
-  /** PTY 종료 실측 반영 — 셸(기본 터미널) 전용. 에이전트는 agent-state 경로가 관장한다 (FR-D-50) */
+  /** PTY 종료 실측 반영 — 셸 우선 모델의 1차 dead 신호. 훅 연동 에이전트는 agent-state가 뒤따른다 (FR-D-50) */
   sessionExited(id: string, code: number | null): void;
   createMission(wsId: string, name: string, goal: string, branch?: string): void;
   cycleMissionStatus(id: string): void;
@@ -275,6 +277,7 @@ const SESSIONS: Session[] = createMutable<Session[]>([
     scrollbackLines: 18400,
     memoryMb: 512,
     memoryPeakMb: 640,
+    agent: "Claude", // 감지 표시의 목 시드 — Tauri에서는 applyAgents 실측이 대체한다
     lastOutput: "작업 중 · 인증 리팩터",
     sinceMs: 8 * 60000,
   }),
@@ -289,6 +292,7 @@ const SESSIONS: Session[] = createMutable<Session[]>([
     scrollbackLines: 12900,
     memoryMb: 428,
     memoryPeakMb: 611,
+    agent: "Codex",
     lastOutput: "승인 대기 · Bash(npm publish)",
     sinceMs: 12 * 60000,
   }),
@@ -574,8 +578,11 @@ export class MockBackend implements Backend {
 
   sessionExited(id: string, code: number | null) {
     const sess = SESSIONS.find((x) => x.id === id);
-    if (!sess || sess.personaId) return; // 에이전트 dead는 agent-state가 권위 — 재시작 중 거짓 dead 방지
-    sess.resumable = false; // 셸에는 재개할 transcript가 없다 — 죽은 터미널의 "재개"는 좀비 상태만 만든다
+    if (!sess) return;
+    // 셸 우선 모델 — PTY 종료가 모든 세션의 1차 dead 신호다. 명시적 재개/재시작(훅 연동)의
+    // 재기동 경합으로 늦은 exit이 와도 직후 agent-state가 산 상태로 되돌린다 (FR-D-50과 같은 전이).
+    if (!sess.personaId) sess.resumable = false; // 셸에는 재개할 transcript가 없다 — 역할 세션은 재개 칩 유지
+    sess.agent = undefined; // 트리가 죽었다 — 감지된 에이전트 표시도 내린다
     if (sess.status !== "dead") {
       sess.status = "dead";
       sess.exitCode = code ?? undefined;
@@ -644,10 +651,12 @@ export class MockBackend implements Backend {
       } else {
         SESSIONS.push(
           s(id, wsId, w.slot, w.personaId, w.jobId, {
-            status: "starting",
+            // 셸 우선 모델 — 캐스팅은 에이전트를 띄우지 않는다. 셸에서 직접 실행하면
+            // 감지(applyAgents)가 관제에 표시한다
+            status: "shell",
             cwd: ws?.path ?? `C:\\workspace\\${wsId}`, // 실물 경로 — 목 기본값이 Tauri로 새지 않게
             sinceMs: 0,
-            lastOutput: "세션 시작 중",
+            lastOutput: "셸로 시작 — 에이전트는 터미널에서 직접 실행",
           }),
         );
       }
@@ -735,11 +744,11 @@ export class MockBackend implements Backend {
     }
     SESSIONS.push(
       s(`${personaId}@${wsId}`, wsId, slot, personaId, jobId, {
-        status: "starting",
+        status: "shell", // 셸 우선 모델 — 역할 세션도 셸로 시작한다
         cwd: opts?.cwd ?? ws.path,
         worktree: opts?.worktree ?? false,
         sinceMs: 0,
-        lastOutput: "세션 시작 중",
+        lastOutput: "셸로 시작 — 에이전트는 터미널에서 직접 실행",
       }),
     );
     const pName = PERSONAS.find((x) => x.id === personaId)?.name ?? personaId;
@@ -856,6 +865,18 @@ export class MockBackend implements Backend {
       if (!sess || (sess.memoryMb === m.mb && sess.memoryPeakMb === m.peakMb)) continue;
       sess.memoryMb = m.mb;
       sess.memoryPeakMb = m.peakMb;
+      changed = true;
+    }
+    if (changed) this.broadcast();
+  }
+
+  applyAgents(list: { id: string; agent: string }[]) {
+    const found = new Map(list.map((x) => [x.id, x.agent]));
+    let changed = false;
+    for (const sess of SESSIONS) {
+      const next = found.get(sess.id); // 미검출은 undefined — 내려간 에이전트 표시를 지운다
+      if (sess.agent === next) continue;
+      sess.agent = next;
       changed = true;
     }
     if (changed) this.broadcast();

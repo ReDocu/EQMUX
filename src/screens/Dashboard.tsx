@@ -180,6 +180,12 @@ export function Dashboard() {
                         <div class="cell-status">
                           <span class={`sdot ${s.status}`} />
                           <StatusLabel session={s} />
+                          {/* 감지된 에이전트 (셸 우선 모델) — Job 트리 실측. 없으면 표시하지 않는다 */}
+                          <Show when={s.agent}>
+                            <span class="badge blue" style={{ "margin-left": "auto" }} title="터미널에서 실행 중인 에이전트 CLI — 프로세스 트리 실측">
+                              {s.agent}
+                            </span>
+                          </Show>
                         </div>
                         <div class="cell-mission muted">{cellLine2(s)}</div>
                       </button>

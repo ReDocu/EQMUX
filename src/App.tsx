@@ -4,6 +4,7 @@ import { SidePanel } from "./components/SidePanel";
 import { ensureAgentListeners } from "./backend/agent";
 import { startMessageBus } from "./backend/conversation";
 import { backend } from "./backend/mock";
+import { startAgentProbe } from "./backend/agentprobe";
 import { startMemorySampling } from "./backend/memory";
 import { ensurePtyListeners, isTauri, setPtyExitHook } from "./backend/pty";
 import { crashRecovery } from "./backend/recovery";
@@ -50,6 +51,8 @@ export function App() {
   onMount(() => void startMessageBus());
   // 세션 메모리 계측 (FR-C-09 · C11) — Job Object 10초 샘플링, 표시 전용
   onMount(() => startMemorySampling());
+  // 세션 에이전트 감지 (셸 우선 모델) — 터미널에 직접 띄운 claude/codex 등을 관제에 표시
+  onMount(() => startAgentProbe());
   // 외부 편집 감지 (FR-E-73) — .eqmux 변화 → 임무·라이브러리 재실측 (파일이 이긴다, FR-E-74)
   onMount(() => startFileWatch());
 

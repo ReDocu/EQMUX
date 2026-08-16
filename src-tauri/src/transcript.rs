@@ -27,6 +27,8 @@ pub struct TranscriptData {
     pub turns: Vec<Turn>,
     pub skipped: u32,   // 파싱 실패로 건너뛴 줄 (FR-G-85 — 숨기지 않고 표시)
     pub windowed: bool, // 창 단위 로드로 앞부분이 잘렸는가
+    /// 셸 우선 폴백 — uuid 매핑 없이 cwd의 최신 파일로 추정했다 (표시용, 호출부가 세운다)
+    pub guessed: bool,
 }
 
 fn local_hhmm(ts: &str) -> String {
@@ -173,6 +175,7 @@ pub fn read(path: &std::path::Path, limit: usize) -> Result<TranscriptData, Stri
         turns,
         skipped,
         windowed,
+        guessed: false,
     })
 }
 

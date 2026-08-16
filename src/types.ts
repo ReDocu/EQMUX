@@ -112,6 +112,9 @@ export interface Session {
   scrollbackLines: number;
   memoryMb?: number; // C11 · FR-C-09
   memoryPeakMb?: number;
+  /** 감지된 에이전트 CLI (셸 우선 모델) — Job 프로세스 트리 실측 표시 이름 (Claude/Codex 등).
+   *  관측 전용: 사용자가 터미널에 직접 띄운 것을 이름만 식별한다. 미검출이면 undefined */
+  agent?: string;
   lastOutput: string;
 }
 

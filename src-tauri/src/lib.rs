@@ -15,6 +15,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 pub(crate) mod agent;
+mod agentscan;
 mod cli;
 mod clip;
 mod diff;
@@ -980,9 +981,18 @@ fn transcript_read(
     id: String,
     cwd: String,
 ) -> Result<transcript::TranscriptData, String> {
-    let uuid = agent_uuid_for(&app, &workspace, &id)
-        .ok_or("이 세션에서 실행된 에이전트가 없습니다")?;
-    transcript::read(&agent::transcript_path(&cwd, &uuid), 200)
+    // 1급 — 이 세션에서 EQMUX가 띄운 에이전트의 uuid 매핑 (FR-D-24)
+    if let Some(uuid) = agent_uuid_for(&app, &workspace, &id) {
+        if let Ok(d) = transcript::read(&agent::transcript_path(&cwd, &uuid), 200) {
+            return Ok(d);
+        }
+    }
+    // 셸 우선 폴백 — 터미널에서 직접 띄운 에이전트는 매핑이 없다. 같은 cwd의 최신
+    // 트랜스크립트를 추정해 보여준다 (TUI 잔해투성이 스크롤백 폴백보다 낫다). 추정임은 표시한다.
+    let p = agent::latest_transcript(&cwd).ok_or("이 세션에서 실행된 에이전트가 없습니다")?;
+    let mut d = transcript::read(&p, 200)?;
+    d.guessed = true;
+    Ok(d)
 }
 
 /// 재개 (FR-D-21~23) — 사용자 트리거 전용. 같은 uuid + 같은 cwd로 --resume.
@@ -1547,6 +1557,33 @@ fn sessions_memory(state: State<PtyState>) -> Vec<MemSample> {
         .collect()
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentSample {
+    id: String,
+    agent: String,
+}
+
+/// 세션 에이전트 감지 (셸 우선 모델) — Job pid 트리에서 알려진 에이전트 CLI(claude/codex 등)를
+/// 찾는다. 관측 전용 · 프런트가 주기 폴링 · 이벤트 적재 없음. 미검출 세션은 목록에서 빠진다.
+#[tauri::command]
+fn sessions_agents(state: State<PtyState>) -> Vec<AgentSample> {
+    // 잠금 아래서는 pid 목록만 복사한다 — OpenProcess 등 시스템 호출로 잠금을 쥐지 않는다 (B14)
+    let pid_sets: Vec<(String, Vec<u32>)> = {
+        let Ok(sessions) = state.0.lock() else {
+            return Vec::new();
+        };
+        sessions
+            .iter()
+            .filter_map(|(id, s)| s.job.as_ref().map(|j| (id.clone(), j.pids())))
+            .collect()
+    };
+    pid_sets
+        .into_iter()
+        .filter_map(|(id, pids)| agentscan::detect(&pids).map(|a| AgentSample { id, agent: a.into() }))
+        .collect()
+}
+
 /// 포트 스냅숏 (PRD H) — LISTENING TCP + 세션 귀속(Job pid 대조). 관측 전용.
 #[tauri::command]
 async fn ports_snapshot(app: AppHandle) -> Vec<ports::PortRow> {
@@ -1954,6 +1991,7 @@ pub fn run() {
             clip::clip_write_text,
             clip::clip_save_image,
             sessions_memory,
+            sessions_agents,
             ports_snapshot,
             fsx::fs_tree,
             fsx::fs_preview,

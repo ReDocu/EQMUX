@@ -21,8 +21,9 @@ pub struct PortRow {
 }
 
 /// pid → 실행 파일 이름 (확장자 제외). 실패는 "?" — 표시에만 쓴다.
+/// 에이전트 감지(agentscan)도 같은 해석을 쓴다.
 #[cfg(windows)]
-fn process_name(pid: u32) -> String {
+pub(crate) fn process_name(pid: u32) -> String {
     use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::System::Threading::{
         OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -48,7 +49,7 @@ fn process_name(pid: u32) -> String {
 }
 
 #[cfg(not(windows))]
-fn process_name(_pid: u32) -> String {
+pub(crate) fn process_name(_pid: u32) -> String {
     "?".into()
 }
 

@@ -11,7 +11,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import "@xterm/xterm/css/xterm.css";
-import { pageScrollback } from "../backend/panels";
+import { cleanScrollback, pageScrollback } from "../backend/panels";
 import type { ScrollbackHit } from "../backend/panels";
 import {
   clipReadText,
@@ -290,20 +290,9 @@ async function initSession(
     term.onData((data) => writePty(props.sessionId, data));
 
     // 앱 재시작 복구 (FR-C-31·32) — 스토어의 확정 줄을 흐리게 재생하고 경계를 긋는다.
-    // 기존 DB에 남은 TUI 잔해(상자 문자 프레임 조각·연속 중복)는 재생에서 걸러낸다.
-    const BOXY = /[─│╭╮╯╰┌┐└┘═║╔╗╚╝┃━╌╍┤├┬┴┼]/g;
-    const isNoise = (l: string) => {
-      const t = l.replace(/\s/g, "");
-      if (!t) return true;
-      return ((t.match(BOXY) ?? []).length * 2) >= t.length;
-    };
+    // 기존 DB에 남은 TUI 잔해(프레임 조각·연속 중복)는 재생에서 걸러낸다 — 판정은 공용(cleanScrollback)
     const tail = await scrollbackTail(props.wsId ?? "default", props.sessionId, settings().scrollbackReplay);
-    let prevLine = "";
-    const cleaned = tail.filter((l) => {
-      if (isNoise(l.text) || l.text === prevLine) return false;
-      prevLine = l.text;
-      return true;
-    });
+    const cleaned = cleanScrollback(tail);
     if (cleaned.length > 0) {
       term.writeln(`\x1b[90m─── 이전 세션 스크롤백 · 마지막 ${cleaned.length}줄 재생 ───\x1b[0m`);
       // SGR 보존본(FR-C-15)이 있으면 색 그대로, 없으면 흐리게 (FR-C-31)
