@@ -28,17 +28,35 @@ function ensureListeners(): Promise<void> {
     listenerReady = (async () => {
       await listen<PtyOutput>("pty-output", (e) => {
         const { id, data } = e.payload;
+        // 아는 세션만 버퍼링 — 제거된 세션의 늦은 출력이 buffers 항목을 되살려 누적되는 것 방지
+        if (!spawned.has(id) && !outputSubs.get(id)?.size) return;
         const buf = (buffers.get(id) ?? "") + data;
         buffers.set(id, buf.length > BUFFER_CAP ? buf.slice(-BUFFER_CAP) : buf);
         outputSubs.get(id)?.forEach((cb) => cb(data));
       });
       await listen<PtyExit>("pty-exit", (e) => {
         spawned.delete(e.payload.id);
+        exitHook?.(e.payload.id, e.payload.code);
         exitSubs.get(e.payload.id)?.forEach((cb) => cb(e.payload.code));
       });
     })();
   }
   return listenerReady;
+}
+
+/** 부트스트랩에서 반드시 1회 호출 — 전역 pty-output/exit 수신 등록.
+ *  spawnPty 경로에서만 등록하면 에이전트 전용 실행(캐스팅만으로 시작)이나
+ *  웹뷰 재시작 재부착(revive) 세션은 출력 이벤트를 아무도 구독하지 않아 빈 화면이 된다 */
+export function ensurePtyListeners(): Promise<void> {
+  if (!isTauri()) return Promise.resolve();
+  return ensureListeners();
+}
+
+let exitHook: ((id: string, code: number | null) => void) | undefined;
+
+/** 전역 exit 훅 — 셸 세션의 dead 전이를 앱 상태에 반영한다 (에이전트는 agent-state가 관장) */
+export function setPtyExitHook(cb: (id: string, code: number | null) => void): void {
+  exitHook = cb;
 }
 
 export async function spawnPty(
@@ -96,6 +114,22 @@ export async function storeUsageReal(workspace: string): Promise<StoreUsageReal 
 export function writePty(id: string, data: string): void {
   if (!isTauri()) return;
   void invoke("pty_write", { id, data }).catch(() => {});
+}
+
+/** 표시 전용 에코 (P-2) — PTY 입력을 거치지 않고 페인 화면·로컬 버퍼에만 쓴다.
+ *  일반 셸에 키 입력으로 주입하면 뒤따르는 \r이 사용자가 치던 미제출 명령을 그대로
+ *  실행하므로, 기본 터미널로 가는 메시지는 이 경로로만 표시한다. */
+export function echoPty(id: string, data: string): void {
+  const buf = (buffers.get(id) ?? "") + data;
+  buffers.set(id, buf.length > BUFFER_CAP ? buf.slice(-BUFFER_CAP) : buf);
+  outputSubs.get(id)?.forEach((cb) => cb(data));
+}
+
+/** 세션 영구 제거 시 백엔드 잔류 상태 정리 (P-9) — 추적 맵·알림 게이트·IPC 토큰.
+ *  killPty(중지)와 별개다 — 제거 경로에서만 부른다. */
+export function forgetAgent(id: string): void {
+  if (!isTauri()) return;
+  void invoke("agent_forget", { id }).catch(() => {});
 }
 
 export function resizePty(id: string, cols: number, rows: number): void {

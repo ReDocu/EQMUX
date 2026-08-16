@@ -92,6 +92,10 @@ fn resolve_existing(ws_path: &str, rel: &str) -> Result<PathBuf, String> {
     if !target.starts_with(&base) {
         return Err("워크스페이스 밖 경로".into());
     }
+    // 심링크 우회 차단 — guard_git은 canonicalize 이전 문자열만 봐서, foo -> .git 심링크로
+    // rel="foo/config"를 넣으면 통과한다. 해석된 실제 경로가 .git을 지나는지 다시 검사한다
+    let rest = target.strip_prefix(&base).map(|r| r.to_string_lossy().replace('\\', "/")).unwrap_or_default();
+    guard_git(&rest)?;
     Ok(target)
 }
 
@@ -171,9 +175,7 @@ pub fn write_file(
             return Err("파일이 밖에서 바뀌었습니다 — 편집을 취소하고 다시 열어 확인하세요".into());
         }
     }
-    let tmp = target.with_extension("eqmux-tmp");
-    fs::write(&tmp, content).map_err(|e| e.to_string())?;
-    fs::rename(&tmp, &target).map_err(|e| e.to_string())?;
+    crate::workspace::atomic_write(&target, content.as_bytes())?;
     Ok(mtime_ms(&target))
 }
 

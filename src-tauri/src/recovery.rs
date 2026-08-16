@@ -38,10 +38,19 @@ pub struct CrashReport {
 /// 트랜스크립트 실측 (FR-D-20)으로 다시 판정한다.
 pub fn crash_scan(root: &Path) -> Vec<CrashSession> {
     let mut out = Vec::new();
+    // 등록 해제된 워크스페이스의 DB는 디스크에 남지만(FR-E-09) 복구 목록에는 올리지 않는다 —
+    // UI 어디에도 없는 워크스페이스의 세션이 dirty 시작마다 재등장하는 충돌을 막는다
+    let registered: std::collections::HashSet<String> = crate::workspace::load(root)
+        .iter()
+        .map(|e| crate::store::sanitize(&e.id))
+        .collect();
     let ws_root = root.join("workspaces");
     if let Ok(entries) = std::fs::read_dir(&ws_root) {
         for entry in entries.flatten() {
             let ws = entry.file_name().to_string_lossy().into_owned();
+            if !registered.contains(&ws) {
+                continue;
+            }
             let db = entry.path().join("session.db");
             let Ok(conn) = Connection::open_with_flags(&db, OpenFlags::SQLITE_OPEN_READ_ONLY) else {
                 continue;
@@ -91,11 +100,33 @@ pub fn crash_recovery(store_state: State<StoreState>, dirty: State<DirtyStart>) 
 mod tests {
     use super::*;
 
-    /// exit 기록이 없는 세션만, 최근 활동순으로 잡힌다 (FR-C-35)
+    /// exit 기록이 없는 세션만, 최근 활동순으로, 등록된 워크스페이스에서만 잡힌다 (FR-C-35)
     #[test]
     fn crash_scan_finds_unexited_sessions_only() {
         let root = std::env::temp_dir().join(format!("eqmux-crash-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
+        // 레지스트리에는 ws1만 — 등록 해제된 ws2의 DB는 남아 있어도 스캔에서 제외된다
+        crate::workspace::save(
+            &root,
+            &[crate::workspace::WsEntry {
+                id: "ws1".into(),
+                name: "ws1".into(),
+                path: "C:\\w".into(),
+                remote: None,
+                branch: None,
+                last_used: 0,
+            }],
+        )
+        .expect("save registry");
+        let conn2 = crate::store::open_db(&root, "ws2").expect("db open");
+        conn2
+            .execute(
+                "INSERT INTO session (id, workspace, cwd, shell, created_at, last_output_at, exit_code)
+                 VALUES ('ghost@ws2', 'ws2', 'C:\\w', 'pwsh', 1, 9000, NULL)",
+                [],
+            )
+            .expect("seed ws2");
+        drop(conn2);
         let conn = crate::store::open_db(&root, "ws1").expect("db open");
         conn.execute(
             "INSERT INTO session (id, workspace, cwd, shell, created_at, last_output_at, exit_code)

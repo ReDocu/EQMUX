@@ -4,16 +4,20 @@ import { SidePanel } from "./components/SidePanel";
 import { ensureAgentListeners } from "./backend/agent";
 import { startMessageBus } from "./backend/conversation";
 import { backend } from "./backend/mock";
+import { startAgentProbe } from "./backend/agentprobe";
 import { startMemorySampling } from "./backend/memory";
-import { isTauri } from "./backend/pty";
+import { ensurePtyListeners, isTauri, setPtyExitHook } from "./backend/pty";
 import { crashRecovery } from "./backend/recovery";
 import type { CrashReport } from "./backend/recovery";
 import { performShutdown } from "./backend/shutdown";
 import { startTeamSync } from "./backend/team";
 import { startFileWatch } from "./backend/watch";
 import { refreshWorkspaces } from "./backend/workspaces";
-import { exitOpen, explorerOpen, layoutPickerOpen, panelOpen, setExitOpen, setLayoutPickerOpen, setView, terminalFull, view } from "./state";
-import { ExplorerOverlay } from "./components/ExplorerOverlay";
+import { exitOpen, layoutPickerOpen, overlay, panelOpen, setExitOpen, setLayoutPickerOpen, setView, terminalFull, view } from "./state";
+import type { View } from "./state";
+import { t } from "./i18n";
+import { ScreenOverlay } from "./components/ScreenOverlay";
+import { editorGuard, MissionExplorerTab } from "./components/MissionExplorerTab";
 import { ControlCenter } from "./screens/ControlCenter";
 import { CrashRecovery } from "./screens/CrashRecovery";
 import { Dashboard } from "./screens/Dashboard";
@@ -32,6 +36,12 @@ import { WorkspaceConnection } from "./screens/WorkspaceConnection";
 export function App() {
   const v = view;
 
+  // 전역 pty-output/exit 수신 — spawnPty 경로에만 맡기면 에이전트 전용 실행·재부착 세션이
+  // 출력을 못 받는다. 셸 exit은 여기서 상태에 반영한다 (에이전트는 agent-state가 관장)
+  onMount(() => {
+    void ensurePtyListeners();
+    setPtyExitHook((id, code) => backend.sessionExited(id, code));
+  });
   // Tauri 부트스트랩 — workspaces.json 실물 레지스트리가 목 목록을 대체한다 (PRD E)
   onMount(() => void refreshWorkspaces());
   // agent-state 이벤트 수신 시작 (PRD D) — 상태 스트림이 목 백엔드를 실측으로 덮는다
@@ -42,6 +52,8 @@ export function App() {
   onMount(() => void startMessageBus());
   // 세션 메모리 계측 (FR-C-09 · C11) — Job Object 10초 샘플링, 표시 전용
   onMount(() => startMemorySampling());
+  // 세션 에이전트 감지 (셸 우선 모델) — 터미널에 직접 띄운 claude/codex 등을 관제에 표시
+  onMount(() => startAgentProbe());
   // 외부 편집 감지 (FR-E-73) — .eqmux 변화 → 임무·라이브러리 재실측 (파일이 이긴다, FR-E-74)
   onMount(() => startFileWatch());
 
@@ -118,9 +130,6 @@ export function App() {
                 return ws ? <ControlCenter workspace={ws} /> : <Dashboard />;
               })()}
             </Match>
-            <Match when={v().kind === "connect"}>
-              <WorkspaceConnection />
-            </Match>
             <Match when={v().kind === "launch"}>
               <LaunchMode wsId={(v() as { kind: "launch"; wsId: string }).wsId} />
             </Match>
@@ -133,17 +142,14 @@ export function App() {
             <Match when={v().kind === "composition"}>
               <TeamComposition wsId={(v() as { kind: "composition"; wsId: string }).wsId} />
             </Match>
-            <Match when={v().kind === "roles"}>
-              <RoleLibrary />
-            </Match>
             <Match when={v().kind === "missions"}>
               <Missions wsId={(v() as { kind: "missions"; wsId: string }).wsId} />
             </Match>
             <Match when={v().kind === "gitdiff"}>
-              <GitDiffEditor wsId={(v() as { kind: "gitdiff"; wsId?: string }).wsId} />
-            </Match>
-            <Match when={v().kind === "settings"}>
-              <Settings />
+              <GitDiffEditor
+                wsId={(v() as Extract<View, { kind: "gitdiff" }>).wsId}
+                commit={(v() as Extract<View, { kind: "gitdiff" }>).commit}
+              />
             </Match>
           </Switch>
         </div>
@@ -152,8 +158,26 @@ export function App() {
           <SidePanel />
         </Show>
       </div>
-      <Show when={explorerOpen()}>
-        <ExplorerOverlay />
+      {/* 전체 화면 팝업 4종 — overlay 신호 하나라서 동시에 하나만 열린다 (M25 확장) */}
+      <Show when={overlay() === "explorer"}>
+        <ScreenOverlay title={t("임무 · 파일 탐색기")} icon="≡" guard={editorGuard}>
+          <MissionExplorerTab />
+        </ScreenOverlay>
+      </Show>
+      <Show when={overlay() === "connect"}>
+        <ScreenOverlay title={t("워크스페이스 연결")} icon="⌂">
+          <WorkspaceConnection />
+        </ScreenOverlay>
+      </Show>
+      <Show when={overlay() === "roles"}>
+        <ScreenOverlay title={t("역할 라이브러리")} icon="◇">
+          <RoleLibrary />
+        </ScreenOverlay>
+      </Show>
+      <Show when={overlay() === "settings"}>
+        <ScreenOverlay title={t("설정")} icon="⚙">
+          <Settings />
+        </ScreenOverlay>
       </Show>
       <Show when={exitOpen()}>
         <ExitDialog />

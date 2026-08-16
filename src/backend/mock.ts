@@ -3,6 +3,8 @@
 // 컬렉션은 createMutable 프록시다 — in-place 변경이 곧 반응성이라, 상세 모달·<For> 행처럼
 // tick()을 다시 읽지 않는 표면도 즉시 갱신된다 (B1~B4 재발 방지).
 import { createMutable } from "solid-js/store";
+import { forgetAgent, isTauri, killPty } from "./pty";
+import { HARD_MAX_SLOTS, maxSlots } from "./settings";
 import type {
   AgentStateApply,
   ConversationMessage,
@@ -54,6 +56,9 @@ export interface Backend {
   addRoleSession(wsId: string, personaId: string, jobId: string, opts?: { cwd?: string; worktree?: boolean }): void;
   /** 슬롯에서 터미널 제거 — 세션을 삭제하고 임무 배정도 해제한다 */
   removeTerminal(id: string): void;
+  /** 셸 세션 cwd 변경 (브랜치 부여) — PTY 재스폰과 짝으로만 부른다.
+   *  역할 세션은 대상이 아니다 — cwd가 역할 파일·transcript와 묶여 있다 (FR-E-63) */
+  setSessionCwd(id: string, cwd: string): void;
   /** 역할 세션의 페르소나·직무 변경 — 직무가 바뀌면 권한 변경이므로 재시작 필요(E11′) */
   updateSessionRole(id: string, personaId: string, jobId: string): void;
   /** 슬롯 권한 오버라이드 (FR-E-34, M31) — undefined = 해제(직무 기본값 복귀).
@@ -70,8 +75,12 @@ export interface Backend {
   renameSession(id: string, name?: string): void;
   /** 세션 메모리 실측 반영 (FR-C-09) — 최신값·피크만 유지, 이벤트 적재 없음 */
   applyMemory(samples: { id: string; mb: number; peakMb: number }[]): void;
+  /** 세션 에이전트 감지 반영 (셸 우선 모델) — Job 트리 실측. 목록에 없는 세션은 표시를 내린다 */
+  applyAgents(list: { id: string; agent: string }[]): void;
   /** 실물 에이전트 상태 반영 (PRD D agent-state 이벤트) — Tauri에서만 호출된다 */
   applyAgentState(evt: AgentStateApply): void;
+  /** PTY 종료 실측 반영 — 셸 우선 모델의 1차 dead 신호. 훅 연동 에이전트는 agent-state가 뒤따른다 (FR-D-50) */
+  sessionExited(id: string, code: number | null): void;
   createMission(wsId: string, name: string, goal: string, branch?: string): void;
   cycleMissionStatus(id: string): void;
   toggleAssign(missionId: string, sessionId: string): void;
@@ -103,34 +112,63 @@ export interface TranscriptTurn {
 
 // ── 목 데이터: docs/design.pen의 카피를 그대로 사용 (Academy 팀 시나리오) ──
 
+// 직무 8종 고정 로스터 — 원본은 Rust library.rs fixed_jobs()와 src/jobs.ts (id·배지·색 1:1)
 export const JOBS: Job[] = createMutable<Job[]>([
   {
     id: "lead",
     name: "리드",
-    permissions: { write: true, commit: true, push: false },
-    responsibility: "전체 구조 · 임무 분해 · 최종 판단",
-    forbidden: "검증 없이 완료 선언 · 원격 push",
+    permissions: { write: true, commit: true, push: true },
+    responsibility: "전체 구조 · 임무 분해 · 통합 · 최종 판단",
+    forbidden: "검증 없이 완료 선언 · 검증 없이 push",
   },
   {
-    id: "impl",
-    name: "구현",
+    id: "plan",
+    name: "기획",
     permissions: { write: true, commit: false, push: false },
-    responsibility: "작은 단위 구현과 자체 검증",
-    forbidden: "검증 없이 커밋 요청",
+    responsibility: "요구 정리 · 조사 · 기획 문서(PRD)",
+    forbidden: "근거 없는 요구 확정 · 코드 수정",
   },
   {
-    id: "verify",
-    name: "검증",
-    permissions: { write: false, commit: false, push: false },
-    responsibility: "테스트 · 증거 수집",
-    forbidden: "증거 없는 통과 판정",
+    id: "dev",
+    name: "개발",
+    permissions: { write: true, commit: false, push: false },
+    responsibility: "기획 내용에 대한 구현과 자체 검증",
+    forbidden: "기획에 없는 임의 구현 · 검증 없이 커밋 요청",
   },
   {
-    id: "review",
-    name: "리뷰",
+    id: "design",
+    name: "디자인",
+    permissions: { write: true, commit: false, push: false },
+    responsibility: "UI 설계 · 스타일 가이드 · 목업",
+    forbidden: "동작 코드의 로직 변경",
+  },
+  {
+    id: "qa",
+    name: "QA",
     permissions: { write: false, commit: false, push: false },
-    responsibility: "변경 검토 · 품질 기준",
-    forbidden: "리뷰 없이 승인",
+    responsibility: "테스트 · 증거 수집 · 변경 검토",
+    forbidden: "증거 없는 통과 판정 · 리뷰 없이 승인",
+  },
+  {
+    id: "debug",
+    name: "디버거",
+    permissions: { write: true, commit: false, push: false },
+    responsibility: "재현 · 원인 규명 · 최소 수정",
+    forbidden: "원인 불명 상태의 땜질 수정",
+  },
+  {
+    id: "docs",
+    name: "문서",
+    permissions: { write: true, commit: false, push: false },
+    responsibility: "문서화 · 재현 절차 · 가이드",
+    forbidden: "코드 동작과 다른 문서",
+  },
+  {
+    id: "release",
+    name: "릴리즈",
+    permissions: { write: false, commit: true, push: true },
+    responsibility: "커밋 정리 · 태그 · 배포",
+    forbidden: "검증 안 된 변경의 push",
   },
 ]);
 
@@ -205,7 +243,7 @@ const WORKSPACES: Workspace[] = createMutable<Workspace[]>([
 const s = (
   id: string,
   ws: string,
-  slot: 1 | 2 | 3 | 4,
+  slot: number, // 1..HARD_MAX_SLOTS
   personaId: string,
   jobId: string,
   patch: Partial<Session>,
@@ -229,6 +267,13 @@ const s = (
   ...patch,
 });
 
+/** 워크스페이스의 첫 빈 슬롯 — 상한은 설정 maxSlots (기본 4 · 옵션 6·8). 없으면 undefined */
+function freeSlot(wsId: string): number | undefined {
+  const used = new Set(SESSIONS.filter((x) => x.workspaceId === wsId).map((x) => x.slot));
+  for (let n = 1; n <= maxSlots(); n++) if (!used.has(n)) return n;
+  return undefined;
+}
+
 const SESSIONS: Session[] = createMutable<Session[]>([
   s("kai@academy", "academy", 1, "kai", "lead", {
     status: "busy",
@@ -240,10 +285,11 @@ const SESSIONS: Session[] = createMutable<Session[]>([
     scrollbackLines: 18400,
     memoryMb: 512,
     memoryPeakMb: 640,
+    agent: "Claude", // 감지 표시의 목 시드 — Tauri에서는 applyAgents 실측이 대체한다
     lastOutput: "작업 중 · 인증 리팩터",
     sinceMs: 8 * 60000,
   }),
-  s("noel@academy", "academy", 2, "noel", "impl", {
+  s("noel@academy", "academy", 2, "noel", "dev", {
     status: "waiting",
     waitingFor: "Bash(npm publish)",
     unseen: true,
@@ -254,10 +300,11 @@ const SESSIONS: Session[] = createMutable<Session[]>([
     scrollbackLines: 12900,
     memoryMb: 428,
     memoryPeakMb: 611,
+    agent: "Codex",
     lastOutput: "승인 대기 · Bash(npm publish)",
     sinceMs: 12 * 60000,
   }),
-  s("lin@academy", "academy", 3, "lin", "review", {
+  s("lin@academy", "academy", 3, "lin", "qa", {
     status: "busy",
     missionId: "auth-refactor",
     agentSessionId: "77ab01ce",
@@ -270,7 +317,7 @@ const SESSIONS: Session[] = createMutable<Session[]>([
     lastOutput: "리뷰 중 · 승인 게이트",
     sinceMs: 4 * 60000,
   }),
-  s("sol@academy", "academy", 4, "sol", "verify", {
+  s("sol@academy", "academy", 4, "sol", "debug", {
     status: "idle",
     missionId: "regression",
     scrollbackLines: 2100,
@@ -287,7 +334,7 @@ const SESSIONS: Session[] = createMutable<Session[]>([
     memoryPeakMb: 300,
     lastOutput: "스토리지 계측",
   }),
-  s("jun@eqmux", "eqmux", 2, "jun", "impl", {
+  s("jun@eqmux", "eqmux", 2, "jun", "dev", {
     status: "busy",
     missionId: "prd-d-impl",
     scrollbackLines: 7300,
@@ -295,7 +342,7 @@ const SESSIONS: Session[] = createMutable<Session[]>([
     memoryPeakMb: 420,
     lastOutput: "PRD D 구현",
   }),
-  s("hana@eqmux", "eqmux", 3, "hana", "impl", {
+  s("hana@eqmux", "eqmux", 3, "hana", "dev", {
     status: "dead",
     exitCode: 1,
     resumable: true,
@@ -427,6 +474,16 @@ const TURNS = new Map<string, TranscriptTurn[]>([
   ],
 ]);
 
+// Tauri에서는 목 시드를 렌더링 전에 비운다 — ws_registry hydrate가 도착하기 전
+// 첫 프레임에 가짜 워크스페이스·세션·미확인 점이 노출되는 것을 막는다. 브라우저 dev는 유지.
+if (isTauri()) {
+  WORKSPACES.length = 0;
+  SESSIONS.length = 0;
+  MISSIONS.length = 0;
+  EVENTS.length = 0;
+  MESSAGES.length = 0;
+}
+
 export class MockBackend implements Backend {
   private listeners = new Set<() => void>();
   private timer: ReturnType<typeof setInterval> | undefined;
@@ -527,6 +584,24 @@ export class MockBackend implements Backend {
     this.broadcast();
   }
 
+  sessionExited(id: string, code: number | null) {
+    const sess = SESSIONS.find((x) => x.id === id);
+    if (!sess) return;
+    // 셸 우선 모델 — PTY 종료가 모든 세션의 1차 dead 신호다. 명시적 재개/재시작(훅 연동)의
+    // 재기동 경합으로 늦은 exit이 와도 직후 agent-state가 산 상태로 되돌린다 (FR-D-50과 같은 전이).
+    if (!sess.personaId) sess.resumable = false; // 셸에는 재개할 transcript가 없다 — 역할 세션은 재개 칩 유지
+    sess.agent = undefined; // 트리가 죽었다 — 감지된 에이전트 표시도 내린다
+    if (sess.status !== "dead") {
+      sess.status = "dead";
+      sess.exitCode = code ?? undefined;
+      sess.sinceMs = 0;
+      sess.waitingFor = undefined;
+      sess.lastOutput = `프로세스 종료 · exit ${code ?? "?"}`;
+      this.logEvent("state", `프로세스 종료 · exit ${code ?? "?"}`, id);
+    }
+    this.broadcast();
+  }
+
   stopSession(id: string) {
     const sess = SESSIONS.find((x) => x.id === id);
     if (!sess || sess.status === "dead") return;
@@ -552,22 +627,48 @@ export class MockBackend implements Backend {
   }
 
   applyCasting(wsId: string, slots: { personaId: string; jobId: string }[]) {
-    slots.slice(0, 4).forEach((slot, i) => {
-      const n = (i + 1) as 1 | 2 | 3 | 4;
-      const existing = SESSIONS.find((x) => x.workspaceId === wsId && x.slot === n);
+    // 재캐스팅은 대치(reconcile)다 (P-5) — 슬롯의 기존 세션을 제자리에서 다른 페르소나로
+    // 덮으면 세션 id(`페르소나@ws` 관례)·상태가 옛 값으로 남아, 자동 배정(id로 찾는다)이
+    // 빗나가고 살아 있는 PTY가 옛 정체성에 붙는다. 같은 페르소나는 유지·이동하고,
+    // 밀려나는 세션은 PTY·백엔드 잔류 상태까지 함께 끝낸다.
+    const ws = WORKSPACES.find((x) => x.id === wsId);
+    const wanted = slots.slice(0, maxSlots()).map((slot, i) => ({ ...slot, slot: i + 1 }));
+    const wantedIds = new Set(wanted.map((w) => `${w.personaId}@${wsId}`));
+    const targetSlots = new Set(wanted.map((w) => w.slot));
+    for (let i = SESSIONS.length - 1; i >= 0; i--) {
+      const sess = SESSIONS[i];
+      if (sess.workspaceId !== wsId || !targetSlots.has(sess.slot) || wantedIds.has(sess.id)) continue;
+      killPty(sess.id);
+      forgetAgent(sess.id);
+      SESSIONS.splice(i, 1);
+      for (const m of MISSIONS) {
+        const j = m.assigned.indexOf(sess.id);
+        if (j >= 0) m.assigned.splice(j, 1);
+      }
+    }
+    for (const w of wanted) {
+      const id = `${w.personaId}@${wsId}`;
+      const existing = SESSIONS.find((x) => x.workspaceId === wsId && x.id === id);
       if (existing) {
-        existing.personaId = slot.personaId;
-        existing.jobId = slot.jobId;
+        existing.slot = w.slot;
+        if (existing.jobId !== w.jobId) {
+          existing.jobId = w.jobId;
+          existing.permOverride = undefined; // 직무가 바뀌면 이전 직무 기준 오버라이드는 무의미
+          existing.restartNeeded = true; // 권한 원천이 바뀌었다 (E11′)
+        }
       } else {
         SESSIONS.push(
-          s(`${slot.personaId}@${wsId}`, wsId, n, slot.personaId, slot.jobId, {
-            status: "starting",
+          s(id, wsId, w.slot, w.personaId, w.jobId, {
+            // 셸 우선 모델 — 캐스팅은 에이전트를 띄우지 않는다. 셸에서 직접 실행하면
+            // 감지(applyAgents)가 관제에 표시한다
+            status: "shell",
+            cwd: ws?.path ?? `C:\\workspace\\${wsId}`, // 실물 경로 — 목 기본값이 Tauri로 새지 않게
             sinceMs: 0,
-            lastOutput: "세션 시작 중",
+            lastOutput: "셸로 시작 — 에이전트는 터미널에서 직접 실행",
           }),
         );
       }
-    });
+    }
     this.logEvent("app", "캐스팅 적용 · team.json 저장");
     this.broadcast();
   }
@@ -591,10 +692,9 @@ export class MockBackend implements Backend {
   addTerminal(wsId: string, shell?: string, cwd?: string) {
     const ws = WORKSPACES.find((x) => x.id === wsId);
     if (!ws) return;
-    const used = new Set(SESSIONS.filter((x) => x.workspaceId === wsId).map((x) => x.slot));
-    const slot = ([1, 2, 3, 4] as const).find((n) => !used.has(n));
+    const slot = freeSlot(wsId);
     if (!slot) {
-      this.logEvent("app", `세션 슬롯 가득 참 (4/4) · ${ws.name}`);
+      this.logEvent("app", `세션 슬롯 가득 참 (${maxSlots()}/${maxSlots()}) · ${ws.name}`);
       this.broadcast();
       return;
     }
@@ -617,6 +717,7 @@ export class MockBackend implements Backend {
     if (i < 0) return;
     const sess = SESSIONS[i];
     SESSIONS.splice(i, 1);
+    forgetAgent(id); // 제거 = 정체성의 끝 — 추적 맵·알림 게이트·토큰 잔류 정리 (P-9)
     for (const m of MISSIONS) {
       const j = m.assigned.indexOf(id);
       if (j >= 0) m.assigned.splice(j, 1);
@@ -625,23 +726,35 @@ export class MockBackend implements Backend {
     this.broadcast();
   }
 
+  setSessionCwd(id: string, cwd: string) {
+    const sess = SESSIONS.find((x) => x.id === id);
+    if (!sess || sess.personaId) return; // 역할 세션 cwd는 역할 파일·transcript와 묶여 있다 (FR-E-63)
+    sess.cwd = cwd;
+    // 재스폰 직후 호출된다 — 이동 중 pty-exit가 남긴 dead를 산 셸로 되돌린다
+    sess.status = "shell";
+    sess.exitCode = undefined;
+    sess.sinceMs = 0;
+    sess.lastOutput = "브랜치 부여 · 워크트리 이동";
+    this.logEvent("state", `워크트리 이동 · ${cwd}`, id);
+    this.broadcast();
+  }
+
   addRoleSession(wsId: string, personaId: string, jobId: string, opts?: { cwd?: string; worktree?: boolean }) {
     const ws = WORKSPACES.find((x) => x.id === wsId);
     if (!ws) return;
-    const used = new Set(SESSIONS.filter((x) => x.workspaceId === wsId).map((x) => x.slot));
-    const slot = ([1, 2, 3, 4] as const).find((n) => !used.has(n));
+    const slot = freeSlot(wsId);
     if (!slot) {
-      this.logEvent("app", `세션 슬롯 가득 참 (4/4) · ${ws.name}`);
+      this.logEvent("app", `세션 슬롯 가득 참 (${maxSlots()}/${maxSlots()}) · ${ws.name}`);
       this.broadcast();
       return;
     }
     SESSIONS.push(
       s(`${personaId}@${wsId}`, wsId, slot, personaId, jobId, {
-        status: "starting",
+        status: "shell", // 셸 우선 모델 — 역할 세션도 셸로 시작한다
         cwd: opts?.cwd ?? ws.path,
         worktree: opts?.worktree ?? false,
         sinceMs: 0,
-        lastOutput: "세션 시작 중",
+        lastOutput: "셸로 시작 — 에이전트는 터미널에서 직접 실행",
       }),
     );
     const pName = PERSONAS.find((x) => x.id === personaId)?.name ?? personaId;
@@ -657,9 +770,10 @@ export class MockBackend implements Backend {
     let added = 0;
     let revivedCount = 0;
     for (const sl of slots) {
-      const slot = sl.slot as 1 | 2 | 3 | 4;
+      const slot = sl.slot;
       const used = SESSIONS.some((x) => x.workspaceId === wsId && x.slot === slot);
-      if (used || slot < 1 || slot > 4) continue;
+      // 복원은 설정 상한이 아니라 절대 상한을 본다 — 슬롯 수를 줄여도 저장된 팀을 버리지 않는다
+      if (used || slot < 1 || slot > HARD_MAX_SLOTS) continue;
       const id = `${sl.persona}@${wsId}`;
       // PTY 생존 = 웹뷰만 재시작한 것 (FR-C-06) — 재개 대기가 아니라 재부착 대상.
       // 상태는 agent_snapshot이 곧바로 덮는다 (restoreTeams에서 이어 호출).
@@ -708,11 +822,11 @@ export class MockBackend implements Backend {
     if (!ws || SESSIONS.some((x) => x.id === id)) return;
     const used = new Set(SESSIONS.filter((x) => x.workspaceId === wsId).map((x) => x.slot));
     // `shell<N>@ws` 이름 관례를 따르는 세션은 원래 슬롯을 되찾고, 아니면 빈 슬롯
-    const m = /^shell([1-4])@/.exec(id);
-    const preferred = m ? (Number(m[1]) as 1 | 2 | 3 | 4) : undefined;
-    const slot = preferred && !used.has(preferred) ? preferred : ([1, 2, 3, 4] as const).find((n) => !used.has(n));
+    const m = /^shell([1-8])@/.exec(id);
+    const preferred = m ? Number(m[1]) : undefined;
+    const slot = preferred && !used.has(preferred) ? preferred : freeSlot(wsId);
     if (!slot) {
-      this.logEvent("app", `재부착 불가 · 슬롯 가득 참 (4/4) · ${id}`);
+      this.logEvent("app", `재부착 불가 · 슬롯 가득 참 (${maxSlots()}/${maxSlots()}) · ${id}`);
       this.broadcast();
       return;
     }
@@ -758,6 +872,18 @@ export class MockBackend implements Backend {
       if (!sess || (sess.memoryMb === m.mb && sess.memoryPeakMb === m.peakMb)) continue;
       sess.memoryMb = m.mb;
       sess.memoryPeakMb = m.peakMb;
+      changed = true;
+    }
+    if (changed) this.broadcast();
+  }
+
+  applyAgents(list: { id: string; agent: string }[]) {
+    const found = new Map(list.map((x) => [x.id, x.agent]));
+    let changed = false;
+    for (const sess of SESSIONS) {
+      const next = found.get(sess.id); // 미검출은 undefined — 내려간 에이전트 표시를 지운다
+      if (sess.agent === next) continue;
+      sess.agent = next;
       changed = true;
     }
     if (changed) this.broadcast();
@@ -947,10 +1073,15 @@ export class MockBackend implements Backend {
     const openIds = new Set(WORKSPACES.filter((w) => w.open).map((w) => w.id));
     WORKSPACES.length = 0;
     for (const w of list) WORKSPACES.push({ ...w, open: openIds.has(w.id) });
-    // 레지스트리에 없는 워크스페이스의 목 세션·임무는 함께 걷어낸다
+    // 레지스트리에 없는 워크스페이스의 목 세션·임무는 함께 걷어낸다.
+    // PTY도 함께 죽인다 — 화면에서만 지우면 재접속 불가능한 고아 프로세스가 계속 돈다
     const valid = new Set(WORKSPACES.map((w) => w.id));
     for (let i = SESSIONS.length - 1; i >= 0; i--) {
-      if (!valid.has(SESSIONS[i].workspaceId)) SESSIONS.splice(i, 1);
+      if (!valid.has(SESSIONS[i].workspaceId)) {
+        killPty(SESSIONS[i].id);
+        forgetAgent(SESSIONS[i].id); // P-9 — 추적 맵·게이트·토큰까지 함께
+        SESSIONS.splice(i, 1);
+      }
     }
     for (let i = MISSIONS.length - 1; i >= 0; i--) {
       if (!valid.has(MISSIONS[i].workspaceId)) MISSIONS.splice(i, 1);
@@ -964,7 +1095,11 @@ export class MockBackend implements Backend {
     const ws = WORKSPACES[i];
     WORKSPACES.splice(i, 1);
     for (let j = SESSIONS.length - 1; j >= 0; j--) {
-      if (SESSIONS[j].workspaceId === id) SESSIONS.splice(j, 1);
+      if (SESSIONS[j].workspaceId === id) {
+        killPty(SESSIONS[j].id); // 등록 해제 = 세션도 끝 — PTY 고아 방지
+        forgetAgent(SESSIONS[j].id); // P-9 — 추적 맵·게이트·토큰까지 함께
+        SESSIONS.splice(j, 1);
+      }
     }
     for (let j = MISSIONS.length - 1; j >= 0; j--) {
       if (MISSIONS[j].workspaceId === id) MISSIONS.splice(j, 1);

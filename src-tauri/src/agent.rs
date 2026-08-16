@@ -34,6 +34,19 @@ pub struct Tracked {
     pub cost_usd: Option<f64>,
     /// 관측 저하 (FR-D-62·63, M34) — 레지스트리를 못 쓰는 중. 훅+프로세스 생존으로 유지된다
     pub degraded: bool,
+    /// 훅(2차 소스)이 마지막으로 상태를 바꾼 시각 ms (P-3) — 레지스트리 재스캔이 이보다
+    /// 오래된 파일 상태로 신선한 훅 상태를 되돌리지 않게 하는 가드
+    pub hook_ms: i64,
+    /// 상태 이벤트 순번 (P-4) — 전역 단조 증가. 스냅숏과 실시간 이벤트가 겹치는 창에서
+    /// 프런트가 더 오래된 페이로드를 버릴 수 있게 한다
+    pub seq: u64,
+}
+
+static NEXT_EVT_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// 상태 이벤트 순번 발급 (P-4) — 세션 재스폰에도 되돌아가지 않도록 전역 카운터 하나를 쓴다
+pub fn next_seq() -> u64 {
+    NEXT_EVT_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// 세션당 알림 합침 상태 (FR-G-32) — 마지막 발신 시각 + 그 사이 억제된 건수
@@ -48,6 +61,24 @@ pub struct AgentRt {
     /// 사용자가 의도한 종료 (중지·제거) — dead 알림 대상이 아니다 (G3: dead = 의도치 않은 종료)
     pub expected_exit: Mutex<HashSet<String>>,
     notify_gate: Mutex<HashMap<String, NotifyGate>>,
+    /// 세션별 IPC 토큰 (P-1) — 스폰 시 발급되어 EQMUX_TOKEN으로 주입되고, 파이프 요청의
+    /// session 주장을 검증한다. 세션 id는 추측 가능한 평문이라 id만으로는 신원이 아니다.
+    pub session_tokens: Mutex<HashMap<String, String>>,
+}
+
+/// 세션 영구 제거 시 잔류 상태 정리 (P-9) — 추적 맵·알림 게이트·IPC 토큰.
+/// expected_exit는 남긴다 — 진행 중인 kill의 EOF 처리(on_pty_exit)가 스스로 소비한다.
+pub fn forget_session(app: &AppHandle, id: &str) {
+    let rt: tauri::State<AgentRt> = app.state();
+    if let Ok(mut map) = rt.by_uuid.lock() {
+        map.retain(|_, t| t.app_session != id);
+    }
+    if let Ok(mut gates) = rt.notify_gate.lock() {
+        gates.remove(id);
+    }
+    if let Ok(mut tokens) = rt.session_tokens.lock() {
+        tokens.remove(id);
+    };
 }
 
 /// §7.1 상태 신호 스키마
@@ -69,6 +100,8 @@ pub struct AgentStateEvt {
     pub exit_code: Option<i64>,
     /// 낮은 신뢰 표시 (FR-G-27) — 레지스트리 접근 불가로 상태의 정밀도가 떨어진 세션
     pub degraded: bool,
+    /// 순번 (P-4) — 프런트의 순서 역전 가드. 스냅숏은 마지막 발급 순번을 그대로 싣는다
+    pub seq: u64,
 }
 
 /// 세션 레지스트리 레코드 (§10.1) — 부분 파싱 (FR-D-64): 모르는 필드는 무시,
@@ -94,18 +127,47 @@ fn sessions_dir() -> PathBuf {
     home().join(".claude").join("sessions")
 }
 
-/// 트랜스크립트 경로 (§10.3) — cwd의 ':' '\' '/'를 '-'로 치환. cwd가 경로에 들어가므로
-/// 재개는 같은 cwd에서만 성립한다 (FR-D-03 · R4).
+/// 트랜스크립트 경로 (§10.3) — Claude Code의 projects 디렉터리 명명 규칙과 일치해야 한다.
+/// 실측 결과 CC는 ASCII 영숫자만 남기고 나머지(`:` `\` `/` `.` `_` 공백 한글 등)를 전부 '-'로 치환한다
+/// (예: `C:\Users` → `C--Users`, `D:\ClaudeProject.EQMent` → `D---ClaudeProject-EQMent`).
+/// cwd가 경로에 들어가므로 재개는 같은 cwd에서만 성립한다 (FR-D-03 · R4).
 pub fn transcript_path(cwd: &str, uuid: &str) -> PathBuf {
     let escaped: String = cwd
         .chars()
-        .map(|c| if matches!(c, ':' | '\\' | '/') { '-' } else { c })
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .collect();
     home()
         .join(".claude")
         .join("projects")
         .join(escaped)
         .join(format!("{uuid}.jsonl"))
+}
+
+/// cwd의 Claude projects 디렉터리에서 가장 최근에 수정된 트랜스크립트 (셸 우선 모델) —
+/// 사용자가 터미널에 직접 띄운 에이전트는 uuid 매핑이 없으므로 cwd로 추정한다.
+/// 같은 cwd를 쓰는 세션들은 같은 파일을 보게 된다 — 표시(참조만, V2)라서 감수한다.
+pub fn latest_transcript(cwd: &str) -> Option<PathBuf> {
+    let with_dummy = transcript_path(cwd, "x");
+    latest_jsonl_in(with_dummy.parent()?)
+}
+
+fn latest_jsonl_in(dir: &std::path::Path) -> Option<PathBuf> {
+    let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
+    for e in fs::read_dir(dir).ok()?.flatten() {
+        let p = e.path();
+        if p.extension().and_then(|x| x.to_str()) != Some("jsonl") {
+            continue;
+        }
+        let Ok(meta) = e.metadata() else { continue };
+        if meta.len() == 0 {
+            continue;
+        }
+        let Ok(t) = meta.modified() else { continue };
+        if best.as_ref().is_none_or(|(bt, _)| t > *bt) {
+            best = Some((t, p));
+        }
+    }
+    best.map(|(_, p)| p)
 }
 
 /// 재개 가능 판정 = 트랜스크립트 존재 + 비어 있지 않음 (FR-D-20). 추정하지 않고 실측한다.
@@ -122,6 +184,7 @@ pub fn claude_builders(
     cwd: &str,
     app_session: &str,
     role_file: Option<&str>,
+    token: &str,
 ) -> Vec<CommandBuilder> {
     let team_md = std::path::Path::new(cwd).join(".eqmux").join("team.md");
     let team_md = team_md.exists().then(|| team_md.to_string_lossy().into_owned());
@@ -129,6 +192,9 @@ pub fn claude_builders(
         b.cwd(cwd);
         // FR-D-04 환경변수 — 역할·팀 파일은 존재할 때만 (파일이 원본, FR-E-41)
         b.env("EQMUX_SESSION", app_session);
+        // 세션 토큰 (P-1) — 파이프 IPC의 신원 증명. 세션 id는 공개 관례(`이름@ws`)라
+        // 추측 가능하므로, 스폰마다 새로 발급한 논스가 실제 신원이다
+        b.env("EQMUX_TOKEN", token);
         b.env("EQMUX_TERMINAL", "eqmux");
         // `eqmux` CLI(PRD I)가 PATH에서 잡히도록 앱 실행 파일 폴더를 앞에 붙인다 —
         // 훅 커맨드·에이전트의 send/report가 절대 경로 없이 성립한다
@@ -184,6 +250,16 @@ fn maybe_notify(app: &AppHandle, evt: &AgentStateEvt) {
     if evt.status != "waiting" && evt.status != "dead" {
         return;
     }
+    // 의도된 종료(중지·제거) 표식은 알림 설정보다 먼저 소비한다 — off/음소거로 여기서 일찍
+    // return하면 표식이 남아, 나중에 설정을 켰을 때 같은 id의 정당한 dead 알림 1건을 삼킨다
+    let rt: tauri::State<AgentRt> = app.state();
+    if evt.status == "dead" {
+        if let Ok(mut expected) = rt.expected_exit.lock() {
+            if expected.remove(&evt.session) {
+                return;
+            }
+        }
+    }
     // 설정 라우팅 (PRD J · FR-G-30) — 꺼도 인앱 미확인 표시는 계속 동작한다 (FR-G-37)
     match crate::setting_str(app, "notifications").as_deref() {
         Some("off") => return,
@@ -209,15 +285,6 @@ fn maybe_notify(app: &AppHandle, evt: &AgentStateEvt) {
         .unwrap_or(false);
     if muted {
         return;
-    }
-    let rt: tauri::State<AgentRt> = app.state();
-    // 사용자가 의도한 종료(중지·제거)는 dead 알림 대상이 아니다
-    if evt.status == "dead" {
-        if let Ok(mut expected) = rt.expected_exit.lock() {
-            if expected.remove(&evt.session) {
-                return;
-            }
-        }
     }
     // 창이 포커스를 갖고 있으면 내지 않는다 (FR-G-31) — 인앱 표현으로 충분하다
     let focused = app
@@ -308,7 +375,7 @@ pub fn apply_hook(app: &AppHandle, session: &str, event: &str, payload: &serde_j
     }
     // 상태 전이만 이벤트 테이블·알림까지 간다 (FR-D-17) — activity·subagents 변경은
     // 도구 호출마다 일어나므로 방송만 하고 기록하지 않는다 (피드는 전이의 기록이다)
-    let quiet = !matches!(effect, HookEffect::Status(_));
+    let mut quiet = !matches!(effect, HookEffect::Status(_));
     let rt: tauri::State<AgentRt> = app.state();
     let mut evt = None;
     if let Ok(mut map) = rt.by_uuid.lock() {
@@ -326,6 +393,7 @@ pub fn apply_hook(app: &AppHandle, session: &str, event: &str, payload: &serde_j
                     }
                     t.last_status = (*status).into();
                     t.last_waiting = waiting;
+                    t.hook_ms = crate::workspace::now_ms() as i64; // P-3 — 훅이 더 신선하다는 표식
                     if *status == "idle" {
                         // 턴 종료 — 도구·서브에이전트 부연도 함께 접는다 (FR-D-15)
                         t.activity = None;
@@ -333,10 +401,19 @@ pub fn apply_hook(app: &AppHandle, session: &str, event: &str, payload: &serde_j
                     }
                 }
                 HookEffect::Activity(tool) => {
-                    if t.activity == *tool {
+                    // 도구 실행 시작 = 승인 완료 — waiting에 고착돼 있으면 busy로 되돌린다.
+                    // degraded(레지스트리 없음) 모드에선 이 전이가 없으면 다음 Stop까지 "승인 대기"로 남는다
+                    let unstick = t.last_status == "waiting";
+                    if t.activity == *tool && !unstick {
                         break;
                     }
                     t.activity = tool.clone();
+                    if unstick {
+                        t.last_status = "busy".into();
+                        t.last_waiting = None;
+                        t.hook_ms = crate::workspace::now_ms() as i64; // P-3 — 이 전이도 훅 소스다
+                        quiet = false; // 상태 전이이므로 피드·알림 경로로 보낸다
+                    }
                 }
                 HookEffect::SubagentDelta(d) => {
                     let next = (t.subagents + d).max(0);
@@ -347,6 +424,7 @@ pub fn apply_hook(app: &AppHandle, session: &str, event: &str, payload: &serde_j
                 }
                 HookEffect::Ignore => break,
             }
+            t.seq = next_seq();
             evt = Some(AgentStateEvt {
                 session: session.to_string(),
                 agent_session: uuid.clone(),
@@ -359,6 +437,7 @@ pub fn apply_hook(app: &AppHandle, session: &str, event: &str, payload: &serde_j
                 version: None,
                 exit_code: None,
                 degraded: t.degraded,
+                seq: t.seq,
             });
             break;
         }
@@ -398,6 +477,7 @@ pub fn apply_statusline(app: &AppHandle, session: &str, payload: &serde_json::Va
                 break;
             }
             t.cost_usd = Some(cost);
+            t.seq = next_seq();
             evt = Some(AgentStateEvt {
                 session: session.to_string(),
                 agent_session: uuid.clone(),
@@ -410,6 +490,7 @@ pub fn apply_statusline(app: &AppHandle, session: &str, payload: &serde_json::Va
                 version: None,
                 exit_code: None,
                 degraded: t.degraded,
+                seq: t.seq,
             });
             break;
         }
@@ -429,6 +510,7 @@ pub fn on_pty_exit(app: &AppHandle, id: &str, code: Option<u32>, gen: u64) {
                 t.last_status = "dead".into();
                 t.activity = None;
                 t.subagents = 0;
+                t.seq = next_seq();
                 evt = Some(AgentStateEvt {
                     session: id.to_string(),
                     agent_session: uuid.clone(),
@@ -441,6 +523,7 @@ pub fn on_pty_exit(app: &AppHandle, id: &str, code: Option<u32>, gen: u64) {
                     version: None,
                     exit_code: code.map(i64::from),
                     degraded: t.degraded,
+                    seq: t.seq,
                 });
                 break;
             }
@@ -448,6 +531,13 @@ pub fn on_pty_exit(app: &AppHandle, id: &str, code: Option<u32>, gen: u64) {
     }
     if let Some(e) = evt {
         emit_state(app, &e);
+    } else {
+        // dead 이벤트가 안 나간 exit(일반 셸·세대 불일치 재시작) — 이 exit을 위해 남긴
+        // expected_exit 표식을 여기서 소비한다. 방치하면 같은 id의 미래 에이전트가
+        // 뜻하지 않게 죽었을 때 정당한 dead 알림 1건을 삼킨다.
+        if let Ok(mut expected) = rt.expected_exit.lock() {
+            expected.remove(id);
+        }
     }
 }
 
@@ -499,6 +589,7 @@ fn scan(app: &AppHandle) {
                 continue; // 죽었거나 이미 원하는 값 — 전환 없음
             }
             t.degraded = !registry_ok;
+            t.seq = next_seq();
             flips.push(AgentStateEvt {
                 session: t.app_session.clone(),
                 agent_session: uuid.clone(),
@@ -511,6 +602,7 @@ fn scan(app: &AppHandle) {
                 version: None,
                 exit_code: None,
                 degraded: t.degraded,
+                seq: t.seq,
             });
         }
     }
@@ -530,14 +622,21 @@ fn scan(app: &AppHandle) {
         });
     }
     let Ok(entries) = entries else { return };
-    let mut found: HashMap<String, RegistryRecord> = HashMap::new();
+    let mut found: HashMap<String, (RegistryRecord, i64)> = HashMap::new();
     for entry in entries.flatten() {
         let p = entry.path();
         if p.extension().map(|e| e == "json").unwrap_or(false) {
             if let Ok(text) = fs::read_to_string(&p) {
                 if let Ok(rec) = serde_json::from_str::<RegistryRecord>(&text) {
                     if let Some(sid) = rec.session_id.clone() {
-                        found.insert(sid, rec);
+                        // 파일 mtime = 이 레지스트리 상태의 신선도 (P-3) — 훅 도착 시각과 비교한다
+                        let mtime_ms = fs::metadata(&p)
+                            .and_then(|m| m.modified())
+                            .ok()
+                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map(|d| d.as_millis() as i64)
+                            .unwrap_or(0);
+                        found.insert(sid, (rec, mtime_ms));
                     }
                 }
             }
@@ -550,7 +649,12 @@ fn scan(app: &AppHandle) {
             if t.last_status == "dead" {
                 continue;
             }
-            if let Some(rec) = found.get(&uuid) {
+            if let Some((rec, mtime_ms)) = found.get(&uuid) {
+                // 스테일 가드 (P-3) — 훅이 이 파일보다 나중에 상태를 바꿨다면 재스캔이 되돌리지
+                // 않는다. 방치하면 2초 주기 재스캔이 가짜 idle을 만들어 M3 인박스를 오주입한다.
+                if *mtime_ms <= t.hook_ms {
+                    continue;
+                }
                 // status 부재 시 기존 값 유지 (FR-D-64 — 훅 폴백은 다음 단계)
                 let status = rec.status.clone().unwrap_or_else(|| t.last_status.clone());
                 let waiting = rec.waiting_for.clone();
@@ -561,6 +665,7 @@ fn scan(app: &AppHandle) {
                         t.activity = None; // 턴 종료 부연 정리 — 훅 경로(apply_hook)와 같은 규칙
                         t.subagents = 0;
                     }
+                    t.seq = next_seq();
                     updates.push(AgentStateEvt {
                         session: t.app_session.clone(),
                         agent_session: uuid.clone(),
@@ -573,6 +678,7 @@ fn scan(app: &AppHandle) {
                         version: rec.version.clone(),
                         exit_code: None,
                         degraded: t.degraded,
+                        seq: t.seq,
                     });
                 }
             }
@@ -586,6 +692,40 @@ fn scan(app: &AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::HookEffect;
+
+    /// 트랜스크립트 경로 이스케이프 (QA) — Claude Code는 ASCII 영숫자만 남기고 나머지를 '-'로.
+    /// `_`·`.`·공백·한글이 든 cwd에서 resumable이 오판되던 회귀를 막는다.
+    #[test]
+    fn transcript_path_escapes_like_claude_code() {
+        let esc = |cwd: &str| {
+            super::transcript_path(cwd, "u")
+                .parent()
+                .unwrap()
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        };
+        assert_eq!(esc("C:\\Users\\USER"), "C--Users-USER");
+        assert_eq!(esc("D:\\ClaudeProject.EQMent"), "D--ClaudeProject-EQMent");
+        assert_eq!(esc("D:\\my_proj v2"), "D--my-proj-v2"); // 밑줄·공백도 '-'
+        assert_eq!(esc("D:\\팀"), "D---"); // 한글은 ASCII 영숫자가 아니라 '-'
+    }
+
+    /// cwd 최신 트랜스크립트 추정 (셸 우선 모델) — 빈 파일·jsonl 아닌 파일은 제외, 최신 수정본
+    #[test]
+    fn latest_jsonl_picks_newest_nonempty() {
+        let dir = std::env::temp_dir().join(format!("eqmux-lt-{}", crate::workspace::now_ms()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("old.jsonl"), "x").unwrap();
+        std::fs::write(dir.join("empty.jsonl"), "").unwrap();
+        std::fs::write(dir.join("note.txt"), "x").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(30)); // mtime 해상도 확보
+        std::fs::write(dir.join("new.jsonl"), "y").unwrap();
+        let p = super::latest_jsonl_in(&dir).unwrap();
+        assert_eq!(p.file_name().unwrap(), "new.jsonl");
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn hook_events_map_to_states() {

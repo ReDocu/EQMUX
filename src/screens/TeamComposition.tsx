@@ -2,7 +2,8 @@
 // 권한 번역 결과(permission-mode)를 시작 전에 노출한다 (FR-D-40·41).
 import { createSignal, For, Show } from "solid-js";
 import { backend } from "../backend/mock";
-import { setView, tick } from "../state";
+import { t, tf } from "../i18n";
+import { setOverlay, setView, tick } from "../state";
 import { Eyebrow, KV } from "../components/ui";
 import { translatePermissions } from "../types";
 import type { Session } from "../types";
@@ -21,23 +22,24 @@ export function TeamComposition(props: { wsId: string }) {
   const persona = (id: string) => backend.listPersonas().find((p) => p.id === id);
   const job = (id: string) => backend.listJobs().find((j) => j.id === id);
   const lead = () => members().find((m) => m.slot === 1);
-  const leadName = () => persona(lead()?.personaId ?? "")?.name ?? "리드";
+  const leadName = () => persona(lead()?.personaId ?? "")?.name ?? t("리드");
 
   const badge = (m: Session) =>
-    m.slot === 1 ? "LEAD" : m.jobId === "review" ? "REVIEW" : `REPORTS TO ${leadName()}`;
+    m.slot === 1 ? "LEAD" : m.jobId === "qa" ? "QA" : `REPORTS TO ${leadName()}`;
   const relations = (m: Session): string[] => {
     if (m.slot === 1) {
       const rest = members().filter((x) => x.slot !== 1).map((x) => persona(x.personaId)?.name);
-      return [`지도 ⇢ ${rest.join(" · ") || "—"}`, "협업 — 전원"];
+      return [`${t("지도")} ⇢ ${rest.join(" · ") || "—"}`, t("협업 — 전원")];
     }
-    const rel = [`보고 → ${leadName()}`];
-    if (m.jobId === "review") {
-      const impls = members().filter((x) => x.jobId === "impl").map((x) => persona(x.personaId)?.name);
-      if (impls.length) rel.push(`리뷰 ◇ ${impls.join(" · ")}`);
+    const rel = [`${t("보고")} → ${leadName()}`];
+    // 고정 8종 관계 — QA는 개발·디버거의 변경을 검토, 디버거는 개발 산출물을 대상으로 한다
+    if (m.jobId === "qa") {
+      const devs = members().filter((x) => x.jobId === "dev" || x.jobId === "debug").map((x) => persona(x.personaId)?.name);
+      if (devs.length) rel.push(`${t("검토")} ◇ ${devs.join(" · ")}`);
     }
-    if (m.jobId === "verify") {
-      const targets = members().filter((x) => x.jobId === "impl" || x.jobId === "review").map((x) => persona(x.personaId)?.name);
-      if (targets.length) rel.push(`검증 → ${targets.join(" · ")}`);
+    if (m.jobId === "debug") {
+      const targets = members().filter((x) => x.jobId === "dev").map((x) => persona(x.personaId)?.name);
+      if (targets.length) rel.push(`${t("수정")} → ${targets.join(" · ")}`);
     }
     return rel;
   };
@@ -49,9 +51,9 @@ export function TeamComposition(props: { wsId: string }) {
   const fillDefault = () => {
     backend.applyCasting(props.wsId, [
       { personaId: "kai", jobId: "lead" },
-      { personaId: "noel", jobId: "impl" },
-      { personaId: "lin", jobId: "review" },
-      { personaId: "sol", jobId: "verify" },
+      { personaId: "noel", jobId: "dev" },
+      { personaId: "lin", jobId: "qa" },
+      { personaId: "sol", jobId: "debug" },
     ]);
     setSaved(false);
   };
@@ -72,26 +74,26 @@ export function TeamComposition(props: { wsId: string }) {
     <div class="screen">
       <div class="screen-head">
         <div>
-          <h1>팀 편성 · {ws()?.name}</h1>
-          <div class="sub">.eqmux/team.json 원본 · team.md 파생 · LEAD 최대 1명</div>
+          <h1>{t("팀 편성")} · {ws()?.name}</h1>
+          <div class="sub">{t(".eqmux/team.json 원본 · team.md 파생 · LEAD 최대 1명")}</div>
         </div>
         <div style={{ display: "flex", gap: "8px" }}>
           <button class="btn" onClick={fillDefault}>
-            기본 편성 채우기
+            {t("기본 편성 채우기")}
           </button>
-          <button class="btn" onClick={() => setView({ kind: "roles" })}>
-            역할 라이브러리
+          <button class="btn" onClick={() => setOverlay("roles")}>
+            {t("역할 라이브러리")}
           </button>
           <button class="btn" onClick={() => setSaved(true)}>
-            {saved() ? "저장됨 ✓" : "편성 저장"}
+            {t(saved() ? "저장됨 ✓" : "편성 저장")}
           </button>
         </div>
       </div>
       <div class="screen-body comp-body">
         <div>
           <div class="conn-list-head">
-            <Eyebrow>팀 슬롯과 관계</Eyebrow>
-            <span class="mono muted">보고 → 지도 ⇢ 리뷰 ◇ 협업 —</span>
+            <Eyebrow>{t("팀 슬롯과 관계")}</Eyebrow>
+            <span class="mono muted">{t("보고 → 지도 ⇢ 리뷰 ◇ 협업 —")}</span>
           </div>
 
           <Show when={members().length > 1}>
@@ -153,16 +155,16 @@ export function TeamComposition(props: { wsId: string }) {
           </div>
           <div class="card cast-footer" style={{ "margin-top": "12px" }}>
             <div class="muted" style={{ "font-size": "11px" }}>
-              파일이 원본 · 중복 관계와 자기 참조는 저장 시 제거 · team.json/team.md는 커밋
+              {t("파일이 원본 · 중복 관계와 자기 참조는 저장 시 제거 · team.json/team.md는 커밋")}
             </div>
             <button class="btn primary" onClick={() => setView({ kind: "workspace", id: props.wsId })}>
-              {members().length}개 세션 시작
+              {tf("{n}개 세션 시작", { n: members().length })}
             </button>
           </div>
         </div>
 
         <div class="conn-detail">
-          <Show when={selMember()} fallback={<div class="muted">편성이 비었습니다 — 캐스팅을 먼저 하세요</div>}>
+          <Show when={selMember()} fallback={<div class="muted">{t("편성이 비었습니다 — 캐스팅을 먼저 하세요")}</div>}>
             <Eyebrow>SELECTED · {persona(selMember().personaId)?.name}</Eyebrow>
             <div style={{ "font-size": "15px", "font-weight": 800, margin: "6px 0" }}>
               {persona(selMember().personaId)?.name} · {selJob()?.name}
@@ -178,14 +180,14 @@ export function TeamComposition(props: { wsId: string }) {
             </div>
             <div class="card inset" style={{ padding: "10px", "margin-top": "10px" }}>
               <div class="mono st-waiting" style={{ "font-size": "11px", "font-weight": 700 }}>
-                권한 변경은 재시작 필요
+                {t("권한 변경은 재시작 필요")}
               </div>
               <div class="muted" style={{ "font-size": "11px", "margin-top": "4px" }}>
-                파일은 즉시 저장되지만 실행 플래그는 프로세스 수명 동안 고정됩니다.
+                {t("파일은 즉시 저장되지만 실행 플래그는 프로세스 수명 동안 고정됩니다.")}
               </div>
             </div>
             <button class="btn" style={{ "margin-top": "10px", width: "100%", "justify-content": "center" }} onClick={() => setSaved(true)}>
-              {saved() ? "저장됨 ✓" : "변경 저장"}
+              {t(saved() ? "저장됨 ✓" : "변경 저장")}
             </button>
           </Show>
         </div>

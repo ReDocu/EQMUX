@@ -1,13 +1,15 @@
 // 임무 · 파일 탐색기 패널 (ehpqx) — 워크스페이스 파일 트리 + 미리보기 + 파일 CRUD (M24).
 // Tauri에서는 실제 FS를 읽고 쓴다 (깊이·개수 상한 · .git 불가침 · 삭제는 휴지통).
 // 파일이 원본이라는 계약 그대로: 임무 파일은 backend의 실측 임무 데이터로, 그 외 텍스트는 원문으로.
-import { createEffect, createSignal, For, on, onMount, Show } from "solid-js";
+import { createEffect, createSignal, For, lazy, on, onMount, Show } from "solid-js";
 import { backend } from "../backend/mock";
 import { fsCreate, fsDelete, fsPreview, fsRead, fsRename, fsTree, fsWrite } from "../backend/panels";
 import type { FsNode } from "../backend/panels";
 import { refreshMissions } from "../backend/missions";
+import { sendConversation } from "../backend/conversation";
 import { isTauri } from "../backend/pty";
-import { openPanel, selectedSession, setExplorerOpen, setView, tick, view } from "../state";
+import { t } from "../i18n";
+import { openPanel, scopeWorkspace, selectedSession, setOverlay, setView, tick } from "../state";
 
 // 브라우저 dev 폴백 트리 (기존 목)
 const MOCK_TREE: FsNode[] = [
@@ -21,6 +23,9 @@ const MOCK_TREE: FsNode[] = [
 ];
 
 const parentOf = (rel: string) => (rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "");
+
+// CodeMirror는 편집을 열 때만 필요하다 — 지연 로드로 메인 번들에서 분리한다 (~600KB)
+const CodeEditor = lazy(() => import("./CodeEditor").then((m) => ({ default: m.CodeEditor })));
 
 // 미저장 이탈 보호 — 오버레이(ESC 닫기)가 편집 중 여부를 알아야 한다
 export const [editorGuard, setEditorGuard] = createSignal(false);
@@ -36,18 +41,16 @@ export function MissionExplorerTab() {
     const all = backend.listSessions();
     return all.find((s) => s.id === selectedSession()) ?? all[0];
   };
-  // 스코프 — 선택 세션의 워크스페이스 → 활성 탭 → 첫 등록
+  // 스코프 — 현재 워크스페이스 문맥(단일 소스)이 우선이다. 전역 세션 선택이 스코프를 끌고
+  // 다니면 A에서 세션을 고른 뒤 B 탭에 와도 A의 트리가 보인다. 세션 폴백은 워크스페이스
+  // 문맥이 아예 없을 때(첫 실행 관제 화면)만. "첫 등록" 폴백은 폐기.
   const ws = () => {
     tick();
-    const all = backend.listWorkspaces();
-    const bySession = session() && all.find((w) => w.id === session()!.workspaceId);
+    const scoped = scopeWorkspace();
+    if (scoped && !scoped.pathMissing) return scoped;
+    const bySession = session() && backend.listWorkspaces().find((w) => w.id === session()!.workspaceId);
     if (bySession && !bySession.pathMissing) return bySession;
-    const v = view();
-    if (v.kind === "workspace") {
-      const cur = all.find((w) => w.id === (v as { id: string }).id);
-      if (cur && !cur.pathMissing) return cur;
-    }
-    return all.find((w) => !w.pathMissing);
+    return undefined;
   };
   const persona = () => backend.listPersonas().find((p) => p.id === session()?.personaId);
   const job = () => backend.listJobs().find((j) => j.id === session()?.jobId);
@@ -58,8 +61,33 @@ export function MissionExplorerTab() {
     setNodes(await fsTree(target.path));
   };
   onMount(() => {
-    createEffect(on(() => ws()?.id, () => void loadTree()));
+    createEffect(
+      on(() => ws()?.id, () => {
+        setCollapsed(new Set<string>()); // 워크스페이스가 바뀌면 접기 상태도 새로 — 다른 트리다
+        void loadTree();
+      }),
+    );
   });
+
+  // ── 폴더 접기 — 접힌 폴더의 rel 집합. 하위 항목은 조상 경로가 접혀 있으면 숨긴다.
+  // 검색 중에는 평면 결과라서 접기를 무시한다 (이름 일치가 우선).
+  const [collapsed, setCollapsed] = createSignal<Set<string>>(new Set());
+  const isCollapsed = (rel: string) => collapsed().has(rel);
+  const toggleFold = (rel: string) => {
+    const next = new Set(collapsed());
+    if (!next.delete(rel)) next.add(rel);
+    setCollapsed(next);
+  };
+  const hiddenByFold = (rel: string) => {
+    const c = collapsed();
+    if (c.size === 0) return false;
+    let i = rel.indexOf("/");
+    while (i > 0) {
+      if (c.has(rel.slice(0, i))) return true;
+      i = rel.indexOf("/", i + 1);
+    }
+    return false;
+  };
 
   // 브라우저 dev — 정적 목 트리에 이 워크스페이스의 임무 파일을 실측(MISSIONS)으로 합친다.
   // 임무 생성이 곧 파일 생성이라는 계약(FR-E-51)이 목에서도 보이게 한다 (B6).
@@ -82,7 +110,8 @@ export function MissionExplorerTab() {
   const tree = () => {
     const list = isTauri() ? (nodes() ?? []) : mockTree();
     const q = query().trim();
-    return q ? list.filter((n) => n.name.includes(q)) : list;
+    if (q) return list.filter((n) => n.name.includes(q)); // 검색 = 평면 — 접기 무시
+    return list.filter((n) => !hiddenByFold(n.rel));
   };
 
   const loadPreview = async (rel: string) => {
@@ -95,7 +124,7 @@ export function MissionExplorerTab() {
     // 미저장 이탈 보호 — 편집 중 다른 파일 클릭은 1회 경고, 같은 파일 재클릭이 곧 확인
     if (editing() !== undefined && dirty() && pendingSwitch() !== n.rel) {
       setPendingSwitch(n.rel);
-      setFsErr("미저장 변경이 있습니다 — 한 번 더 클릭하면 버리고 이동합니다");
+      setFsErr(t("미저장 변경이 있습니다 — 한 번 더 클릭하면 버리고 이동합니다"));
       return;
     }
     setPendingSwitch(undefined);
@@ -233,23 +262,23 @@ export function MissionExplorerTab() {
   };
 
   const sendBrief = () => {
-    backend.sendMessage(
-      persona()?.name ?? "리드",
-      "@all",
-      "handoff",
-      `브리프 전달 · ${sel()?.rel ?? ".eqmux/missions/"}`,
-    );
+    // 원장 경로(msg_send)로 보낸다 — backend.sendMessage 직접 호출은 Tauri에서 DB·PTY 전달 없이
+    // workspaceId undefined인 유령 메시지가 됐다가 다음 hydrate에서 사라진다
+    const wsId = ws()?.id;
+    if (wsId) {
+      void sendConversation(wsId, "@all", "handoff", `브리프 전달 · ${sel()?.rel ?? ".eqmux/missions/"}`);
+    }
     // 전체 화면 팝업(M25)에서 부르므로 — 팝업을 접고 대화 패널을 연다
-    setExplorerOpen(false);
+    setOverlay(undefined);
     openPanel("conversation");
   };
 
   return (
     <div class="msnp">
       <div class="panel-head-row">
-        <span class="panel-title">임무 · 파일 탐색기</span>
+        <span class="panel-title">{t("임무 · 파일 탐색기")}</span>
         <span class="mono muted" style={{ "font-size": "9px", "letter-spacing": "0.06em" }}>
-          {isTauri() ? "FS 실측 · CRUD" : "목 데이터"}
+          {t(isTauri() ? "FS 실측 · CRUD" : "목 데이터")}
         </span>
       </div>
 
@@ -257,10 +286,10 @@ export function MissionExplorerTab() {
         <span class="msnp-status-dot" />
         <div style={{ flex: 1, "min-width": 0 }}>
           <div style={{ "font-weight": 700, "font-size": "11px" }}>
-            {persona()?.name ?? "세션 없음"} · {job()?.name ?? "—"}
+            {persona()?.name ?? t("세션 없음")} · {job()?.name ?? "—"}
           </div>
           <div class="mono muted" style={{ "font-size": "10px" }}>
-            {ws()?.path ?? "워크스페이스 없음"}
+            {ws()?.path ?? t("워크스페이스 없음")}
           </div>
         </div>
         <span class="badge blue mono">⎇ {ws()?.branch ?? "—"}</span>
@@ -270,36 +299,36 @@ export function MissionExplorerTab() {
         <div class="msnp-tree">
           <input
             class="panel-search mono"
-            placeholder="파일 검색"
+            placeholder={t("파일 검색")}
             value={query()}
             onInput={(e) => setQuery(e.currentTarget.value)}
           />
           {/* 파일 CRUD (M24) — 대상: 선택 폴더 안 / 선택 파일 옆 / 루트 */}
           <div class="msnp-crud">
-            <button class="btn ghost" disabled={!isTauri() || !ws()} title={`새 파일 — ${createDir() || "루트"}`} onClick={() => openName("file")}>
-              +파일
+            <button class="btn ghost" disabled={!isTauri() || !ws()} title={`${t("새 파일")} — ${createDir() || t("루트")}`} onClick={() => openName("file")}>
+              {t("+파일")}
             </button>
-            <button class="btn ghost" disabled={!isTauri() || !ws()} title={`새 폴더 — ${createDir() || "루트"}`} onClick={() => openName("dir")}>
-              +폴더
+            <button class="btn ghost" disabled={!isTauri() || !ws()} title={`${t("새 폴더")} — ${createDir() || t("루트")}`} onClick={() => openName("dir")}>
+              {t("+폴더")}
             </button>
-            <button class="btn ghost" disabled={!isTauri() || !sel()} title="이름 변경 (같은 폴더 안)" onClick={() => openName("rename")}>
-              이름
+            <button class="btn ghost" disabled={!isTauri() || !sel()} title={t("이름 변경 (같은 폴더 안)")} onClick={() => openName("rename")}>
+              {t("이름")}
             </button>
             <button
               class="btn ghost"
               classList={{ danger: confirmDel() }}
               disabled={!isTauri() || !sel()}
-              title="휴지통으로 이동 — 영구 삭제 아님"
+              title={t("휴지통으로 이동 — 영구 삭제 아님")}
               onClick={() => void doDelete()}
             >
-              {confirmDel() ? "휴지통 확정?" : "삭제"}
+              {t(confirmDel() ? "휴지통 확정?" : "삭제")}
             </button>
           </div>
           <Show when={nameMode()}>
             <div class="msnp-name-row">
               <input
                 class="mono"
-                placeholder={nameMode() === "rename" ? "새 이름" : nameMode() === "dir" ? "폴더 이름" : "파일 이름"}
+                placeholder={t(nameMode() === "rename" ? "새 이름" : nameMode() === "dir" ? "폴더 이름" : "파일 이름")}
                 value={nameVal()}
                 onInput={(e) => setNameVal(e.currentTarget.value)}
                 onKeyDown={(e) => {
@@ -309,7 +338,7 @@ export function MissionExplorerTab() {
                 ref={(el) => setTimeout(() => el.focus())}
               />
               <button class="btn primary" style={{ padding: "2px 8px" }} onClick={() => void submitName()}>
-                확인
+                {t("확인")}
               </button>
               <button class="btn ghost" style={{ padding: "2px 6px" }} onClick={() => setNameMode(undefined)}>
                 ✕
@@ -328,10 +357,14 @@ export function MissionExplorerTab() {
                   class="msnp-tree-row mono"
                   classList={{ selected: sel()?.rel === n.rel, folder: n.dir }}
                   style={{ "padding-left": `${8 + n.depth * 12}px` }}
-                  onClick={() => pick(n)}
+                  title={n.dir ? t(isCollapsed(n.rel) ? "펼치기" : "접기") : undefined}
+                  onClick={() => {
+                    pick(n);
+                    if (n.dir) toggleFold(n.rel); // 폴더 클릭 = 선택 + 접기 토글 (탐색기 관례)
+                  }}
                 >
                   <span class="msnp-tree-icon">
-                    {n.dir ? "▸" : n.name.endsWith(".json") ? "{}" : n.name.endsWith(".md") ? "≡" : "·"}
+                    {n.dir ? (isCollapsed(n.rel) ? "▸" : "▾") : n.name.endsWith(".json") ? "{}" : n.name.endsWith(".md") ? "≡" : "·"}
                   </span>
                   {n.name}
                 </button>
@@ -339,7 +372,7 @@ export function MissionExplorerTab() {
             </For>
             <Show when={tree().length === 0}>
               <div class="muted" style={{ padding: "8px", "font-size": "11px" }}>
-                {isTauri() ? "파일이 없거나 워크스페이스가 없습니다" : "검색 결과 없음"}
+                {t(isTauri() ? "파일이 없거나 워크스페이스가 없습니다" : "검색 결과 없음")}
               </div>
             </Show>
           </div>
@@ -349,9 +382,9 @@ export function MissionExplorerTab() {
           <div class="msnp-preview-head">
             <div style={{ "min-width": 0 }}>
               <div class="mono" style={{ "font-weight": 700, "font-size": "11px" }}>
-                {sel()?.name ?? "파일을 선택하세요"}
+                {sel()?.name ?? t("파일을 선택하세요")}
                 <Show when={editing() !== undefined}>
-                  <span class="st-waiting"> · 편집 중{dirty() ? " *" : ""}</span>
+                  <span class="st-waiting"> · {t("편집 중")}{dirty() ? " *" : ""}</span>
                 </Show>
               </div>
               <div class="mono muted" style={{ "font-size": "10px" }}>
@@ -360,19 +393,19 @@ export function MissionExplorerTab() {
             </div>
             <div style={{ display: "flex", gap: "4px" }}>
               <Show when={isTauri() && sel() && !sel()!.dir && editing() === undefined}>
-                <button class="btn ghost" title="원문 편집 (1MB 상한)" style={{ padding: "2px 6px" }} onClick={() => void startEdit()}>
-                  편집
+                <button class="btn ghost" title={t("원문 편집 (1MB 상한)")} style={{ padding: "2px 6px" }} onClick={() => void startEdit()}>
+                  {t("편집")}
                 </button>
               </Show>
               <Show when={editing() !== undefined}>
                 <button class="btn primary" style={{ padding: "2px 8px" }} onClick={() => void saveEdit()}>
-                  저장
+                  {t("저장")}
                 </button>
                 <button class="btn ghost" style={{ padding: "2px 6px" }} onClick={() => setEditing(undefined)}>
-                  취소
+                  {t("취소")}
                 </button>
               </Show>
-              <button class="btn ghost" title="트리 새로 읽기" style={{ padding: "2px 6px" }} onClick={() => void loadTree()}>
+              <button class="btn ghost" title={t("트리 새로 읽기")} style={{ padding: "2px 6px" }} onClick={() => void loadTree()}>
                 ⟳
               </button>
             </div>
@@ -388,11 +421,13 @@ export function MissionExplorerTab() {
                     when={preview() !== undefined}
                     fallback={
                       <div class="muted" style={{ padding: "14px 10px", "font-size": "11px" }}>
-                        {sel() && !sel()!.dir
-                          ? "미리보기를 불러올 수 없습니다 (바이너리 또는 읽기 실패)"
-                          : sel()?.dir
-                            ? "폴더 선택됨 — +파일/+폴더는 이 안에 만들어집니다"
-                            : "파일을 선택하면 원문이 표시됩니다. 임무 파일(.eqmux/missions/*.md)은 구조화되어 보입니다."}
+                        {t(
+                          sel() && !sel()!.dir
+                            ? "미리보기를 불러올 수 없습니다 (바이너리 또는 읽기 실패)"
+                            : sel()?.dir
+                              ? "폴더 선택됨 — +파일/+폴더는 이 안에 만들어집니다"
+                              : "파일을 선택하면 원문이 표시됩니다. 임무 파일(.eqmux/missions/*.md)은 구조화되어 보입니다.",
+                        )}
                       </div>
                     }
                   >
@@ -431,10 +466,10 @@ export function MissionExplorerTab() {
                     </div>
                     <div class="msnp-md">
                       <div class="msnp-md-h1"># {m().name}</div>
-                      <div class="msnp-md-h2">목표</div>
+                      <div class="msnp-md-h2">{t("목표")}</div>
                       <div class="msnp-md-p">{m().goal || "—"}</div>
                       <Show when={m().outputs.length > 0}>
-                        <div class="msnp-md-h2">산출물</div>
+                        <div class="msnp-md-h2">{t("산출물")}</div>
                         <For each={m().outputs}>{(o) => <div class="msnp-md-p mono">□ {o}</div>}</For>
                       </Show>
                     </div>
@@ -443,20 +478,16 @@ export function MissionExplorerTab() {
               </Show>
             }
           >
-            <textarea
-              class="mono msnp-edit"
-              value={editing()}
-              onInput={(e) => {
-                setEditing(e.currentTarget.value);
+            {/* CodeMirror 6 (textarea의 후신) — 구문 강조·줄 번호·검색(Ctrl+F)·되돌리기.
+                저장 배관(1MB 상한 · mtime 충돌)은 그대로 saveEdit가 소유한다 */}
+            <CodeEditor
+              value={editing()!}
+              fileName={sel()?.name ?? ""}
+              onChange={(text) => {
+                setEditing(text);
                 setDirty(true);
               }}
-              onKeyDown={(e) => {
-                // Ctrl+S 저장 — 브라우저 저장 다이얼로그를 가로챈다
-                if (e.ctrlKey && e.key.toLowerCase() === "s") {
-                  e.preventDefault();
-                  void saveEdit();
-                }
-              }}
+              onSave={() => void saveEdit()}
             />
           </Show>
         </div>
@@ -465,10 +496,10 @@ export function MissionExplorerTab() {
       <div class="msnp-footer">
         <div>
           <div class="mono" style={{ "font-size": "10px", color: "var(--eq-green)" }}>
-            {isTauri() ? "실측 · 열 때 새로 읽음" : "WATCHING · .eqmux/ (목)"}
+            {t(isTauri() ? "실측 · 열 때 새로 읽음" : "WATCHING · .eqmux/ (목)")}
           </div>
           <div class="muted" style={{ "font-size": "10px" }}>
-            파일 우선 · 삭제는 휴지통 · .git 불가침
+            {t("파일 우선 · 삭제는 휴지통 · .git 불가침")}
           </div>
         </div>
         <div style={{ display: "flex", gap: "6px" }}>
@@ -477,14 +508,13 @@ export function MissionExplorerTab() {
             disabled={!ws()}
             onClick={() => {
               if (!ws()) return;
-              setExplorerOpen(false); // 팝업 아래로 이동하므로 접는다
-              setView({ kind: "missions", wsId: ws()!.id });
+              setView({ kind: "missions", wsId: ws()!.id }); // setView가 팝업을 접는다
             }}
           >
-            임무 관리
+            {t("임무 관리")}
           </button>
           <button class="btn primary" onClick={sendBrief}>
-            브리프 전달
+            {t("브리프 전달")}
           </button>
         </div>
       </div>

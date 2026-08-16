@@ -4,6 +4,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { backend } from "./mock";
 import { isTauri, writePty } from "./pty";
+import { personaLevel } from "../types";
 import type { Session } from "../types";
 
 export interface RolePayload {
@@ -11,11 +12,16 @@ export interface RolePayload {
   persona: string;
   personaName: string;
   hint: string;
+  tone: string; // 말투 (중간 단계 · 선택) — 비면 섹션이 출력되지 않는다
+  personality: string; // 성격 (중간 단계 · 선택)
   job: string;
   jobName: string;
   permissions: { write: boolean; commit: boolean; push: boolean };
   responsibility: string;
   forbidden: string;
+  characterPath?: string; // 고급 캐릭터 시트 — 전재 없이 경로 포인터만 실린다 (FR-E-40)
+  characterName?: string;
+  characterSource?: string;
   teammates: { slot: number; name: string; jobName: string; me: boolean }[];
 }
 
@@ -36,11 +42,19 @@ export function buildRolePayload(s: Session): RolePayload | undefined {
       jobName: jobs.find((j) => j.id === x.jobId)?.name ?? x.jobId,
       me: x.id === s.id,
     }));
+  // 단계 = 활성 프로필 선택 — 최상위 필드는 이미 활성 프로필의 사본이다 (Rust 실측).
+  // 기본 = 판단 성향만 · 중급 = 성향+말투+성격 · 고급 = 캐릭터 시트만 주입.
+  const level = personaLevel(persona);
   return {
     session: s.id,
     persona: persona.id,
     personaName: persona.name,
-    hint: persona.hint,
+    hint: level !== "adv" ? persona.hint : "",
+    tone: level === "mid" ? (persona.tone ?? "") : "",
+    personality: level === "mid" ? (persona.personality ?? "") : "",
+    characterPath: level === "adv" ? persona.characterPath : undefined,
+    characterName: level === "adv" ? persona.characterName : undefined,
+    characterSource: level === "adv" ? persona.characterSource : undefined,
     job: job.id,
     jobName: job.name,
     permissions: s.permOverride ?? job.permissions, // 유효 권한 (FR-E-34) — frontmatter에 반영

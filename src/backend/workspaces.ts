@@ -10,7 +10,8 @@ import { refreshLibrary } from "./library";
 import { backend } from "./mock";
 import { refreshMissions } from "./missions";
 import { isTauri } from "./pty";
-import { restoreTeams } from "./team";
+import { flushTeamNow, restoreTeams } from "./team";
+import { setView, view } from "../state";
 import type { Workspace } from "../types";
 
 export interface WsEntry {
@@ -57,7 +58,17 @@ export async function refreshWorkspaces(): Promise<void> {
   if (!isTauri()) return;
   const list = await invoke<WsInfo[]>("ws_registry").catch(() => [] as WsInfo[]);
   backend.hydrateWorkspaces(list.map(toWorkspace));
+  // 유령 뷰 정규화 — 현재 탭의 워크스페이스가 레지스트리에서 사라졌으면 관제로 돌아간다.
+  // 방치하면 본문은 Dashboard 폴백인데 앱 바는 어떤 탭도 활성이 아닌 충돌 상태가 되고,
+  // layout.json에 존재하지 않는 lastWorkspace가 계속 저장된다.
+  const v = view();
+  if (v.kind === "workspace" && !list.some((w) => w.entry.id === v.id)) {
+    setView({ kind: "control" });
+  }
   await refreshLibrary(); // 라이브러리 실파일 (FR-E-20~23) — 팀 복원이 이름·색을 참조하므로 먼저
+  // 디바운스(500ms) 중인 팀 변경을 먼저 파일에 내린다 — 스테일 team.json을 다시 읽으면
+  // 방금 지운 역할 세션이 복원되어 되살아난다
+  flushTeamNow();
   await restoreTeams(); // team.json → 슬롯 복원 (에이전트 자동 실행 없음, S3)
   await restoreUnseen(); // 미확인 영속 (G) — 세션이 존재해야 점이 붙는다. 동기화는 복원 뒤 시작
   startUnseenSync();

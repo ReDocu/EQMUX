@@ -5,6 +5,7 @@ import { backend, PORT_SUMMARY, SESSION_PORTS } from "../backend/mock";
 import { portsSnapshot } from "../backend/panels";
 import type { PortRow } from "../backend/panels";
 import { clipWriteText, isTauri } from "../backend/pty";
+import { t } from "../i18n";
 
 interface Row {
   port: number;
@@ -86,15 +87,15 @@ export function PortsPanelTab() {
   return (
     <div class="portsp">
       <div class="panel-head-row">
-        <span class="panel-title">포트</span>
+        <span class="panel-title">{t("포트")}</span>
         <span class="mono muted" style={{ "font-size": "10px" }}>
-          {summary().session + summary().system} OPEN {isTauri() && real() ? "· 실측" : "· 목"}
+          {summary().session + summary().system} OPEN {t(isTauri() && real() ? "· 실측" : "· 목")}
         </span>
       </div>
 
       <input
         class="panel-search mono"
-        placeholder="포트 · 프로세스 · 세션 검색"
+        placeholder={t("포트 · 프로세스 · 세션 검색")}
         value={query()}
         onInput={(e) => setQuery(e.currentTarget.value)}
       />
@@ -123,7 +124,7 @@ export function PortsPanelTab() {
               </div>
             </div>
             <div class="portsp-actions">
-              <button class="portsp-act" title="주소 복사" onClick={() => copyAddr(p)}>
+              <button class="portsp-act" title={t("주소 복사")} onClick={() => copyAddr(p)}>
                 ⧉
               </button>
             </div>
@@ -132,7 +133,7 @@ export function PortsPanelTab() {
       </For>
       <Show when={filtered().length === 0}>
         <div class="muted" style={{ padding: "8px", "font-size": "11px" }}>
-          세션이 연 LISTENING 포트가 없습니다
+          {t("세션이 연 LISTENING 포트가 없습니다")}
         </div>
       </Show>
 
@@ -161,7 +162,7 @@ export function PortsPanelTab() {
 
       <div class="portsp-summary card inset">
         <div class="eyebrow" style={{ "margin-bottom": "6px" }}>
-          포트 사용 요약
+          {t("포트 사용 요약")}
         </div>
         <div class="portsp-summary-grid">
           <For
@@ -178,7 +179,7 @@ export function PortsPanelTab() {
                   {m.v}
                 </div>
                 <div class="muted" style={{ "font-size": "10px" }}>
-                  {m.k}
+                  {t(m.k)}
                 </div>
               </div>
             )}
@@ -187,9 +188,9 @@ export function PortsPanelTab() {
         <div class="portsp-notice">
           <Show
             when={summary().exposed === 0}
-            fallback={<><span class="st-waiting">⚠</span> 루프백 밖으로 바인딩된 포트가 있습니다.</>}
+            fallback={<><span class="st-waiting">⚠</span> {t("루프백 밖으로 바인딩된 포트가 있습니다.")}</>}
           >
-            <span class="st-green">✓</span> 세션 포트가 루프백에만 바인딩되어 있습니다.
+            <span class="st-green">✓</span> {t("세션 포트가 루프백에만 바인딩되어 있습니다.")}
           </Show>
         </div>
       </div>

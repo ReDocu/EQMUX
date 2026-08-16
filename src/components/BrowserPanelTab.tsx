@@ -6,6 +6,7 @@ import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { portsSnapshot } from "../backend/panels";
 import type { PortRow } from "../backend/panels";
 import { isTauri } from "../backend/pty";
+import { t } from "../i18n";
 
 const LOCAL_RE = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/i;
 
@@ -28,10 +29,10 @@ export function BrowserPanelTab() {
   });
 
   const open = (target: string) => {
-    const t = target.trim();
-    const full = /^https?:\/\//i.test(t) ? t : `http://${t}`;
+    const raw = target.trim();
+    const full = /^https?:\/\//i.test(raw) ? raw : `http://${raw}`;
     if (!LOCAL_RE.test(full)) {
-      setError("localhost · 127.0.0.1 대상만 미리봅니다 — 외부 웹은 사용자의 브라우저에서");
+      setError(t("localhost · 127.0.0.1 대상만 미리봅니다 — 외부 웹은 사용자의 브라우저에서"));
       return;
     }
     setError(null);
@@ -43,15 +44,15 @@ export function BrowserPanelTab() {
   return (
     <div class="browserp">
       <div class="panel-head-row">
-        <span class="panel-title">브라우저</span>
+        <span class="panel-title">{t("브라우저")}</span>
         <span class="mono muted" style={{ "font-size": "10px" }}>
-          세션 포트 미리보기
+          {t("세션 포트 미리보기")}
         </span>
         <Show when={url()}>
           <button
             class="btn ghost"
             style={{ "margin-left": "auto", padding: "2px 7px" }}
-            title="새로고침"
+            title={t("새로고침")}
             onClick={() => setNonce((n) => n + 1)}
           >
             ⟳
@@ -79,7 +80,7 @@ export function BrowserPanelTab() {
       <div class="card inset browserp-url mono" style={{ display: "flex", gap: "6px" }}>
         <input
           style={{ flex: 1, "min-width": 0, background: "transparent", border: "none", color: "inherit" }}
-          placeholder="127.0.0.1:5173 — Enter로 열기"
+          placeholder={t("127.0.0.1:5173 — Enter로 열기")}
           value={addr()}
           onInput={(e) => setAddr(e.currentTarget.value)}
           onKeyDown={(e) => e.key === "Enter" && open(addr())}
@@ -95,13 +96,15 @@ export function BrowserPanelTab() {
           <div class="card inset browserp-view">
             <div class="muted" style={{ "text-align": "center" }}>
               <div style={{ "font-size": "22px", "margin-bottom": "8px" }}>◱</div>
-              세션 포트 미리보기
+              {t("세션 포트 미리보기")}
               <div class="mono" style={{ "font-size": "10px", "margin-top": "6px" }}>
-                {isTauri()
-                  ? ports().length > 0
-                    ? "위 포트 칩을 누르거나 주소를 입력하세요"
-                    : "세션이 LISTENING 포트를 열면 칩이 나타납니다"
-                  : "Tauri에서 실행하면 실측 포트가 연결됩니다"}
+                {t(
+                  isTauri()
+                    ? ports().length > 0
+                      ? "위 포트 칩을 누르거나 주소를 입력하세요"
+                      : "세션이 LISTENING 포트를 열면 칩이 나타납니다"
+                    : "Tauri에서 실행하면 실측 포트가 연결됩니다",
+                )}
               </div>
             </div>
           </div>
@@ -109,7 +112,7 @@ export function BrowserPanelTab() {
       >
         {/* keyed Show — url·nonce가 바뀔 때 iframe을 재생성한다 (새로고침) */}
         <Show when={`${url()}#${nonce()}`} keyed>
-          <iframe src={url()!} class="card inset browserp-frame" title="세션 포트 미리보기" />
+          <iframe src={url()!} class="card inset browserp-frame" title={t("세션 포트 미리보기")} />
         </Show>
       </Show>
     </div>

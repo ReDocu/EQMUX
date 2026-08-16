@@ -23,12 +23,22 @@ export interface AgentStateEvt {
   version: string | null;
   exitCode: number | null;
   degraded: boolean; // 관측 저하 (FR-D-62·63, M34) — 낮은 신뢰 표시 (FR-G-27)
+  seq?: number; // 순번 (P-4) — 전역 단조 증가. 스냅숏·이벤트 순서 역전 가드
 }
 
 const STATUSES: AgentStatus[] = ["starting", "busy", "waiting", "shell", "idle", "dead"];
 
+// 순서 역전 가드 (P-4) — 스냅숏(agent_snapshot)과 실시간 이벤트(agent-state)가 겹치는
+// 창(웹뷰 재시작 직후)에서 더 오래된 페이로드가 나중에 도착해 신선한 상태를 덮지 않게 한다
+const lastSeq = new Map<string, number>();
+
 /** Rust 이벤트(null 표기) → 목 백엔드 반영 페이로드(undefined 표기) — 수신부 공용 변환 */
 function applyEvt(p: AgentStateEvt): void {
+  if (typeof p.seq === "number") {
+    const last = lastSeq.get(p.session);
+    if (last !== undefined && p.seq < last) return; // 스테일 — 버린다
+    lastSeq.set(p.session, p.seq);
+  }
   // waiting 사운드 (FR-G-34) — 진입 전이에만, 설정이 켜져 있을 때만 (기본 꺼짐, G6).
   // 음소거(FR-G-35) 대상이면 내지 않는다 — 세션 id 또는 소속 워크스페이스 id
   const prevSess = backend.listSessions().find((x) => x.id === p.session);

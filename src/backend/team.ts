@@ -63,35 +63,41 @@ export function startTeamSync(): void {
   syncStarted = true;
   backend.subscribe(() => {
     clearTimeout(timer);
-    timer = setTimeout(() => {
-      for (const ws of backend.listWorkspaces()) {
-        if (ws.pathMissing) continue;
-        const slots = slotsOf(ws.id);
-        const json = JSON.stringify(slots);
-        // 세션이 하나도 로드된 적 없는 워크스페이스는 건드리지 않는다 (파일이 원본)
-        if (json !== "[]" || lastSaved.has(ws.id)) {
-          if (lastSaved.get(ws.id) !== json) {
-            lastSaved.set(ws.id, json);
-            void invoke("team_save", { wsPath: ws.path, slots }).catch(() => {});
-          }
-        }
-        // 역할 파일 — 페르소나·직무·관계가 바뀐 워크스페이스만 다시 합성한다.
-        // 경로 규약은 세션 cwd 기준 (FR-E-63) — 워크트리 세션은 자기 사본에 합성된다.
-        const payloads = backend
-          .listSessions()
-          .filter((s) => s.workspaceId === ws.id && s.personaId)
-          .map((s) => ({ cwd: s.cwd || ws.path, payload: buildRolePayload(s) }))
-          .filter((x): x is { cwd: string; payload: NonNullable<ReturnType<typeof buildRolePayload>> } => x.payload !== undefined);
-        if (payloads.length === 0 && !lastRoleSaved.has(ws.id)) continue;
-        const roleJson = JSON.stringify(payloads);
-        if (lastRoleSaved.get(ws.id) === roleJson) continue;
-        lastRoleSaved.set(ws.id, roleJson);
-        for (const x of payloads) {
-          void invoke("role_save", { wsPath: x.cwd, payload: x.payload }).catch(() => {});
-        }
-      }
-    }, 500);
+    timer = setTimeout(flushTeamNow, 500);
   });
+}
+
+/** 디바운스 즉시 flush — 종료 시퀀스가 부른다. 대기 타이머만 믿으면 마지막 0.5초 변경이 유실된다.
+ *  sync 시작 전(부트스트랩 중)에는 no-op — 빈 상태로 파일을 덮으면 안 된다. */
+export function flushTeamNow(): void {
+  if (!syncStarted) return;
+  clearTimeout(timer);
+  for (const ws of backend.listWorkspaces()) {
+    if (ws.pathMissing) continue;
+    const slots = slotsOf(ws.id);
+    const json = JSON.stringify(slots);
+    // 세션이 하나도 로드된 적 없는 워크스페이스는 건드리지 않는다 (파일이 원본)
+    if (json !== "[]" || lastSaved.has(ws.id)) {
+      if (lastSaved.get(ws.id) !== json) {
+        lastSaved.set(ws.id, json);
+        void invoke("team_save", { wsPath: ws.path, slots }).catch(() => {});
+      }
+    }
+    // 역할 파일 — 페르소나·직무·관계가 바뀐 워크스페이스만 다시 합성한다.
+    // 경로 규약은 세션 cwd 기준 (FR-E-63) — 워크트리 세션은 자기 사본에 합성된다.
+    const payloads = backend
+      .listSessions()
+      .filter((s) => s.workspaceId === ws.id && s.personaId)
+      .map((s) => ({ cwd: s.cwd || ws.path, payload: buildRolePayload(s) }))
+      .filter((x): x is { cwd: string; payload: NonNullable<ReturnType<typeof buildRolePayload>> } => x.payload !== undefined);
+    if (payloads.length === 0 && !lastRoleSaved.has(ws.id)) continue;
+    const roleJson = JSON.stringify(payloads);
+    if (lastRoleSaved.get(ws.id) === roleJson) continue;
+    lastRoleSaved.set(ws.id, roleJson);
+    for (const x of payloads) {
+      void invoke("role_save", { wsPath: x.cwd, payload: x.payload }).catch(() => {});
+    }
+  }
 }
 
 /** 워크스페이스의 팀 슬롯 복원 — refreshWorkspaces 이후 호출된다.

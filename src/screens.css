@@ -278,6 +278,7 @@
 }
 .cc-center {
   min-height: 0;
+  min-width: 0; /* 1fr 트랙의 min-width:auto — 트랜스크립트 머리줄이 뷰포트 밖으로 밀어내지 않게 */
   display: flex;
   flex-direction: column;
 }
@@ -388,6 +389,142 @@
 }
 .rail-ms b {
   font-size: 12px;
+}
+/* 워크트리 레일 (orca식) — 임무 아래. 행 = 브랜치 + 귀속 세션, 생성은 팝오버 */
+.rail-wt-head {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px 0;
+}
+.rail-wt-head .eyebrow {
+  flex: 1;
+}
+.rail-wt-head b {
+  font-size: 12px;
+}
+.rail-wt-add {
+  flex-shrink: 0;
+  padding: 0 6px;
+  font-size: 13px;
+  color: var(--eq-dim);
+  border-radius: var(--eq-r-sm);
+  cursor: pointer;
+}
+.rail-wt-add:hover {
+  color: var(--eq-text);
+  background: var(--eq-surface-2);
+}
+.rail-wt-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 4px;
+  right: 4px;
+  z-index: 30;
+  border-color: var(--eq-line);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.45);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.rail-wt-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.rail-wt {
+  padding: 5px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--eq-r-sm);
+}
+.rail-wt:hover {
+  border-color: var(--eq-line);
+  background: var(--eq-surface);
+}
+.rail-wt-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.rail-wt-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rail-wt-tag {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--eq-dim);
+  flex-shrink: 0;
+}
+.rail-wt-tag.main {
+  color: var(--eq-blue);
+}
+.rail-wt-open {
+  opacity: 0;
+  flex-shrink: 0;
+  padding: 0 5px;
+  font-size: 10px;
+  color: var(--eq-dim);
+  border-radius: var(--eq-r-sm);
+  cursor: pointer;
+}
+.rail-wt:hover .rail-wt-open {
+  opacity: 1;
+}
+.rail-wt-open:hover {
+  color: var(--eq-text);
+  background: var(--eq-surface-2);
+}
+.rail-wt-path {
+  font-size: 9px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rail-wt-agents {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+}
+.rail-wt-agent {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  font-size: 10px;
+  padding: 2px 4px;
+  border-radius: var(--eq-r-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.rail-wt-agent:hover,
+.rail-wt-agent.sel {
+  background: var(--eq-surface-2);
+}
+.rail-wt-agent .sdot {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+}
+.rail-wt-agent-nm {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rail-wt-empty {
+  font-size: 10px;
+  padding: 2px 10px;
 }
 
 .terminal-slot {
@@ -511,6 +648,27 @@
   color: var(--eq-amber);
   background: var(--eq-amber-soft);
 }
+/* 직무 8색 팔레트 정렬 — jobs.ts JOB_META 색과 1:1 (amber는 구 데이터 호환용으로 유지) */
+.persona-dot.cyan {
+  color: var(--eq-cyan);
+  background: var(--eq-cyan-soft);
+}
+.persona-dot.pink {
+  color: var(--eq-pink);
+  background: var(--eq-pink-soft);
+}
+.persona-dot.red {
+  color: var(--eq-red);
+  background: var(--eq-red-soft);
+}
+.persona-dot.slate {
+  color: var(--eq-slate);
+  background: var(--eq-slate-soft);
+}
+.persona-dot.orange {
+  color: var(--eq-orange);
+  background: var(--eq-orange-soft);
+}
 
 /* ── 워크스페이스 연결 ── */
 .conn-body {
@@ -575,6 +733,20 @@
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 10px;
+}
+/* 슬롯 추가 카드 — 빈 슬롯 자리의 고스트 버튼 (설정 maxSlots까지) */
+.cast-slot-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-style: dashed;
+  color: var(--eq-muted);
+  cursor: pointer;
+  min-height: 120px;
+}
+.cast-slot-add:hover {
+  color: var(--eq-text);
+  border-color: var(--eq-blue);
 }
 .cast-slot,
 .comp-member {
@@ -644,6 +816,20 @@
   min-height: 0;
   border-left: 1px solid var(--eq-line);
   background: var(--eq-surface-2);
+}
+/* 위치 전환 — 왼쪽에 붙으면 테두리도 반대편이다 (order는 컴포넌트가 인라인으로) */
+.side-panel.left {
+  border-left: none;
+  border-right: 1px solid var(--eq-line);
+}
+.panel-tab.side-toggle {
+  margin-left: auto;
+  flex: 0 0 auto;
+  border-right: none;
+  border-left: 1px solid var(--eq-line);
+}
+.panel-tab.side-toggle + .panel-tab.close {
+  margin-left: 0;
 }
 .panel-tabs {
   display: flex;
@@ -918,6 +1104,13 @@
   height: 100%;
   max-width: 100%;
 }
+/* 줌 리사이즈 시 캔버스가 비워지는 한 프레임 동안 xterm 기본 검정(.xterm-viewport #000)이
+   비쳐 깜빡인다 — 플래시 레이어를 테마색으로 칠해 전환을 안 보이게 한다.
+   주의: -layer 캔버스(링크 등)는 메인 캔버스 위의 투명 오버레이라 불투명 배경을 주면 텍스트를 가린다 */
+.xterm-host .xterm-viewport,
+.xterm-host .xterm-screen canvas:not([class*="-layer"]) {
+  background-color: var(--eq-terminal);
+}
 .xterm-host.drop-target {
   outline: 1px solid var(--eq-blue);
   outline-offset: -1px;
@@ -1031,11 +1224,49 @@
 /* 트랜스크립트 검색 (FR-G-87) — 로드된 창 안 클라이언트 필터 */
 .transcript-search {
   width: 150px;
+  min-width: 50px;
+  flex-shrink: 1; /* 좁은 해상도에서 머리줄이 폭을 밀어내는 대신 검색창이 줄어든다 */
   font-size: 10px;
   padding: 1px 6px;
   background: var(--eq-surface);
   border: 1px solid var(--eq-line);
   color: var(--eq-text);
+}
+
+/* 트랜스크립트 머리줄 — 제목은 줄임표, 도구 묶음은 고정. 좁은 해상도에서
+   min-content 팽창 → 문서 가로 스크롤(포커스 시 오른쪽 밀림)을 차단한다 */
+.transcript .terminal-head {
+  gap: 10px;
+  align-items: center;
+}
+.transcript-head-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.transcript-head-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.transcript-count {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+/* 세션 저장 — 라인 카운터 옆. .btn 위에 크기 오버라이드만 얹는다 (.term-search .btn 관례) */
+.transcript-save {
+  flex-shrink: 0;
+  font-size: 10px;
+  padding: 1px 8px;
+}
+.transcript-save-msg {
+  font-size: 10px;
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--eq-line);
+  color: var(--eq-muted);
+  word-break: break-all;
 }
 
 /* ── 트랜스크립트 페인 (화면 #12) ── */
@@ -1050,6 +1281,8 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
+  overflow-wrap: anywhere; /* 긴 경로·URL이 pre-wrap에서도 폭을 밀어내지 않게 */
 }
 .turn {
   padding: 6px 8px;
@@ -1082,8 +1315,8 @@
 }
 .roles-personas {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 8px;
+  grid-template-columns: repeat(4, 1fr); /* 직무 그리드와 같은 4열 — 화면 비율 정렬 */
+  gap: 10px;
   margin-top: 8px;
 }
 .role-persona {
@@ -1171,11 +1404,35 @@
   padding: 0 12px;
 }
 
-/* ── git 패널 (PAlmZ) ── */
+/* ── git 패널 (PAlmZ · UI 리파인 §git) ── */
 .gitp {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+/* 타이틀바 — 아이콘+제목 왼쪽 · 출처(경로는 툴팁)·새로 읽기 오른쪽 */
+.gitp-titlebar {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.gitp-git-ic {
+  display: flex;
+  color: var(--eq-purple);
+}
+.gitp-src {
+  font-size: 10px;
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gitp-refresh {
+  font-size: 12px;
+  padding: 1px 7px;
+}
+.gitp-repo-wrap {
+  position: relative;
 }
 .gitp-repo,
 .gitp-branch {
@@ -1192,18 +1449,73 @@
 .gitp-branch:hover {
   border-color: var(--eq-muted);
 }
-.gitp-branch-row {
+/* 한 줄 툴바 — 브랜치 ▾ · ↑↓ · diff · pull · commit · push. 좁으면 줄바꿈 */
+.gitp-toolbar {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+  row-gap: 6px;
+  flex-wrap: wrap;
   position: relative;
+}
+.gitp-branch-wrap {
+  flex: 1 1 110px;
+  min-width: 0;
+  display: flex;
 }
 .gitp-branch {
   flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+}
+.gitp-branch-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .gitp-sync {
   font-size: 11px;
   white-space: nowrap;
+}
+.gitp-act {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  font-size: 11px;
+  white-space: nowrap;
+  color: var(--eq-text);
+  background: var(--eq-surface-2);
+  border: 1px solid var(--eq-line);
+  border-radius: var(--eq-r-sm);
+  cursor: pointer;
+}
+.gitp-act:hover {
+  border-color: var(--eq-blue);
+}
+.gitp-act .n {
+  color: var(--eq-blue);
+  font-weight: 700;
+}
+/* 워크트리 생성 모드 토글 (레일 §워크트리) — 새 브랜치 / 기존 브랜치 연결. 레일·git 패널 공용 */
+.wt-mode-toggle {
+  display: flex;
+  gap: 4px;
+}
+.wt-mode-toggle button {
+  flex: 1;
+  font-size: 10px;
+  padding: 2px 6px;
+  background: none;
+  border: 1px solid var(--eq-line);
+  border-radius: var(--eq-r-sm);
+  color: var(--eq-muted);
+  cursor: pointer;
+}
+.wt-mode-toggle button.on {
+  color: var(--eq-blue);
+  border-color: var(--eq-blue-mid);
+  background: var(--eq-blue-soft);
 }
 /* 팝오버 (시안 §05) — 브랜치 체크아웃·워크트리 생성 폼. 내용을 밀지 않고 위에 뜬다 */
 .gitp-pop {
@@ -1219,23 +1531,7 @@
   flex-direction: column;
   gap: 4px;
 }
-/* 변경 요약 한 줄 (시안 §05) — 타일 4개의 후신 */
-.gitp-sumline {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  font-size: 12px;
-  padding: 2px 2px 0;
-  font-variant-numeric: tabular-nums;
-}
-.gitp-sumline b {
-  font-size: 16px;
-  font-weight: 700;
-}
-.gitp-added {
-  color: var(--eq-green);
-}
-/* 워크트리 행 — 뱃지 박스 대신 우측 텍스트 라벨 */
+/* 워크트리 스트립 (UI 리파인 §git) — 한 줄. 경로·head·정책은 툴팁 */
 .gitp-wt-head {
   position: relative;
 }
@@ -1247,11 +1543,25 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 2px;
+  padding: 3px 2px;
   border-top: 1px solid var(--eq-line);
 }
 .gitp-wt:first-child {
   border-top: none;
+}
+.gitp-wt-name {
+  font-size: 11px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gitp-wt-path {
+  font-size: 9px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .gitp-wt-tag {
   font-size: 9px;
@@ -1269,75 +1579,106 @@
   padding-top: 8px;
   margin-top: 2px;
 }
+/* 커밋 리스트 (UI 리파인 §git) — 밀도 행: 뱃지+메시지 왼쪽 · 작성자·시간·해시 오른쪽 한 줄.
+   그래프 라인은 행을 관통해 이어진다. 행 클릭 = 부모 커밋 ↔ 이 커밋 diff */
 .gitp-commits {
   display: flex;
   flex-direction: column;
 }
 .gitp-commit {
   display: flex;
-  gap: 10px;
-  align-items: stretch;
+  gap: 8px;
+  align-items: center;
+  min-height: 38px;
+  padding: 0 2px;
+  border-bottom: 1px solid var(--eq-line);
+  cursor: pointer;
+}
+.gitp-commit:last-child {
+  border-bottom: none;
+}
+.gitp-commit:hover {
+  background: var(--eq-surface-2);
 }
 .gitp-graph {
   position: relative;
   width: 14px;
   flex-shrink: 0;
+  align-self: stretch;
 }
 .gitp-line {
   position: absolute;
   left: 6px;
   top: 0;
   bottom: 0;
-  width: 1px;
-  background: var(--eq-line);
+  width: 2px;
+  background: var(--eq-blue-mid);
 }
 .gitp-line.first {
-  top: 12px;
+  top: 50%;
 }
 .gitp-line.last {
-  bottom: calc(100% - 12px);
+  bottom: 50%;
 }
 .gitp-dot {
   position: absolute;
   left: 3px;
-  top: 9px;
+  top: 50%;
+  margin-top: -4px;
   width: 8px;
   height: 8px;
   border-radius: 50%;
   background: var(--eq-blue);
   border: 1px solid var(--eq-bg);
 }
-.gitp-commit-body {
+.gitp-commit-main {
   flex: 1;
   min-width: 0;
-  padding: 6px 0 10px;
-  border-bottom: 1px solid var(--eq-line);
-}
-.gitp-commit:last-child .gitp-commit-body {
-  border-bottom: none;
-}
-.gitp-commit-msg {
   display: flex;
   align-items: center;
   gap: 6px;
   font-size: 12px;
-  margin-bottom: 2px;
 }
-.gitp-diff-cta {
+.gitp-commit-txt {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* ref 뱃지 — 아웃라인 필. 원격(origin/…)은 보라 계열로 구분 */
+.gitp-ref {
+  flex-shrink: 0;
+  font-size: 9.5px;
+  font-weight: 600;
+  line-height: 16px;
+  padding: 0 6px;
+  border-radius: 5px;
+  color: var(--eq-blue);
+  border: 1px solid var(--eq-blue-mid);
+  background: var(--eq-blue-soft);
+}
+.gitp-ref.remote {
+  color: var(--eq-purple);
+  border-color: var(--eq-purple-soft);
+  background: var(--eq-purple-soft);
+}
+.gitp-commit-meta {
+  flex-shrink: 0;
   display: flex;
-  justify-content: space-between;
   align-items: center;
   gap: 8px;
-  padding: 10px 12px;
-  font-size: 12px;
-  font-weight: 600;
-  border-color: var(--eq-blue-mid);
-  background: var(--eq-blue-soft);
-  color: var(--eq-blue);
-  text-align: left;
+  font-size: 10px;
+  color: var(--eq-dim);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
-.gitp-diff-cta:hover {
-  border-color: var(--eq-blue);
+.gitp-commit-author {
+  max-width: 76px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.gitp-commit-hash {
+  color: var(--eq-blue);
+  opacity: 0.75;
 }
 
 /* ── 서버 로그 패널 (KcL3j) ── */
@@ -1578,18 +1919,15 @@
   min-width: 0;
   font-size: 11px;
 }
-.msnp-edit {
+/* CodeMirror 편집 표면 — msnp-edit(textarea)의 후신. 색·폰트는 컴포넌트가 토큰으로 그린다 */
+.cm-host {
   flex: 1;
   min-height: 0;
   width: 100%;
-  resize: none;
-  border: none;
-  outline: none;
-  background: var(--eq-surface);
-  color: var(--eq-text);
-  font-size: 11px;
-  line-height: 1.6;
-  padding: 10px;
+  overflow: hidden;
+}
+.cm-host .cm-editor {
+  height: 100%;
 }
 .msnp-tree-rows {
   flex: 1;
@@ -1922,6 +2260,11 @@
 .gde-sidebar-head {
   margin-bottom: 10px;
 }
+.gde-sidebar-sub {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .gde-files {
   flex: 1;
   min-height: 0;
@@ -1929,17 +2272,27 @@
   border: 1px solid var(--eq-line);
   background: var(--eq-surface);
 }
+/* 디렉터리 트리 (UI 리파인 §git) — 폴더 행 + 들여쓴 한 줄 파일 행 */
+.gde-dir {
+  padding: 2px 8px;
+  font-size: 11px;
+  color: var(--eq-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .gde-file {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   width: 100%;
-  padding: 7px 9px;
+  padding: 3px 8px;
   text-align: left;
-  border-bottom: 1px solid var(--eq-line);
 }
-.gde-file:last-child {
-  border-bottom: none;
+.gde-file-stat {
+  margin-left: auto;
+  font-size: 9px;
+  flex-shrink: 0;
 }
 .gde-file:hover {
   background: var(--eq-surface-2);
@@ -1975,7 +2328,8 @@
   background: var(--eq-red-soft);
 }
 .gde-file-path {
-  font-size: 10px;
+  font-size: 11px;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2048,6 +2402,13 @@
   padding: 8px 12px;
   border-bottom: 1px solid var(--eq-line);
   flex-shrink: 0;
+}
+/* 비교 방향 색 구분 (UI 리파인 §git) — 왼쪽(비교 대상)=붉은 계열, 오른쪽(현재)=초록 계열 */
+.gde-pane-head.old .gde-pane-title {
+  color: var(--eq-red);
+}
+.gde-pane-head.new .gde-pane-title {
+  color: var(--eq-green);
 }
 .gde-range {
   padding: 5px 12px;
@@ -2302,9 +2663,22 @@
 .terminal-grid.layout-main-right .terminal-pane:first-child {
   grid-row: 1 / span 3;
 }
+/* 슬롯 상한 6·8 (설정 maxSlots) — 메인 페인이 나머지 슬롯 수만큼 스택을 덮는다 */
+.terminal-grid.slots-6.layout-main-right .terminal-pane:first-child {
+  grid-row: 1 / span 5;
+}
+.terminal-grid.slots-8.layout-main-right .terminal-pane:first-child {
+  grid-row: 1 / span 7;
+}
 .terminal-grid.layout-main-bottom {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   grid-template-rows: minmax(0, 2fr) minmax(0, 1fr);
+}
+.terminal-grid.slots-6.layout-main-bottom {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+.terminal-grid.slots-8.layout-main-bottom {
+  grid-template-columns: repeat(7, minmax(0, 1fr));
 }
 .terminal-grid.layout-main-bottom .terminal-pane:first-child {
   grid-column: 1 / -1;
@@ -2385,6 +2759,17 @@
 }
 .explorer-fullscreen .msnp-content {
   grid-template-columns: 320px minmax(0, 1fr); /* 패널의 168px 트리를 넓힌다 */
+}
+/* 팝업 본문 — .screen(height:100%)과 패널형 콘텐츠가 다 들어갈 수 있게 flex로 채운다 */
+.overlay-screen-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.overlay-screen-body > * {
+  flex: 1;
+  min-height: 0;
 }
 
 /* 전체 화면 본문 — 터미널 열 + (열려 있으면) 사이드 패널. 대화도 포커스 모드에서 보인다 */

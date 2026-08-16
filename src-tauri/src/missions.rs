@@ -35,6 +35,27 @@ fn mission_path(ws_path: &str, id: &str) -> PathBuf {
     missions_dir(ws_path).join(format!("{id}.md"))
 }
 
+/// id → 파일 경로 해석 (P-6) — 파일명 일치를 우선하고, 탐색기에서 이름이 바뀐 파일은
+/// frontmatter id로 찾는다. list()가 id를 frontmatter에서 뽑으므로(파일명은 폴백),
+/// 조회·변경 경로도 같은 규칙이어야 rename 후 상태·배정이 무반응이 되지 않는다.
+fn find_path(ws_path: &str, id: &str) -> Option<PathBuf> {
+    let direct = mission_path(ws_path, id);
+    if direct.exists() {
+        return Some(direct);
+    }
+    for e in fs::read_dir(missions_dir(ws_path)).ok()?.flatten() {
+        let p = e.path();
+        if p.extension().map(|x| x == "md").unwrap_or(false) {
+            if let Some((_, m)) = parse_file(&p) {
+                if m.id == id {
+                    return Some(p);
+                }
+            }
+        }
+    }
+    None
+}
+
 fn now_stamp() -> String {
     chrono::Local::now().format("%Y-%m-%d %H:%M").to_string()
 }
@@ -182,11 +203,13 @@ pub fn list(ws_path: &str) -> Vec<MissionInfo> {
 }
 
 /// 임무 생성 (FR-E-50·51) — id는 이름의 슬러그, 충돌 시 -2 -3 …
+/// 충돌 검사는 파일명과 frontmatter id 양쪽 (P-6) — rename된 파일의 id와도 겹치면 안 된다
 pub fn create(ws_path: &str, name: &str, goal: &str, branch: Option<String>) -> Result<MissionInfo, String> {
+    let existing: std::collections::HashSet<String> = list(ws_path).into_iter().map(|m| m.id).collect();
     let base = slug(name);
     let mut id = base.clone();
     let mut n = 1;
-    while mission_path(ws_path, &id).exists() {
+    while mission_path(ws_path, &id).exists() || existing.contains(&id) {
         n += 1;
         id = format!("{base}-{n}");
     }
@@ -210,7 +233,7 @@ pub fn set_status(ws_path: &str, id: &str, status: &str) -> Result<(), String> {
     if !STATUSES.contains(&status) {
         return Err(format!("허용되지 않은 상태 — {status}"));
     }
-    let path = mission_path(ws_path, id);
+    let path = find_path(ws_path, id).ok_or("임무 파일을 찾을 수 없습니다")?;
     let text = fs::read_to_string(&path).map_err(|_| "임무 파일을 찾을 수 없습니다".to_string())?;
     let (mut fm, body) = split_frontmatter(&text);
     fm.retain(|l| !l.starts_with("status:") && !l.starts_with("updated:"));
@@ -228,7 +251,7 @@ pub fn set_status(ws_path: &str, id: &str, status: &str) -> Result<(), String> {
 
 /// 단건 조회 — 배정 토글이 임무 블록을 만들 때 쓴다
 pub fn get(ws_path: &str, id: &str) -> Option<MissionInfo> {
-    parse_file(&mission_path(ws_path, id)).map(|(_, m)| m)
+    parse_file(&find_path(ws_path, id)?).map(|(_, m)| m)
 }
 
 /// frontmatter의 default 키만 고쳐 쓴다 — 본문·다른 키는 보존 (FR-E-74와 같은 원칙)
@@ -257,20 +280,20 @@ fn write_default_flag(path: &Path, on: bool) -> Result<(), String> {
 /// 워크스페이스 기본 임무 지정 (FR-E-56, M33) — 켜면 다른 임무의 default는 걷어낸다 (1개 규칙).
 /// 임무 없는 세션의 자동 배정은 프런트가 세션 생성 시점에 이 플래그를 보고 수행한다.
 pub fn set_default(ws_path: &str, id: &str, on: bool) -> Result<(), String> {
+    // 대상은 frontmatter id로 푼다 (P-6) — 탐색기 rename 후에도 같은 임무를 가리켜야 한다
+    let target = find_path(ws_path, id).ok_or("임무 파일을 찾을 수 없습니다")?;
     if on {
         let Ok(entries) = fs::read_dir(missions_dir(ws_path)) else {
             return Err("임무 디렉터리가 없습니다".into());
         };
         for e in entries.flatten() {
             let p = e.path();
-            if p.extension().map(|x| x == "md").unwrap_or(false)
-                && p.file_stem().map(|s| s.to_string_lossy() != id).unwrap_or(true)
-            {
+            if p.extension().map(|x| x == "md").unwrap_or(false) && p != target {
                 let _ = write_default_flag(&p, false); // 깨진 파일은 건너뛴다 (부분 파싱 원칙)
             }
         }
     }
-    write_default_flag(&mission_path(ws_path, id), on)
+    write_default_flag(&target, on)
 }
 
 #[cfg(test)]
@@ -290,11 +313,16 @@ mod tests {
             persona: "kai".into(),
             persona_name: "카이".into(),
             hint: "전체 구조와 위험을 먼저 본다".into(),
+            tone: String::new(),
+            personality: String::new(),
             job: "lead".into(),
             job_name: "리드".into(),
             permissions: roles::RolePermissions { write: true, commit: true, push: false },
             responsibility: "전체 구조 · 최종 판단".into(),
             forbidden: "원격 push".into(),
+            character_path: None,
+            character_name: None,
+            character_source: None,
             teammates: vec![roles::Teammate { slot: 1, name: "카이".into(), job_name: "리드".into(), me: true }],
         }
     }
@@ -312,6 +340,24 @@ mod tests {
         set_status(&ws, &m.id, "in-review").unwrap();
         assert_eq!(get(&ws, &m.id).unwrap().status, "in-review");
         assert!(set_status(&ws, &m.id, "잘못된값").is_err());
+        fs::remove_dir_all(&ws).ok();
+    }
+
+    /// 파일명 ↔ frontmatter id 불일치 (P-6) — 탐색기 rename 후에도 id로 상태·기본 임무·조회가
+    /// 전부 동작해야 한다. 이전에는 파일명으로만 찾아 조용히 무반응이었다.
+    #[test]
+    fn renamed_mission_file_still_resolves_by_id() {
+        let ws = temp_ws("rename");
+        let m = create(&ws, "리네임 대상", "목표", None).unwrap();
+        fs::rename(mission_path(&ws, &m.id), missions_dir(&ws).join("다른이름.md")).unwrap();
+        set_status(&ws, &m.id, "in-progress").unwrap();
+        let got = get(&ws, &m.id).unwrap();
+        assert_eq!(got.status, "in-progress");
+        set_default(&ws, &m.id, true).unwrap();
+        assert!(get(&ws, &m.id).unwrap().is_default);
+        // 새 임무 생성이 rename된 파일의 frontmatter id와 충돌하지 않는다
+        let m2 = create(&ws, "리네임 대상", "다른 목표", None).unwrap();
+        assert_ne!(m2.id, m.id);
         fs::remove_dir_all(&ws).ok();
     }
 

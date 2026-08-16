@@ -4,17 +4,18 @@
 import { For, Show } from "solid-js";
 import { backend } from "../backend/mock";
 import {
-  explorerOpen,
   openPanel,
+  overlay,
   panelOpen,
   panelTab,
   setExitOpen,
-  setExplorerOpen,
   setPanelOpen,
   setView,
   tick,
+  toggleOverlay,
   view,
 } from "../state";
+import { t } from "../i18n";
 import { ATTENTION_ORDER } from "../types";
 
 export function AppBar() {
@@ -61,7 +62,7 @@ export function AppBar() {
           classList={{ active: view().kind === "control" }}
           onClick={() => setView({ kind: "control" })}
         >
-          관제
+          {t("관제")}
           <Show when={anyUnseen()}>
             <span class="unread-dot" />
           </Show>
@@ -82,7 +83,7 @@ export function AppBar() {
               </Show>
               <span
                 class="tab-close"
-                title="워크스페이스 닫기 (세션은 백그라운드 유지)"
+                title={t("워크스페이스 닫기 (세션은 백그라운드 유지)")}
                 onClick={(e) => {
                   e.stopPropagation();
                   backend.closeWorkspace(ws.id);
@@ -96,49 +97,57 @@ export function AppBar() {
             </button>
           )}
         </For>
-        <button class="tab tab-add" title="워크스페이스 연결" onClick={() => setView({ kind: "connect" })}>
+        <button class="tab tab-add" title={t("워크스페이스 연결")} onClick={() => toggleOverlay("connect")}>
           +
         </button>
       </div>
       <div class="tools">
         <button
           class="tool"
-          classList={{ active: explorerOpen() }}
-          title="임무 · 파일 탐색기 — 전체 화면 팝업 (M25)"
-          onClick={() => setExplorerOpen(!explorerOpen())}
-        >
-          임무
-        </button>
-        <button
-          class="tool"
-          classList={{ active: panelOpen() && panelTab() === "conversation" }}
-          title="대화 패널 토글 — 전체 화면에서도 열립니다"
+          classList={{ active: panelOpen() }}
+          title={t("대화 패널 토글 — 전체 화면에서도 열립니다")}
           onClick={toggleConversation}
         >
-          대화
+          {t("대화")}
           <Show when={unreadMsgs()}>
             <span class="unread-dot" />
           </Show>
         </button>
+        {/* 도구 4종은 전부 전체 화면 팝업이다 — overlay 신호 하나라서 동시에 하나만 열린다 */}
         <button
           class="tool"
-          classList={{ active: view().kind === "connect" }}
-          onClick={() => setView({ kind: "connect" })}
+          classList={{ active: overlay() === "explorer" }}
+          title={t("임무 · 파일 탐색기 — 전체 화면 팝업 (M25)")}
+          onClick={() => toggleOverlay("explorer")}
         >
-          워크스페이스
-        </button>
-        <button class="tool" classList={{ active: view().kind === "roles" }} onClick={() => setView({ kind: "roles" })}>
-          역할
+          {t("임무")}
         </button>
         <button
           class="tool"
-          classList={{ active: view().kind === "settings" }}
-          onClick={() => setView({ kind: "settings" })}
+          classList={{ active: overlay() === "connect" }}
+          title={t("워크스페이스 연결 — 전체 화면 팝업")}
+          onClick={() => toggleOverlay("connect")}
         >
-          설정
+          {t("워크스페이스")}
+        </button>
+        <button
+          class="tool"
+          classList={{ active: overlay() === "roles" }}
+          title={t("역할 라이브러리 — 전체 화면 팝업")}
+          onClick={() => toggleOverlay("roles")}
+        >
+          {t("역할")}
+        </button>
+        <button
+          class="tool"
+          classList={{ active: overlay() === "settings" }}
+          title={t("설정 — 전체 화면 팝업")}
+          onClick={() => toggleOverlay("settings")}
+        >
+          {t("설정")}
         </button>
         <button class="tool" onClick={() => setExitOpen(true)}>
-          종료
+          {t("종료")}
         </button>
       </div>
     </div>

@@ -1,0 +1,370 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EQMUX git 패널 리디자인 — 조정 범위</title>
+<style>
+  :root {
+    --bg: #0b0e14;
+    --panel: #12161f;
+    --inset: #191e2b;
+    --line: #262c3b;
+    --line-soft: #1e2431;
+    --text: #dfe3ec;
+    --muted: #7b8496;
+    --dim: #565f72;
+    --blue: #7d9bff;
+    --purple: #a78bfa;
+    --green: #4ade80;
+    --yellow: #e3b341;
+    --red: #f08080;
+    --marker: #f5a524;
+    --mono: "Cascadia Code", Consolas, "D2Coding", monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: "Segoe UI", "Malgun Gothic", sans-serif;
+    font-size: 14px; line-height: 1.55; padding: 32px 24px 64px;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; }
+  h1 { font-size: 20px; font-weight: 650; margin-bottom: 6px; }
+  h2 { font-size: 15px; font-weight: 650; margin: 40px 0 14px; color: var(--blue); }
+  .lede { color: var(--muted); margin-bottom: 8px; max-width: 72ch; }
+  .lede b { color: var(--text); font-weight: 600; }
+  .mono { font-family: var(--mono); }
+
+  /* ── 주석 마커 ── */
+  .mk {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 17px; height: 17px; border-radius: 50%;
+    background: var(--marker); color: #201400;
+    font: 700 11px/1 var(--mono); flex: none;
+    box-shadow: 0 0 0 3px rgba(245,165,36,.18);
+  }
+  .mk.abs { position: absolute; z-index: 5; }
+
+  .duo { display: flex; gap: 28px; align-items: flex-start; flex-wrap: wrap; }
+  .notes { flex: 1; min-width: 300px; display: flex; flex-direction: column; gap: 10px; padding-top: 4px; }
+  .note { display: flex; gap: 10px; align-items: flex-start; }
+  .note .mk { margin-top: 2px; }
+  .note p { color: var(--muted); font-size: 13px; }
+  .note p b { color: var(--text); font-weight: 600; }
+  .note p .pol { color: var(--yellow); font-weight: 600; }
+  .note p code { font-family: var(--mono); font-size: 11.5px; color: var(--blue); background: var(--inset); padding: 1px 5px; border-radius: 4px; }
+
+  /* ═══════════ 패널 목업 ═══════════ */
+  .mock-panel {
+    position: relative; flex: none;
+    width: 480px; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 10px;
+    overflow: hidden; font-size: 13px;
+    box-shadow: 0 12px 40px rgba(0,0,0,.45);
+  }
+  .p-head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 12px; border-bottom: 1px solid var(--line-soft);
+  }
+  .p-head .git-ic { color: var(--purple); display: flex; }
+  .p-head .title { font-weight: 700; font-size: 15px; }
+  .p-head .spacer { flex: 1; }
+  .p-head .cnt { color: var(--muted); font-size: 12px; }
+  .icon-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 26px; height: 26px; border-radius: 6px;
+    color: var(--muted); cursor: default; border: none; background: none;
+  }
+  .icon-btn:hover { background: var(--inset); color: var(--text); }
+
+  .p-body { padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+
+  .dd {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    background: var(--inset); border: 1px solid var(--line);
+    border-radius: 7px; padding: 7px 11px;
+    font-family: var(--mono); font-size: 12.5px; font-weight: 600;
+  }
+  .dd .chev { color: var(--dim); font-size: 10px; }
+
+  .toolbar { display: flex; align-items: center; gap: 8px; position: relative; }
+  .toolbar .dd { padding: 6px 10px; width: 118px; }
+  .sync { font-family: var(--mono); font-size: 12px; white-space: nowrap; }
+  .sync .up { color: var(--yellow); }
+  .sync .dn { color: var(--dim); }
+  .toolbar .sp { flex: 1; }
+  .tbtn {
+    background: #161b27; border: 1px solid var(--line); color: var(--text);
+    border-radius: 6px; padding: 5px 11px; font-size: 12px;
+    font-family: var(--mono); cursor: default; white-space: nowrap;
+  }
+  .tbtn:hover { border-color: #38415a; }
+  .tbtn .n { color: var(--blue); font-weight: 700; }
+
+  /* 커밋 리스트 */
+  .commits { border-top: 1px solid var(--line-soft); margin: 2px -12px -12px; position: relative; }
+  .crow {
+    display: flex; align-items: center; gap: 10px;
+    padding: 0 14px 0 10px; height: 44px;
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .crow:hover { background: rgba(125,155,255,.04); }
+  .graph { position: relative; width: 16px; align-self: stretch; flex: none; }
+  .graph .vline { position: absolute; left: 7px; top: 0; bottom: 0; width: 2px; background: #33406a; }
+  .crow:first-child .graph .vline { top: 50%; }
+  .crow:last-child .graph .vline { bottom: 50%; }
+  .graph .dot {
+    position: absolute; left: 3px; top: 50%; margin-top: -5px;
+    width: 10px; height: 10px; border-radius: 50%;
+    background: #5b7cfa; border: 2px solid var(--panel);
+  }
+  .cmsg {
+    flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px;
+    overflow: hidden;
+  }
+  .cmsg .txt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+  .refb {
+    font-family: var(--mono); font-size: 10.5px; font-weight: 600;
+    color: #9db1ff; border: 1px solid #45538a;
+    background: rgba(90,120,255,.07);
+    padding: 1px 7px; border-radius: 5px; flex: none;
+  }
+  .refb.remote { color: #c4b5fd; border-color: #5b4d8f; background: rgba(167,139,250,.07); }
+  .cmeta {
+    flex: none; display: flex; align-items: center; gap: 9px;
+    font-family: var(--mono); font-size: 11px; color: var(--dim); white-space: nowrap;
+  }
+  .cmeta .hash { color: #6d82b8; }
+
+  /* 워크트리 (컴팩트) */
+  .wt-strip {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 11px; color: var(--muted); position: relative;
+    padding-top: 2px;
+  }
+  .wt-strip .eyebrow { font: 700 10px var(--mono); letter-spacing: .12em; color: var(--dim); }
+  .wt-strip .wt-tag {
+    font: 600 9.5px var(--mono); color: var(--blue);
+    border: 1px solid #33406a; border-radius: 4px; padding: 0 5px;
+  }
+  .wt-strip .add { margin-left: auto; color: var(--muted); font-size: 11px; border: 1px solid var(--line); border-radius: 5px; padding: 1px 8px; background: none; }
+
+  /* ═══════════ diff 모달 목업 ═══════════ */
+  .mock-diff {
+    position: relative;
+    background: #10141d; border: 1px solid var(--line); border-radius: 10px;
+    overflow: hidden; box-shadow: 0 12px 40px rgba(0,0,0,.45);
+  }
+  .d-title {
+    padding: 12px 16px; font-weight: 650; font-size: 14px;
+    border-bottom: 1px solid var(--line-soft);
+  }
+  .d-title .mono { color: var(--blue); }
+  .d-grid { display: grid; grid-template-columns: 230px 1fr 1fr; min-height: 340px; }
+
+  .d-tree {
+    border-right: 1px solid var(--line-soft); padding: 10px 6px;
+    font-family: var(--mono); font-size: 12px; overflow: hidden;
+  }
+  .t-dir { color: var(--muted); padding: 2px 8px; }
+  .t-file { display: flex; align-items: center; gap: 7px; padding: 2.5px 8px; border-radius: 5px; color: var(--text); white-space: nowrap; }
+  .t-file.sel { background: #232c42; }
+  .t-file .st { font-weight: 700; width: 10px; flex: none; }
+  .st.A { color: var(--green); } .st.M { color: var(--yellow); } .st.D { color: #f87171; }
+  .ind1 { padding-left: 22px; } .ind2 { padding-left: 36px; }
+
+  .d-pane { display: flex; flex-direction: column; min-width: 0; }
+  .d-pane + .d-pane { border-left: 1px solid var(--line-soft); }
+  .pane-h {
+    padding: 8px 14px; font-size: 12.5px; font-weight: 650;
+    border-bottom: 1px solid var(--line-soft); background: #131824;
+  }
+  .pane-h.old { color: var(--red); }
+  .pane-h.new { color: var(--green); }
+  .pane-body { flex: 1; position: relative; font-family: var(--mono); font-size: 12px; overflow: hidden; }
+  .empty-state {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    color: var(--dim); font-size: 12px; background: #0d1118;
+  }
+  .code { background: rgba(46,160,67,.10); min-height: 100%; padding: 6px 0; }
+  .ln { display: flex; gap: 14px; padding: 0 12px; line-height: 1.75; white-space: pre; }
+  .ln .no { width: 22px; text-align: right; color: #4e7a5c; flex: none; user-select: none; }
+  .ln .c { color: #cfe3d4; overflow: hidden; text-overflow: ellipsis; }
+  .kw { color: #c792ea; } .str { color: #a5d6a7; } .fn { color: #82aaff; } .cm { color: #5f6b7d; }
+  .d-foot { display: flex; justify-content: flex-end; padding: 10px 14px; border-top: 1px solid var(--line-soft); }
+  .d-foot .tbtn { padding: 6px 18px; }
+
+  /* ═══════════ 작업 규모 표 ═══════════ */
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; color: var(--muted); font-weight: 600; font-size: 12px; padding: 8px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  td { padding: 9px 12px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+  td:first-child { white-space: nowrap; }
+  td code { font-family: var(--mono); font-size: 11.5px; color: var(--blue); }
+  .sz { display: inline-block; font: 700 11px var(--mono); border-radius: 5px; padding: 2px 9px; white-space: nowrap; }
+  .sz.s { color: var(--green); background: rgba(74,222,128,.1); }
+  .sz.m { color: var(--yellow); background: rgba(227,179,65,.1); }
+  .sz.l { color: #f87171; background: rgba(248,113,113,.1); }
+  .sz.p { color: var(--marker); background: rgba(245,165,36,.12); }
+  .why { color: var(--muted); font-size: 12.5px; }
+
+  .verdict {
+    margin-top: 28px; padding: 14px 18px; border: 1px solid var(--line);
+    border-left: 3px solid var(--blue); border-radius: 8px; background: var(--panel);
+    color: var(--muted); max-width: 80ch;
+  }
+  .verdict b { color: var(--text); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>git 패널 리디자인 — 이해한 것</h1>
+  <p class="lede">
+    현재 패널(세로 카드 스택, 큰 여백)을 레퍼런스처럼 <b>한 줄 툴바 + 밀도 높은 커밋 리스트 + 커밋 클릭 → diff 모달</b> 구조로 바꾸는 작업.
+    아래 목업은 레퍼런스 레이아웃에 EQMUX 실제 데이터를 입힌 것이고, <span class="mk" style="vertical-align:-3px">n</span> 마커가 조정 지점입니다.
+  </p>
+
+  <h2>1 · 패널 — 목표 상태</h2>
+  <div class="duo">
+    <div class="mock-panel">
+      <span class="mk abs" style="top: 12px; right: 118px;">1</span>
+      <div class="p-head">
+        <span class="git-ic"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M11.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm-2.25.75a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25ZM4.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5ZM3.5 3.25a.75.75 0 1 1 1.5 0 .75.75 0 0 1-1.5 0Z"/></svg></span>
+        <span class="title">git</span>
+        <span class="spacer"></span>
+        <span class="cnt">저장소 1개</span>
+        <span class="icon-btn"><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 3a5 5 0 1 0 4.546 2.914.5.5 0 0 1 .908-.417A6 6 0 1 1 8 2v1Z"/><path d="M8 4.466V.534a.25.25 0 0 1 .41-.192l2.36 1.966c.12.1.12.284 0 .384L8.41 4.658A.25.25 0 0 1 8 4.466Z"/></svg></span>
+        <span class="icon-btn"><svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5"/><line x1="9.5" y1="2.5" x2="9.5" y2="13.5"/></svg></span>
+        <span class="icon-btn">✕</span>
+      </div>
+      <div class="p-body">
+        <div class="dd" style="position:relative">
+          <span class="mk abs" style="top: 6px; right: -30px;">2</span>
+          <span>EQMUX</span><span class="chev">▼</span>
+        </div>
+        <div class="toolbar">
+          <span class="mk abs" style="top: 4px; right: -30px;">3</span>
+          <div class="dd"><span>main</span><span class="chev">▼</span></div>
+          <span class="sync"><span class="up">↑0</span> <span class="dn">↓0</span></span>
+          <span class="sp"></span>
+          <button class="tbtn">diff</button>
+          <button class="tbtn">↓ pull</button>
+          <button class="tbtn">commit <span class="n">1</span></button>
+          <button class="tbtn">↑ push <span class="n">0</span></button>
+        </div>
+        <div class="wt-strip">
+          <span class="mk abs" style="top: 0; right: -30px;">5</span>
+          <span class="eyebrow">WORKTREES · 1</span>
+          <span class="mono" style="color:var(--text)">main</span>
+          <span class="wt-tag">MAIN</span>
+          <button class="add">+ 워크트리</button>
+        </div>
+        <div class="commits">
+          <span class="mk abs" style="top: 14px; right: -30px;">4</span>
+          <div class="crow">
+            <div class="graph"><div class="vline"></div><div class="dot"></div></div>
+            <div class="cmsg"><span class="refb">main</span><span class="txt">UI shell overhaul: overlay tools, workspace-scoped panels, CodeMirror editor</span></div>
+            <div class="cmeta"><span>ReDocu</span><span>2일 전</span><span class="hash">aea91a7</span></div>
+          </div>
+          <div class="crow">
+            <div class="graph"><div class="vline"></div><div class="dot"></div></div>
+            <div class="cmsg"><span class="txt">Add orca-style worktree rail section and explorer folder collapse</span></div>
+            <div class="cmeta"><span>ReDocu</span><span>2일 전</span><span class="hash">bb58b06</span></div>
+          </div>
+          <div class="crow">
+            <div class="graph"><div class="vline"></div><div class="dot"></div></div>
+            <div class="cmsg"><span class="txt">Fix all deferred QA items P-1~P-9: IPC session tokens, safe shell echo…</span></div>
+            <div class="cmeta"><span>ReDocu</span><span>2일 전</span><span class="hash">76b4fb2</span></div>
+          </div>
+          <div class="crow">
+            <div class="graph"><div class="vline"></div><div class="dot"></div></div>
+            <div class="cmsg"><span class="txt">Fix critical bugs from QA audit: notification races, deadlocks…</span></div>
+            <div class="cmeta"><span>ReDocu</span><span>3일 전</span><span class="hash">0e1b5db</span></div>
+          </div>
+          <div class="crow" style="border-bottom:none">
+            <div class="graph"><div class="vline"></div><div class="dot"></div></div>
+            <div class="cmsg"><span class="refb remote">origin/main</span><span class="refb remote">origin/HEAD</span><span class="txt">Release v0.2.0</span></div>
+            <div class="cmeta"><span>ReDocu</span><span>3일 전</span><span class="hash">de2e657</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="notes">
+      <div class="note"><span class="mk">1</span><p><b>헤더 재구성</b> — 탭 밑 큰 제목·경로 텍스트 대신, 아이콘+제목 왼쪽 / 저장소 수·새로고침·분할·닫기 오른쪽의 얇은 타이틀바 한 줄.</p></div>
+      <div class="note"><span class="mk">2</span><p><b>저장소 선택 = 풀폭 드롭다운</b> — 지금의 정적 카드(<code>gitp-repo</code>)를 워크스페이스 전환 셀렉트로. 경로 전체 표시는 툴팁으로 이동.</p></div>
+      <div class="note"><span class="mk">3</span><p><b>브랜치+동기화+액션을 한 줄 툴바로</b> — 지금은 브랜치 카드 / 변경 요약 줄 / 큰 diff CTA가 3단으로 쌓여 있음. 이걸 <code>[main▼] ↑0↓0 ··· [diff][↓pull][commit N][↑push N]</code> 한 줄로 병합. <span class="pol">단, pull·push·commit 버튼은 현재 정책(G7 — "실행은 터미널에서")을 뒤집는 것이라 결정 필요.</span> 모양만 갖추고 클릭 시 터미널로 안내하는 절충도 가능.</p></div>
+      <div class="note"><span class="mk">4</span><p><b>커밋 리스트 밀도화</b> — 행 높이 ~44px 고정, 메시지 왼쪽 · 작성자/시간/해시 오른쪽 정렬 한 줄, 연속 그래프 라인+도트, 아웃라인 스타일 ref 뱃지. 지금 <code>refBadge()</code>가 뱃지 1개만 뽑는데 레퍼런스처럼 <code>origin/main</code>·<code>origin/HEAD</code> 복수 표시로 변경.</p></div>
+      <div class="note"><span class="mk">5</span><p><b>워크트리 섹션은 EQMUX 고유</b> (레퍼런스에 없음) — 없애지 않고 한 줄 스트립으로 압축해 커밋 리스트 위에 유지.</p></div>
+    </div>
+  </div>
+
+  <h2>2 · 커밋 클릭 → diff 모달 — 목표 상태</h2>
+  <div class="mock-diff">
+    <span class="mk abs" style="top: 13px; left: 380px;">6</span>
+    <span class="mk abs" style="top: 52px; left: 205px;">7</span>
+    <span class="mk abs" style="top: 46px; right: 14px;">8</span>
+    <div class="d-title">diff — <span class="mono">aea91a7</span> — UI shell overhaul: overlay tools, workspace-scoped panels, CodeMirror editor</div>
+    <div class="d-grid">
+      <div class="d-tree">
+        <div class="t-dir">src/</div>
+        <div class="t-dir ind1">components/</div>
+        <div class="t-file ind2"><span class="st M">M</span>AppBar.tsx</div>
+        <div class="t-file ind2"><span class="st M">M</span>GitPanelTab.tsx</div>
+        <div class="t-file ind2 sel"><span class="st A">A</span>OverlayTools.tsx</div>
+        <div class="t-dir ind1">screens/</div>
+        <div class="t-file ind2"><span class="st M">M</span>GitDiffEditor.tsx</div>
+        <div class="t-file ind1"><span class="st M">M</span>screens.css</div>
+        <div class="t-file ind1"><span class="st D">D</span>legacy-tools.ts</div>
+      </div>
+      <div class="d-pane">
+        <div class="pane-h old">비교 대상 — 부모 커밋 (aea91a7^)</div>
+        <div class="pane-body"><div class="empty-state">(이 시점에는 파일이 없습니다 — 새 파일)</div></div>
+      </div>
+      <div class="d-pane">
+        <div class="pane-h new">현재 — 이 커밋 (aea91a7)</div>
+        <div class="pane-body"><div class="code">
+          <div class="ln"><span class="no">1</span><span class="c"><span class="cm">// 오버레이 도구 (M37) — 워크스페이스 위에 뜨는 도구 레일.</span></span></div>
+          <div class="ln"><span class="no">2</span><span class="c"><span class="kw">import</span> { createSignal, For, Show } <span class="kw">from</span> <span class="str">"solid-js"</span>;</span></div>
+          <div class="ln"><span class="no">3</span><span class="c"><span class="kw">import</span> { setPanelOpen, view } <span class="kw">from</span> <span class="str">"../state"</span>;</span></div>
+          <div class="ln"><span class="no">4</span><span class="c"></span></div>
+          <div class="ln"><span class="no">5</span><span class="c"><span class="kw">export function</span> <span class="fn">OverlayTools</span>() {</span></div>
+          <div class="ln"><span class="no">6</span><span class="c">  <span class="kw">const</span> [open, setOpen] = <span class="fn">createSignal</span>(<span class="kw">false</span>);</span></div>
+          <div class="ln"><span class="no">7</span><span class="c">  <span class="kw">return</span> (</span></div>
+          <div class="ln"><span class="no">8</span><span class="c">    &lt;div <span class="fn">class</span>=<span class="str">"overlay-tools"</span>&gt;</span></div>
+          <div class="ln"><span class="no">9</span><span class="c">      …</span></div>
+        </div></div>
+      </div>
+    </div>
+    <div class="d-foot"><button class="tbtn">닫기</button></div>
+  </div>
+  <div class="notes" style="margin-top: 16px;">
+    <div class="note"><span class="mk">6</span><p><b>커밋 기준 diff는 신규 기능</b> — 지금 diff는 HEAD↔워크트리 비교만 있음(B11 정책, 커밋 우클릭 메뉴에도 "워크트리 diff 열기"뿐). 커밋 행 클릭 시 <b>부모 커밋 ↔ 이 커밋</b>을 여는 모드를 백엔드(<code>src-tauri/diff.rs</code>)부터 새로 뚫어야 함. 이번 작업 중 가장 큰 덩어리.</p></div>
+    <div class="note"><span class="mk">7</span><p><b>파일 목록 → 디렉터리 트리</b> — 지금은 플랫 리스트+필터. 폴더 계층 들여쓰기 + A/M/D 상태 문자(색상)로 전환. 신규 파일(A) 선택 시 왼쪽 페인은 "(이 시점에는 파일이 없습니다 — 새 파일)" 빈 상태.</p></div>
+    <div class="note"><span class="mk">8</span><p><b>페인 헤더 색 구분 + 모달 표현</b> — 왼쪽(비교 대상)은 붉은 계열, 오른쪽(현재)은 초록 계열 헤더. 지금은 풀스크린 뷰인데 레퍼런스는 닫기 버튼이 있는 모달 — 풀스크린 유지 여부는 선택 사항(기존 나란히 비교·1:1 정렬·접기 엔진은 그대로 재사용).</p></div>
+  </div>
+
+  <h2>3 · 작업 규모 정리</h2>
+  <table>
+    <thead><tr><th>#</th><th>항목</th><th>규모</th><th>내용 · 대상</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>헤더 타이틀바</td><td><span class="sz s">S · CSS 위주</span></td><td class="why"><code>GitPanelTab.tsx</code> 상단 + <code>screens.css</code> — 마크업 몇 줄과 스타일.</td></tr>
+      <tr><td>2</td><td>저장소 드롭다운</td><td><span class="sz s">S</span></td><td class="why">정적 카드 → 워크스페이스 셀렉트. 상태 소스(<code>scopeWorkspace</code>)는 이미 있음.</td></tr>
+      <tr><td>3</td><td>한 줄 툴바 병합</td><td><span class="sz m">M</span></td><td class="why">브랜치 카드·변경 요약·diff CTA 3단 → 툴바 1줄. 기존 브랜치 팝오버·2단 확인 로직은 재사용.</td></tr>
+      <tr><td>4</td><td>pull / push / commit 버튼</td><td><span class="sz p">정책 결정</span></td><td class="why">G7("실행은 터미널에서") 반전 여부. UI만 두고 터미널 안내면 <b>S</b>, 실제 실행이면 백엔드 커맨드 포함 <b>M+</b>.</td></tr>
+      <tr><td>5</td><td>커밋 리스트 밀도·뱃지 복수화</td><td><span class="sz m">S~M</span></td><td class="why">CSS 재작업 + <code>refBadge()</code> → 복수 refs 파싱. 데이터는 이미 <code>refs</code>에 다 있음.</td></tr>
+      <tr><td>6</td><td>커밋 클릭 → 커밋 diff</td><td><span class="sz l">L · 신규 기능</span></td><td class="why"><code>src-tauri/diff.rs</code>에 부모↔커밋 diff 커맨드 추가 → <code>backend/git.ts</code> → <code>GitDiffEditor</code>에 비교 모드 파라미터. B11 정책 변경 포함.</td></tr>
+      <tr><td>7</td><td>diff 파일 트리 + 페인 색 구분</td><td><span class="sz m">M</span></td><td class="why"><code>GitDiffEditor.tsx</code> 사이드바 트리화, 헤더 색, 새 파일 빈 상태. 비교 엔진은 그대로.</td></tr>
+      <tr><td>8</td><td>워크트리 스트립 압축</td><td><span class="sz s">S</span></td><td class="why">기능 그대로, 표현만 한 줄로.</td></tr>
+    </tbody>
+  </table>
+
+  <div class="verdict">
+    <b>요약</b> — 8개 항목 중 6개는 레이아웃·밀도 재작업(CSS + 마크업 재배치)이라 기존 로직을 그대로 씁니다.
+    실제로 "기능"이 새로 생기는 건 <b>⑥ 커밋 기준 diff 하나</b>이고(백엔드부터 필요, 가장 큼),
+    <b>④ pull·push·commit 버튼</b>은 코드보다 <b>정책(G7) 결정</b>이 먼저입니다. 이 두 가지만 방향을 정해 주시면 나머지는 바로 진행 가능한 범위입니다.
+  </div>
+
+</div>
+</body>
+</html>

@@ -37,11 +37,23 @@ pub struct RolePayload {
     pub persona: String,
     pub persona_name: String,
     pub hint: String,
+    /// 말투·성격 (중간 단계 · 선택) — 비면 섹션이 출력되지 않는다
+    #[serde(default)]
+    pub tone: String,
+    #[serde(default)]
+    pub personality: String,
     pub job: String,
     pub job_name: String,
     pub permissions: RolePermissions,
     pub responsibility: String,
     pub forbidden: String,
+    /// 고급 캐릭터 시트 (선택) — 전재하지 않고 경로 포인터만 실린다 (FR-E-40과 같은 태도)
+    #[serde(default)]
+    pub character_path: Option<String>,
+    #[serde(default)]
+    pub character_name: Option<String>,
+    #[serde(default)]
+    pub character_source: Option<String>,
     #[serde(default)]
     pub teammates: Vec<Teammate>,
 }
@@ -209,6 +221,24 @@ pub fn save(ws_path: &str, p: &RolePayload) -> Result<String, String> {
     if !p.hint.is_empty() {
         out.push_str(&format!("\n## 판단 성향\n{}\n", p.hint));
     }
+    // 중간 단계 (3단계 페르소나) — 채워진 것만 출력, 비면 토큰 0
+    if !p.tone.is_empty() {
+        out.push_str(&format!("\n## 말투\n{}\n", p.tone));
+    }
+    if !p.personality.is_empty() {
+        out.push_str(&format!("\n## 성격\n{}\n", p.personality));
+    }
+    // 고급 단계 — 시트는 전재하지 않는다. 정체성 1줄 + 경로 + 우선순위 문장이 전부다.
+    if let Some(sheet) = p.character_path.as_deref().filter(|s| !s.is_empty()) {
+        let name = p.character_name.as_deref().filter(|s| !s.is_empty()).unwrap_or(&p.persona_name);
+        let who = match p.character_source.as_deref().filter(|s| !s.is_empty()) {
+            Some(src) => format!("{name} ({src})"),
+            None => name.to_string(),
+        };
+        out.push_str(&format!(
+            "\n## 캐릭터\n\"{who}\" 캐릭터로 응답한다 — 시작 전에 시트를 읽을 것:\n{sheet}\n시트와 말투·성격 섹션이 겹치면 시트가 우선. 책임·금지·권한은 캐릭터보다 항상 우선.\n"
+        ));
+    }
     if !p.responsibility.is_empty() {
         out.push_str(&format!("\n## 책임\n{}\n", p.responsibility));
     }
@@ -278,6 +308,59 @@ pub fn remove(ws_path: &str, session: &str) -> Result<(), String> {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 3단계 페르소나 합성 — 기본 단계는 출력 변화 0, 중간·고급은 채워진 섹션만 추가된다
+    #[test]
+    fn save_renders_optional_persona_sections() {
+        let dir = std::env::temp_dir().join(format!("eqmux-roles-3tier-{}", crate::workspace::now_ms()));
+        fs::create_dir_all(&dir).unwrap();
+        let ws = dir.to_string_lossy().into_owned();
+        let mut p = RolePayload {
+            session: "s1".into(),
+            persona: "kai".into(),
+            persona_name: "카이".into(),
+            hint: "전체 구조와 위험을 먼저 본다".into(),
+            tone: String::new(),
+            personality: String::new(),
+            job: "lead".into(),
+            job_name: "리드".into(),
+            permissions: RolePermissions { write: true, commit: false, push: false },
+            responsibility: "전체 구조".into(),
+            forbidden: "원격 push".into(),
+            character_path: None,
+            character_name: None,
+            character_source: None,
+            teammates: Vec::new(),
+        };
+        let path = save(&ws, &p).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("## 말투") && !text.contains("## 성격") && !text.contains("## 캐릭터"));
+        p.tone = "간결한 존댓말 · 결론부터".into();
+        p.personality = "신중함".into();
+        p.character_path = Some("X:/personas/kai.character.md".into());
+        p.character_name = Some("별지기 루카".into());
+        p.character_source = Some("창작 캐릭터".into());
+        save(&ws, &p).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("## 말투\n간결한 존댓말 · 결론부터"));
+        assert!(text.contains("## 성격\n신중함"));
+        assert!(text.contains("\"별지기 루카 (창작 캐릭터)\" 캐릭터로 응답한다"));
+        assert!(text.contains("X:/personas/kai.character.md"));
+        // 캐릭터 블록은 성향 뒤 · 책임 앞 — 화법은 판단·책임 규칙보다 앞설 수 없다는 배치
+        let (c, r) = (text.find("## 캐릭터").unwrap(), text.find("## 책임").unwrap());
+        assert!(text.find("## 판단 성향").unwrap() < c && c < r);
+        // 시트 이름이 비면 페르소나 이름으로 정체성 줄을 만든다
+        p.character_name = None;
+        p.character_source = None;
+        save(&ws, &p).unwrap();
+        assert!(fs::read_to_string(&path).unwrap().contains("\"카이\" 캐릭터로 응답한다"));
+        fs::remove_dir_all(&dir).ok();
     }
 }
 
