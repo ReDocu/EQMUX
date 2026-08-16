@@ -131,13 +131,6 @@ npm run tauri build   # NSIS 인스톨러 산출 (EQMUX_x64-setup.exe)
 
 사용자의 `CLAUDE.md`는 수정하지 않습니다 — 역할은 `--append-system-prompt` 포인터 2줄로만 전달됩니다.
 
-## 문서
-
-- [PRD 인덱스 · 결정 대장](docs/prd/00-index.md) — 제품 정의, 11개 PRD 맵, 확정 결정
-- [구현 현황](docs/implementation-status.md) — PRD 대조 스냅숏 (M36 기준)
-- [화면·흐름 PRD](result_prd.md) — design.pen 기반 화면·내비게이션 계약
-- [레퍼런스 비교](docs/features-tree.md) — Ghostty · Orca · bbarit · Terax · AgentCommender 기능 트리
-
 ## 라이선스
 
 비공개 (private) — EQMENT Studio.
