@@ -3,9 +3,10 @@
 // 등록 해제는 레지스트리에서만 지우며 디스크는 건드리지 않는다 (FR-E-09).
 
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
@@ -86,16 +87,79 @@ pub fn save(root: &Path, list: &[WsEntry]) -> Result<(), String> {
 /// git CLI 실행 — GUI 앱이므로 콘솔 창을 띄우지 않는다.
 /// core.quotepath=off — 비ASCII(한글) 경로를 8진 이스케이프(`\355…`) 대신 그대로 출력한다.
 /// 이게 없으면 status·diff·numstat 파싱이 한글 파일명에서 전부 어긋난다 (대상 사용자 상시).
+/// git 호출 상한. index.lock 대기·자격증명 프롬프트·죽은 원격에 걸린 git은 스스로 끝나지
+/// 않으므로 호출부가 영영 붙잡힌다 — 폴링 경로에서는 그게 매 주기 쌓인다.
+/// 읽기 명령이 정상적으로 60초를 넘는 일은 없고, 큰 저장소의 checkout에는 넉넉하다.
+const GIT_TIMEOUT: Duration = Duration::from_secs(60);
+/// clone처럼 분 단위가 정상인 호출용 — 상한은 폭주 방지용 최후의 선일 뿐이다
+const GIT_TIMEOUT_LONG: Duration = Duration::from_secs(60 * 60);
+
 pub fn git(args: &[&str], cwd: &str) -> Result<String, String> {
+    git_within(args, cwd, GIT_TIMEOUT)
+}
+
+/// 오래 걸리는 것이 정상인 git (clone 등) — 짧은 상한을 씌우면 정상 작업이 잘린다
+pub fn git_long(args: &[&str], cwd: &str) -> Result<String, String> {
+    git_within(args, cwd, GIT_TIMEOUT_LONG)
+}
+
+/// 자식 파이프 하나를 끝까지 읽는 스레드 — 반환은 join으로 회수한다
+fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut p) = pipe {
+            let _ = p.read_to_end(&mut buf);
+        }
+        buf
+    })
+}
+
+/// 종료 확인 주기 — git 한 번이 보통 100ms 단위라 이 정도 지연은 묻힌다
+const POLL: Duration = Duration::from_millis(20);
+
+fn git_within(args: &[&str], cwd: &str, timeout: Duration) -> Result<String, String> {
     let mut cmd = Command::new("git");
-    cmd.args(["-c", "core.quotepath=off"]).args(args).current_dir(cwd);
+    cmd.args(["-c", "core.quotepath=off"])
+        .args(args)
+        .current_dir(cwd)
+        // output()의 기본값과 같게 stdin을 막는다 — 상속하면 자격증명 프롬프트가 즉시
+        // 실패하지 않고 입력을 기다리며 멈춘다 (상한이 있어도 그 시간을 통째로 쓴다)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
-    let out = cmd.output().map_err(|e| format!("git 실행 실패: {e}"))?;
-    if out.status.success() {
-        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    let mut child = cmd.spawn().map_err(|e| format!("git 실행 실패: {e}"))?;
+    // 두 파이프를 각각 전담 스레드가 끝까지 비운다. 이걸 안 하고 여기서 기다리면 출력이 큰
+    // 명령(for-each-ref·log 등)에서 파이프가 차고 git이 write에서 멈춰 서로 교착한다.
+    // 비우는 쪽이 따로 있으므로 아래 try_wait 폴링은 안전하다.
+    let out_t = drain(child.stdout.take());
+    let err_t = drain(child.stderr.take());
+
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(st)) => break st,
+            Err(e) => return Err(format!("git 실행 실패: {e}")),
+            Ok(None) if Instant::now() >= deadline => {
+                // 끊어야 파이프가 EOF를 내고 위 스레드들도 풀린다 — 안 그러면 스레드가 남는다
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "git 응답 없음 ({}초 초과): git {}",
+                    timeout.as_secs(),
+                    args.join(" ")
+                ));
+            }
+            Ok(None) => std::thread::sleep(POLL),
+        }
+    };
+    let stdout = out_t.join().unwrap_or_default();
+    let stderr = err_t.join().unwrap_or_default();
+    if status.success() {
+        Ok(String::from_utf8_lossy(&stdout).trim().to_string())
     } else {
-        Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+        Err(String::from_utf8_lossy(&stderr).trim().to_string())
     }
 }
 
@@ -381,6 +445,14 @@ pub fn entry_name(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// git() 재작성의 유일한 위험 지점 — 파이프를 계속 비우지 않으면 출력이 64KB를 넘는
+    /// 순간 git이 write에서 멈춰 이 테스트가 타임아웃까지 걸린다 (교착 회귀 감지).
+    #[test]
+    fn git_drains_large_output() {
+        let out = git(&["log", "-p", "-n", "30"], ".").unwrap();
+        assert!(out.len() > 64 * 1024, "출력이 파이프 버퍼보다 작아 회귀를 못 잡는다: {}B", out.len());
+    }
 
     /// 레지스트리 보호 (QA C-5) — 손상 파일은 변경 경로에서 Err, 없는 파일만 빈 목록.
     /// atomic_write 왕복과 team.json/team.md식 이름 충돌 없는 tmp도 함께 확인한다.

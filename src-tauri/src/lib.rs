@@ -1168,14 +1168,20 @@ async fn ws_checkout(ws_path: String, branch: String) -> Result<String, String> 
 // 작업 트리 조작만 개방한다: 목록·생성·체크아웃·열기. 삭제(FR-E-64)와
 // commit·push·stage(G7 — 실행은 터미널에서 사람이)는 계속 제공하지 않는다.
 
+// 둘 다 git CLI를 띄우므로 blocking 스레드에서 돈다 (git_overview와 같은 이유) — 동기 커맨드는
+// 메인 스레드에서 실행되고, 이 둘은 10초 폴링이라 UI 스레드가 매 주기 git을 기다리게 된다.
 #[tauri::command]
-fn git_worktrees(ws_path: String) -> Result<Vec<workspace::WorktreeInfo>, String> {
-    workspace::worktree_list(&ws_path)
+async fn git_worktrees(ws_path: String) -> Result<Vec<workspace::WorktreeInfo>, String> {
+    tauri::async_runtime::spawn_blocking(move || workspace::worktree_list(&ws_path))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn git_branches(ws_path: String) -> Result<Vec<workspace::BranchInfo>, String> {
-    workspace::branch_list(&ws_path)
+async fn git_branches(ws_path: String) -> Result<Vec<workspace::BranchInfo>, String> {
+    tauri::async_runtime::spawn_blocking(move || workspace::branch_list(&ws_path))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// 이름 있는 워크트리 생성 — base ref(브랜치·커밋)에서 분기. 큰 저장소의 체크아웃이
@@ -1427,47 +1433,57 @@ fn ws_pick_folder() -> Option<String> {
         .map(|p| p.to_string_lossy().into_owned())
 }
 
+/// 항목마다 git을 2번 부른다(inspect) — 등록 수만큼 늘어나므로 blocking 스레드에서 돈다.
+/// 파일 워처가 .eqmux 변화마다 다시 부르는 경로라 메인 스레드에 두면 그때마다 UI가 멈춘다.
 #[tauri::command]
-fn ws_registry(store_state: State<StoreState>) -> Vec<WsInfo> {
-    workspace::load(&store_state.0.root())
-        .iter()
-        .map(workspace::inspect)
-        .collect()
+async fn ws_registry(store_state: State<'_, StoreState>) -> Result<Vec<WsInfo>, String> {
+    let root = store_state.0.root();
+    tauri::async_runtime::spawn_blocking(move || {
+        workspace::load(&root).iter().map(workspace::inspect).collect()
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 /// 등록 (FR-E-01) — git 저장소가 아니면 "NOT_A_REPO"를 돌려주고 프런트가 git init을 묻는다
 #[tauri::command]
-fn ws_register(store_state: State<StoreState>, path: String) -> Result<WsInfo, String> {
-    if !Path::new(&path).is_dir() {
-        return Err("폴더를 찾을 수 없습니다".into());
-    }
-    if !workspace::is_repo(&path) {
-        return Err("NOT_A_REPO".into());
-    }
+async fn ws_register(store_state: State<'_, StoreState>, path: String) -> Result<WsInfo, String> {
     let root = store_state.0.root();
-    let mut list = workspace::load_strict(&root)?;
-    if let Some(existing) = list.iter_mut().find(|e| e.path.eq_ignore_ascii_case(&path)) {
-        existing.last_used = workspace::now_ms();
-        let info = workspace::inspect(existing);
+    tauri::async_runtime::spawn_blocking(move || {
+        if !Path::new(&path).is_dir() {
+            return Err("폴더를 찾을 수 없습니다".to_string());
+        }
+        if !workspace::is_repo(&path) {
+            return Err("NOT_A_REPO".to_string());
+        }
+        let mut list = workspace::load_strict(&root)?;
+        if let Some(existing) = list.iter_mut().find(|e| e.path.eq_ignore_ascii_case(&path)) {
+            existing.last_used = workspace::now_ms();
+            let info = workspace::inspect(existing);
+            workspace::save(&root, &list)?;
+            return Ok(info);
+        }
+        let entry = WsEntry {
+            id: workspace::make_id(&path),
+            name: workspace::entry_name(&path),
+            path: path.clone(),
+            remote: None,
+            branch: None,
+            last_used: workspace::now_ms(),
+        };
+        list.push(entry.clone());
         workspace::save(&root, &list)?;
-        return Ok(info);
-    }
-    let entry = WsEntry {
-        id: workspace::make_id(&path),
-        name: workspace::entry_name(&path),
-        path: path.clone(),
-        remote: None,
-        branch: None,
-        last_used: workspace::now_ms(),
-    };
-    list.push(entry.clone());
-    workspace::save(&root, &list)?;
-    Ok(workspace::inspect(&entry))
+        Ok(workspace::inspect(&entry))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn ws_git_init(path: String) -> Result<(), String> {
-    workspace::git(&["init"], &path).map(|_| ())
+async fn ws_git_init(path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || workspace::git(&["init"], &path).map(|_| ()))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// git 패널 실데이터 (PRD H) — 읽기 전용. git CLI 호출이라 blocking 스레드에서 돈다.
@@ -1489,7 +1505,7 @@ async fn ws_clone(url: String, parent: String) -> Result<String, String> {
             .next()
             .unwrap_or("repo")
             .to_string();
-        workspace::git(&["clone", &url], &parent)?;
+        workspace::git_long(&["clone", &url], &parent)?; // 분 단위가 정상 — 기본 상한을 씌우면 잘린다
         Ok(Path::new(&parent).join(name).to_string_lossy().into_owned())
     })
     .await
@@ -1507,19 +1523,27 @@ fn ws_unregister(store_state: State<StoreState>, id: String) -> Result<(), Strin
 
 /// 경로 재지정 (FR-E-08)
 #[tauri::command]
-fn ws_repath(store_state: State<StoreState>, id: String, path: String) -> Result<WsInfo, String> {
-    if !Path::new(&path).is_dir() {
-        return Err("폴더를 찾을 수 없습니다".into());
-    }
+async fn ws_repath(
+    store_state: State<'_, StoreState>,
+    id: String,
+    path: String,
+) -> Result<WsInfo, String> {
     let root = store_state.0.root();
-    let mut list = workspace::load_strict(&root)?;
-    let entry = list.iter_mut().find(|e| e.id == id).ok_or("등록 항목 없음")?;
-    entry.path = path;
-    entry.name = workspace::entry_name(&entry.path);
-    entry.last_used = workspace::now_ms();
-    let info = workspace::inspect(entry);
-    workspace::save(&root, &list)?;
-    Ok(info)
+    tauri::async_runtime::spawn_blocking(move || {
+        if !Path::new(&path).is_dir() {
+            return Err("폴더를 찾을 수 없습니다".to_string());
+        }
+        let mut list = workspace::load_strict(&root)?;
+        let entry = list.iter_mut().find(|e| e.id == id).ok_or("등록 항목 없음")?;
+        entry.path = path;
+        entry.name = workspace::entry_name(&entry.path);
+        entry.last_used = workspace::now_ms();
+        let info = workspace::inspect(entry);
+        workspace::save(&root, &list)?;
+        Ok(info)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
