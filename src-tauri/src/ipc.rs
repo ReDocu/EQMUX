@@ -162,24 +162,25 @@ fn handle(app: &AppHandle, line: &str) -> Result<serde_json::Value, String> {
             let kind = req["type"].as_str().ok_or("BAD_TYPE")?;
             let body = req["body"].as_str().ok_or("EMPTY")?;
             let to_raw = req["to"].as_str().unwrap_or("@all");
-            let (_, t) = crate::find_tracked(app, session).ok_or("UNKNOWN_SESSION")?;
-            let to = resolve_recipient(app, &t.ws, &t.cwd, to_raw)?;
-            publish(app, &t.ws, session, &to, kind, body)
+            // 원점은 스폰 관문이 남긴다 — 에이전트 추적 맵을 요구하면 셸 세션은 영영 못 보낸다
+            let (ws, cwd) = crate::session_origin(app, session).ok_or("UNKNOWN_SESSION")?;
+            let to = resolve_recipient(app, &ws, &cwd, to_raw)?;
+            publish(app, &ws, session, &to, kind, body)
         }
         "report" => {
             // V4 자기 보고 (FR-G-88) — 스트림에는 report 타입으로, 세션 피드에는 event로
             let session = req["session"].as_str().ok_or("NO_SESSION")?;
             verify_session(app, session, &req)?;
             let body = req["body"].as_str().ok_or("EMPTY")?;
-            let (_, t) = crate::find_tracked(app, session).ok_or("UNKNOWN_SESSION")?;
+            let (ws, _) = crate::session_origin(app, session).ok_or("UNKNOWN_SESSION")?;
             let store: State<crate::StoreState> = app.state();
             let _ = store.0.sender().send(crate::store::StoreMsg::Event {
-                ws: t.ws.clone(),
+                ws: ws.clone(),
                 id: Some(session.to_string()),
                 kind: "report".into(),
                 message: body.chars().take(200).collect(),
             });
-            publish(app, &t.ws, session, "나", "report", body)
+            publish(app, &ws, session, "나", "report", body)
         }
         "hook" => {
             // 훅 2차 상태 소스 (D3 · FR-D-30 계열) — 모르는 이벤트는 조용히 무시

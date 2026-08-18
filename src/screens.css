@@ -167,6 +167,19 @@
   flex-shrink: 0;
   font-variant-numeric: tabular-nums;
 }
+/* 한 줄 유지: 이름은 줄바꿈 없이 그대로, 남는 폭은 메시지가 먹고 넘치면 말줄임 */
+.event-row .ev-name {
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.event-row .ev-msg {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 /* ── 컨트롤 센터 ── */
 /* 화면 크기에 동적으로 맞춘다: 본문은 스크롤하지 않고, 중앙 터미널 그리드가

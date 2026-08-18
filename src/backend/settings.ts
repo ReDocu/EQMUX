@@ -25,7 +25,14 @@ export interface AppSettings {
   maxSlots: number;
   /** UI 언어 — 한국어(기본)·영어. 코드의 한국어 원문이 키이고 영어는 사전 치환(i18n.ts) */
   language: "ko" | "en";
+  /** 에이전트 세션 상태 줄 (FR-D-19) — 우리가 --settings로 주입한 statusLine이 그리는 한 줄.
+   *  full=모델·비용 · nocost=모델만 · off=줄 없음. 어느 값이든 채널 자체는 계속 돌아
+   *  세션 비용 수집(apply_statusline)은 끊기지 않는다 */
+  statusLine: "full" | "nocost" | "off";
 }
+
+/** 상태 줄 옵션 — 설정 화면·검증·Rust 주입이 공유한다 */
+export const STATUSLINE_MODES = ["full", "nocost", "off"] as const;
 
 /** 팔레트 옵션 — 설정 화면·검증이 공유한다. styles.css의 [data-palette] 블록과 1:1 */
 export const PALETTES = ["soft", "contrast", "neutral", "warm"] as const;
@@ -47,6 +54,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   sgrStore: true, // FR-C-15 — 기본 켜짐, 끄면 용량 절감
   maxSlots: 4, // 세션 슬롯 상한 — 기본 4, 옵션으로 6·8
   language: "ko", // UI 언어 — 기본 한국어
+  statusLine: "full", // 현행 유지 — 모델·비용 한 줄
 };
 
 const [settings, setSettings] = createSignal<AppSettings>(DEFAULT_SETTINGS);
@@ -74,6 +82,9 @@ function sanitize(raw: unknown): AppSettings {
     sgrStore: v.sgrStore !== false,
     maxSlots: (SLOT_OPTIONS as readonly number[]).includes(v.maxSlots as number) ? (v.maxSlots as number) : 4,
     language: v.language === "en" ? "en" : "ko",
+    statusLine: (STATUSLINE_MODES as readonly string[]).includes(v.statusLine as string)
+      ? (v.statusLine as AppSettings["statusLine"])
+      : "full",
   };
 }
 

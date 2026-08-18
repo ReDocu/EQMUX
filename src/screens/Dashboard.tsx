@@ -283,8 +283,8 @@ export function Dashboard() {
               {(e) => (
                 <div class="event-row">
                   <span class="mono muted ev-time">{e.time}</span>
-                  <span style={{ "font-weight": 600 }}>{eventName(e.sessionId)}</span>
-                  <span class="muted">{e.message}</span>
+                  <span class="ev-name">{eventName(e.sessionId)}</span>
+                  <span class="muted ev-msg" title={e.message}>{e.message}</span>
                 </div>
               )}
             </For>

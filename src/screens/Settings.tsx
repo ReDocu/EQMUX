@@ -2,7 +2,14 @@
 // 동작에 연결된 항목(시작 화면·알림 라우팅·사운드·재생 줄 수)은 settings.json에 즉시 저장되고,
 // 고정 정책 항목은 클릭해도 바뀌지 않는 선언으로 남는다. Tauri 밖에서는 저장 없이 순환만 한다.
 import { For, Show } from "solid-js";
-import { DEFAULT_SETTINGS, PALETTES, settings, SLOT_OPTIONS, updateSettings } from "../backend/settings";
+import {
+  DEFAULT_SETTINGS,
+  PALETTES,
+  settings,
+  SLOT_OPTIONS,
+  STATUSLINE_MODES,
+  updateSettings,
+} from "../backend/settings";
 import type { AppSettings } from "../backend/settings";
 import { isTauri, openExternal } from "../backend/pty";
 import { t } from "../i18n";
@@ -31,6 +38,7 @@ const THEMES: AppSettings["theme"][] = ["dark", "light", "system"];
 const PALS = [...PALETTES]; // 부드러움 · 고대비 · 중성 · 따뜻함
 const MEM_BANNER = [0, 2048, 4096, 8192]; // FR-G-67 — 0 = 꺼짐 (기본)
 const LANGS: AppSettings["language"][] = ["ko", "en"];
+const STATUSLINES = [...STATUSLINE_MODES]; // 모델·비용 · 모델만 · 숨김
 
 // 문의 폼 (README·릴리스 노트와 같은 주소) — UI 언어에 맞는 쪽을 연다
 const FEEDBACK_FORM: Record<AppSettings["language"], string> = {
@@ -151,7 +159,15 @@ const SECTIONS: Section[] = [
   },
   {
     title: "Claude Code 런타임",
-    desc: "검증된 CLI와 관측 어댑터 — 고정 정책 (D2).",
+    desc: "검증된 CLI와 관측 어댑터 — 고정 정책 (D2). 상태 줄 표시만 고를 수 있습니다 (FR-D-19).",
+    wired: [
+      {
+        k: "세션 상태 줄",
+        labels: ["모델 · 비용 (기본)", "모델만 — 비용 숨김", "숨김"],
+        current: () => pick(STATUSLINES, settings().statusLine),
+        apply: (i) => updateSettings({ statusLine: STATUSLINES[i] }),
+      },
+    ],
     fixed: [
       { k: "상태 소스", label: "세션 레지스트리 watch + 2s 재스캔" },
       { k: "재개", label: "--resume · 같은 UUID · 같은 cwd" },

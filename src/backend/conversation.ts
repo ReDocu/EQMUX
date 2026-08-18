@@ -173,14 +173,14 @@ function fmtEcho(m: ConversationMessage): string {
 }
 
 /** 수신 세션 결정 (M4) — "@all"이면 그 워크스페이스의 살아 있는 참여자 전원.
- *  역할 세션은 에이전트가 떠 있어야 받는다 (restored·dead·shell 제외 — PTY 너머에 받을 사람이 없다).
- *  기본 터미널(역할 없음)은 참여자다 — 프롬프트 앞의 사람이 읽는다. */
+ *  기본 터미널(역할 없음)은 참여자다 — 프롬프트 앞의 사람이 읽는다.
+ *  역할 세션은 에이전트가 아직 안 떠 있어도(shell) 참여자로 센다 — 셸 우선 모델에서는
+ *  기동 전이 정상 상태이고, 그때 온 메시지는 인박스에 쌓였다가 기동 직후 흘러간다.
+ *  제외는 진짜로 받을 수 없는 것만 — dead(프로세스 없음)와 restored(재시작 잔상). */
 function recipients(wsId: string, to: string) {
-  const live = backend.listSessions().filter((s) => {
-    if (s.workspaceId !== wsId || s.restored || s.status === "dead") return false;
-    if (s.personaId) return s.status !== "shell"; // 역할 세션 — 에이전트 미기동(shell)은 제외
-    return true; // 기본 터미널 — 대화 참여자
-  });
+  const live = backend.listSessions().filter(
+    (s) => s.workspaceId === wsId && !s.restored && s.status !== "dead",
+  );
   return to === "@all" ? live : live.filter((s) => s.id === to);
 }
 
@@ -189,6 +189,15 @@ function deliver(wsId: string, m: ConversationMessage): void {
     if (s.id === m.from) continue; // 에이전트 발신(@all)이 자기 자신에게 되돌아가지 않게
     if (!s.personaId) {
       echoPty(s.id, fmtEcho(m)); // 기본 터미널 — 표시 전용, 셸 입력에는 닿지 않는다 (P-2)
+    } else if (s.status === "shell") {
+      // 역할은 있는데 에이전트가 아직 안 떴다 — 셸에 주입하면 사람이 치던 명령을 실행시킨다.
+      // 사람이 읽도록 화면에만 에코하고, 원문은 인박스에 남겨 기동 직후 에이전트에게 전달한다.
+      echoPty(s.id, fmtEcho(m));
+      const q = inbox.get(s.id) ?? [];
+      q.push(m);
+      inbox.set(s.id, q);
+      setInboxTick((t) => t + 1);
+      scheduleInboxSave();
     } else if (s.status === "idle") {
       writePty(s.id, fmt(m)); // 유휴 = 프롬프트가 비어 있다 → 즉시 (M3)
     } else {

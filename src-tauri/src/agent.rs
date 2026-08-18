@@ -64,9 +64,13 @@ pub struct AgentRt {
     /// 세션별 IPC 토큰 (P-1) — 스폰 시 발급되어 EQMUX_TOKEN으로 주입되고, 파이프 요청의
     /// session 주장을 검증한다. 세션 id는 추측 가능한 평문이라 id만으로는 신원이 아니다.
     pub session_tokens: Mutex<HashMap<String, String>>,
+    /// 세션 원점 (워크스페이스 id, cwd) — 셸·에이전트 공통 스폰 관문이 채운다.
+    /// IPC 발신(send·report)이 워크스페이스를 푸는 자리다. by_uuid는 관리되는 에이전트만
+    /// 담으므로, 그것만 보면 셸 우선 모델의 보통 세션은 자기 워크스페이스를 못 밝힌다.
+    pub session_origin: Mutex<HashMap<String, (String, String)>>,
 }
 
-/// 세션 영구 제거 시 잔류 상태 정리 (P-9) — 추적 맵·알림 게이트·IPC 토큰.
+/// 세션 영구 제거 시 잔류 상태 정리 (P-9) — 추적 맵·알림 게이트·IPC 토큰·세션 원점.
 /// expected_exit는 남긴다 — 진행 중인 kill의 EOF 처리(on_pty_exit)가 스스로 소비한다.
 pub fn forget_session(app: &AppHandle, id: &str) {
     let rt: tauri::State<AgentRt> = app.state();
@@ -78,6 +82,9 @@ pub fn forget_session(app: &AppHandle, id: &str) {
     }
     if let Ok(mut tokens) = rt.session_tokens.lock() {
         tokens.remove(id);
+    }
+    if let Ok(mut origin) = rt.session_origin.lock() {
+        origin.remove(id);
     };
 }
 
@@ -184,6 +191,7 @@ pub fn claude_builders(
     cwd: &str,
     app_session: &str,
     role_file: Option<&str>,
+    settings_file: Option<&str>,
     token: &str,
 ) -> Vec<CommandBuilder> {
     let team_md = std::path::Path::new(cwd).join(".eqmux").join("team.md");
@@ -204,6 +212,12 @@ pub fn claude_builders(
         }
         if let Some(rf) = role_file {
             b.env("EQMUX_ROLE_FILE", rf);
+        }
+        // 상태 줄 표시 모드의 원본 (FR-D-19) — 값이 아니라 파일 경로를 심는다. `eqmux
+        // _statusline`이 매 호출마다 다시 읽으므로 설정 변경이 재기동 없이 반영된다
+        // (역할 파일과 같은 원칙 — 파일이 원본, FR-E-41).
+        if let Some(sf) = settings_file {
+            b.env("EQMUX_SETTINGS_FILE", sf);
         }
         if let Some(tf) = &team_md {
             b.env("EQMUX_TEAM_FILE", tf);

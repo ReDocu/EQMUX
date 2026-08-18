@@ -84,7 +84,12 @@ export const dict: Record<string, string> = {
 
   // Claude Code 런타임
   "Claude Code 런타임": "Claude Code runtime",
-  "검증된 CLI와 관측 어댑터 — 고정 정책 (D2).": "Verified CLI and observation adapter — fixed policy (D2).",
+  "검증된 CLI와 관측 어댑터 — 고정 정책 (D2). 상태 줄 표시만 고를 수 있습니다 (FR-D-19).":
+    "Verified CLI and observation adapter — fixed policy (D2). Only the status line display is configurable (FR-D-19).",
+  "세션 상태 줄": "Session status line",
+  "모델 · 비용 (기본)": "Model · cost (default)",
+  "모델만 — 비용 숨김": "Model only — hide cost",
+  숨김: "Hidden",
   "상태 소스": "Status source",
   "세션 레지스트리 watch + 2s 재스캔": "Session registry watch + 2s rescan",
   "--resume · 같은 UUID · 같은 cwd": "--resume · same UUID · same cwd",

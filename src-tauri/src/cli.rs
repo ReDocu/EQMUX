@@ -18,7 +18,10 @@ pub enum Req {
     StatusLine { session: String },
 }
 
-const USAGE: &str = "사용법:\n  eqmux send --type <ask|handoff|report|review|escalate> [--to @이름] \"내용\"\n  eqmux report \"진척 한 줄\"\n  eqmux ping";
+// PowerShell에서 @는 스플래팅 기호다 — 따옴표 없는 `--to @all`은 인자째 사라지고
+// 그 자리를 본문이 메워 "내용이 비어 있습니다"로 떨어진다. 기본 셸이 pwsh이므로
+// 사용법은 처음부터 따옴표를 씌운 형태로 안내한다 (cmd·bash에서도 그대로 유효하다).
+const USAGE: &str = "사용법:\n  eqmux send --type <ask|handoff|report|review|escalate> [--to \"@이름\"] \"내용\"\n  eqmux report \"진척 한 줄\"\n  eqmux ping\n\nPowerShell에서 --to 값은 따옴표로 감싸세요 — @는 스플래팅 기호라 그냥 쓰면 사라집니다.";
 
 /// main.rs의 CLI/GUI 분기 판별 — parse가 아는 서브커맨드 전부와 같이 움직여야 한다.
 /// 여기 빠진 커맨드는 GUI 기동으로 흘러, Claude Code가 주기 호출하는 채널이면
@@ -62,6 +65,13 @@ pub fn parse(args: &[String], session: Option<&str>) -> Result<Req, String> {
             }
             let kind = kind.ok_or(format!("--type이 필요합니다\n{USAGE}"))?;
             if body.is_empty() {
+                // 본문이 통째로 --to로 빨려 들어간 형태 — PowerShell이 따옴표 없는 @이름을
+                // 지우면 정확히 이 모양이 된다. 일반적인 "비어 있음"보다 원인을 짚어준다.
+                if !to.starts_with('@') && to != "@all" {
+                    return Err(format!(
+                        "내용이 비어 있습니다 — --to가 \"{to}\"를 받았습니다.\nPowerShell에서 따옴표 없는 @이름은 사라지고 그 자리를 본문이 메웁니다: --to \"@이름\"\n{USAGE}"
+                    ));
+                }
                 return Err(format!("내용이 비어 있습니다\n{USAGE}"));
             }
             Ok(Req::Send { session: need_session()?, to, kind, body: body.join(" ") })
@@ -108,26 +118,56 @@ fn to_line(req: &Req, token: Option<&str>) -> String {
         }
         Req::StatusLine { session } => {
             // stdin JSON에 모델·비용이 온다 (§10.4). 첫 stdout 줄 = Claude Code 상태 줄 —
-            // 여기서 바로 찍는다 (앱 미실행이어도 상태 줄은 성립해야 한다)
+            // 여기서 바로 찍는다 (앱 미실행이어도 상태 줄은 성립해야 한다).
+            // 표시 모드가 off여도 payload는 그대로 앱에 보낸다 — 비용 수집(FR-D-19)은
+            // 표시와 무관하게 계속 성립해야 하기 때문.
             let payload = read_stdin_json();
-            let model = payload
-                .get("model")
-                .and_then(|m| m.get("display_name"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("Claude");
-            match payload
-                .get("cost")
-                .and_then(|c| c.get("total_cost_usd"))
-                .and_then(|v| v.as_f64())
-            {
-                Some(cost) => println!("EQMUX · {model} · ${cost:.2}"),
-                None => println!("EQMUX · {model}"),
+            if let Some(line) = statusline_text(&payload, statusline_mode()) {
+                println!("{line}");
             }
             with_token(serde_json::json!({
                 "cmd": "statusline", "session": session, "payload": payload
             }))
         }
     }
+}
+
+/// 상태 줄 표시 모드 (FR-D-19) — 앱 설정 settings.json의 statusLine 필드.
+/// 경로는 스폰 때 심은 EQMUX_SETTINGS_FILE에서 오고, 호출마다 다시 읽으므로 설정
+/// 변경이 세션 재기동 없이 다음 갱신부터 반영된다. 읽기에 실패하면 기본값(full) —
+/// 설정 파일이 없다고 상태 줄이 사라지지는 않는다.
+fn statusline_mode() -> String {
+    std::env::var("EQMUX_SETTINGS_FILE")
+        .ok()
+        .filter(|p| !p.is_empty())
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v.get("statusLine").and_then(|m| m.as_str()).map(str::to_string))
+        .unwrap_or_else(|| "full".into())
+}
+
+/// 상태 줄 한 줄 — None이면 아무것도 찍지 않는다 (모드 off).
+fn statusline_text(payload: &serde_json::Value, mode: String) -> Option<String> {
+    if mode == "off" {
+        return None;
+    }
+    let model = payload
+        .get("model")
+        .and_then(|m| m.get("display_name"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("Claude");
+    let cost = (mode != "nocost")
+        .then(|| {
+            payload
+                .get("cost")
+                .and_then(|c| c.get("total_cost_usd"))
+                .and_then(|v| v.as_f64())
+        })
+        .flatten();
+    Some(match cost {
+        Some(c) => format!("EQMUX · {model} · ${c:.2}"),
+        None => format!("EQMUX · {model}"),
+    })
 }
 
 fn read_stdin_json() -> serde_json::Value {
@@ -290,6 +330,56 @@ mod tests {
             Req::StatusLine { session: "kai@ws".into() }
         );
         assert!(parse(&s(&["_statusline"]), None).is_err()); // EQMUX_SESSION 없으면 거부 (run이 0으로 삼킨다)
+    }
+
+    /// 상태 줄 표시 모드 (FR-D-19) — off는 줄 자체가 없고, nocost는 비용만 빠진다.
+    /// 어느 모드든 payload는 앱으로 계속 가므로 비용 수집은 표시와 무관하다.
+    #[test]
+    fn statusline_text_honors_mode() {
+        let payload = serde_json::json!({
+            "model": { "display_name": "Opus 5 (1M context)" },
+            "cost": { "total_cost_usd": 0.618 }
+        });
+        assert_eq!(
+            statusline_text(&payload, "full".into()).as_deref(),
+            Some("EQMUX · Opus 5 (1M context) · $0.62")
+        );
+        assert_eq!(
+            statusline_text(&payload, "nocost".into()).as_deref(),
+            Some("EQMUX · Opus 5 (1M context)")
+        );
+        assert_eq!(statusline_text(&payload, "off".into()), None);
+        // 비용이 아직 안 온 첫 갱신 — full이어도 모델만 나온다
+        let no_cost = serde_json::json!({ "model": { "display_name": "Opus 5" } });
+        assert_eq!(statusline_text(&no_cost, "full".into()).as_deref(), Some("EQMUX · Opus 5"));
+        // 모델도 없으면 자리표시 — 상태 줄이 빈 줄로 무너지지 않는다
+        assert_eq!(
+            statusline_text(&serde_json::Value::Null, "full".into()).as_deref(),
+            Some("EQMUX · Claude")
+        );
+    }
+
+    /// 설정 파일이 없거나 필드가 없으면 기본값 full — 표시가 조용히 사라지지 않는다
+    #[test]
+    fn statusline_mode_defaults_to_full() {
+        std::env::remove_var("EQMUX_SETTINGS_FILE");
+        assert_eq!(statusline_mode(), "full");
+        std::env::set_var("EQMUX_SETTINGS_FILE", "C:/nonexistent/eqmux-settings.json");
+        assert_eq!(statusline_mode(), "full");
+        std::env::remove_var("EQMUX_SETTINGS_FILE");
+    }
+
+    /// PowerShell이 따옴표 없는 `@all`을 지우면 --to가 본문을 삼킨다 —
+    /// 그때는 "비어 있음"이 아니라 따옴표를 짚어주는 오류가 나가야 한다.
+    #[test]
+    fn empty_body_after_to_swallowed_hints_at_quoting() {
+        let e = parse(&s(&["send", "--type", "report", "--to", "브로드캐스트 검증"]), Some("noel@ws"))
+            .unwrap_err();
+        assert!(e.contains("브로드캐스트 검증"), "삼켜진 값을 보여줘야 한다: {e}");
+        assert!(e.contains("--to \"@이름\""), "따옴표 사용법을 짚어야 한다: {e}");
+        // --to를 아예 안 준 경우는 원인이 다르므로 평범한 안내 그대로다
+        let e = parse(&s(&["send", "--type", "report"]), Some("noel@ws")).unwrap_err();
+        assert!(e.starts_with("내용이 비어 있습니다\n"), "{e}");
     }
 
     #[test]

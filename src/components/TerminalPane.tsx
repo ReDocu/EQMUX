@@ -288,13 +288,21 @@ function createEntry(): TermEntry {
     lineHeight: 1.25,
     cursorBlink: true,
     scrollback: 5000, // FR-C-10 — 인메모리 링버퍼, 초과분은 스토어가 갖고 있다
+    // 유니코드 애드온이 쓰는 term.unicode는 xterm의 proposed API다 — 이 플래그가 없으면
+    // loadAddon이 던지고, 그 예외가 페인 생성 전체를 무너뜨린다 (터미널도 스폰도 없다).
+    allowProposedApi: true,
     theme: readTermTheme(),
   });
   // 문자 폭 (유니코드 15 + 자소 군집) — 반드시 첫 write 전에. 폭은 파싱 시점에 버퍼에 박힌다.
   // xterm 기본은 유니코드 6 테이블이라 ✅(U+2705)·⚙️(VS16) 같은 이모지를 1칸으로 센다.
   // 에이전트 CLI는 string-width(유니코드 9+)를 써서 2칸으로 패딩하므로, 그 차이만큼
   // 셀이 밀리고 Ink의 차등 재그리기가 어긋난 자리에 덮어써 글자가 중복된다 (표가 깨져 보인다).
-  term.loadAddon(new UnicodeGraphemesAddon()); // activeVersion = "15-graphemes"로 스스로 전환한다
+  // 폭 교정은 가독성 문제고 터미널 자체는 이것 없이도 성립한다 — 실패해도 페인은 살린다.
+  try {
+    term.loadAddon(new UnicodeGraphemesAddon()); // activeVersion = "15-graphemes"로 스스로 전환한다
+  } catch {
+    /* 유니코드 테이블은 xterm 기본값(6)으로 남는다 — 이모지 폭만 어긋난다 */
+  }
   const fit = new FitAddon();
   term.loadAddon(fit);
   const search = new SearchAddon();

@@ -235,6 +235,15 @@ fn spawn_pty_session(
     );
     drop(sessions);
 
+    // 세션 원점 기록 — 셸이든 에이전트든 스폰은 전부 이 관문을 지나므로, 여기 한 곳이면
+    // IPC 발신(PRD I)이 어떤 세션에서 와도 워크스페이스를 풀 수 있다 (session_origin).
+    {
+        let rt: State<agent::AgentRt> = app.state();
+        if let Ok(mut origin) = rt.session_origin.lock() {
+            origin.insert(id.clone(), (ws.clone(), dir.clone()));
+        };
+    }
+
     // 스토어에 세션 시작을 기록 (FR-C-03)
     let store_tx = store_state.0.sender();
     let _ = store_tx.send(StoreMsg::SessionStart {
@@ -881,7 +890,20 @@ fn agent_spawn_inner(
             tokens.insert(id.clone(), token.clone());
         };
     }
-    let builders = agent::claude_builders(&args, &cwd, &id, role_file.as_deref(), &token);
+    // 상태 줄 표시 모드(FR-D-19)의 원본 경로 — settings_save가 쓰는 그 파일 그대로
+    let settings_file = app
+        .path()
+        .app_data_dir()
+        .ok()
+        .map(|r| r.join("settings.json").to_string_lossy().into_owned());
+    let builders = agent::claude_builders(
+        &args,
+        &cwd,
+        &id,
+        role_file.as_deref(),
+        settings_file.as_deref(),
+        &token,
+    );
     let gen = spawn_pty_session(
         app.clone(),
         id.clone(),
@@ -981,6 +1003,19 @@ pub(crate) fn find_tracked(app: &AppHandle, id: &str) -> Option<(String, agent::
     map.iter()
         .find(|(_, t)| t.app_session == id)
         .map(|(u, t)| (u.clone(), t.clone()))
+}
+
+/// 세션의 워크스페이스·cwd — 관리되는 에이전트든 맨 셸이든 같은 답을 준다 (PRD I 발신 경로).
+/// 추적 맵(by_uuid)은 agent_spawn에서만 채워지므로 그것만 보면 셸 세션이 발신할 수 없다.
+/// 스폰 관문이 남긴 원점을 폴백으로 둔다 — 에이전트는 추적 맵이 더 신선하므로 먼저 본다
+/// (워크트리 재기동 등으로 cwd가 바뀌면 추적 맵이 그 값을 들고 있다).
+pub(crate) fn session_origin(app: &AppHandle, id: &str) -> Option<(String, String)> {
+    if let Some((_, t)) = find_tracked(app, id) {
+        return Some((t.ws, t.cwd));
+    }
+    let rt: State<agent::AgentRt> = app.state();
+    let origin = rt.session_origin.lock().ok()?;
+    origin.get(id).cloned()
 }
 
 /// 세션의 Claude sessionId — 추적 맵 우선, 앱 재시작 후엔 agent_session 테이블 (FR-D-24)
