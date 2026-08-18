@@ -1196,20 +1196,73 @@
   text-overflow: ellipsis;
 }
 
-/* dead 페인 인라인 재개 (U8) — 상세 드로어 2단계를 건너뛴다 */
-.pane-resume {
+/* 에이전트 기동 칩 (FR-D-01) — 살아 있는 셸 위에 뜨므로 출력을 가리지 않게 우하단 구석에 둔다.
+   역할 세션이 관리 에이전트로 올라서면 사라진다 (needsAgent) */
+.pane-launch {
   position: absolute;
   right: 10px;
   bottom: 10px;
   z-index: 3;
   font-size: 11px;
   padding: 4px 12px;
-  border-color: var(--eq-red);
+  border-color: var(--eq-blue-mid);
   color: var(--eq-text);
   background: var(--eq-surface);
 }
-.pane-resume:hover {
+.pane-launch:hover {
   border-color: var(--eq-blue);
+  color: var(--eq-blue);
+}
+
+/* 종료된 슬롯 화면 — 빈 슬롯(.pane-add)과 같은 결로 두되, 종료 사유와 두 행동을 담는다.
+   터미널을 감췄으므로 "남긴 출력 보기"가 트랜스크립트로 가는 유일한 길이다 */
+.pane-dead-slot {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 0;
+  padding: 12px;
+  text-align: center;
+}
+.pane-dead-why {
+  color: var(--eq-red);
+  font-size: 12px;
+}
+.pane-dead-acts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.pane-dead-slot .btn {
+  font-size: 11px;
+  padding: 4px 12px;
+}
+.pane-dead-resume {
+  border-color: var(--eq-blue-mid);
+}
+.pane-dead-resume:hover {
+  border-color: var(--eq-blue);
+}
+.pane-dead-note {
+  color: var(--eq-dim);
+  font-size: 11px;
+}
+.pane-dead-log {
+  background: none;
+  border: none;
+  color: var(--eq-muted);
+  cursor: pointer;
+  font-size: 10px;
+  padding: 0;
+  text-decoration: underline;
+}
+.pane-dead-log:hover {
+  color: var(--eq-blue);
 }
 
 /* 과부하 소프트 경고 배너 (D11 · FR-G-36) — 알림이 아니라 상단 배너, 막지 않는다 */
@@ -1267,6 +1320,45 @@
   border-bottom: 1px solid var(--eq-line);
   color: var(--eq-muted);
   word-break: break-all;
+}
+/* 출처 한 줄 (FR-G-80·86) — 좁은 페인에서는 뒤가 잘리므로 전체 경로는 title·복사로 준다 */
+.transcript-source {
+  display: block;
+  width: 100%;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--eq-line);
+  color: var(--eq-muted);
+  cursor: pointer;
+  font-size: 10px;
+  padding: 3px 12px;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.transcript-source:hover {
+  color: var(--eq-text);
+}
+/* 도구 줄 (FR-G-83) — 이름 + 경로·명령 요약을 한 줄로. 좁은 페인에서는 뒤를 자른다 */
+.turn-tool {
+  display: block;
+  width: 100%;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
+  font-size: 12px;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 추정 출처(cwd 최신)는 색으로 구분한다 — screens.css가 styles.css보다 뒤라 명시적으로 이긴다 */
+.transcript-source.st-waiting,
+.transcript-source.st-waiting:hover {
+  color: var(--eq-amber);
 }
 
 /* ── 트랜스크립트 페인 (화면 #12) ── */

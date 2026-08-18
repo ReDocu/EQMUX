@@ -148,6 +148,39 @@ fn friendly(err: &str) -> String {
     }
 }
 
+/// SessionStart 훅의 stdout (FR-D-05 · §10.2) — 역할 파일을 세션 컨텍스트로 싣는다.
+///
+/// --append-system-prompt의 2줄 포인터는 "읽어라"는 지시일 뿐이라, 가벼운 첫 메시지에는
+/// 모델이 파일을 열지 않고 답해버린다 (페르소나가 첫 턴부터 빠지는 원인). 훅 컨텍스트는
+/// 모델이 고를 수 없으므로 여기서 확정적으로 전달한다.
+///
+/// 파일은 여전히 유일한 원본이다 (FR-E-40의 취지) — 앱이 사본을 들고 있지 않고,
+/// 매 세션 시작마다 이 자리에서 다시 읽는다. 역할 없는 세션이면 아무것도 내지 않는다.
+/// 경로는 claude 프로세스에 심은 EQMUX_ROLE_FILE에서 온다 (훅은 그 환경을 물려받는다).
+fn session_start_context() -> Option<String> {
+    let path = std::env::var("EQMUX_ROLE_FILE").ok().filter(|p| !p.is_empty())?;
+    role_context(&path)
+}
+
+/// 역할 파일 → 훅 출력 JSON. 환경변수를 벗겨 둬야 테스트할 수 있다 (env는 프로세스 전역).
+fn role_context(path: &str) -> Option<String> {
+    let body = std::fs::read_to_string(path).ok()?;
+    if body.trim().is_empty() {
+        return None;
+    }
+    let ctx = format!(
+        "이 세션에 부여된 역할이다 (원본 파일: {path}). 첫 응답부터 이 인물·책임·금지·권한을 따른다.
+
+{body}"
+    );
+    Some(
+        serde_json::json!({
+            "hookSpecificOutput": { "hookEventName": "SessionStart", "additionalContext": ctx }
+        })
+        .to_string(),
+    )
+}
+
 /// CLI 모드 본체 — 종료 코드 반환. _hook·_statusline은 어떤 실패에도 0
 /// (에이전트 흐름·상태 줄을 깨지 않는다).
 pub fn run(args: Vec<String>) -> i32 {
@@ -164,6 +197,15 @@ pub fn run(args: Vec<String>) -> i32 {
             return 2;
         }
     };
+    // 역할 컨텍스트는 파이프와 무관하게 먼저 낸다 — 앱이 안 떠 있어도 역할은 실려야 한다.
+    // stdin은 아직 읽지 않았다 (to_line의 read_stdin_json이 뒤에서 읽는다).
+    if let Req::Hook { event, .. } = &req {
+        if event == "SessionStart" {
+            if let Some(ctx) = session_start_context() {
+                println!("{ctx}");
+            }
+        }
+    }
     match crate::ipc::request(&to_line(&req, token.as_deref())) {
         Ok(resp) => {
             let v: serde_json::Value = serde_json::from_str(&resp).unwrap_or_default();
@@ -200,6 +242,33 @@ mod tests {
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()
+    }
+
+    /// SessionStart 훅 (FR-D-05) — 역할 파일 본문이 additionalContext로 실려야 한다.
+    /// 여기가 비면 에이전트는 첫 턴에서 페르소나 없이 답한다.
+    #[test]
+    fn session_start_context_carries_the_role_file() {
+        let dir = std::env::temp_dir().join(format!("eqmux-hook-{}", crate::workspace::now_ms()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("role.md");
+        std::fs::write(&f, "# S[DevOps]실버울프 — 개발
+
+## 금지
+검증 없이 커밋 요청
+").unwrap();
+        let out = super::role_context(&f.to_string_lossy()).expect("역할 파일이 있으면 컨텍스트가 나온다");
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["hookSpecificOutput"]["hookEventName"], "SessionStart");
+        let ctx = v["hookSpecificOutput"]["additionalContext"].as_str().unwrap();
+        assert!(ctx.contains("실버울프") && ctx.contains("검증 없이 커밋 요청")); // 본문이 실렸다
+        assert!(ctx.contains(&*f.to_string_lossy())); // 원본 경로도 함께 — 파일이 원본이다
+
+        // 역할 없는 세션 · 빈 파일 → 아무것도 싣지 않는다 (기본 터미널이 오염되지 않게)
+        std::fs::write(&f, "   
+").unwrap();
+        assert!(super::role_context(&f.to_string_lossy()).is_none());
+        assert!(super::role_context(&dir.join("없는파일.md").to_string_lossy()).is_none());
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// GUI/CLI 분기 (main.rs) — parse가 아는 서브커맨드는 전부 CLI로 분기해야 한다.

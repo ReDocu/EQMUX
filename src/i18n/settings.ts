@@ -25,6 +25,13 @@ export const dict: Record<string, string> = {
   "시스템 따름": "Follow system",
   "터미널 페인": "Terminal panes",
   "항상 다크 (ANSI 팔레트 전제)": "Always dark (assumes ANSI palette)",
+  "색 팔레트": "Color palette",
+  "부드러움 (기본)": "Soft (default)",
+  고대비: "High contrast",
+  중성: "Neutral",
+  따뜻함: "Warm",
+  강조색: "Accent colors",
+  "팔레트 공통 — 배경 명도·색온도만 바뀝니다": "Shared across palettes — only surface lightness and warmth change",
 
   // 세션 슬롯
   "세션 슬롯": "Session slots",

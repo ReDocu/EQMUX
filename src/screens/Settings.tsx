@@ -2,7 +2,7 @@
 // 동작에 연결된 항목(시작 화면·알림 라우팅·사운드·재생 줄 수)은 settings.json에 즉시 저장되고,
 // 고정 정책 항목은 클릭해도 바뀌지 않는 선언으로 남는다. Tauri 밖에서는 저장 없이 순환만 한다.
 import { For, Show } from "solid-js";
-import { DEFAULT_SETTINGS, settings, SLOT_OPTIONS, updateSettings } from "../backend/settings";
+import { DEFAULT_SETTINGS, PALETTES, settings, SLOT_OPTIONS, updateSettings } from "../backend/settings";
 import type { AppSettings } from "../backend/settings";
 import { isTauri, openExternal } from "../backend/pty";
 import { t } from "../i18n";
@@ -28,6 +28,7 @@ const NOTI: AppSettings["notifications"][] = ["waiting-dead", "waiting", "off"];
 const REPLAY = [500, 1000, 2000];
 const SLOTS = [...SLOT_OPTIONS]; // 4 · 6 · 8
 const THEMES: AppSettings["theme"][] = ["dark", "light", "system"];
+const PALS = [...PALETTES]; // 부드러움 · 고대비 · 중성 · 따뜻함
 const MEM_BANNER = [0, 2048, 4096, 8192]; // FR-G-67 — 0 = 꺼짐 (기본)
 const LANGS: AppSettings["language"][] = ["ko", "en"];
 
@@ -62,8 +63,17 @@ const SECTIONS: Section[] = [
         current: () => pick(THEMES, settings().theme),
         apply: (i) => updateSettings({ theme: THEMES[i] }),
       },
+      {
+        k: "색 팔레트",
+        labels: ["부드러움 (기본)", "고대비", "중성", "따뜻함"],
+        current: () => pick(PALS, settings().palette),
+        apply: (i) => updateSettings({ palette: PALS[i] }),
+      },
     ],
-    fixed: [{ k: "터미널 페인", label: "항상 다크 (ANSI 팔레트 전제)" }],
+    fixed: [
+      { k: "터미널 페인", label: "항상 다크 (ANSI 팔레트 전제)" },
+      { k: "강조색", label: "팔레트 공통 — 배경 명도·색온도만 바뀝니다" },
+    ],
   },
   {
     title: "세션 슬롯",

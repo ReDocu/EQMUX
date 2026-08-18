@@ -8,6 +8,8 @@ export interface TranscriptTurnReal {
   role: "user" | "agent" | "tool";
   time: string;
   text: string;
+  /** 도구 줄의 접힌 요약 — 건드린 경로·명령 앞부분 (FR-G-83). 도구 턴에만 있다 */
+  summary: string | null;
   detail: string | null;
 }
 

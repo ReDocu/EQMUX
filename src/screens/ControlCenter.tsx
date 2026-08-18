@@ -33,12 +33,20 @@ import { maxSlots } from "../backend/settings";
 import { ensureWorktree } from "../backend/team";
 import { gridTemplateStyle, PaneDividers } from "../components/PaneDividers";
 import { SidePanel } from "../components/SidePanel";
-import { disposeSessionTerminal, respawnSessionShell, sessionTermSize, syncSessionTerminal, TerminalPane } from "../components/TerminalPane";
+import {
+  disposeSessionTerminal,
+  isRespawning,
+  launchAgentInSession,
+  respawnSessionShell,
+  sessionTermSize,
+  syncSessionTerminal,
+  TerminalPane,
+} from "../components/TerminalPane";
 import { t } from "../i18n";
 import { SessionDetailPanel } from "./SessionDetailPanel";
 import { TranscriptPane } from "./TranscriptPane";
 import type { Session, Workspace } from "../types";
-import { sessionDisplayName } from "../types";
+import { effectivePermissions, sessionDisplayName } from "../types";
 
 // 세션 상태별 목 터미널 출력 — 2×2 그리드 시각 검증용 (Tauri 밖 폴백 전용)
 function mockLines(s: Session, personaName: string): string[] {
@@ -361,6 +369,11 @@ export function ControlCenter(props: { workspace: Workspace }) {
     ],
     [
       {
+        label: t("에이전트 기동"),
+        disabled: !needsAgent(s),
+        action: () => void launchAgent(s),
+      },
+      {
         label: t("재개"),
         disabled: !s.resumable || (s.status !== "dead" && !s.restored),
         action: () => void resumeInline(s),
@@ -393,6 +406,82 @@ export function ControlCenter(props: { workspace: Workspace }) {
     if (!s.personaId) doRemove(s);
     else setRemoveTarget(s);
   };
+
+  /** 관리되는 에이전트의 기동 인자 — 역할 세션에만 있다 (기본 터미널은 셸로 남는다) */
+  const roleAgent = (s: Session) => {
+    if (!s.personaId) return undefined;
+    const p = effectivePermissions(s, job(s.jobId));
+    if (!p) return undefined;
+    return { name: persona(s.personaId)?.name ?? s.personaId, permissions: p };
+  };
+  /** 아직 EQMUX가 관리하는 에이전트가 아니다 — 맨 셸이 떠 있는 역할 세션.
+   *  손으로 `claude`를 쳐도 환경변수·훅·역할이 안 붙으므로, 기동은 이 액션으로만 한다. */
+  const needsAgent = (s: Session) => !!roleAgent(s) && !s.agentSessionId && s.status !== "dead";
+  const launchAgent = async (s: Session) => {
+    const a = roleAgent(s);
+    if (!a) return;
+    try {
+      await launchAgentInSession(s.id, s.workspaceId, s.cwd, a.name, a.permissions);
+    } catch {
+      /* 실패는 페인 출력과 이벤트 피드가 보여준다 (FR-D-08) */
+    }
+  };
+
+  // 종료된 슬롯의 "+ 세션 추가" — 슬롯을 비운 뒤 추가 다이얼로그로 잇는다.
+  // 역할 세션은 기존 확인 모달을 그대로 거친다 (역할 파일 삭제가 딸려 있어 확인이 필요하다).
+  const replaceDeadSlot = (s: Session) => {
+    removeTerminal(s);
+    if (!s.personaId) openAdd();
+  };
+
+  /** 종료된 슬롯 화면 — 죽은 터미널 대신 다음 행동을 내놓는다.
+   *  세션 기록은 지우지 않는다 — 재개(FR-D-21~23)와 트랜스크립트가 살아 있어야 하기 때문이다.
+   *  터미널 버퍼도 REGISTRY에 남아 있어, 재개하면 끊긴 자리에서 이어서 그려진다. */
+  const deadSlot = (s: Session) => (
+    <div class="pane-dead-slot mono">
+      <div class="pane-dead-why">
+        {t("프로세스 종료")} · exit {s.exitCode ?? "?"}
+      </div>
+      <div class="pane-dead-acts">
+        <button
+          class="btn"
+          title={t("이 슬롯을 비우고 새 세션을 추가합니다")}
+          onClick={(e) => {
+            e.stopPropagation();
+            replaceDeadSlot(s);
+          }}
+        >
+          + {t("세션 추가")}
+        </button>
+        <Show
+          when={s.resumable}
+          fallback={<span class="pane-dead-note">{t("재개 불가")} — {t("트랜스크립트 없음")}</span>}
+        >
+          <button
+            class="btn pane-dead-resume"
+            title={t("이 자리에서 재개 — --resume · 대화 복원 (FR-D-21)")}
+            onClick={(e) => {
+              e.stopPropagation();
+              void resumeInline(s);
+            }}
+          >
+            ▶ {t("재개 — 대화 복원")}
+          </button>
+        </Show>
+      </div>
+      {/* 터미널을 감췄으므로 남긴 출력으로 가는 길을 연다 — 종료된 세션의 마지막 출력 확인용 */}
+      <button
+        class="pane-dead-log"
+        onClick={(e) => {
+          e.stopPropagation();
+          setSelectedSession(s.id);
+          setCenterTab("transcript");
+        }}
+      >
+        {t("남긴 출력 보기")}
+      </button>
+    </div>
+  );
 
   const gridSessions = () => {
     const z = zoomed();
@@ -440,50 +529,54 @@ export function ControlCenter(props: { workspace: Workspace }) {
                 <StatusLabel session={s} />
               </span>
             </button>
-            <TerminalPane
-              sessionId={s.id}
-              cwd={s.cwd}
-              wsId={props.workspace.id}
-              shell={shellCmdFor(s)}
-              // 셸 우선 모델 — 역할 세션도 agent 프로퍼티 없이 셸로 시작한다. 에이전트는
-              // 사용자가 터미널에서 직접 띄우고, 관제가 Job 트리 감지로 표시한다.
-              // 재개(FR-C-33)는 제안 게이트 대신 세션 상세·페인 메뉴의 명시 액션으로 남는다.
-              revive={s.revived}
-              mockLines={mockLines(s, persona(s.personaId)?.name ?? "?")}
-              extraMenu={() => [
-                // 보기 — 배치·줌·전체 화면 (페인 헤더에서 버튼을 내려놓는 자리, 시안 §06)
-                [
-                  {
-                    label: t("배치"),
-                    sub: PANE_LAYOUTS.map((l) => ({
-                      label: t(l.name),
-                      checked: paneLayout() === l.key,
-                      action: () => setPaneLayout(l.key),
-                    })),
-                  },
-                  { label: t(zoomed() === s.id ? "줌 해제" : "줌"), action: () => applyZoom(zoomed() === s.id ? undefined : s.id) },
-                  { label: t("전체 화면"), kbd: t("ESC 종료"), action: () => setTerminalFull(true) },
-                ],
-                // 이동 — 상세 팝업·트랜스크립트 (레일 메뉴와 공유)
-                [detailItem(s), transcriptItem(s)],
-                // 브랜치 부여 (기본 터미널 전용) — 그 브랜치의 워크트리로 이동, 없으면 만들어 연결
-                ...branchAssignGroup(s),
-                // 위험 — 컴포넌트가 마지막 그룹으로 강제한다
-                removeGroup(s),
-              ]}
-            />
-            {/* dead 페인 인라인 재개 (U8) — 상세 모달 2단계를 거치지 않는다 */}
-            <Show when={s.status === "dead" && s.resumable}>
-              <button
-                class="btn pane-resume mono"
-                title={t("이 자리에서 재개 — --resume · 대화 복원 (FR-D-21)")}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  void resumeInline(s);
-                }}
-              >
-                ▶ {t("재개 — 대화 복원")}
-              </button>
+            {/* 종료된 슬롯은 터미널 대신 다음 행동을 보여준다 — 재개 경로는 그 안에 있다 */}
+            <Show when={s.status !== "dead" || isRespawning(s.id)} fallback={deadSlot(s)}>
+              <TerminalPane
+                sessionId={s.id}
+                cwd={s.cwd}
+                wsId={props.workspace.id}
+                shell={shellCmdFor(s)}
+                // 셸 우선 모델 — 역할 세션도 agent 프로퍼티 없이 셸로 시작한다. 에이전트는
+                // 사용자가 터미널에서 직접 띄우고, 관제가 Job 트리 감지로 표시한다.
+                // 재개(FR-C-33)는 제안 게이트 대신 세션 상세·페인 메뉴의 명시 액션으로 남는다.
+                revive={s.revived}
+                mockLines={mockLines(s, persona(s.personaId)?.name ?? "?")}
+                extraMenu={() => [
+                  // 보기 — 배치·줌·전체 화면 (페인 헤더에서 버튼을 내려놓는 자리, 시안 §06)
+                  [
+                    {
+                      label: t("배치"),
+                      sub: PANE_LAYOUTS.map((l) => ({
+                        label: t(l.name),
+                        checked: paneLayout() === l.key,
+                        action: () => setPaneLayout(l.key),
+                      })),
+                    },
+                    { label: t(zoomed() === s.id ? "줌 해제" : "줌"), action: () => applyZoom(zoomed() === s.id ? undefined : s.id) },
+                    { label: t("전체 화면"), kbd: t("ESC 종료"), action: () => setTerminalFull(true) },
+                  ],
+                  // 이동 — 상세 팝업·트랜스크립트 (레일 메뉴와 공유)
+                  [detailItem(s), transcriptItem(s)],
+                  // 브랜치 부여 (기본 터미널 전용) — 그 브랜치의 워크트리로 이동, 없으면 만들어 연결
+                  ...branchAssignGroup(s),
+                  // 위험 — 컴포넌트가 마지막 그룹으로 강제한다
+                  removeGroup(s),
+                ]}
+              />
+              {/* 에이전트 기동 (FR-D-01 · 명시 액션) — 셸 우선 모델이라 역할 세션도 맨 셸로 뜬다.
+                  손으로 claude를 치면 EQMUX 환경변수·훅·역할이 안 붙으므로 이 버튼으로 띄운다 */}
+              <Show when={needsAgent(s)}>
+                <button
+                  class="btn pane-launch mono"
+                  title={t("이 셸을 끝내고 역할·권한·훅이 붙은 에이전트로 다시 엽니다")}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void launchAgent(s);
+                  }}
+                >
+                  ▶ {t("에이전트 기동")}
+                </button>
+              </Show>
             </Show>
           </div>
         )}

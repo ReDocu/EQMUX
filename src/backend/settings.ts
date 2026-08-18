@@ -14,6 +14,9 @@ export interface AppSettings {
   muted: string[];
   /** 테마 (M29) — 토큰 교체. 터미널 페인은 어느 테마에서든 다크 (TUI·ANSI 가독성) */
   theme: "dark" | "light" | "system";
+  /** 색 팔레트 — 다크 표면과 터미널 ANSI의 명도·색온도. 강조색은 팔레트 간 공유라 정체성은 유지된다.
+   *  라이트 테마에서는 앱 토큰을 라이트가 덮으므로 터미널 페인에만 적용된다 (터미널은 항상 다크) */
+  palette: "soft" | "contrast" | "neutral" | "warm";
   /** 세션 메모리 배너 임계값 MB (FR-G-67, M30) — 0 = 꺼짐(기본). 소프트 경고만, 강제 개입 없음 */
   memBannerMb: number;
   /** SGR 색 저장 (FR-C-15, M32) — 스크롤백에 색 시퀀스 보존. 끄면 평문만 (용량 절감) */
@@ -23,6 +26,9 @@ export interface AppSettings {
   /** UI 언어 — 한국어(기본)·영어. 코드의 한국어 원문이 키이고 영어는 사전 치환(i18n.ts) */
   language: "ko" | "en";
 }
+
+/** 팔레트 옵션 — 설정 화면·검증이 공유한다. styles.css의 [data-palette] 블록과 1:1 */
+export const PALETTES = ["soft", "contrast", "neutral", "warm"] as const;
 
 /** 슬롯 수 옵션 — 설정 화면·검증이 공유한다 */
 export const SLOT_OPTIONS = [4, 6, 8] as const;
@@ -36,6 +42,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   scrollbackReplay: 500,
   muted: [],
   theme: "dark", // terminal-first 기본
+  palette: "soft", // 순검정 대신 띄운 배경 — 번짐을 줄인다
   memBannerMb: 0, // FR-G-67 — 기본 꺼짐
   sgrStore: true, // FR-C-15 — 기본 켜짐, 끄면 용량 절감
   maxSlots: 4, // 세션 슬롯 상한 — 기본 4, 옵션으로 6·8
@@ -60,6 +67,9 @@ function sanitize(raw: unknown): AppSettings {
       : 500,
     muted: Array.isArray(v.muted) ? v.muted.filter((x): x is string => typeof x === "string") : [],
     theme: v.theme === "light" || v.theme === "system" ? v.theme : "dark",
+    palette: (PALETTES as readonly string[]).includes(v.palette as string)
+      ? (v.palette as AppSettings["palette"])
+      : "soft",
     memBannerMb: [0, 2048, 4096, 8192].includes(v.memBannerMb as number) ? (v.memBannerMb as number) : 0,
     sgrStore: v.sgrStore !== false,
     maxSlots: (SLOT_OPTIONS as readonly number[]).includes(v.maxSlots as number) ? (v.maxSlots as number) : 4,
@@ -78,6 +88,10 @@ function applyTheme(): void {
         : "dark"
       : t;
   document.documentElement.dataset.theme = resolved;
+  document.documentElement.dataset.palette = settings().palette;
+  // 터미널은 CSS가 아니라 xterm theme 객체로 색을 받는다 — 토큰이 바뀐 사실을 알려야 다시 읽는다.
+  // 이벤트로 알리는 이유: 살아 있는 터미널은 컴포넌트 밖 레지스트리에 있어 반응성으로 닿지 않는다.
+  window.dispatchEvent(new CustomEvent("eq-tokens-changed"));
 }
 
 // OS 테마 변경 추적 — system 모드일 때만 반응한다

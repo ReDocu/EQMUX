@@ -5,8 +5,10 @@
 // 링버퍼 꼭대기(FR-C-13)에서는 디스크 기록 칩이 떠서 스토어 스크롤백을 조각 로드한다 (FR-C-14).
 import { createEffect, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { Terminal } from "@xterm/xterm";
+import type { ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
+import { UnicodeGraphemesAddon } from "@xterm/addon-unicode-graphemes";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -36,30 +38,36 @@ import { ContextMenu } from "./ui";
 import type { MenuGroup } from "./ui";
 import type { Permissions } from "../types";
 
-const EQ_THEME = {
-  background: "#080b10",
-  foreground: "#aab7c8",
-  cursor: "#6e9eff",
-  cursorAccent: "#080b10",
-  selectionBackground: "#233a61",
-  black: "#0b0f14",
-  blue: "#6e9eff",
-  cyan: "#55d1cf",
-  green: "#6bd38e",
-  magenta: "#b68af2",
-  red: "#ef6b73",
-  yellow: "#ddb34c",
-  white: "#e8eef8",
-  brightBlack: "#5c6f85",
-  brightBlue: "#8fb5ff",
-  brightCyan: "#7ce4e2",
-  brightGreen: "#8fe2ab",
-  brightMagenta: "#cfaef7",
-  brightRed: "#ff8d94",
-  brightWhite: "#f2f7ff",
-  brightYellow: "#eec96f",
-};
-
+/** 터미널 색 — styles.css의 --eq-term-* 토큰이 원본이다 (설정 · 색 팔레트가 이 토큰을 고른다).
+ *  여기에 hex를 두면 팔레트와 어긋나므로 두지 않는다. 터미널은 어느 테마에서도 다크로 남는다. */
+function readTermTheme(): ITheme {
+  const cs = getComputedStyle(document.documentElement);
+  const v = (name: string) => cs.getPropertyValue(name).trim();
+  const bg = v("--eq-term-bg");
+  return {
+    background: bg,
+    foreground: v("--eq-term-fg"),
+    cursor: v("--eq-term-blue"),
+    cursorAccent: bg,
+    selectionBackground: v("--eq-term-sel"),
+    black: v("--eq-term-black"),
+    red: v("--eq-term-red"),
+    green: v("--eq-term-green"),
+    yellow: v("--eq-term-yellow"),
+    blue: v("--eq-term-blue"),
+    magenta: v("--eq-term-magenta"),
+    cyan: v("--eq-term-cyan"),
+    white: v("--eq-term-white"),
+    brightBlack: v("--eq-term-bright-black"),
+    brightRed: v("--eq-term-bright-red"),
+    brightGreen: v("--eq-term-bright-green"),
+    brightYellow: v("--eq-term-bright-yellow"),
+    brightBlue: v("--eq-term-bright-blue"),
+    brightMagenta: v("--eq-term-bright-magenta"),
+    brightCyan: v("--eq-term-bright-cyan"),
+    brightWhite: v("--eq-term-bright-white"),
+  };
+}
 interface TermEntry {
   term: Terminal;
   fit: FitAddon;
@@ -77,6 +85,21 @@ interface TermEntry {
 }
 
 const REGISTRY = new Map<string, TermEntry>();
+
+// 색 팔레트 교체 (설정 · 화면) — 살아 있는 터미널은 컴포넌트 밖 REGISTRY에 있어 반응성이 닿지 않는다.
+// settings.applyTheme가 토큰을 세운 뒤 이 이벤트를 쏘면 전 터미널이 새 ANSI 팔레트를 다시 읽는다.
+if (typeof window !== "undefined") {
+  window.addEventListener("eq-tokens-changed", () => {
+    const theme = readTermTheme();
+    for (const e of REGISTRY.values()) e.term.options.theme = theme;
+  });
+}
+
+/** 재스폰 중인 세션 (브랜치 부여 · 에이전트 기동) — kill과 spawn 사이의 짧은 dead 구간을
+ *  화면이 진짜 종료로 오해하지 않게 한다. 재스폰이 끝나거나 실패하면 반드시 비운다. */
+const [respawning, setRespawning] = createSignal<string[]>([]);
+export const isRespawning = (id: string) => respawning().includes(id);
+const doneRespawning = (id: string) => setRespawning((v) => v.filter((x) => x !== id));
 
 // pendingRestore는 REGISTRY(비반응형)에 살므로, 변경을 화면에 알리는 전용 틱을 둔다
 const [restoreTick, setRestoreTick] = createSignal(0);
@@ -101,32 +124,73 @@ export function sessionTermSize(id: string): { cols: number; rows: number } {
   return e ? { cols: e.term.cols, rows: e.term.rows } : { cols: 120, rows: 30 };
 }
 
+/** 살아 있는 PTY를 끝내고 종료 수신까지 기다린다 — 같은 세션 id로 다시 스폰하기 위한 전제.
+ *  Rust의 spawn_pty_session은 같은 id가 이미 살아 있으면 재부착만 하고 새로 띄우지 않으므로,
+ *  먼저 끝내지 않으면 재스폰이 조용한 no-op이 된다. pty-exit(→ dead 전이)가 새 스폰 뒤에
+ *  늦게 도착해 산 세션을 dead로 덮지 않게, 종료를 받은 뒤 다음 단계로 넘어간다. */
+async function killAndWait(id: string): Promise<void> {
+  if (backend.listSessions().find((x) => x.id === id)?.status === "dead") return;
+  // 아래 kill과 뒤따르는 spawn 사이에는 status가 잠깐 dead다 — 그 창에서 페인이
+  // "종료된 슬롯" 화면으로 튀지 않도록 재스폰 중임을 표시해 둔다 (isRespawning)
+  setRespawning((v) => (v.includes(id) ? v : [...v, id]));
+  await new Promise<void>((resolve) => {
+    let done = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      unsub();
+      clearTimeout(timer);
+      resolve();
+    };
+    const unsub = onPtyExit(id, finish);
+    timer = setTimeout(finish, 2000); // exit 유실 폴백 — Rust는 세대 추적으로 같은 id 재기동을 허용한다
+    killPty(id);
+  });
+}
+
 /** 브랜치 부여 (워크트리 이동) — 기존 셸 PTY를 끝내고 같은 세션 id로 새 cwd에서 다시 연다.
- *  출력·종료 구독은 세션 id 키라 재스폰 후에도 그대로 이어진다. pty-exit(→ dead 전이)가
- *  새 스폰 뒤에 늦게 도착해 산 세션을 dead로 덮지 않게, 종료 수신을 기다린 뒤 스폰한다. */
+ *  출력·종료 구독은 세션 id 키라 재스폰 후에도 그대로 이어진다. */
 export async function respawnSessionShell(id: string, cwd: string, wsId?: string, shell?: string): Promise<void> {
   if (!isTauri()) return;
   const e = REGISTRY.get(id); // 페인 미마운트 세션도 이동은 된다 — 크기만 기본값 폴백
-  const alive = backend.listSessions().find((x) => x.id === id)?.status !== "dead";
-  if (alive) {
-    await new Promise<void>((resolve) => {
-      let done = false;
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const finish = () => {
-        if (done) return;
-        done = true;
-        unsub();
-        clearTimeout(timer);
-        resolve();
-      };
-      const unsub = onPtyExit(id, finish);
-      timer = setTimeout(finish, 2000); // exit 유실 폴백 — Rust는 세대 추적으로 같은 id 재기동을 허용한다
-      killPty(id);
-    });
-  }
+  await killAndWait(id);
   e?.term.writeln(`\x1b[90m─── 브랜치 부여 → ${cwd} ───\x1b[0m`);
   const size = sessionTermSize(id); // 재개/재시작과 같은 크기 규약 — 미마운트면 기본값 폴백
-  await spawnPty(id, cwd, size.cols, size.rows, wsId, shell);
+  try {
+    await spawnPty(id, cwd, size.cols, size.rows, wsId, shell);
+  } finally {
+    doneRespawning(id);
+  }
+  if (e) {
+    e.lastCols = e.term.cols;
+    e.lastRows = e.term.rows;
+    e.term.focus();
+  }
+}
+
+/** 에이전트 기동 (FR-D-01·04·05) — 명시 액션 전용이라 "자동 실행 없음"(FR-C-33)은 그대로다.
+ *
+ *  셸 우선 모델이라 페인에는 맨 셸이 떠 있다. 그 셸에 사용자가 손으로 `claude`를 치면 EQMUX가
+ *  붙이는 것이 하나도 실리지 않는다 — 환경변수(EQMUX_SESSION·ROLE_FILE·TOKEN), 훅 설정
+ *  (--settings), 역할 포인터(--append-system-prompt), 세션 UUID(--session-id). 그래서 역할 주입도
+ *  메시지 버스(eqmux send/report)도 재개도 전부 죽는다. 관리되는 에이전트는 이 경로로만 뜬다. */
+export async function launchAgentInSession(
+  id: string,
+  wsId: string,
+  cwd: string,
+  name: string,
+  permissions: Permissions,
+): Promise<void> {
+  if (!isTauri()) return;
+  const e = REGISTRY.get(id);
+  await killAndWait(id); // 셸이 살아 있으면 Rust가 재부착만 한다 — 반드시 먼저 끝낸다
+  const size = sessionTermSize(id);
+  try {
+    await spawnAgent(id, wsId, cwd, name, permissions, size.cols, size.rows);
+  } finally {
+    doneRespawning(id);
+  }
   if (e) {
     e.lastCols = e.term.cols;
     e.lastRows = e.term.rows;
@@ -224,8 +288,13 @@ function createEntry(): TermEntry {
     lineHeight: 1.25,
     cursorBlink: true,
     scrollback: 5000, // FR-C-10 — 인메모리 링버퍼, 초과분은 스토어가 갖고 있다
-    theme: EQ_THEME,
+    theme: readTermTheme(),
   });
+  // 문자 폭 (유니코드 15 + 자소 군집) — 반드시 첫 write 전에. 폭은 파싱 시점에 버퍼에 박힌다.
+  // xterm 기본은 유니코드 6 테이블이라 ✅(U+2705)·⚙️(VS16) 같은 이모지를 1칸으로 센다.
+  // 에이전트 CLI는 string-width(유니코드 9+)를 써서 2칸으로 패딩하므로, 그 차이만큼
+  // 셀이 밀리고 Ink의 차등 재그리기가 어긋난 자리에 덮어써 글자가 중복된다 (표가 깨져 보인다).
+  term.loadAddon(new UnicodeGraphemesAddon()); // activeVersion = "15-graphemes"로 스스로 전환한다
   const fit = new FitAddon();
   term.loadAddon(fit);
   const search = new SearchAddon();

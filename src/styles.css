@@ -2,6 +2,69 @@
    규칙: 표면 3단계(bg→surface→surface-2)로 위계를 만들고, 테두리는 상호작용·주의 상태에만.
    surface-2는 "raised"다 — 버튼·칩·호버가 카드보다 밝게 떠오른다 (시안 §02) */
 :root {
+  --eq-bg: #10141c;
+  --eq-surface: #171d28;
+  --eq-surface-2: #212936;
+  --eq-line: #2c3648;
+  --eq-text: #d5dce8;
+  --eq-muted: #97a3b8;
+  --eq-dim: #74829a;
+  --eq-r: 9px;
+  --eq-r-sm: 6px;
+  --eq-blue: #6e9eff;
+  --eq-blue-soft: #1d2b47;
+  --eq-blue-mid: #294069;
+  --eq-purple: #b68af2;
+  --eq-purple-soft: #2e233e;
+  --eq-green: #6bd38e;
+  --eq-green-soft: #162b23;
+  --eq-cyan: #55d1cf;
+  --eq-cyan-soft: #152e2f;
+  --eq-amber: #ddb34c;
+  --eq-amber-soft: #31281a;
+  --eq-red: #ef6b73;
+  --eq-red-soft: #301b21;
+  --eq-pink: #ee8bd0;
+  --eq-pink-soft: #342031;
+  --eq-slate: #9aa8bd;
+  --eq-slate-soft: #202839;
+  --eq-orange: #eb9a5f;
+  --eq-orange-soft: #312218;
+  --eq-terminal: #0d1117;
+  --eq-gutter: #12171f;
+  --eq-code: #aab7c8;
+  /* 터미널 ANSI (팔레트만 따른다 — 터미널 페인은 어느 테마에서도 다크로 남는다).
+     TerminalPane이 getComputedStyle로 읽어 xterm theme으로 넘긴다 — 고정 hex 중복을 없앤다 */
+  --eq-term-bg: #0d1117;
+  --eq-term-fg: #b3bfd0;
+  --eq-term-sel: #294069;
+  --eq-term-black: #11161d;
+  --eq-term-red: #ef6b73;
+  --eq-term-green: #6bd38e;
+  --eq-term-yellow: #ddb34c;
+  --eq-term-blue: #6e9eff;
+  --eq-term-magenta: #b68af2;
+  --eq-term-cyan: #55d1cf;
+  --eq-term-white: #dbe3ef;
+  --eq-term-bright-black: #6f8098;
+  --eq-term-bright-red: #ff8d94;
+  --eq-term-bright-green: #8fe2ab;
+  --eq-term-bright-yellow: #eec96f;
+  --eq-term-bright-blue: #8fb5ff;
+  --eq-term-bright-magenta: #cfaef7;
+  --eq-term-bright-cyan: #7ce4e2;
+  --eq-term-bright-white: #eaf0fa;
+  --eq-font: "Inter", system-ui, sans-serif;
+  --eq-mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+
+
+/* ── 색 팔레트 (설정 · 화면) ── <html data-palette="…">가 다크 표면과 터미널 ANSI를 고른다.
+   기본(:root)은 "부드러움" — 순검정을 피해 번짐(halation)을 줄이고 최고 흰색을 낮춘 값이다.
+   강조색(파랑·보라·초록·청록·호박·빨강·분홍·슬레이트·주황)은 네 팔레트가 공유한다 — 배경만
+   바뀌므로 제품 정체성이 유지된다. 라이트 블록은 반드시 이 아래에 온다 (같은 특정도, 순서 승부) */
+/* 고대비 (기존) */
+:root[data-palette="contrast"] {
   --eq-bg: #0a0e16;
   --eq-surface: #0f1522;
   --eq-surface-2: #141c2c;
@@ -9,32 +72,91 @@
   --eq-text: #e6ecf7;
   --eq-muted: #8b98ae;
   --eq-dim: #5c6a82;
-  --eq-r: 9px;
-  --eq-r-sm: 6px;
-  --eq-blue: #6e9eff;
-  --eq-blue-soft: #17253f;
-  --eq-blue-mid: #233a61;
-  --eq-purple: #b68af2;
-  --eq-purple-soft: #281d36;
-  --eq-green: #6bd38e;
-  --eq-green-soft: #10251b;
-  --eq-cyan: #55d1cf;
-  --eq-cyan-soft: #0f2827;
-  --eq-amber: #ddb34c;
-  --eq-amber-soft: #2b2212;
-  --eq-red: #ef6b73;
-  --eq-red-soft: #2a1519;
-  --eq-pink: #ee8bd0;
-  --eq-pink-soft: #2e1a29;
-  --eq-slate: #9aa8bd;
-  --eq-slate-soft: #1a2231;
-  --eq-orange: #eb9a5f;
-  --eq-orange-soft: #2b1c10;
+  --eq-code: #aab7c8;
   --eq-terminal: #080b10;
   --eq-gutter: #0d1219;
-  --eq-code: #aab7c8;
-  --eq-font: "Inter", system-ui, sans-serif;
-  --eq-mono: "IBM Plex Mono", ui-monospace, monospace;
+  --eq-blue-mid: #233a61;
+  --eq-blue-soft: #17253f;
+  --eq-purple-soft: #281d36;
+  --eq-green-soft: #10251b;
+  --eq-cyan-soft: #0f2827;
+  --eq-amber-soft: #2b2212;
+  --eq-red-soft: #2a1519;
+  --eq-pink-soft: #2e1a29;
+  --eq-slate-soft: #1a2231;
+  --eq-orange-soft: #2b1c10;
+  /* 터미널 ANSI — 팔레트만 따르고 라이트 테마는 따르지 않는다 (터미널은 항상 다크) */
+  --eq-term-bg: #080b10;
+  --eq-term-fg: #aab7c8;
+  --eq-term-sel: #233a61;
+  --eq-term-black: #0b0f14;
+  --eq-term-white: #e8eef8;
+  --eq-term-bright-black: #5c6f85;
+  --eq-term-bright-white: #f2f7ff;
+}
+
+/* 중성 — 남색 캐스트 제거, 청색광 최소 */
+:root[data-palette="neutral"] {
+  --eq-bg: #15171b;
+  --eq-surface: #1c1f25;
+  --eq-surface-2: #252932;
+  --eq-line: #30353f;
+  --eq-text: #d6d9de;
+  --eq-muted: #9aa1ab;
+  --eq-dim: #7c848f;
+  --eq-code: #b0b6be;
+  --eq-terminal: #101215;
+  --eq-gutter: #16191d;
+  --eq-blue-mid: #2b3c56;
+  --eq-blue-soft: #1d2a3c;
+  --eq-purple-soft: #2b2436;
+  --eq-green-soft: #1a2a20;
+  --eq-cyan-soft: #182b2c;
+  --eq-amber-soft: #302719;
+  --eq-red-soft: #2f1e21;
+  --eq-pink-soft: #331f2c;
+  --eq-slate-soft: #242830;
+  --eq-orange-soft: #302217;
+  /* 터미널 ANSI — 팔레트만 따르고 라이트 테마는 따르지 않는다 (터미널은 항상 다크) */
+  --eq-term-bg: #101215;
+  --eq-term-fg: #b5bac1;
+  --eq-term-sel: #2b3c56;
+  --eq-term-black: #15171b;
+  --eq-term-white: #dcdfe4;
+  --eq-term-bright-black: #767e89;
+  --eq-term-bright-white: #ecEEF2;
+}
+
+/* 따뜻함 — 색온도 최저, 야간용 */
+:root[data-palette="warm"] {
+  --eq-bg: #1a1714;
+  --eq-surface: #221e1a;
+  --eq-surface-2: #2c2722;
+  --eq-line: #3a332c;
+  --eq-text: #e0d9d0;
+  --eq-muted: #a89e92;
+  --eq-dim: #8a8073;
+  --eq-code: #bdb3a6;
+  --eq-terminal: #16130f;
+  --eq-gutter: #1c1815;
+  --eq-blue-mid: #333c52;
+  --eq-blue-soft: #22293a;
+  --eq-purple-soft: #2f2637;
+  --eq-green-soft: #1e2b20;
+  --eq-cyan-soft: #1b2c2b;
+  --eq-amber-soft: #372a17;
+  --eq-red-soft: #361f1f;
+  --eq-pink-soft: #39222d;
+  --eq-slate-soft: #282a2e;
+  --eq-orange-soft: #382315;
+  /* 터미널 ANSI — 팔레트만 따르고 라이트 테마는 따르지 않는다 (터미널은 항상 다크) */
+  --eq-term-bg: #16130f;
+  --eq-term-fg: #c2b8ab;
+  --eq-term-sel: #333c52;
+  --eq-term-black: #1a1714;
+  --eq-term-white: #e6ded4;
+  --eq-term-bright-black: #887d70;
+  --eq-term-bright-white: #f2ece3;
 }
 
 /* 라이트 테마 (M29) — 토큰만 바꾼다. 터미널 페인(--eq-terminal)은 라이트에서도 다크 유지 —

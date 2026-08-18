@@ -17,6 +17,8 @@ pub struct Turn {
     pub role: String, // "user" | "agent" | "tool"
     pub time: String, // HH:MM (로컬)
     pub text: String,
+    /// 도구 줄의 한 줄 요약 — 접힌 상태에서 무엇을 건드렸는지 (경로·명령). 도구 턴에만 있다
+    pub summary: Option<String>,
     pub detail: Option<String>, // 도구 호출의 입력·출력 — UI에서 접힘 (FR-G-83)
 }
 
@@ -46,6 +48,60 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
+/// 경로 요약 — 뒤(파일명)가 중요하므로 넘치면 앞 세그먼트부터 버린다.
+fn short_path(p: &str) -> String {
+    const MAX: usize = 52;
+    if p.chars().count() <= MAX {
+        return p.to_string();
+    }
+    let sep = if p.contains('\\') { '\\' } else { '/' };
+    let mut out = String::new();
+    for seg in p.split(['\\', '/']).filter(|s| !s.is_empty()).rev() {
+        let next = if out.is_empty() { seg.to_string() } else { format!("{seg}{sep}{out}") };
+        if next.chars().count() + 1 > MAX {
+            break;
+        }
+        out = next;
+    }
+    if out.is_empty() {
+        // 마지막 세그먼트 하나도 안 들어간다 — 문자 단위로 뒤만 남긴다
+        out = p.chars().skip(p.chars().count() - MAX).collect();
+    }
+    format!("…{out}")
+}
+
+/// 명령·질의 등 자유 텍스트 요약 — 줄바꿈·연속 공백을 접고 앞부분만 남긴다.
+fn short_text(s: &str) -> String {
+    truncate(&s.split_whitespace().collect::<Vec<_>>().join(" "), 60)
+}
+
+/// 접힌 도구 줄의 한 줄 요약 (FR-G-83) — 펼치지 않고도 무엇을 건드렸는지 알게 한다.
+/// JSONL은 비공개 계약이라(R3) 아는 키가 없으면 조용히 도구 이름만 남는다.
+fn tool_summary(input: &serde_json::Value) -> Option<String> {
+    // (키, 경로인가) — 앞에 있는 것이 이긴다. Grep/Glob은 path보다 pattern이 정보량이 크다
+    const KEYS: [(&str, bool); 10] = [
+        ("file_path", true),
+        ("notebook_path", true),
+        ("command", false),
+        ("pattern", false),
+        ("url", false),
+        ("query", false),
+        ("path", true),
+        ("description", false),
+        ("skill", false),
+        ("prompt", false),
+    ];
+    for (key, is_path) in KEYS {
+        let Some(v) = input.get(key).and_then(|v| v.as_str()) else { continue };
+        let v = v.trim();
+        if v.is_empty() {
+            continue;
+        }
+        return Some(if is_path { short_path(v) } else { short_text(v) });
+    }
+    None
+}
+
 /// content 블록 배열에서 턴을 뽑는다. tool_result는 직전의 결과 없는 도구 턴에 붙인다.
 fn push_blocks(turns: &mut Vec<Turn>, blocks: &[serde_json::Value], role: &str, time: &str) {
     for b in blocks {
@@ -58,6 +114,7 @@ fn push_blocks(turns: &mut Vec<Turn>, blocks: &[serde_json::Value], role: &str, 
                             role: role.into(),
                             time: time.into(),
                             text: truncate(trimmed, 4000),
+                            summary: None,
                             detail: None,
                         });
                     }
@@ -65,14 +122,15 @@ fn push_blocks(turns: &mut Vec<Turn>, blocks: &[serde_json::Value], role: &str, 
             }
             "tool_use" => {
                 let name = b.get("name").and_then(|n| n.as_str()).unwrap_or("도구");
-                let input = b
-                    .get("input")
+                let raw = b.get("input");
+                let input = raw
                     .map(|i| serde_json::to_string_pretty(i).unwrap_or_default())
                     .unwrap_or_default();
                 turns.push(Turn {
                     role: "tool".into(),
                     time: time.into(),
                     text: format!("⚙ {name}"),
+                    summary: raw.and_then(tool_summary),
                     detail: Some(truncate(&format!("입력:\n{input}"), 2000)),
                 });
             }
@@ -100,6 +158,7 @@ fn push_blocks(turns: &mut Vec<Turn>, blocks: &[serde_json::Value], role: &str, 
                         role: "tool".into(),
                         time: time.into(),
                         text: "⚑ 도구 결과".into(),
+                        summary: None,
                         detail: Some(out),
                     });
                 }
@@ -124,7 +183,13 @@ fn parse_line(turns: &mut Vec<Turn>, line: &str) -> Result<(), ()> {
         Some(serde_json::Value::String(s)) => {
             let trimmed = s.trim();
             if !trimmed.is_empty() {
-                turns.push(Turn { role: role.into(), time, text: truncate(trimmed, 4000), detail: None });
+                turns.push(Turn {
+                    role: role.into(),
+                    time,
+                    text: truncate(trimmed, 4000),
+                    summary: None,
+                    detail: None,
+                });
             }
             Ok(())
         }
@@ -203,10 +268,36 @@ mod tests {
         assert_eq!(roles, vec!["user", "agent", "tool", "agent"]);
         let tool = &data.turns[2];
         assert!(tool.text.contains("Read"));
+        assert_eq!(tool.summary.as_deref(), Some("src/auth.ts")); // 접힌 줄의 경로 요약 (FR-G-83)
         let d = tool.detail.as_deref().unwrap();
         assert!(d.contains("입력:") && d.contains("출력:") && d.contains("auth()")); // 짝짓기
         assert!(!data.windowed);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 요약은 접힌 한 줄에 들어가야 한다 — 경로는 뒤를, 명령은 앞을 남긴다.
+    #[test]
+    fn tool_summary_picks_the_informative_key() {
+        let sum = |input: serde_json::Value| super::tool_summary(&input);
+        assert_eq!(sum(serde_json::json!({"file_path": "src/a.ts"})), Some("src/a.ts".into()));
+        // Bash — 여러 줄 명령은 한 줄로 접힌다
+        assert_eq!(
+            sum(serde_json::json!({"command": "npm run build\n  && npm test", "description": "빌드"})),
+            Some("npm run build && npm test".into())
+        );
+        // Grep — path보다 pattern이 이긴다
+        assert_eq!(
+            sum(serde_json::json!({"pattern": "TODO", "path": "src"})),
+            Some("TODO".into())
+        );
+        assert_eq!(sum(serde_json::json!({"todos": []})), None); // 아는 키 없음 → 이름만
+        assert_eq!(sum(serde_json::json!({"file_path": "   "})), None); // 빈 값은 무시
+
+        // 긴 경로는 앞을 버리고 파일명을 남긴다
+        let long = "C:\\Users\\LEE\\Desktop\\EQMux_workspace\\EQMUX\\src\\screens\\TranscriptPane.tsx";
+        let short = super::short_path(long);
+        assert!(short.starts_with('…') && short.ends_with("TranscriptPane.tsx"));
+        assert!(short.chars().count() <= 53);
     }
 
     #[test]

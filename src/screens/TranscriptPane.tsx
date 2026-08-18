@@ -5,7 +5,7 @@
 import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
 import { backend } from "../backend/mock";
 import { cleanScrollback, exportSessionScrollback } from "../backend/panels";
-import { isTauri, scrollbackTail, writePty } from "../backend/pty";
+import { clipWriteText, isTauri, scrollbackTail, writePty } from "../backend/pty";
 import { t as tr, tf } from "../i18n";
 import { readTranscript } from "../backend/transcript";
 import type { TranscriptData } from "../backend/transcript";
@@ -59,7 +59,7 @@ export function TranscriptPane(props: { session: Session }) {
     if (!qq) return true;
     return texts.some((t) => t?.toLowerCase().includes(qq));
   };
-  const shownTurns = createMemo(() => (data()?.turns ?? []).filter((t) => hit(t.text, t.detail)));
+  const shownTurns = createMemo(() => (data()?.turns ?? []).filter((t) => hit(t.text, t.summary, t.detail)));
   const shownFallback = createMemo(() => (fallback() ?? []).filter((l) => hit(l)));
   const shownMock = createMemo(() => (isTauri() ? [] : mockTurns().filter((t) => hit(t.text))));
 
@@ -113,6 +113,23 @@ export function TranscriptPane(props: { session: Session }) {
     return tr("스크롤백 폴백 (FR-G-86)");
   };
 
+  // 출처 (FR-G-80·86) — 도구 턴만 늘어놓으면 이게 어느 폴더의 로그인지 알 수 없다.
+  // JSONL 경로는 cwd로 정해지므로(agent::transcript_path) cwd + 파일명이 곧 출처다.
+  // 셸 우선 추정(guessed)일수록 중요하다 — 같은 cwd의 최신 파일을 고른 것이라 세션과 1:1이 아니다.
+  const baseName = (p: string) => p.split(/[\\/]/).pop() ?? p;
+  const source = () => {
+    if (!isTauri()) return undefined;
+    const ws = props.session.workspaceId;
+    const d = data();
+    if (d) {
+      return { path: d.file, label: `${ws} · ${props.session.cwd} · ${baseName(d.file)}`, guessed: d.guessed };
+    }
+    // 스크롤백 폴백은 워크스페이스 DB에서 읽는다 — 어느 워크스페이스인지가 곧 출처다
+    if (!fallback()?.length) return undefined;
+    const db = `workspaces/${ws}/session.db`;
+    return { path: db, label: db, guessed: false };
+  };
+
   const roleLabel = (role: string) =>
     role === "user" ? tr("▸ 사람") : role === "tool" ? tr("⚙ 도구") : `◂ ${persona()?.name ?? tr("에이전트")}`;
 
@@ -151,6 +168,19 @@ export function TranscriptPane(props: { session: Session }) {
           </button>
         </span>
       </div>
+      {/* 출처 한 줄 — 어느 워크스페이스(cwd)의 어느 파일에서 읽었는가. 클릭하면 전체 경로 복사 */}
+      <Show when={source()}>
+        {(s) => (
+          <button
+            class="mono transcript-source"
+            classList={{ "st-waiting": s().guessed }}
+            title={tf("출처 {path} — 클릭하면 경로를 복사합니다", { path: s().path })}
+            onClick={() => clipWriteText(s().path)}
+          >
+            ⎘ {tr("출처")} {s().label}
+          </button>
+        )}
+      </Show>
       <Show when={saveMsg()}>
         {(m) => (
           <div class="mono transcript-save-msg" classList={{ "st-dead": m().err }}>
@@ -171,21 +201,16 @@ export function TranscriptPane(props: { session: Session }) {
                     when={t.role === "tool"}
                     fallback={<div style={{ "font-size": "12px", "white-space": "pre-wrap" }}>{t.text}</div>}
                   >
-                    {/* 도구 호출 — 접힌 상태 기본, 클릭 시 입력·출력 (FR-G-83) */}
+                    {/* 도구 호출 — 접힌 상태 기본, 클릭 시 입력·출력 (FR-G-83).
+                        요약(경로·명령)을 이름 옆에 붙여 펼치지 않고도 대상이 보이게 한다 */}
                     <button
-                      class="mono"
-                      style={{
-                        background: "none",
-                        border: "none",
-                        color: "inherit",
-                        cursor: "pointer",
-                        padding: 0,
-                        "font-size": "12px",
-                        "text-align": "left",
-                      }}
+                      class="mono turn-tool"
+                      title={t.summary ?? undefined}
                       onClick={() => setOpenTurn(openTurn() === i() ? undefined : i())}
                     >
-                      {t.text} <span class="muted">{openTurn() === i() ? "▾" : "▸"}</span>
+                      {t.text}
+                      <Show when={t.summary}>{(s) => <span class="muted"> · {s()}</span>}</Show>{" "}
+                      <span class="muted">{openTurn() === i() ? "▾" : "▸"}</span>
                     </button>
                     <Show when={openTurn() === i() && t.detail}>
                       <pre

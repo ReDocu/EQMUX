@@ -57,6 +57,15 @@ export const dict: Record<string, string> = {
   "경로 복사": "Copy path",
   "삭제는 두지 않는다 — git worktree remove (FR-E-64)": "No delete here — use git worktree remove (FR-E-64)",
   "빈 슬롯에 세션 추가 — 기본 터미널 또는 역할 세션": "Add a session to an empty slot — default terminal or role session",
+  // ── 에이전트 기동 ──
+  "에이전트 기동": "Start agent",
+  "이 셸을 끝내고 역할·권한·훅이 붙은 에이전트로 다시 엽니다":
+    "Ends this shell and reopens it as an agent wired with its role, permissions, and hooks",
+  // ── 종료된 슬롯 화면 ──
+  "프로세스 종료": "Process ended",
+  "이 슬롯을 비우고 새 세션을 추가합니다": "Frees this slot and adds a new session",
+  "트랜스크립트 없음": "no transcript",
+  "남긴 출력 보기": "View what it left behind",
   "임무 관리": "Manage missions",
   "워크트리 생성 — 새 브랜치(eqmux/<이름>) 또는 기존 브랜치 연결":
     "Create worktree — new branch (eqmux/<name>) or attach an existing branch",
@@ -106,6 +115,8 @@ export const dict: Record<string, string> = {
   "끝 2MB 창": "last-2MB window",
   "건너뜀 {n}줄": "{n} lines skipped",
   "스크롤백 폴백 (FR-G-86)": "Scrollback fallback (FR-G-86)",
+  출처: "Source",
+  "출처 {path} — 클릭하면 경로를 복사합니다": "Source {path} — click to copy the path",
   "▸ 사람": "▸ Human",
   "⚙ 도구": "⚙ Tool",
   에이전트: "Agent",

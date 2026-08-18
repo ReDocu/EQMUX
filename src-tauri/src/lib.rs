@@ -372,6 +372,24 @@ fn pty_spawn(
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|e| e.parent().map(|p| p.to_path_buf()));
+    // 셸에도 세션 신원을 심는다 (FR-D-04 계열) — 셸 우선 모델이라 사용자가 이 셸에서 손으로
+    // `claude`를 띄우는 일이 흔하다. 그 자식 프로세스는 환경을 물려받으므로, 최소한 자기가
+    // 누구인지는 알게 된다: eqmux send/report(PRD I)가 성립하고 훅도 세션을 특정할 수 있다.
+    // 훅 설정(--settings)과 역할 포인터(--append-system-prompt)는 CLI 플래그라 여기서는
+    // 실을 수 없다 — 그건 "에이전트 기동"(agent_spawn) 경로가 담당한다.
+    let token = uuid::Uuid::new_v4().to_string();
+    {
+        let rt: State<agent::AgentRt> = app.state();
+        if let Ok(mut tokens) = rt.session_tokens.lock() {
+            tokens.insert(id.clone(), token.clone());
+        }; // 세미콜론 — if let의 임시값을 rt보다 먼저 떨군다 (agent_spawn과 같은 이유)
+    }
+    let role_file = {
+        let p = roles::role_path(&dir, &id);
+        p.exists().then(|| p.to_string_lossy().into_owned())
+    };
+    let team_md = std::path::Path::new(&dir).join(".eqmux").join("team.md");
+    let team_md = team_md.exists().then(|| team_md.to_string_lossy().into_owned());
     let builders = shell_candidates(shell)
         .into_iter()
         .map(|c| {
@@ -381,6 +399,15 @@ fn pty_spawn(
             if let Some(d) = &exe_dir {
                 let path = std::env::var("PATH").unwrap_or_default();
                 b.env("PATH", format!("{};{}", d.display(), path));
+            }
+            b.env("EQMUX_SESSION", &id);
+            b.env("EQMUX_TOKEN", &token);
+            b.env("EQMUX_TERMINAL", "eqmux");
+            if let Some(rf) = &role_file {
+                b.env("EQMUX_ROLE_FILE", rf);
+            }
+            if let Some(tf) = &team_md {
+                b.env("EQMUX_TEAM_FILE", tf);
             }
             b
         })
@@ -1845,6 +1872,9 @@ fn write_hook_settings(root: &Path) {
     };
     let v = serde_json::json!({
         "hooks": {
+            // 역할 주입 (FR-D-05 · §10.2) — 세션 시작에 역할 파일을 컨텍스트로 싣는다.
+            // --append-system-prompt 포인터는 "읽어라"는 지시일 뿐이라 모델이 건너뛸 수 있다.
+            "SessionStart": hook("SessionStart"),
             "UserPromptSubmit": hook("UserPromptSubmit"),
             "Stop": hook("Stop"),
             "Notification": hook("Notification"),
