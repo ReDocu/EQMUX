@@ -5,12 +5,14 @@
 import { createEffect, createSignal, For, Show } from "solid-js";
 import {
   ensureConversation,
+  exportConversation,
   markConversationRead,
   MSG_MAX_BODY,
   pendingInbox,
   sendConversation,
 } from "../backend/conversation";
 import { backend } from "../backend/mock";
+import { isTauri } from "../backend/pty";
 import { t, tf } from "../i18n";
 import { scopeWorkspace, tick } from "../state";
 import { Eyebrow } from "./ui";
@@ -77,6 +79,36 @@ export function ConversationTab() {
         s.id === mention,
     );
 
+  // 대화 저장 — 이 워크스페이스의 대화 원장 전체를 Markdown 파일로 내보낸다.
+  // 대화상자·파일 쓰기는 Rust(msg_export) 몫이고, 여기선 표시 이름 맵과 결과 표시만 맡는다.
+  // 화면의 최근 200건이 아니라 원장 전부가 나간다 — "본 것만" 저장되면 기록이 아니다.
+  const [saving, setSaving] = createSignal(false);
+  const [note, setNote] = createSignal<{ ws: string; text: string; bad?: boolean } | null>(null);
+  // 결과 문구는 그 팀의 것이다 — 다른 워크스페이스를 보면 자연히 사라진다. 지우는 이펙트를 두면
+  // 스코프 신호가 다시 튈 때마다(저장 대화상자가 닫히며 포커스가 돌아올 때가 그렇다) 함께 날아간다.
+  const shownNote = () => {
+    const n = note();
+    return n && n.ws === ws()?.id ? n : null;
+  };
+
+  const doExport = async () => {
+    const w = ws();
+    if (!w) return;
+    setNote(null);
+    setSaving(true);
+    try {
+      // 원장에는 세션 id만 남는다 — 사람이 읽을 이름은 지금 화면이 아는 것으로 넘긴다
+      const names: Record<string, string> = { 나: t("나") };
+      for (const s of wsSessions()) names[s.id] = nameOf(s);
+      const r = await exportConversation(w.id, w.name, names);
+      if (r) setNote({ ws: w.id, text: tf("{n}건 저장됨 — {path}", { n: r.count, path: r.path }) });
+    } catch (e) {
+      setNote({ ws: w.id, text: `${t("저장 실패 — 로그 패널을 확인하세요")} (${String(e)})`, bad: true });
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const send = async () => {
     const w = ws();
     const body = draft().trim();
@@ -116,8 +148,36 @@ export function ConversationTab() {
           <button class="btn ghost" onClick={() => markConversationRead(ws()?.id)}>
             {t("모두 읽음")}
           </button>
+          <button
+            class="btn ghost"
+            disabled={!ws() || saving() || !isTauri()}
+            title={t(
+              isTauri()
+                ? "이 팀의 대화 전체를 Markdown 파일로 저장"
+                : "파일 저장은 앱에서만 됩니다 — 브라우저 목업에는 원장이 없습니다",
+            )}
+            onClick={() => void doExport()}
+          >
+            ⤓ {t("저장")}
+          </button>
         </div>
       </div>
+      <Show when={shownNote()}>
+        {(n) => (
+          <div
+            class="mono"
+            classList={{ muted: !n().bad }}
+            style={{
+              "font-size": "10px",
+              padding: "0 2px 4px",
+              "word-break": "break-all",
+              color: n().bad ? "var(--red, #e5534b)" : undefined,
+            }}
+          >
+            {n().text}
+          </div>
+        )}
+      </Show>
       <Show when={waitingInbox().length > 0}>
         <div class="card inset" style={{ padding: "6px 10px", "font-size": "11px" }}>
           <span class="muted">{t("인박스 대기 (M3 — 턴 종료 시 전달)")}: </span>

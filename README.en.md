@@ -41,7 +41,7 @@ Auxiliary panes (editor, diff, browser) do not consume session slots.
 - **Agent runtime** — launches Claude Code sessions (`--session-id`, permission flags), state detection via registry watch + hooks, resume and permission restart, degraded-observability indicator
 - **Teams · roles · missions** — casting presets, job/persona library (global + per-workspace override), role-file frontmatter decides execution permissions, opt-in git worktree isolation per session
 - **Session persistence** — SQLite (WAL) scrollback storage, replays the last 500 lines on restart (SGR colors preserved) with a resume suggestion, FTS full-text search, child process tree cleanup via Job Objects, survives webview crashes
-- **Message bus** — typed inter-agent messages (ask / handoff / report / review / escalate), state-aware delivery (immediate when idle, at end of turn when busy), humans join with `@session` and `@all`
+- **Message bus** — typed inter-agent messages (ask / handoff / report / review / escalate), state-aware delivery (immediate when idle, at end of turn when busy), humans join with `@session` and `@all`, save the whole ledger to a Markdown file
 - **Dev tool panels** — git (status · worktrees · checkout), explorer (file CRUD), ports, logs, diff viewer, localhost browser
 - **Transcript view** — read Claude Code JSONL logs turn by turn (reference only), collapsible tool calls, scrollback fallback
 - **External interface** — `eqmux send · report · ping` CLI over a named pipe, statusLine cost collection

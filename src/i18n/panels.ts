@@ -5,6 +5,11 @@ export const dict: Record<string, string> = {
   "팀 대화": "Team chat",
   전체: "All",
   "모두 읽음": "Mark all read",
+  "이 팀의 대화 전체를 Markdown 파일로 저장": "Save this team's whole conversation to a Markdown file",
+  "파일 저장은 앱에서만 됩니다 — 브라우저 목업에는 원장이 없습니다":
+    "Saving to a file works in the app only — the browser mock has no ledger",
+  "{n}건 저장됨 — {path}": "Saved {n} message(s) — {path}",
+  "저장 실패 — 로그 패널을 확인하세요": "Save failed — check the logs panel",
   "인박스 대기 (M3 — 턴 종료 시 전달)": "Inbox pending (M3 — delivered at turn end)",
   "{n}건": "{n} msg(s)",
   "아직 메시지가 없습니다 — 아래에서 타입을 골라 팀에 보내보세요.":

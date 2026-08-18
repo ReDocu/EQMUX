@@ -679,6 +679,47 @@ fn msg_mark_read(store_state: State<StoreState>, workspace: String) -> Result<()
     messages::mark_read(&store_state.0.root(), &workspace)
 }
 
+/// 대화 저장 결과 — 저장 경로와 실제 기록된 메시지 수
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MsgExportResult {
+    path: String,
+    count: u64,
+}
+
+/// 팀 대화 내보내기 — 저장 대화상자(rfd, scrollback_export와 같은 패턴)로 위치를 고른 뒤
+/// 그 워크스페이스의 대화 원장 전체를 Markdown으로 쓴다. 화면에 올라온 최근 200건이 아니라
+/// message 테이블 전부다. names는 프런트만 아는 표시 이름(세션 이름·페르소나) — 원장의
+/// 세션 id를 사람이 읽을 이름으로 갈아끼우는 데 쓴다. 취소하면 Ok(None) — 취소는 에러가 아니다.
+#[tauri::command]
+fn msg_export(
+    store_state: State<StoreState>,
+    workspace: String,
+    ws_name: String,
+    suggested: String,
+    names: HashMap<String, String>,
+) -> Result<Option<MsgExportResult>, String> {
+    let Some(dest) = rfd::FileDialog::new()
+        .set_title("팀 대화 저장")
+        .set_file_name(&suggested)
+        .add_filter("마크다운", &["md"])
+        .save_file()
+    else {
+        return Ok(None);
+    };
+    let file = std::fs::File::create(&dest).map_err(|e| e.to_string())?;
+    let mut w = std::io::BufWriter::new(file);
+    let count = messages::export_markdown(
+        &store_state.0.root(),
+        &workspace,
+        &ws_name,
+        &names,
+        |chunk| w.write_all(chunk.as_bytes()).map_err(|e| e.to_string()),
+    )?;
+    w.flush().map_err(|e| e.to_string())?;
+    Ok(Some(MsgExportResult { path: dest.to_string_lossy().into_owned(), count }))
+}
+
 /// 스크롤백 전문 검색 (FR-C-16) — FTS5 인덱스, 없으면 LIKE 폴백. 읽기 전용.
 #[tauri::command]
 fn scrollback_search(
@@ -2128,6 +2169,7 @@ pub fn run() {
             msg_list,
             msg_send,
             msg_mark_read,
+            msg_export,
             ws_pick_folder,
             ws_watch,
             ws_unwatch,

@@ -88,6 +88,33 @@ export async function sendConversation(
   }
 }
 
+export interface ConversationExport {
+  path: string;
+  count: number;
+}
+
+/** 대화 저장 — 저장 대화상자(Rust rfd)에서 위치를 고르면 그 워크스페이스의 대화 원장 전체를
+ *  Markdown으로 쓴다. 화면에 하이드레이트된 최근 200건이 아니라 message 테이블 전부다.
+ *  names는 세션 id → 표시 이름 — 원장에는 id만 남고 이름을 아는 것은 프런트뿐이라 넘겨준다.
+ *  취소 시 null, 실패는 던진다 (FR-D-08 — 조용히 성공한 척하지 않는다) */
+export async function exportConversation(
+  wsId: string,
+  wsName: string,
+  names: Record<string, string>,
+): Promise<ConversationExport | null> {
+  if (!isTauri()) return null; // 브라우저 목업에는 원장도 저장 대화상자도 없다
+  const d = new Date();
+  const p2 = (n: number) => String(n).padStart(2, "0");
+  const stamp = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}`;
+  const safe = (wsName || "workspace").replace(/[\\/:*?"<>|]/g, "_");
+  return invoke<ConversationExport | null>("msg_export", {
+    workspace: wsId,
+    wsName,
+    suggested: `${safe}-대화-${stamp}.md`,
+    names,
+  });
+}
+
 /** 모두 읽음 — 원장의 read 플래그와 화면 표시를 함께 내린다 */
 export function markConversationRead(wsId: string | undefined): void {
   backend.markAllRead();
