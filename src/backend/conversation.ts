@@ -160,8 +160,38 @@ export function pendingInbox(): { sessionId: string; count: number }[] {
     .map(([sessionId, q]) => ({ sessionId, count: q.length }));
 }
 
+/** 주입 본문 — 한 줄로 눌러서 보낸다. 에이전트 TUI에서 개행은 곧 제출이라, 본문에 줄바꿈이
+ *  있으면 첫 줄만 들어가고 나머지가 다음 프롬프트로 새거나 중간에 턴이 시작된다. */
 function fmt(m: ConversationMessage): string {
-  return `[EQMUX 메시지·${m.type}] ${m.from}: ${m.body}\r`;
+  return `[EQMUX 메시지·${m.type}] ${m.from}: ${m.body.replace(/\s*\r?\n\s*/g, " ")}`;
+}
+
+const SUBMIT_DELAY_MS = 80; // 본문 접수 → 제출 사이. TUI가 붙여넣기를 정리할 시간을 준다
+const TURN_GAP_MS = 400; // 연속 주입 간격 — 앞 메시지의 턴 시작과 겹치지 않게
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** 세션별 주입 큐 — 인박스 flush는 여러 건을 한꺼번에 흘리므로 직렬화가 필요하다.
+ *  본문과 Enter를 한 번에 쓰면 TUI가 붙여넣기로 묶어 개행을 줄바꿈으로 삼키는 경우가 있어,
+ *  본문 → 짧은 지연 → \r 두 단계로 나눈다. 이게 "도착은 했는데 턴이 안 도는" 자리였다. */
+const injectQueue = new Map<string, Promise<void>>();
+
+function injectMessage(sessionId: string, m: ConversationMessage): void {
+  const prev = injectQueue.get(sessionId) ?? Promise.resolve();
+  const next = prev
+    .then(async () => {
+      writePty(sessionId, fmt(m));
+      await sleep(SUBMIT_DELAY_MS);
+      writePty(sessionId, "\r"); // 제출 — 여기서 비로소 수신자의 턴이 돈다
+      await sleep(TURN_GAP_MS);
+    })
+    .catch(() => {
+      /* 세션이 그 사이 사라졌다 — 큐는 다음 메시지를 위해 계속 산다 */
+    });
+  injectQueue.set(sessionId, next);
+  void next.then(() => {
+    if (injectQueue.get(sessionId) === next) injectQueue.delete(sessionId);
+  });
 }
 
 /** 기본 터미널용 표시 전용 라인 (P-2) — PTY 입력에 넣지 않는다. 주석 접두(`#`)를 붙여도
@@ -199,7 +229,7 @@ function deliver(wsId: string, m: ConversationMessage): void {
       setInboxTick((t) => t + 1);
       scheduleInboxSave();
     } else if (s.status === "idle") {
-      writePty(s.id, fmt(m)); // 유휴 = 프롬프트가 비어 있다 → 즉시 (M3)
+      injectMessage(s.id, m); // 유휴 = 프롬프트가 비어 있다 → 즉시 (M3)
     } else {
       const q = inbox.get(s.id) ?? [];
       q.push(m);
@@ -218,7 +248,7 @@ export function flushInboxOnState(sessionId: string, status: string | undefined)
   inbox.delete(sessionId);
   setInboxTick((t) => t + 1);
   scheduleInboxSave(); // 전달 완료 — 캐시의 대기분도 비운다
-  for (const m of q) writePty(sessionId, fmt(m));
+  for (const m of q) injectMessage(sessionId, m); // 큐가 직렬화한다 — 한꺼번에 쏟지 않는다
 }
 
 // ── message-new 수신 — 발신 경로가 하나(msg_send)라서 수신 경로도 하나다 ──

@@ -40,6 +40,11 @@ pub struct Tracked {
     /// 상태 이벤트 순번 (P-4) — 전역 단조 증가. 스냅숏과 실시간 이벤트가 겹치는 창에서
     /// 프런트가 더 오래된 페이로드를 버릴 수 있게 한다
     pub seq: u64,
+    /// pid로 채택된 세션 (A) — 앱이 띄우지 않았으므로 훅도 재개 앵커도 없다.
+    /// 상태는 레지스트리 재스캔에만 의존하고, 프로세스가 사라지면 shell로 되돌린다.
+    pub adopted: bool,
+    /// 채택 시점의 claude 프로세스 pid — 생존 확인의 근거 (adopted일 때만 의미가 있다)
+    pub pid: Option<u32>,
 }
 
 static NEXT_EVT_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -124,6 +129,11 @@ struct RegistryRecord {
     waiting_for: Option<String>,
     #[serde(default)]
     version: Option<String>,
+    /// claude 프로세스 pid — 앱 발급 UUID가 없는 세션을 페인에 잇는 유일한 끈 (A)
+    #[serde(default)]
+    pid: Option<u32>,
+    #[serde(default)]
+    cwd: Option<String>,
 }
 
 fn home() -> PathBuf {
@@ -580,14 +590,28 @@ pub fn start_registry_watch(app: AppHandle) {
     });
 }
 
-/// 레지스트리 스캔 — sessionId 일치(FR-D-12)로만 우리 세션을 판별한다
+/// pid → 페인 (A) — 잡 프로세스 목록에서 그 pid를 담은 세션과 PTY 세대를 찾는다.
+/// 잡은 페인의 자식 트리 전체(pwsh → claude → …)를 담으므로 손자 프로세스도 잡힌다.
+pub fn pane_for_pid(
+    job_pids: &HashMap<String, (Vec<u32>, u64)>,
+    pid: u32,
+) -> Option<(String, u64)> {
+    job_pids
+        .iter()
+        .find(|(_, (pids, _))| pids.contains(&pid))
+        .map(|(id, (_, gen))| (id.clone(), *gen))
+}
+
+/// 레지스트리 스캔 — sessionId 일치(FR-D-12)가 1순위, 없으면 pid로 채택한다 (A)
 fn scan(app: &AppHandle) {
     let rt: tauri::State<AgentRt> = app.state();
+    // 페인별 자식 프로세스 목록 — 채택(A)의 근거. by_uuid 잠금 밖에서 먼저 걷는다.
+    let job_pids = crate::session_job_pids(app);
     let tracked_uuids: Vec<String> = match rt.by_uuid.lock() {
         Ok(m) => m.keys().cloned().collect(),
         Err(_) => return,
     };
-    if tracked_uuids.is_empty() {
+    if tracked_uuids.is_empty() && job_pids.is_empty() {
         return;
     }
     let entries = fs::read_dir(sessions_dir());
@@ -655,6 +679,122 @@ fn scan(app: &AppHandle) {
                 }
             }
         }
+    }
+    // ── 채택 (A · FR-D-12 확장) — 앱이 띄우지 않은 claude를 pid로 페인에 잇는다 ──
+    //
+    // 셸 우선 모델에서는 사용자가 페인 안에서 손으로 `claude`를 띄우거나 재기동하는 일이 흔하고,
+    // 그때 sessionId는 앱 발급 UUID와 다르다. 이름 매칭만 하면 그 세션은 상태 소스가 통째로
+    // 없어져 페인이 영영 `shell`로 남고, 그러면 대화 전달(M3)이 화면 에코 + 인박스 적재에서
+    // 멈춘다 — 도착은 하는데 상대의 턴이 돌지 않는 그 증상이 정확히 이 자리에서 생긴다.
+    let mut adopted: Vec<AgentStateEvt> = Vec::new();
+    if !job_pids.is_empty() {
+        if let Ok(mut map) = rt.by_uuid.lock() {
+            for (uuid, (rec, _)) in found.iter() {
+                if map.contains_key(uuid) {
+                    continue; // 이미 추적 중 (관리 기동이거나 앞선 스캔이 채택했다)
+                }
+                let Some(pid) = rec.pid else { continue };
+                let Some((app_session, gen)) = pane_for_pid(&job_pids, pid) else {
+                    continue; // 우리 페인의 자식이 아니다 — 남의 터미널에서 도는 claude
+                };
+                // 같은 페인의 죽은 추적(직전 프로세스)은 걷어낸다 — 한 페인의 상태가 둘로
+                // 갈리지 않게. 아직 레지스트리에 안 나타난 갓 기동(starting)은 건드리지 않는다.
+                map.retain(|u, t| {
+                    t.app_session != app_session || t.last_status == "starting" || found.contains_key(u)
+                });
+                let (ws, cwd) = crate::session_origin(app, &app_session).unwrap_or_else(|| {
+                    (
+                        app_session.split('@').nth(1).unwrap_or("default").to_string(),
+                        rec.cwd.clone().unwrap_or_default(),
+                    )
+                });
+                let status = rec.status.clone().unwrap_or_else(|| "idle".into());
+                let seq = next_seq();
+                adopted.push(AgentStateEvt {
+                    session: app_session.clone(),
+                    agent_session: uuid.clone(),
+                    status: status.clone(),
+                    waiting_for: rec.waiting_for.clone(),
+                    activity: None,
+                    subagents: 0,
+                    cost_usd: None,
+                    resumable: resumable(&cwd, uuid),
+                    version: rec.version.clone(),
+                    exit_code: None,
+                    degraded: false,
+                    seq,
+                });
+                let name = app_session.split('@').next().unwrap_or(&app_session).to_string();
+                map.insert(
+                    uuid.clone(),
+                    Tracked {
+                        app_session,
+                        ws,
+                        cwd,
+                        name,
+                        last_status: status,
+                        last_waiting: rec.waiting_for.clone(),
+                        pty_gen: gen, // 페인이 죽으면 on_pty_exit이 dead로 닫을 수 있게
+                        seq,
+                        adopted: true,
+                        pid: Some(pid),
+                        ..Default::default()
+                    },
+                );
+            }
+        }
+    }
+    for evt in &adopted {
+        // agent_session 매핑 (FR-D-24) — 관리 기동과 같은 자리에 남긴다. 채택 세션도
+        // 트랜스크립트 조회와 재개 앵커를 갖게 되어, 앱을 다시 켜도 그 대화로 돌아갈 수 있다.
+        if let Some((ws, cwd)) = crate::session_origin(app, &evt.session) {
+            let store: tauri::State<crate::StoreState> = app.state();
+            let _ = store.0.sender().send(crate::store::StoreMsg::AgentSession {
+                ws,
+                id: evt.session.clone(),
+                agent_session_id: evt.agent_session.clone(),
+                log_path: transcript_path(&cwd, &evt.agent_session)
+                    .to_string_lossy()
+                    .into_owned(),
+                resumable: evt.resumable,
+            });
+        }
+        emit_state(app, evt);
+    }
+    // 채택 세션의 생존 확인 — claude만 죽고 셸이 남으면 PTY EOF가 없어 dead 전이도 없다.
+    // 그대로 두면 마지막 idle이 굳어 셸 프롬프트에 메시지를 주입하게 된다 (P-2 위반).
+    // 잡 목록을 못 걷은 스캔(잠금 실패·잡 없음)에서는 생존 판정을 하지 않는다 —
+    // 근거가 없는데 전부 shell로 되돌리면 멀쩡한 세션의 상태를 날린다.
+    let mut lost: Vec<AgentStateEvt> = Vec::new();
+    if let (false, Ok(mut map)) = (job_pids.is_empty(), rt.by_uuid.lock()) {
+        map.retain(|uuid, t| {
+            let alive = !t.adopted
+                || t.pid.is_some_and(|pid| {
+                    job_pids
+                        .get(&t.app_session)
+                        .is_some_and(|(pids, _)| pids.contains(&pid))
+                });
+            if !alive {
+                lost.push(AgentStateEvt {
+                    session: t.app_session.clone(),
+                    agent_session: uuid.clone(),
+                    status: "shell".into(), // 페인은 살아 있다 — dead가 아니라 셸로 되돌린다
+                    waiting_for: None,
+                    activity: None,
+                    subagents: 0,
+                    cost_usd: t.cost_usd,
+                    resumable: resumable(&t.cwd, uuid),
+                    version: None,
+                    exit_code: None,
+                    degraded: false,
+                    seq: next_seq(),
+                });
+            }
+            alive // 추적에서 뺀다 — 사용자가 다시 띄우면 그때 새 uuid로 다시 채택된다
+        });
+    }
+    for evt in &lost {
+        emit_state(app, evt);
     }
     let mut updates: Vec<AgentStateEvt> = Vec::new();
     if let Ok(mut map) = rt.by_uuid.lock() {
@@ -739,6 +879,22 @@ mod tests {
         let p = super::latest_jsonl_in(&dir).unwrap();
         assert_eq!(p.file_name().unwrap(), "new.jsonl");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// pid 채택 (A) — 앱이 띄우지 않은 claude는 sessionId가 앱 발급 UUID와 다르므로
+    /// 잡 프로세스 트리의 pid만이 페인을 잇는 끈이다. 여기가 비면 그 세션은 상태가 영영
+    /// `shell`로 남고, 대화 전달이 화면 에코 + 인박스 적재에서 멈춘다 (답신 0건의 원인).
+    #[test]
+    fn pid_finds_the_owning_pane() {
+        let mut jobs = std::collections::HashMap::new();
+        jobs.insert("노엘@ws".to_string(), (vec![100, 101, 102], 7));
+        jobs.insert("카이@ws".to_string(), (vec![200, 201], 3));
+        // 손자 프로세스(pwsh → claude)도 같은 잡에 들어 있으므로 그대로 잡힌다
+        assert_eq!(super::pane_for_pid(&jobs, 102), Some(("노엘@ws".into(), 7)));
+        assert_eq!(super::pane_for_pid(&jobs, 200), Some(("카이@ws".into(), 3)));
+        // 남의 터미널에서 도는 claude는 어느 잡에도 없다 — 채택하지 않는다
+        assert_eq!(super::pane_for_pid(&jobs, 999), None);
+        assert_eq!(super::pane_for_pid(&std::collections::HashMap::new(), 100), None);
     }
 
     #[test]

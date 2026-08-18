@@ -24,11 +24,29 @@ pub enum Req {
 const USAGE: &str = "사용법:\n  eqmux send --type <ask|handoff|report|review|escalate> [--to \"@이름\"] \"내용\"\n  eqmux report \"진척 한 줄\"\n  eqmux ping\n\nPowerShell에서 --to 값은 따옴표로 감싸세요 — @는 스플래팅 기호라 그냥 쓰면 사라집니다.";
 
 /// main.rs의 CLI/GUI 분기 판별 — parse가 아는 서브커맨드 전부와 같이 움직여야 한다.
-/// 여기 빠진 커맨드는 GUI 기동으로 흘러, Claude Code가 주기 호출하는 채널이면
-/// 앱 창이 계속 늘어난다 (_statusline 누락이 그 사례).
+/// 여기 빠진 커맨드도 이제는 GUI로 흐르지 않는다 (main.rs 게이트가 사용법으로 받는다) —
+/// 다만 파이프로 가야 할 커맨드가 사용법으로 떨어지므로 목록은 여전히 정확해야 한다.
 pub fn is_cli_command(cmd: &str) -> bool {
     matches!(cmd, "ping" | "send" | "report" | "_hook" | "_statusline")
 }
+
+/// 모르는 인자로 불렸을 때 (main.rs 게이트) — 사용법만 내고 끝낸다. GUI는 뜨지 않는다.
+/// 릴리스는 windows 서브시스템이라 콘솔에 붙지 않으면 이 출력이 사라진다 — 부모 콘솔에
+/// 붙여 사람이 친 `eqmux 오타`도 이유를 볼 수 있게 한다 (에이전트는 파이프라 원래 받는다).
+pub fn usage_exit() -> i32 {
+    attach_parent_console();
+    eprintln!("{USAGE}");
+    2
+}
+
+#[cfg(windows)]
+fn attach_parent_console() {
+    // 실패는 무시한다 — 콘솔이 없는 기동(아이콘 실행)이면 붙을 부모가 없는 게 정상이다
+    unsafe { windows_sys::Win32::System::Console::AttachConsole(u32::MAX) };
+}
+
+#[cfg(not(windows))]
+fn attach_parent_console() {}
 
 /// argv → 요청. session은 EQMUX_SESSION — 테스트를 위해 주입받는다.
 pub fn parse(args: &[String], session: Option<&str>) -> Result<Req, String> {
@@ -311,15 +329,21 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// GUI/CLI 분기 (main.rs) — parse가 아는 서브커맨드는 전부 CLI로 분기해야 한다.
-    /// 하나라도 빠지면 Claude Code가 그 커맨드를 부를 때마다 앱 창이 새로 뜬다.
+    /// GUI/CLI 분기 (main.rs) — parse가 아는 서브커맨드는 전부 파이프로 가야 한다.
+    /// 하나라도 빠지면 그 채널은 사용법으로 떨어진다 (예전에는 앱 창이 새로 떴다).
     #[test]
     fn cli_branch_covers_every_subcommand() {
         for cmd in ["ping", "send", "report", "_hook", "_statusline"] {
             assert!(is_cli_command(cmd), "{cmd}가 main.rs CLI 분기에서 빠졌다");
         }
-        assert!(!is_cli_command("")); // 인자 없음 → GUI 기동
-        assert!(!is_cli_command("--flag")); // 미지의 토큰 → GUI 기동
+        // 미지의 토큰은 CLI 커맨드가 아니다 — main.rs 게이트가 사용법(exit 2)으로 받는다.
+        // GUI 기동은 인자가 아예 없고 세션 밖일 때뿐이다 (에이전트의 `eqmux --help`가
+        // 창을 띄우던 회귀 — 대화를 시키면 창이 계속 늘어났다).
+        assert!(!is_cli_command(""));
+        assert!(!is_cli_command("--flag"));
+        assert!(!is_cli_command("--help"));
+        assert!(!is_cli_command("Send")); // 대소문자도 정확 일치만 인정한다
+        assert_eq!(usage_exit(), 2);
     }
 
     /// statusLine 채널 (FR-D-19) — 세션 필수, 인자 없음

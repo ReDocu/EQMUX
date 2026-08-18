@@ -1009,6 +1009,21 @@ pub(crate) fn find_tracked(app: &AppHandle, id: &str) -> Option<(String, agent::
 /// 추적 맵(by_uuid)은 agent_spawn에서만 채워지므로 그것만 보면 셸 세션이 발신할 수 없다.
 /// 스폰 관문이 남긴 원점을 폴백으로 둔다 — 에이전트는 추적 맵이 더 신선하므로 먼저 본다
 /// (워크트리 재기동 등으로 cwd가 바뀌면 추적 맵이 그 값을 들고 있다).
+/// 세션별 (잡 프로세스 pid 목록, PTY 세대) — 레지스트리 레코드의 pid를 페인에 잇는 자리.
+/// 앱이 띄우지 않은 claude(사용자가 셸에서 직접·재기동)는 sessionId가 앱 발급 UUID와 달라
+/// 이름으로는 영영 매칭되지 않는다. 잡은 그 페인의 자식 트리 전체를 담으므로 pid가 답이다.
+/// 스캔은 이걸 by_uuid 잠금을 잡기 전에 걷는다 — 두 잠금을 겹쳐 쥐지 않기 위해서다.
+pub(crate) fn session_job_pids(app: &AppHandle) -> HashMap<String, (Vec<u32>, u64)> {
+    let state: State<PtyState> = app.state();
+    let Ok(sessions) = state.0.lock() else {
+        return HashMap::new();
+    };
+    sessions
+        .iter()
+        .filter_map(|(id, s)| s.job.as_ref().map(|j| (id.clone(), (j.pids(), s.gen))))
+        .collect()
+}
+
 pub(crate) fn session_origin(app: &AppHandle, id: &str) -> Option<(String, String)> {
     if let Some((_, t)) = find_tracked(app, id) {
         return Some((t.ws, t.cwd));
@@ -1937,7 +1952,55 @@ pub fn is_cli_command(cmd: &str) -> bool {
     cli::is_cli_command(cmd)
 }
 
+/// 모르는 인자로 불렸을 때의 종료 코드 (main.rs 게이트) — 사용법만 낸다.
+pub fn cli_usage() -> i32 {
+    cli::usage_exit()
+}
+
+/// 단일 인스턴스 (P-10) — 이미 떠 있으면 그 창을 앞으로 끌어오고 true를 준다.
+/// 창이 여럿이면 파이프 서버가 이중화되어(PIPE_UNLIMITED_INSTANCES) 에이전트의 send가
+/// 세션을 모르는 쪽으로 흘러 사라지고, running.flag가 서로의 크래시 표식을 덮어쓴다.
+/// 뮤텍스 핸들은 일부러 닫지 않는다 — 프로세스가 살아 있는 동안 소유가 유지되어야 한다.
+#[cfg(windows)]
+fn another_instance_running() -> bool {
+    use windows_sys::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
+    use windows_sys::Win32::System::Threading::CreateMutexW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        FindWindowW, SetForegroundWindow, ShowWindow, SW_RESTORE,
+    };
+
+    let wide = |s: &str| -> Vec<u16> { s.encode_utf16().chain(std::iter::once(0)).collect() };
+    let name = wide("Local\\eqmux-single-instance");
+    let h = unsafe { CreateMutexW(std::ptr::null(), 1, name.as_ptr()) };
+    if h.is_null() {
+        return false; // 뮤텍스를 못 만들면 가드를 포기한다 — 앱을 막지는 않는다
+    }
+    if unsafe { GetLastError() } != ERROR_ALREADY_EXISTS {
+        // 우리가 첫 인스턴스다. 핸들은 닫지 않는다 — 프로세스가 끝날 때 OS가 회수하며,
+        // 그 전까지 소유가 유지되어야 두 번째 프로세스가 여기서 걸린다.
+        return false;
+    }
+    // 이미 하나 떠 있다 — 사람이 아이콘으로 연 것일 수 있으니 그 창을 앞으로 끌어온다
+    let title = wide("EQMUX");
+    let win = unsafe { FindWindowW(std::ptr::null(), title.as_ptr()) };
+    if !win.is_null() {
+        unsafe {
+            ShowWindow(win, SW_RESTORE);
+            SetForegroundWindow(win);
+        }
+    }
+    true
+}
+
+#[cfg(not(windows))]
+fn another_instance_running() -> bool {
+    false
+}
+
 pub fn run() {
+    if another_instance_running() {
+        return; // 창은 하나뿐이다 — 두 번째 프로세스는 조용히 물러난다
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .manage(PtyState::default())

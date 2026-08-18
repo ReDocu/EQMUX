@@ -29,6 +29,8 @@ webview2-com = "0.38"
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_Security",
+    "Win32_System_Console", # AttachConsole — GUI 서브시스템에서도 CLI 오류를 부모 콘솔에 낸다
+    "Win32_UI_WindowsAndMessaging", # 두 번째 인스턴스가 기존 창을 앞으로 끌어온다
     "Win32_Storage_FileSystem",
     "Win32_System_Diagnostics_Debug", # ReadProcessMemory — 에이전트 감지의 명령줄 읽기
     "Win32_System_IO",
