@@ -1,15 +1,19 @@
 // 컨트롤 센터 (bi8Au) — 워크스페이스 탭의 기준 화면. 팀·세션 카드 / 터미널·저장·이벤트 / 인스펙터.
 // 터미널 텍스트는 목 출력이다 — M1에서 xterm.js + Rust PTY로 실물이 된다.
-import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
 import { backend } from "../backend/mock";
 import {
   defaultShell,
+  focusRequest,
+  focusSession as requestFocus,
   PANE_LAYOUTS,
   paneLayout,
   panelOpen,
   selectedSession,
   setDefaultShell,
+  setFocusRequest,
   setLayoutPickerOpen,
+  setOverlay,
   setPaneLayout,
   setSelectedSession,
   setTerminalFull,
@@ -35,6 +39,7 @@ import { gridTemplateStyle, PaneDividers } from "../components/PaneDividers";
 import { SidePanel } from "../components/SidePanel";
 import {
   disposeSessionTerminal,
+  focusSessionTerminal,
   isRespawning,
   launchAgentInSession,
   respawnSessionShell,
@@ -47,6 +52,13 @@ import { SessionDetailPanel } from "./SessionDetailPanel";
 import { TranscriptPane } from "./TranscriptPane";
 import type { Session, Workspace } from "../types";
 import { effectivePermissions, sessionDisplayName } from "../types";
+
+/** 레일에 앉힐 폴더 표기 — 마지막 두 마디만. 전체 경로는 title이 갖고 있고, 좁은 레일에서
+ *  드라이브부터 늘어놓으면 정작 구분이 되는 끝이 잘린다 (…/EQMux_workspace/EQMUX). */
+function shortPath(p: string): string {
+  const parts = p.replace(/[\\/]+$/, "").split(/[\\/]+/).filter(Boolean);
+  return parts.slice(-2).join("/") || p;
+}
 
 // 세션 상태별 목 터미널 출력 — 2×2 그리드 시각 검증용 (Tauri 밖 폴백 전용)
 function mockLines(s: Session, personaName: string): string[] {
@@ -68,10 +80,6 @@ export function ControlCenter(props: { workspace: Workspace }) {
       .filter((s) => s.workspaceId === props.workspace.id)
       .sort((a, b) => a.slot - b.slot);
   });
-  const missions = () => {
-    tick();
-    return backend.listMissions().filter((m) => m.workspaceId === props.workspace.id);
-  };
   const usage = () => backend.storeUsage(props.workspace.name);
   const persona = (id: string) => backend.listPersonas().find((p) => p.id === id);
   const job = (id: string) => backend.listJobs().find((j) => j.id === id);
@@ -86,6 +94,32 @@ export function ControlCenter(props: { workspace: Workspace }) {
     setZoomed(next);
     if (affected) requestAnimationFrame(() => syncSessionTerminal(affected));
   };
+  // ── Focus — 사람이 답해야 진행되는 페인을 통째로 잡는다 (state.focusSession) ──
+  // 선택 프롬프트(질문·계획 승인)와 승인 대기는 대화로 답할 수 없다: waiting에는 본문을
+  // 주입하지 않고 인박스에 쌓아 두므로(M3 — TUI 다이얼로그의 오답이 되기 때문), 진행하는
+  // 길은 그 페인에 직접 치는 것뿐이다. 그래서 선택·줌·전체 화면·키보드를 한 동작으로 묶는다.
+  const focusPane = (id: string) => {
+    setCenterTab("terminal");
+    applyZoom(id);
+    requestAnimationFrame(() => focusSessionTerminal(id));
+  };
+  // 진입은 하나 — 여기서 눌러도 대화 패널에서 눌러도 같은 요청을 거친다 (state.focusSession).
+  // 선택·미확인 해제·전체 화면은 그쪽이, 줌과 키보드는 아래 이펙트가 맡는다.
+  const focusSession = (s: Session) => requestFocus(props.workspace.id, s.id);
+  createEffect(
+    on(focusRequest, (r) => {
+      // 남의 워크스페이스 요청이면 그냥 둔다 — 그 탭이 마운트되면서 자기 것으로 받아간다
+      if (!r || !sessions().some((s) => s.id === r.session)) return;
+      focusPane(r.session);
+      setFocusRequest(undefined); // 한 번 쓰고 비운다 — 이 탭에 다시 왔다고 또 잡지 않게
+    }),
+  );
+  /** 지금 사람을 기다리는 세션 — 오래 기다린 것이 먼저다 (ATTENTION_ORDER와 같은 취지) */
+  const waitingSessions = createMemo(() =>
+    sessions()
+      .filter((s) => s.status === "waiting")
+      .sort((a, b) => b.sinceMs - a.sinceMs),
+  );
   // 세션 상세 팝업 — 우측 고정 인스펙터의 후신. 아바타 레일·페인 메뉴 "세션 상세"가 연다
   const [detailOpen, setDetailOpen] = createSignal(false);
   // 팀 도구 메뉴 (시안 §04) — 임무·캐스팅·팀 편성 버튼 3개의 후신
@@ -135,6 +169,12 @@ export function ControlCenter(props: { workspace: Workspace }) {
         return;
       }
       if (terminalFull()) {
+        // 대기 중인 페인의 터미널에 커서가 있으면 ESC는 그 TUI의 것이다 — 선택 프롬프트가
+        // 스스로 "Esc to cancel"이라 안내하는 자리다. 여기서 겹쳐 받으면 답을 취소하는
+        // 김에 보고 있던 화면(줌·전체 화면)까지 잃는다. Focus로 잡아 온 직후가 정확히
+        // 이 상황이다. 대기 중이 아니면 종전대로 — 나가는 길은 ESC 하나로 남는다.
+        const inTerm = (e.target as HTMLElement | null)?.closest?.(".xterm");
+        if (inTerm && selected()?.status === "waiting") return;
         e.preventDefault();
         if (zoomed()) applyZoom(undefined);
         else setTerminalFull(false);
@@ -183,7 +223,11 @@ export function ControlCenter(props: { workspace: Workspace }) {
   const wtMembers = (wt: WorktreeInfo) => sessions().filter((s) => normPath(s.cwd) === normPath(wt.path));
   const wtLabel = (wt: WorktreeInfo) => wt.branch ?? `detached @ ${wt.head}`;
   const wtTail = (p: string) => p.replace(/\\/g, "/").split("/").slice(-2).join("/");
+  /** 빈 슬롯이 없다 — addTerminal은 이 상태에서 이벤트만 남기고 조용히 돌아간다.
+   *  그래서 부르는 쪽이 먼저 알고 진입점을 닫는다 ("+ 세션 추가"가 이미 쓰는 규칙과 같다) */
+  const slotsFull = () => sessions().length >= maxSlots();
   const openWtShell = (wt: WorktreeInfo) => {
+    if (slotsFull()) return;
     backend.addTerminal(props.workspace.id, defaultShell().label, wt.path);
   };
   // 생성 팝오버 — git 패널과 같은 계약: .eqmux/worktrees/<이름> + 브랜치 eqmux/<이름>.
@@ -415,8 +459,14 @@ export function ControlCenter(props: { workspace: Workspace }) {
     return { name: persona(s.personaId)?.name ?? s.personaId, permissions: p };
   };
   /** 아직 EQMUX가 관리하는 에이전트가 아니다 — 맨 셸이 떠 있는 역할 세션.
-   *  손으로 `claude`를 쳐도 환경변수·훅·역할이 안 붙으므로, 기동은 이 액션으로만 한다. */
-  const needsAgent = (s: Session) => !!roleAgent(s) && !s.agentSessionId && s.status !== "dead";
+   *  손으로 `claude`를 쳐도 환경변수·훅·역할이 안 붙으므로, 기동은 이 액션으로만 한다.
+   *
+   *  판정은 "지금 이 페인에 에이전트가 붙어 있는가"만 본다 — status가 유일한 실시간 소스다
+   *  (conversation.ts의 주입 판정과 같은 기준). agentSessionId로 재면 안 된다: 그것은 과거
+   *  기록(agent_session 매핑)이라 한 번 붙은 뒤로는 지워지지 않고, 복원(team_load가 DB에서
+   *  끌어옴)이나 채택 세션 종료(claude만 죽고 셸이 남아 Rust가 shell로 되돌림) 뒤에도 남아
+   *  있어서, 맨 셸인 페인에서 기동 경로가 영영 사라진다. */
+  const needsAgent = (s: Session) => !!roleAgent(s) && s.status === "shell";
   const launchAgent = async (s: Session) => {
     const a = roleAgent(s);
     if (!a) return;
@@ -520,10 +570,18 @@ export function ControlCenter(props: { workspace: Workspace }) {
               {/* 시안 §04·§06 — SLOT 라벨·✕ 제거, 헤더는 이름·상태만. 제거는 페인 우클릭 메뉴 */}
               <span>{sessionDisplayName(s, personaName(s.personaId))}</span>
               <span style={{ display: "inline-flex", "align-items": "center", gap: "8px" }}>
-                {/* 승인 대기 문맥 (U5) — 도착 즉시 어떤 도구 요청인지 헤더에서 보인다 */}
+                {/* 승인 대기 문맥 (U5) — 도착 즉시 어떤 도구 요청인지 헤더에서 보인다.
+                    클릭은 Focus다: 답은 이 페인 안에서만 칠 수 있으므로 한 번에 잡아 준다 */}
                 <Show when={s.status === "waiting" && s.waitingFor}>
-                  <span class="badge amber pane-wait-badge" title={t("승인 대기 중인 도구 요청 — y/n은 이 페인에 입력")}>
-                    {s.waitingFor}
+                  <span
+                    class="badge amber pane-wait-badge"
+                    title={t("클릭하면 이 페인을 Focus로 잡습니다 — 답은 여기에 직접 입력합니다")}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      focusSession(s);
+                    }}
+                  >
+                    ⛶ {t(s.waitingFor!)}
                   </span>
                 </Show>
                 <StatusLabel session={s} />
@@ -676,6 +734,17 @@ export function ControlCenter(props: { workspace: Workspace }) {
           </button>
         </div>
         <div style={{ flex: 1 }} />
+        {/* 응답 대기 (Focus) — 사람이 답해야 진행되는 페인이 있으면 상단 바가 먼저 알린다.
+            누르면 가장 오래 기다린 페인을 그대로 잡는다. 대화로는 답할 수 없는 상태다 */}
+        <Show when={waitingSessions().length > 0}>
+          <button
+            class="btn cc-focus-chip"
+            title={t("Focus — 가장 오래 기다린 페인을 전체 화면으로 잡습니다. 답은 터미널에 직접 입력합니다")}
+            onClick={() => focusSession(waitingSessions()[0])}
+          >
+            ⛶ {t("응답 대기")} {waitingSessions().length}
+          </button>
+        </Show>
         {/* 셸 선택 — 새로 추가하는 터미널부터 적용된다 */}
         <div class="shell-picker">
           <button class="btn ghost mono" title={t("새 터미널 셸 선택")} onClick={() => setShellMenuOpen(!shellMenuOpen())}>
@@ -771,7 +840,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
               [
                 {
                   label: t("이 워크트리에서 셸 열기"),
-                  disabled: m().wt.isMain,
+                  disabled: m().wt.isMain || slotsFull(),
                   action: () => openWtShell(m().wt),
                 },
                 {
@@ -830,6 +899,20 @@ export function ControlCenter(props: { workspace: Workspace }) {
                     {s.slot === 1 && persona(s.personaId) ? " · LEAD" : ""}
                   </span>
                 </span>
+                {/* 대기 중인 세션만 — 사람이 답해야 진행되는 자리라 Focus를 상시 노출한다.
+                    나머지 행은 호버 때만 뜨는 ⓘ만 갖는다 (U2 — 행 클릭은 페인 선택) */}
+                <Show when={s.status === "waiting"}>
+                  <button
+                    class="rail-focus mono"
+                    title={t("Focus — 이 페인을 전체 화면으로 잡고 키보드를 넘깁니다")}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      focusSession(s);
+                    }}
+                  >
+                    ⛶
+                  </button>
+                </Show>
                 <button
                   class="rail-info mono"
                   title={t("세션 상세")}
@@ -854,9 +937,22 @@ export function ControlCenter(props: { workspace: Workspace }) {
             </button>
           </Show>
           <div class="rail-sep" />
-          <button class="rail-ms" title={t("임무 관리")} onClick={() => setView({ kind: "missions", wsId: props.workspace.id })}>
-            <span class="eyebrow">{t("임무")}</span>
-            <b class="mono">{missions().length}</b>
+          {/* 로컬 폴더 — 이 워크스페이스의 작업 폴더. 클릭은 앱 안의 파일 탐색기로 간다
+              (M25 전체 화면 팝업, 스코프는 현재 워크스페이스). 임무는 "팀 ▾"에 있다.
+              탐색기가 곧 파일 원본이므로 Windows 탐색기로 나가지 않는다 — 편집·미리보기가
+              앱 안에서 끝나야 세션 문맥(선택·대화)을 잃지 않는다. */}
+          <button
+            class="rail-ms rail-folder"
+            title={`${props.workspace.path} — ${t("앱 내 파일 탐색기에서 열기")}`}
+            onClick={() => setOverlay("explorer")}
+          >
+            <span class="rail-folder-txt">
+              <span class="eyebrow">{t("로컬 폴더")}</span>
+              <span class="rail-folder-path mono">{shortPath(props.workspace.path)}</span>
+            </span>
+            <span class="rail-folder-go mono" aria-hidden="true">
+              ▸
+            </span>
           </button>
           <div class="rail-sep" />
           {/* 워크트리 (orca식) — 작업 트리별 브랜치·귀속 세션 현황. 생성은 팝오버, 삭제는 없다 (FR-E-64) */}
@@ -974,9 +1070,16 @@ export function ControlCenter(props: { workspace: Workspace }) {
                       {wt.isMain ? "MAIN" : t(wt.isSession ? "세션" : "외부")}
                     </span>
                     <Show when={!wt.isMain}>
+                      {/* 슬롯이 가득 차면 이 버튼은 아무 일도 하지 않는다 — 누르고 아무 반응이
+                          없으면 클릭 불량과 구별되지 않으므로, 못 한다는 사실을 미리 보인다 */}
                       <button
                         class="rail-wt-open mono"
-                        title={t("이 워크트리에서 기본 터미널 열기 — 역할 부여는 세션 상세에서")}
+                        disabled={slotsFull()}
+                        title={t(
+                          slotsFull()
+                            ? "세션 슬롯이 가득 찼습니다 — 하나를 제거하거나 설정에서 슬롯 수를 늘리세요"
+                            : "이 워크트리에서 기본 터미널 열기 — 역할 부여는 세션 상세에서",
+                        )}
                         onClick={() => openWtShell(wt)}
                       >
                         + {t("셸")}

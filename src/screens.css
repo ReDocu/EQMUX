@@ -403,6 +403,46 @@
 .rail-ms b {
   font-size: 12px;
 }
+/* 로컬 폴더 행 — 임무 자리의 후신. 클릭은 앱 안의 파일 탐색기(M25 팝업)로 간다 */
+.rail-folder {
+  gap: 8px;
+  text-align: left;
+}
+.rail-folder-txt {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.rail-folder-path {
+  font-size: 11px;
+  color: var(--eq-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.rail-folder-go {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--eq-dim);
+}
+.rail-folder:hover .rail-folder-go {
+  color: var(--eq-text);
+}
+/* Focus 버튼 — 사람이 답해야 진행되는 행에만 상시로 뜬다 (ⓘ는 호버 때만) */
+.rail-focus {
+  flex-shrink: 0;
+  padding: 1px 5px;
+  font-size: 11px;
+  color: var(--eq-amber);
+  border: 1px solid var(--eq-amber);
+  border-radius: var(--eq-r-sm);
+  background: none;
+}
+.rail-focus:hover {
+  color: var(--eq-bg);
+  background: var(--eq-amber);
+}
 /* 워크트리 레일 (orca식) — 임무 아래. 행 = 브랜치 + 귀속 세션, 생성은 팝오버 */
 .rail-wt-head {
   position: relative;
@@ -903,6 +943,17 @@
   flex-direction: column;
   gap: 6px;
 }
+/* 지운 화면 되돌리기 — 스트림 위 한 줄. 스크롤과 함께 밀려나지 않게 스트림 밖에 둔다 */
+.conv-uncleared {
+  justify-content: center;
+  width: 100%;
+  padding: 3px 8px;
+  font-size: 10px;
+  color: var(--eq-dim);
+}
+.conv-uncleared:hover {
+  color: var(--eq-blue);
+}
 .conv-msg {
   padding: 8px 10px;
 }
@@ -1207,6 +1258,30 @@
   max-width: 220px;
   overflow: hidden;
   text-overflow: ellipsis;
+  cursor: pointer; /* 클릭 = Focus — 답은 이 페인 안에서만 칠 수 있다 */
+}
+.pane-wait-badge:hover {
+  filter: brightness(1.25);
+}
+/* 상단 바 응답 대기 칩 — 대기 중인 페인이 있을 때만 뜬다 */
+.cc-focus-chip {
+  color: var(--eq-amber);
+  border-color: var(--eq-amber);
+}
+/* 대화 패널의 응답 대기 카드 — 여기서 답할 수 없다는 사실과 건너갈 길을 같이 준다 */
+.conv-waiting {
+  padding: 6px 10px;
+  font-size: 11px;
+}
+.conv-waiting-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+.conv-focus {
+  cursor: pointer;
+  border: none;
 }
 
 /* 에이전트 기동 칩 (FR-D-01) — 살아 있는 셸 위에 뜨므로 출력을 가리지 않게 우하단 구석에 둔다.
@@ -2056,6 +2131,16 @@
 .msnp-tree-row.folder {
   color: var(--eq-muted);
   cursor: default;
+}
+/* 상한에 가려진 자리 (B15) — 빈 폴더와 구별되게, 목록 끝이 폴더 끝이 아님을 알린다 */
+.msnp-tree-cut {
+  color: var(--eq-dim);
+  letter-spacing: 0.08em;
+}
+.msnp-tree-note {
+  padding: 6px 8px;
+  font-size: 10px;
+  border-top: 1px dashed var(--eq-line);
 }
 .msnp-tree-row:not(.folder):hover {
   background: var(--eq-surface-2);

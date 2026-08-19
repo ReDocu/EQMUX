@@ -41,6 +41,7 @@ export const dict: Record<string, string> = {
   "유효 권한이 달라지면 재시작이 필요합니다 (E11′)":
     "If the effective permissions change, a restart is required (E11′)",
   "권한 변경 감지 · 재시작 필요": "Permission change detected · restart needed",
+  "권한 변경 감지 · 다음 기동 때 적용됩니다": "Permission change detected · applies at the next start",
   "재개 기반 재시작 — 대화를 잃지 않는다 (FR-D-26)":
     "Resume-based restart — the conversation is preserved (FR-D-26)",
   "대화 유지 재시작": "Restart, keep conversation",
@@ -91,8 +92,8 @@ export const dict: Record<string, string> = {
   "직전 실행이 정상 종료되지 않았습니다": "The previous run did not shut down cleanly",
   "종료 시퀀스를 거치지 못한 채 끝났습니다. 그때 실행 중이던 세션과 마지막 활동 시각입니다.":
     "It ended without completing the shutdown sequence. These are the sessions running at the time and their last activity.",
-  "자동으로 재실행하지 않습니다 — 워크스페이스 탭을 열면 각 페인에 재개 제안이 표시됩니다.":
-    "Nothing is re-run automatically — open the workspace tab and each pane will show a resume proposal.",
+  "자동으로 재실행하지 않습니다 — 워크스페이스 탭에서 페인의 [▶ 에이전트 기동]으로 다시 시작하거나, 세션 상세에서 이전 대화를 재개하세요.":
+    "Nothing is re-run automatically — open the workspace tab and start again with [▶ Start agent] on the pane, or resume the previous conversation from the session detail.",
 
   // ── 터미널 페인 (TerminalPane) ──
   "터미널 검색": "Search terminal",

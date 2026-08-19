@@ -47,6 +47,20 @@ export const dict: Record<string, string> = {
   줌: "Zoom",
   "줌 해제": "Unzoom",
   "전체 화면": "Fullscreen",
+
+  // ── 대기 문맥 (agent.rs가 만드는 어휘 — 페인 배지·대시보드·상세·알림이 공유한다, B16) ──
+  "질문 선택 대기 — 이 페인에서 답해야 진행됩니다":
+    "Awaiting your choice — answer in this pane to continue",
+  "계획 승인 대기 — 이 페인에서 답해야 진행됩니다":
+    "Awaiting plan approval — answer in this pane to continue",
+  "입력 필요 — 이 페인에서 답해야 진행됩니다": "Input needed — answer in this pane to continue",
+  "권한 승인 대기": "Permission prompt",
+  "다이얼로그 응답 대기": "Dialog awaiting a response",
+  "목표 제안 검토 대기": "Goal proposal awaiting review",
+  "샌드박스 승인 대기": "Sandbox request awaiting approval",
+  "워커 승인 대기": "Worker request awaiting approval",
+  "Focus — 이 페인을 전체 화면으로 잡고 키보드를 넘깁니다":
+    "Focus — takes this pane fullscreen and hands it the keyboard",
   "저장됨 ✓": "Saved ✓",
 
   // ── 경과 시간 (types.ts fmtSince) ──

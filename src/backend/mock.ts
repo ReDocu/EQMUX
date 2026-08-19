@@ -5,6 +5,10 @@
 import { createMutable } from "solid-js/store";
 import { forgetAgent, isTauri, killPty } from "./pty";
 import { HARD_MAX_SLOTS, maxSlots } from "./settings";
+
+/** 동시에 열어 둘 수 있는 워크스페이스 수 (B9) — 등록은 무제한이고 오픈만 제한된다.
+ *  화면(대시보드 "열기")이 상한을 미리 알아야 조용한 no-op이 되지 않는다 */
+export const MAX_OPEN_WORKSPACES = 10;
 import type {
   AgentStateApply,
   ConversationMessage,
@@ -1035,8 +1039,8 @@ export class MockBackend implements Backend {
   openWorkspace(id: string) {
     const ws = WORKSPACES.find((x) => x.id === id);
     if (!ws || ws.pathMissing) return;
-    if (!ws.open && WORKSPACES.filter((x) => x.open).length >= 10) {
-      this.logEvent("app", "동시 오픈 상한 10 도달 (B9)");
+    if (!ws.open && WORKSPACES.filter((x) => x.open).length >= MAX_OPEN_WORKSPACES) {
+      this.logEvent("app", `동시 오픈 상한 ${MAX_OPEN_WORKSPACES} 도달 (B9)`);
     } else if (!ws.open) {
       ws.open = true;
       this.logEvent("app", `워크스페이스 열림 · ${ws.name}`);

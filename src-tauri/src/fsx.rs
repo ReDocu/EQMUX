@@ -20,13 +20,37 @@ pub struct FsNode {
     pub rel: String, // 워크스페이스 상대 경로 (슬래시 구분)
     pub depth: u32,
     pub dir: bool,
+    /// 안을 다 걷지 못한 폴더 (B15) — 깊이 상한에 닿았거나 개수 상한에 걸려 멈춘 자리.
+    /// 빈 폴더와 구별하지 않으면 "여기 그 파일 없다"로 잘못 읽힌다.
+    pub truncated: bool,
 }
 
-fn walk(base: &Path, dir: &Path, depth: u32, out: &mut Vec<FsNode>) {
-    if depth > MAX_DEPTH || out.len() >= MAX_ENTRIES {
-        return;
-    }
-    let Ok(entries) = fs::read_dir(dir) else { return };
+/// 트리 실측 결과 (B15) — 상한에 걸렸는지와 그 상한값을 함께 준다. 화면이 상수를
+/// 다시 적지 않고도 "무엇에 걸려 잘렸는지"를 그대로 말할 수 있게 하기 위함.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct FsTree {
+    pub nodes: Vec<FsNode>,
+    /// 개수 상한에 걸려 걷기를 중단했다 — 목록 끝이 곧 폴더의 끝이 아니다
+    pub truncated: bool,
+    pub max_entries: usize,
+    pub max_depth: u32,
+}
+
+/// 상한에 가려질 내용이 실제로 있는지 — 스킵 대상(.git 등)만 남은 폴더를 '더 있음'으로
+/// 표시하지 않으려고 한 번 더 본다. 깊이 상한에 닿은 폴더에서만 부르므로 비용은 얕다.
+fn has_visible_children(dir: &Path) -> bool {
+    let Ok(entries) = fs::read_dir(dir) else { return false };
+    entries.flatten().any(|e| {
+        let name = e.file_name().to_string_lossy().into_owned();
+        !(e.path().is_dir() && SKIP_DIRS.contains(&name.as_str()))
+    })
+}
+
+/// 한 폴더를 걷는다. 개수 상한에 걸려 멈췄으면 true — 호출자가 자기 폴더도 '더 있음'으로
+/// 표시하고 형제 걷기를 그만둔다 (상한 뒤에 남은 것을 없는 것처럼 보이지 않게).
+fn walk(base: &Path, dir: &Path, depth: u32, out: &mut Vec<FsNode>) -> bool {
+    let Ok(entries) = fs::read_dir(dir) else { return false };
     let mut items: Vec<(bool, String, PathBuf)> = entries
         .flatten()
         .map(|e| {
@@ -37,29 +61,38 @@ fn walk(base: &Path, dir: &Path, depth: u32, out: &mut Vec<FsNode>) {
     // 폴더 먼저, 이름순 — 트리 표시 관례
     items.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.to_lowercase().cmp(&b.1.to_lowercase())));
     for (is_dir, name, path) in items {
-        if out.len() >= MAX_ENTRIES {
-            return;
-        }
         if is_dir && SKIP_DIRS.contains(&name.as_str()) {
             continue;
+        }
+        if out.len() >= MAX_ENTRIES {
+            return true; // 이 폴더에 아직 남았다
         }
         let rel = path
             .strip_prefix(base)
             .map(|r| r.to_string_lossy().replace('\\', "/"))
             .unwrap_or_else(|_| name.clone());
-        out.push(FsNode { name, rel, depth, dir: is_dir });
-        if is_dir {
-            walk(base, &path, depth + 1, out);
+        let at = out.len();
+        out.push(FsNode { name, rel, depth, dir: is_dir, truncated: false });
+        if !is_dir {
+            continue;
+        }
+        if depth + 1 > MAX_DEPTH {
+            out[at].truncated = has_visible_children(&path); // 깊이 상한 — 안을 안 걸었다
+        } else if walk(base, &path, depth + 1, out) {
+            out[at].truncated = true;
+            return true; // 개수 상한은 위로 전파된다 — 형제도 더 걷지 못한다
         }
     }
+    false
 }
 
-/// 깊이·개수 상한이 있는 파일 트리 — 무거운 디렉터리(.git 등)는 걷지 않는다
-pub fn tree(ws_path: &str) -> Vec<FsNode> {
+/// 깊이·개수 상한이 있는 파일 트리 — 무거운 디렉터리(.git 등)는 걷지 않는다.
+/// 상한에 걸린 사실은 숨기지 않고 결과에 실어 보낸다 (B15).
+pub fn tree(ws_path: &str) -> FsTree {
     let base = Path::new(ws_path);
-    let mut out = Vec::new();
-    walk(base, base, 0, &mut out);
-    out
+    let mut nodes = Vec::new();
+    let truncated = walk(base, base, 0, &mut nodes);
+    FsTree { nodes, truncated, max_entries: MAX_ENTRIES, max_depth: MAX_DEPTH }
 }
 
 /// 텍스트 미리보기 — 워크스페이스 밖 경로는 거부, 64KB 상한 (초과분은 잘림 표시)
@@ -228,9 +261,10 @@ pub fn delete_entry(ws_path: &str, rel: &str) -> Result<(), String> {
 
 // ── Tauri 커맨드 표면 — 로직은 위의 순수 함수들, 여기는 이름과 시그니처만 소유한다 ──
 
-/// 탐색기 파일 트리 (PRD H) — 깊이·개수 상한, 무거운 디렉터리 제외
+/// 탐색기 파일 트리 (PRD H) — 깊이·개수 상한, 무거운 디렉터리 제외.
+/// 상한에 걸렸는지도 함께 돌려준다 (B15) — 화면이 잘림을 말할 수 있어야 한다.
 #[tauri::command]
-pub fn fs_tree(ws_path: String) -> Vec<FsNode> {
+pub fn fs_tree(ws_path: String) -> FsTree {
     tree(&ws_path)
 }
 
@@ -322,14 +356,41 @@ mod tests {
         fs::write(dir.join("README.md"), "# 제목").unwrap();
         let ws = dir.to_string_lossy().into_owned();
 
-        let nodes = tree(&ws);
-        assert!(nodes.iter().any(|n| n.rel == "src/a.ts"));
-        assert!(nodes.iter().all(|n| n.name != ".git")); // 무거운 디렉터리 제외
-        let src = nodes.iter().find(|n| n.rel == "src").unwrap();
+        let t = tree(&ws);
+        assert!(t.nodes.iter().any(|n| n.rel == "src/a.ts"));
+        assert!(t.nodes.iter().all(|n| n.name != ".git")); // 무거운 디렉터리 제외
+        let src = t.nodes.iter().find(|n| n.rel == "src").unwrap();
         assert!(src.dir && src.depth == 0);
+        assert!(!t.truncated); // 작은 트리는 상한에 닿지 않는다
+        assert!(t.nodes.iter().all(|n| !n.truncated));
 
         assert_eq!(preview(&ws, "README.md").unwrap(), "# 제목");
         assert!(preview(&ws, "../outside.txt").is_err()); // 경로 탈출 거부
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 상한에 걸린 자리를 빈 폴더처럼 보이게 두지 않는다 (B15) — 깊이 상한에 닿은 폴더는
+    /// truncated로 표시되고, 안이 (스킵 대상 말고는) 비어 있으면 표시하지 않는다
+    #[test]
+    fn tree_marks_folders_it_could_not_walk() {
+        let dir = std::env::temp_dir().join(format!("eqmux-fsx-cut-{}", crate::workspace::now_ms()));
+        // depth 0..3까지 담고 그 아래는 걷지 않는다 — d(depth 3) 안이 가려진다
+        let deep = dir.join("a").join("b").join("c").join("d");
+        fs::create_dir_all(&deep).unwrap();
+        fs::write(deep.join("hidden.txt"), "x").unwrap();
+        // 같은 깊이인데 안이 스킵 대상뿐인 폴더 — 가려진 내용이 없으므로 '더 있음'이 아니다
+        fs::create_dir_all(dir.join("a").join("b").join("c").join("onlyskip").join("node_modules")).unwrap();
+        let ws = dir.to_string_lossy().into_owned();
+
+        let t = tree(&ws);
+        let d = t.nodes.iter().find(|n| n.rel == "a/b/c/d").unwrap();
+        assert!(d.truncated, "깊이 상한에 닿은 폴더는 '더 있음'으로 표시된다");
+        assert!(t.nodes.iter().all(|n| n.rel != "a/b/c/d/hidden.txt")); // 상한 아래는 안 걷는다
+        let only_skip = t.nodes.iter().find(|n| n.rel == "a/b/c/onlyskip").unwrap();
+        assert!(!only_skip.truncated, "스킵 대상만 남은 폴더는 잘린 것이 아니다");
+        // 걷기를 마친 폴더는 표시가 붙지 않는다
+        assert!(!t.nodes.iter().find(|n| n.rel == "a/b").unwrap().truncated);
+        assert!(!t.truncated); // 개수 상한에는 안 걸렸다
         fs::remove_dir_all(&dir).ok();
     }
 }

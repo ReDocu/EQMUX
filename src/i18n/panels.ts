@@ -10,6 +10,16 @@ export const dict: Record<string, string> = {
     "Saving to a file works in the app only — the browser mock has no ledger",
   "{n}건 저장됨 — {path}": "Saved {n} message(s) — {path}",
   "저장 실패 — 로그 패널을 확인하세요": "Save failed — check the logs panel",
+  "본문이 없습니다 — 받는 사람 뒤에 보낼 내용을 적어주세요":
+    "No message body — write what you want to send after the recipient",
+  "화면 지우기": "Clear",
+  "화면만 지웁니다 — 대화 원장과 저장 파일은 그대로 남습니다":
+    "Clears the view only — the conversation ledger and saved files stay intact",
+  "이전 {n}건 숨김 — 다시 보기": "{n} earlier message(s) hidden — show them",
+  "화면을 지웠습니다 — 새 메시지부터 여기에 표시됩니다":
+    "View cleared — new messages will appear here",
+  "응답 대기 — 대화로는 답할 수 없습니다. 페인에서 직접 입력하세요":
+    "Awaiting your answer — chat cannot reach it. Type in the pane itself",
   "인박스 대기 (M3 — 턴 종료 시 전달)": "Inbox pending (M3 — delivered at turn end)",
   "{n}건": "{n} msg(s)",
   "아직 메시지가 없습니다 — 아래에서 타입을 골라 팀에 보내보세요.":

@@ -4,6 +4,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { backend } from "./mock";
 import { isTauri, writePty } from "./pty";
+import { canInject } from "../types";
 import type { Mission, MissionStatus } from "../types";
 
 interface MissionFile {
@@ -93,14 +94,14 @@ export async function toggleAssign(
   if (!wasAssigned) sendBrief(sessionId, m);
 }
 
-/** 배정 브리프 (FR-E-55) — 살아 있는 에이전트 세션에만 자연어 한 줄을 전달한다.
- *  복원·종료 세션은 역할 파일의 임무 블록이 다음 기동 때 알려준다. */
+/** 배정 브리프 (FR-E-55) — 지금 받을 수 있는 에이전트 세션에만 자연어 한 줄을 전달한다.
+ *  못 보낸 경우(맨 셸·승인 대기·작업 중·복원·종료)는 흘린다 — 배정의 원본은 역할 파일의
+ *  임무 블록이라(FR-E-58) 다음 기동·다음 턴에 어차피 전달된다.
+ *  판정은 canInject 하나로 한다 (P-2 · G7) — 예전 가드(agentSessionId)는 지워지지 않는
+ *  과거 기록이라 셸로 돌아온 페인에 브리프를 명령으로 실행시켰다. */
 function sendBrief(sessionId: string, m: Mission): void {
   const s = backend.listSessions().find((x) => x.id === sessionId);
-  if (!s?.personaId || !s.agentSessionId || s.status === "dead" || s.restored) return;
-  // waiting = 승인 다이얼로그가 떠 있다 — 여기 텍스트를 주입하면 다이얼로그의 오답이 된다.
-  // 브리프는 역할 파일 임무 블록에 이미 있으니 다음 턴에 전달된다 (conversation.ts M3와 동일 원칙)
-  if (s.status === "waiting") return;
+  if (!s?.personaId || !canInject(s)) return;
   const goal = m.goal ? ` — ${m.goal}` : "";
   writePty(sessionId, `[EQMUX] 임무 배정: ${m.name}${goal} · 정의 ${m.file}\r`);
 }

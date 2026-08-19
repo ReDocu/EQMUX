@@ -22,6 +22,11 @@ export const dict: Record<string, string> = {
   "고급 구성": "Advanced",
   "역할 팀 구성": "Role team setup",
   "역할과 임무를 가진 에이전트 팀 시작": "Start an agent team with roles and missions",
+  // 라이브러리 저장 오류 (library.ts) — 사용자에게 그대로 보이는 문구다
+  "파일이 밖에서 바뀌었습니다 — 목록을 새로고침했으니 확인 후 다시 저장하세요":
+    "The file changed outside the app — the list was refreshed, check it and save again",
+  "시트가 밖에서 바뀌었습니다 — 다시 열어 확인 후 저장하세요":
+    "The sheet changed outside the app — reopen it, check, and save again",
   "최대 {n}개 세션에 역할, 페르소나, 권한과 임무를 배정합니다. 병렬 구현, 리뷰, 조사처럼 책임이 분리된 작업에 적합합니다.":
     "Assigns roles, personas, permissions and missions to up to {n} sessions. Good for work with separated responsibilities — parallel implementation, review, research.",
   "✓ 역할 · 페르소나별 세션 구성": "✓ Sessions per role · persona",

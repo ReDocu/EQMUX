@@ -5,11 +5,11 @@
 import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { queryGlobalEvents } from "../backend/events";
 import type { FeedEvent } from "../backend/events";
-import { backend } from "../backend/mock";
+import { backend, MAX_OPEN_WORKSPACES } from "../backend/mock";
 import { isTauri, killPty } from "../backend/pty";
 import { maxSlots, settings } from "../backend/settings";
 import { t, tf } from "../i18n";
-import { jumpToSession, openPanel, setOverlay, setView, tick } from "../state";
+import { focusSession, jumpToSession, openPanel, setOverlay, setView, tick } from "../state";
 import { ContextMenu, StatusLabel } from "../components/ui";
 import type { Session } from "../types";
 import { ATTENTION_ORDER, fmtSince, sessionDisplayName } from "../types";
@@ -76,7 +76,7 @@ export function Dashboard() {
       .sort((a, b) => ATTENTION_ORDER[a.status] - ATTENTION_ORDER[b.status]);
 
   const cellLine2 = (s: Session) => {
-    if (s.status === "waiting") return s.waitingFor ?? t("승인 대기");
+    if (s.status === "waiting") return s.waitingFor ? t(s.waitingFor) : t("승인 대기");
     if (s.status === "dead") return t(s.resumable ? "재개 가능" : "재개 불가");
     return missionName(s) ?? t("미배정");
   };
@@ -239,7 +239,18 @@ export function Dashboard() {
                         </button>
                       }
                     >
-                      <button class="btn ghost" onClick={() => backend.openWorkspace(ws.id)}>
+                      {/* 동시 오픈 상한에 닿으면 openWorkspace는 이벤트만 남기고 조용히 돌아간다 —
+                          누르고 아무 일도 안 일어나는 대신, 못 여는 이유를 버튼이 갖고 있게 한다 */}
+                      <button
+                        class="btn ghost"
+                        disabled={openWs().length >= MAX_OPEN_WORKSPACES}
+                        title={
+                          openWs().length >= MAX_OPEN_WORKSPACES
+                            ? tf("동시에 열 수 있는 워크스페이스는 {n}개입니다 — 하나를 닫고 다시 시도하세요", { n: MAX_OPEN_WORKSPACES })
+                            : undefined
+                        }
+                        onClick={() => backend.openWorkspace(ws.id)}
+                      >
                         {t("열기")}
                       </button>
                     </Show>
@@ -266,7 +277,8 @@ export function Dashboard() {
             {(w) => (
               <button
                 class="card waiting-alert"
-                onClick={() => jumpToSession(w().workspaceId, w().id)}
+                title={t("Focus — 이 페인을 전체 화면으로 잡고 키보드를 넘깁니다")}
+                onClick={() => focusSession(w().workspaceId, w().id)}
               >
                 <div class="mono st-waiting" style={{ "font-weight": 700 }}>
                   ● WAITING · {fmtSince(w().sinceMs)}
@@ -274,7 +286,7 @@ export function Dashboard() {
                 <div style={{ "font-weight": 700, "margin-top": "4px" }}>
                   {personaName(w())} · {t("승인 대기")}
                 </div>
-                <div class="mono muted">{w().waitingFor}</div>
+                <div class="mono muted">{w().waitingFor ? t(w().waitingFor!) : ""}</div>
               </button>
             )}
           </Show>

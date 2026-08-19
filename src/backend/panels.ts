@@ -22,11 +22,21 @@ export interface FsNode {
   rel: string;
   depth: number;
   dir: boolean;
+  /** 안을 다 걷지 못한 폴더 (B15) — 빈 폴더가 아니라 "여기 더 있음"이다 */
+  truncated?: boolean;
 }
 
-export async function fsTree(wsPath: string): Promise<FsNode[] | undefined> {
+/** 트리 실측 결과 (B15) — 상한에 걸렸는지와 그 상한값. 화면이 상수를 다시 적지 않게 한다 */
+export interface FsTree {
+  nodes: FsNode[];
+  truncated: boolean;
+  maxEntries: number;
+  maxDepth: number;
+}
+
+export async function fsTree(wsPath: string): Promise<FsTree | undefined> {
   if (!isTauri()) return undefined;
-  return invoke<FsNode[]>("fs_tree", { wsPath }).catch(() => undefined);
+  return invoke<FsTree>("fs_tree", { wsPath }).catch(() => undefined);
 }
 
 export async function fsPreview(wsPath: string, rel: string): Promise<string | undefined> {

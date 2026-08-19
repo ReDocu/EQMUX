@@ -17,6 +17,10 @@ pub enum StoreMsg {
     Event { ws: String, id: Option<String>, kind: String, message: String },
     /// 에이전트 재개 매핑 (FR-C-27 · FR-D-24)
     AgentSession { ws: String, id: String, agent_session_id: String, log_path: String, resumable: bool },
+    /// 재개 매핑 제거 (P-9) — 세션 제거는 정체성의 끝이므로 앵커도 함께 지운다.
+    /// 세션 id는 슬롯·페르소나에서 결정적으로 만들어져 재사용되기 때문에(shell2@ws · persona@ws),
+    /// 남겨 두면 다음에 같은 자리에 생긴 다른 세션이 이 대화를 자기 것으로 물려받는다.
+    ForgetAgentSession { ws: String, id: String },
     /// 종료 flush (FR-C-62②) — 대기 배치를 즉시 커밋하고 ack를 보낸다
     Flush(Sender<()>),
 }
@@ -212,7 +216,8 @@ fn ws_of(msg: &StoreMsg) -> &str {
         | StoreMsg::SessionExit { ws, .. }
         | StoreMsg::Line { ws, .. }
         | StoreMsg::Event { ws, .. }
-        | StoreMsg::AgentSession { ws, .. } => ws,
+        | StoreMsg::AgentSession { ws, .. }
+        | StoreMsg::ForgetAgentSession { ws, .. } => ws,
         StoreMsg::Flush(_) => "default", // 도달 불가 — run 루프가 pending에 넣지 않는다
     }
 }
@@ -317,6 +322,10 @@ fn flush(
                          ON CONFLICT(session_id) DO UPDATE SET agent_session_id = excluded.agent_session_id, log_path = excluded.log_path, resumable = excluded.resumable",
                         params![id, agent_session_id, log_path, i64::from(*resumable)],
                     );
+                }
+                StoreMsg::ForgetAgentSession { id, .. } => {
+                    // 앵커만 지운다 — 스크롤백·이벤트는 보존 정책(30일)이 따로 관장한다
+                    let _ = tx.execute("DELETE FROM agent_session WHERE session_id = ?1", params![id]);
                 }
                 StoreMsg::Flush(_) => {} // pending에 들어오지 않는다 (run 루프에서 즉시 처리)
             }

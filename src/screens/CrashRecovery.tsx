@@ -53,7 +53,9 @@ export function CrashRecovery(props: { report: CrashReport; onClose: () => void 
         </div>
         <div class="card inset" style={{ margin: "12px 20px", padding: "8px 12px" }}>
           <span class="muted" style={{ "font-size": "11px" }}>
-            {t("자동으로 재실행하지 않습니다 — 워크스페이스 탭을 열면 각 페인에 재개 제안이 표시됩니다.")}
+            {/* 안내는 실제로 존재하는 경로만 가리킨다 — 셸 우선 모델에서 페인의 재개 제안 카드는
+                더 이상 뜨지 않는다. 기동은 페인의 칩, 재개는 세션 상세가 유일한 진입점이다. */}
+            {t("자동으로 재실행하지 않습니다 — 워크스페이스 탭에서 페인의 [▶ 에이전트 기동]으로 다시 시작하거나, 세션 상세에서 이전 대화를 재개하세요.")}
           </span>
         </div>
         <div style={{ display: "flex", "justify-content": "flex-end", padding: "0 20px 16px" }}>

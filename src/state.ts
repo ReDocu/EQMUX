@@ -160,9 +160,28 @@ export const [defaultShell, setDefaultShell] = createSignal<ShellChoice>(SHELLS[
 export const [tick, setTick] = createSignal(0);
 backend.subscribe(() => setTick((t) => t + 1));
 
-/** 대시보드 셀 클릭 = 1클릭 점프 (FR-G-50). 페인을 보는 것이므로 미확인도 해제된다 (FR-G-44) */
+/** 대시보드 셀 클릭 = 1클릭 점프 (FR-G-50). 페인을 보는 것이므로 미확인도 해제된다 (FR-G-44).
+ *  워크스페이스를 닫아도 세션은 백그라운드로 살아 있어서(닫기 = 탭만 접기) 주의 카드가
+ *  닫힌 팀의 세션을 가리킬 수 있다. 그대로 화면만 바꾸면 앱 바에 대응 탭이 없어 활성 탭이
+ *  없는 자리에 서게 되므로, 데려가기 전에 그 워크스페이스를 먼저 연다 (B18).
+ *  사용자가 누른 점프의 일부이므로 자동 실행이 아니다 — 상한·경로 소실은 openWorkspace가 거른다. */
 export function jumpToSession(workspaceId: string, sessionId: string) {
   setSelectedSession(sessionId);
   backend.markSeen(sessionId);
+  backend.openWorkspace(workspaceId);
   setView({ kind: "workspace", id: workspaceId });
+}
+
+/** 포커스로 잡기 요청 — 줌과 키보드 포커스는 컨트롤 센터의 몫이라(줌은 그 화면의 지역 상태다)
+ *  여기서는 "이 세션을 잡아라"는 요청만 남기고 화면이 이펙트로 받는다. 같은 세션을 다시
+ *  잡을 수 있어야 하므로 값이 아니라 매번 새 객체다. */
+export const [focusRequest, setFocusRequest] = createSignal<{ session: string } | undefined>(undefined);
+
+/** Focus — 사람이 답해야 진행되는 페인(waiting)을 전체 화면으로 끌어와 키보드까지 넘긴다.
+ *  대화 패널로는 답할 수 없는 상태이기 때문이다: waiting에는 본문을 주입하지 않고(TUI
+ *  다이얼로그의 오답이 된다) 인박스에 쌓아 두므로, 진행은 그 페인에 직접 치는 것뿐이다. */
+export function focusSession(workspaceId: string, sessionId: string) {
+  jumpToSession(workspaceId, sessionId);
+  setTerminalFull(true);
+  setFocusRequest({ session: sessionId });
 }

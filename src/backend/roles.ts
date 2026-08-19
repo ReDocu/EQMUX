@@ -4,7 +4,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { backend } from "./mock";
 import { isTauri, writePty } from "./pty";
-import { personaLevel } from "../types";
+import { canInject, personaLevel } from "../types";
 import type { Session } from "../types";
 
 export interface RolePayload {
@@ -82,10 +82,14 @@ export function removeRoleFile(wsPath: string, sessionId: string): void {
 }
 
 /** 비권한 변경 안내 (FR-E-44) — 파일 갱신 후 "다시 읽어라" 한 줄을 세션에 전달한다.
- *  권한 변경은 여기 오지 않는다 — 재시작 배지(E11′)가 담당한다. */
+ *  권한 변경은 여기 오지 않는다 — 재시작 배지(E11′)가 담당한다.
+ *
+ *  주입 가능 여부는 canInject 하나로 판정한다 (P-2 · G7). 예전에는 agentSessionId로 쟀는데,
+ *  그것은 지워지지 않는 과거 기록이라 승인 대기 중인 다이얼로그와 맨 셸에까지 \r을 쳤다.
+ *  넣지 못한 안내는 흘린다 — 역할 파일은 이미 갱신됐고 다음 기동·다음 읽기에서 반영된다. */
 export function nudgeRoleReload(sessionId: string, roleFile: string): void {
   if (!isTauri()) return;
   const s = backend.listSessions().find((x) => x.id === sessionId);
-  if (!s?.agentSessionId || s.status === "dead" || s.restored) return;
+  if (!canInject(s)) return;
   writePty(sessionId, `[EQMUX] 역할 파일이 갱신되었습니다 — ${roleFile} 를 다시 읽어주세요\r`);
 }

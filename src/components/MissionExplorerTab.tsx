@@ -4,11 +4,11 @@
 import { createEffect, createSignal, For, lazy, on, onMount, Show } from "solid-js";
 import { backend } from "../backend/mock";
 import { fsCreate, fsDelete, fsPreview, fsRead, fsRename, fsTree, fsWrite } from "../backend/panels";
-import type { FsNode } from "../backend/panels";
+import type { FsNode, FsTree } from "../backend/panels";
 import { refreshMissions } from "../backend/missions";
 import { sendConversation } from "../backend/conversation";
 import { isTauri } from "../backend/pty";
-import { t } from "../i18n";
+import { t, tf } from "../i18n";
 import { openPanel, scopeWorkspace, selectedSession, setOverlay, setView, tick } from "../state";
 
 // 브라우저 dev 폴백 트리 (기존 목)
@@ -33,7 +33,7 @@ export const [editorGuard, setEditorGuard] = createSignal(false);
 export function MissionExplorerTab() {
   const [sel, setSel] = createSignal<FsNode | undefined>(undefined);
   const [query, setQuery] = createSignal("");
-  const [nodes, setNodes] = createSignal<FsNode[] | undefined>(undefined);
+  const [fsResult, setFsResult] = createSignal<FsTree | undefined>(undefined);
   const [preview, setPreview] = createSignal<string | undefined>(undefined);
 
   const session = () => {
@@ -58,7 +58,7 @@ export function MissionExplorerTab() {
   const loadTree = async () => {
     const target = ws();
     if (!isTauri() || !target) return;
-    setNodes(await fsTree(target.path));
+    setFsResult(await fsTree(target.path));
   };
   onMount(() => {
     createEffect(
@@ -108,7 +108,7 @@ export function MissionExplorerTab() {
   };
 
   const tree = () => {
-    const list = isTauri() ? (nodes() ?? []) : mockTree();
+    const list = isTauri() ? (fsResult()?.nodes ?? []) : mockTree();
     const q = query().trim();
     if (q) return list.filter((n) => n.name.includes(q)); // 검색 = 평면 — 접기 무시
     return list.filter((n) => !hiddenByFold(n.rel));
@@ -367,12 +367,24 @@ export function MissionExplorerTab() {
                     {n.dir ? (isCollapsed(n.rel) ? "▸" : "▾") : n.name.endsWith(".json") ? "{}" : n.name.endsWith(".md") ? "≡" : "·"}
                   </span>
                   {n.name}
+                  {/* 상한에 가려진 폴더 (B15) — 빈 폴더처럼 보이면 "여기 그 파일 없다"로 읽힌다 */}
+                  <Show when={n.truncated}>
+                    <span class="msnp-tree-cut" title={t("상한에 걸려 이 폴더 안은 읽지 않았습니다")}>
+                      {"…"}
+                    </span>
+                  </Show>
                 </button>
               )}
             </For>
             <Show when={tree().length === 0}>
               <div class="muted" style={{ padding: "8px", "font-size": "11px" }}>
                 {t(isTauri() ? "파일이 없거나 워크스페이스가 없습니다" : "검색 결과 없음")}
+              </div>
+            </Show>
+            {/* 목록의 끝이 폴더의 끝이 아닐 수 있다 (B15) — 상한을 숨기지 않는다 */}
+            <Show when={fsResult()?.truncated && !query().trim()}>
+              <div class="msnp-tree-note mono muted">
+                {tf("{n}개 상한에서 멈췄습니다 — 이 아래로 더 있습니다", { n: fsResult()?.maxEntries ?? 0 })}
               </div>
             </Show>
           </div>

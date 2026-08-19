@@ -9,6 +9,7 @@ import { createSignal } from "solid-js";
 import { t, tf } from "../i18n";
 import { backend } from "./mock";
 import { echoPty, isTauri, writePty } from "./pty";
+import { canInject } from "../types";
 import type { ConversationMessage } from "../types";
 
 export const MSG_MAX_BODY = 2000; // M6 — Rust MAX_BODY_CHARS와 같은 값
@@ -233,11 +234,11 @@ function fmtEcho(m: ConversationMessage): string {
  *  기본 터미널(역할 없음)은 참여자다 — 프롬프트 앞의 사람이 읽는다.
  *  역할 세션은 에이전트가 아직 안 떠 있어도(shell) 참여자로 센다 — 셸 우선 모델에서는
  *  기동 전이 정상 상태이고, 그때 온 메시지는 인박스에 쌓였다가 기동 직후 흘러간다.
- *  제외는 진짜로 받을 수 없는 것만 — dead(프로세스 없음)와 restored(재시작 잔상). */
+ *  복원(restored) 세션도 같다 — 재시작 직후가 딱 그 상태다. 예전에는 여기서 걸러내 앱을
+ *  다시 켠 직후에 보낸 @all이 아무에게도 닿지 않고 흔적도 남지 않았다.
+ *  제외는 진짜로 받을 수 없는 것만 — dead(프로세스 없음). */
 function recipients(wsId: string, to: string) {
-  const live = backend.listSessions().filter(
-    (s) => s.workspaceId === wsId && !s.restored && s.status !== "dead",
-  );
+  const live = backend.listSessions().filter((s) => s.workspaceId === wsId && s.status !== "dead");
   return to === "@all" ? live : live.filter((s) => s.id === to);
 }
 
@@ -255,7 +256,7 @@ function deliver(wsId: string, m: ConversationMessage): void {
       inbox.set(s.id, q);
       setInboxTick((t) => t + 1);
       scheduleInboxSave();
-    } else if (s.status === "idle") {
+    } else if (canInject(s)) {
       injectMessage(s.id, m); // 유휴 = 프롬프트가 비어 있다 → 즉시 (M3)
     } else {
       const q = inbox.get(s.id) ?? [];

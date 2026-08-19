@@ -20,6 +20,11 @@ export const dict: Record<string, string> = {
   // ── 페인 그리드 ──
   "클릭하면 줌 토글 (B1) · 우클릭 세션 메뉴": "Click to toggle zoom (B1) · right-click for session menu",
   "승인 대기 중인 도구 요청 — y/n은 이 페인에 입력": "Tool request awaiting approval — type y/n in this pane",
+  "클릭하면 이 페인을 Focus로 잡습니다 — 답은 여기에 직접 입력합니다":
+    "Click to grab this pane with Focus — the answer is typed here",
+  "Focus — 가장 오래 기다린 페인을 전체 화면으로 잡습니다. 답은 터미널에 직접 입력합니다":
+    "Focus — grabs the longest-waiting pane fullscreen. The answer is typed in the terminal",
+  "응답 대기": "Awaiting answer",
   "ESC 종료": "ESC to exit",
   "이 자리에서 재개 — --resume · 대화 복원 (FR-D-21)":
     "Resume in place — --resume · restores the conversation (FR-D-21)",
@@ -53,6 +58,10 @@ export const dict: Record<string, string> = {
   // ── 워크트리 레일 ──
   외부: "external",
   "이 워크트리에서 셸 열기": "Open a shell in this worktree",
+  "세션 슬롯이 가득 찼습니다 — 하나를 제거하거나 설정에서 슬롯 수를 늘리세요":
+    "All session slots are in use — remove one or raise the slot count in settings",
+  "동시에 열 수 있는 워크스페이스는 {n}개입니다 — 하나를 닫고 다시 시도하세요":
+    "You can keep {n} workspaces open at once — close one and try again",
   "선택 터미널에 브랜치 부여": "Assign branch to selected terminal",
   "경로 복사": "Copy path",
   "삭제는 두지 않는다 — git worktree remove (FR-E-64)": "No delete here — use git worktree remove (FR-E-64)",
@@ -66,7 +75,8 @@ export const dict: Record<string, string> = {
   "이 슬롯을 비우고 새 세션을 추가합니다": "Frees this slot and adds a new session",
   "트랜스크립트 없음": "no transcript",
   "남긴 출력 보기": "View what it left behind",
-  "임무 관리": "Manage missions",
+  "로컬 폴더": "Local folder",
+  "앱 내 파일 탐색기에서 열기": "Open in the in-app file explorer",
   "워크트리 생성 — 새 브랜치(eqmux/<이름>) 또는 기존 브랜치 연결":
     "Create worktree — new branch (eqmux/<name>) or attach an existing branch",
   "새 브랜치": "New branch",

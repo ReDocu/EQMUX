@@ -4,6 +4,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { backend } from "./mock";
 import { isTauri } from "./pty";
+import { t } from "../i18n";
 import type { Job, Persona } from "../types";
 
 interface LibraryData {
@@ -43,8 +44,8 @@ export async function savePersonaFile(p: Persona): Promise<string | null> {
   } catch (e) {
     await refreshLibrary(); // 파일이 이긴다 (FR-E-74) — 밖의 변경으로 화면을 따라잡는다
     return String(e).includes("CONFLICT")
-      ? "파일이 밖에서 바뀌었습니다 — 목록을 새로고침했으니 확인 후 다시 저장하세요"
-      : "저장 실패 — 로그 패널을 확인하세요";
+      ? t("파일이 밖에서 바뀌었습니다 — 목록을 새로고침했으니 확인 후 다시 저장하세요")
+      : t("저장 실패 — 로그 패널을 확인하세요");
   }
   await refreshLibrary();
   return null;
@@ -98,8 +99,8 @@ export async function saveCharacterFile(id: string, content: string, expectedMti
   } catch (e) {
     await refreshLibrary();
     return String(e).includes("CONFLICT")
-      ? "시트가 밖에서 바뀌었습니다 — 다시 열어 확인 후 저장하세요"
-      : "저장 실패 — 로그 패널을 확인하세요";
+      ? t("시트가 밖에서 바뀌었습니다 — 다시 열어 확인 후 저장하세요")
+      : t("저장 실패 — 로그 패널을 확인하세요");
   }
   await refreshLibrary();
   return null;
@@ -125,8 +126,8 @@ export async function saveJobFile(j: Job): Promise<string | null> {
   } catch (e) {
     await refreshLibrary();
     return String(e).includes("CONFLICT")
-      ? "파일이 밖에서 바뀌었습니다 — 목록을 새로고침했으니 확인 후 다시 저장하세요"
-      : "저장 실패 — 로그 패널을 확인하세요";
+      ? t("파일이 밖에서 바뀌었습니다 — 목록을 새로고침했으니 확인 후 다시 저장하세요")
+      : t("저장 실패 — 로그 패널을 확인하세요");
   }
   await refreshLibrary();
   return null;

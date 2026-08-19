@@ -118,6 +118,13 @@ export function syncSessionTerminal(id: string): void {
   REGISTRY.get(id)?.sync?.();
 }
 
+/** 키보드 포커스를 이 세션 터미널로 (Focus) — 선택 전이에 붙은 이펙트로는 모자란 자리가 쓴다.
+ *  이미 선택돼 있는 세션을 다시 잡을 때(대기 배지 클릭)는 selectedSession이 안 바뀌어
+ *  그 이펙트가 다시 돌지 않는다. 여기서 답을 쳐야 하므로 포커스는 확실해야 한다. */
+export function focusSessionTerminal(id: string): void {
+  REGISTRY.get(id)?.term.focus();
+}
+
 /** 세션의 현재 터미널 크기 — 재개/재시작 커맨드가 PTY 크기를 맞추는 데 쓴다 */
 export function sessionTermSize(id: string): { cols: number; rows: number } {
   const e = REGISTRY.get(id);

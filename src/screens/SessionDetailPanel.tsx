@@ -15,7 +15,7 @@ import { t } from "../i18n";
 import { jumpToSession } from "../state";
 import { Eyebrow, KV, StatusLabel } from "../components/ui";
 import type { Permissions, Session } from "../types";
-import { flagsToString, sessionDisplayName, translatePermissions } from "../types";
+import { agentAttached, flagsToString, sessionDisplayName, translatePermissions } from "../types";
 
 const PERM_KEYS: (keyof Permissions)[] = ["write", "commit", "push"];
 
@@ -223,7 +223,7 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
       <Show when={s().status === "waiting"}>
         <div class="card inset waiting-card">
           <div class="mono st-waiting" style={{ "font-weight": 700 }}>
-            {t("승인 대기")} — {s().waitingFor}
+            {t("승인 대기")} — {t(s().waitingFor!)}
           </div>
           <div class="muted" style={{ "margin-top": "4px", "font-size": "11px" }}>
             {t("승인·거부는 터미널 페인에서 수행합니다.")}
@@ -350,20 +350,31 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
         </div>
       </Show>
 
-      {/* 재시작 필요 (E11′) — 원인(권한 변경) 바로 아래에 선다. 인과가 한 화면에 보인다 (U1) */}
+      {/* 재시작 필요 (E11′) — 원인(권한 변경) 바로 아래에 선다. 인과가 한 화면에 보인다 (U1).
+          단, 재시작은 지금 붙어 있는 에이전트가 있을 때만 성립한다 — 권한 플래그는 스폰 시점에
+          결정되므로 맨 셸 세션에는 재시작할 대상이 없다. 그 경우엔 권하지 않고 사실만 말한다. */}
       <Show when={s().restartNeeded}>
-        <div class="card restart-card">
-          <span class="mono st-waiting" style={{ "font-weight": 700 }}>
-            {t("권한 변경 감지 · 재시작 필요")}
-          </span>
-          <button
-            class="btn"
-            title={t("재개 기반 재시작 — 대화를 잃지 않는다 (FR-D-26)")}
-            onClick={() => void doRestart()}
-          >
-            {t("대화 유지 재시작")}
-          </button>
-        </div>
+        <Show
+          when={agentAttached(s())}
+          fallback={
+            <div class="card restart-card">
+              <span class="mono muted">{t("권한 변경 감지 · 다음 기동 때 적용됩니다")}</span>
+            </div>
+          }
+        >
+          <div class="card restart-card">
+            <span class="mono st-waiting" style={{ "font-weight": 700 }}>
+              {t("권한 변경 감지 · 재시작 필요")}
+            </span>
+            <button
+              class="btn"
+              title={t("재개 기반 재시작 — 대화를 잃지 않는다 (FR-D-26)")}
+              onClick={() => void doRestart()}
+            >
+              {t("대화 유지 재시작")}
+            </button>
+          </div>
+        </Show>
       </Show>
 
       {/* 역할 CRUD — 기본 터미널엔 부여, 역할 세션엔 변경·해제. 권한 변경은 재시작으로 이어진다. */}

@@ -1867,6 +1867,18 @@ fn agent_snapshot(app: AppHandle) -> Vec<agent::AgentStateEvt> {
 #[tauri::command]
 fn agent_forget(app: AppHandle, id: String) {
     agent::forget_session(&app, &id);
+    // 재개 앵커(agent_session)도 함께 지운다. 세션 id는 슬롯·페르소나에서 결정적으로 만들어져
+    // 재사용되므로(shell2@ws · persona@ws), 이 행을 남기면 다음에 같은 자리에 생긴 다른 세션이
+    // 남의 대화를 자기 것으로 물려받는다 — 화면에는 "재개 가능"이 뜨고, 반대로 "이미 에이전트가
+    // 붙은 적 있음"으로 오판돼 기동 경로가 막히기도 했다.
+    // 워크스페이스는 추적 맵에서, 없으면 `이름@워크스페이스` id 관례에서 푼다.
+    let ws = session_origin(&app, &id)
+        .map(|(ws, _)| ws)
+        .or_else(|| id.split('@').nth(1).map(str::to_string));
+    if let Some(ws) = ws {
+        let store: State<StoreState> = app.state();
+        let _ = store.0.sender().send(store::StoreMsg::ForgetAgentSession { ws, id });
+    }
 }
 
 async fn tokio_sleep(d: std::time::Duration) {

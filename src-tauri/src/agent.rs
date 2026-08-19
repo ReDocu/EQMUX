@@ -45,6 +45,10 @@ pub struct Tracked {
     pub adopted: bool,
     /// 채택 시점의 claude 프로세스 pid — 생존 확인의 근거 (adopted일 때만 의미가 있다)
     pub pid: Option<u32>,
+    /// 사람의 선택을 기다리는 프롬프트가 떠 있다 (HookEffect::Ask) — 레지스트리는 이 사이에도
+    /// 질의가 진행 중이라고 보아 busy를 쓰므로, 2초 재스캔이 waiting을 도로 내려버린다.
+    /// 그 동안만 재스캔의 상태 갱신을 막는 표식. 답이 들어오면(PostToolUse) 바로 풀린다.
+    pub asking: bool,
 }
 
 static NEXT_EVT_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -336,7 +340,7 @@ fn maybe_notify(app: &AppHandle, evt: &AgentStateEvt) {
     };
     let name = evt.session.split('@').next().unwrap_or(&evt.session);
     let title = if evt.status == "waiting" {
-        format!("{name} · 승인 대기")
+        format!("{name} · {}", waiting_title(evt.waiting_for.as_deref()))
     } else {
         format!("{name} · 종료됨")
     };
@@ -365,11 +369,60 @@ pub fn hook_status(event: &str) -> Option<&'static str> {
     }
 }
 
+/// 대기 문맥의 정본 — 화면 배지·OS 알림 제목·i18n 사전이 전부 이 문자열을 키로 쓴다.
+/// 바꾸면 세 곳이 같이 움직여야 한다 (common.ts 사전 · waiting_title).
+pub const WAIT_QUESTION: &str = "질문 선택 대기 — 이 페인에서 답해야 진행됩니다";
+pub const WAIT_PLAN: &str = "계획 승인 대기 — 이 페인에서 답해야 진행됩니다";
+
+/// 사람이 골라야 끝나는 도구 — 도구가 "실행 중"인 내내 화면에는 선택 프롬프트가 떠 있고,
+/// 진행은 그 페인에 들어온 키 입력에서만 재개된다. 승인 프롬프트와 달리 Notification 훅이
+/// 따라오지 않으므로 이것을 도구명 부연(Activity)으로만 받으면 페인은 그냥 "작업 중"으로 보이고,
+/// 대화는 인박스에 쌓이기만 한다 (M3 — busy에는 주입하지 않는다). 사람이 붙어야 진행되는
+/// 자리를 관제가 놓치는 구멍이 여기라, 이 두 도구만 상태 전이로 승격한다.
+pub fn ask_waiting_for(tool: &str) -> Option<&'static str> {
+    match tool {
+        "AskUserQuestion" => Some(WAIT_QUESTION),
+        "ExitPlanMode" => Some(WAIT_PLAN),
+        _ => None,
+    }
+}
+
+/// 세션 레지스트리의 waitingFor 원문 → 우리 어휘 (B16). 채택 세션(손기동)은 훅이 없어
+/// 이 값이 유일한 문맥인데, 그대로 두면 한국어 화면에 영문이 섞여 나온다. Claude가 쓰는
+/// 문자열 집합은 이 모듈이 아는 지식이므로(FR-D-60) 번역도 여기서 한다.
+/// 모르는 값은 원문 유지 — 부분 파싱 원칙(FR-D-64)과 같은 태도다.
+/// 화면은 이 결과를 t()에 통과시키므로 영어 모드에서는 사전이 다시 영어로 돌려준다.
+pub fn registry_waiting_for(raw: &str) -> String {
+    match raw {
+        "permission prompt" => "권한 승인 대기".into(),
+        "input needed" => "입력 필요 — 이 페인에서 답해야 진행됩니다".into(),
+        "dialog open" => "다이얼로그 응답 대기".into(),
+        "goal proposal" => "목표 제안 검토 대기".into(),
+        "sandbox request" => "샌드박스 승인 대기".into(),
+        "worker request" => "워커 승인 대기".into(),
+        other => other.into(),
+    }
+}
+
+/// OS 알림 제목의 꼬리 (B17) — 잠금 화면·알림 센터는 제목만 보여주는 일이 잦다.
+/// 우리가 만든 어휘만 갈라 보고, 모르는 문맥은 종전대로 "승인 대기".
+fn waiting_title(waiting_for: Option<&str>) -> &'static str {
+    match waiting_for {
+        Some(w) if w == WAIT_QUESTION => "질문 대기",
+        Some(w) if w == WAIT_PLAN => "계획 승인 대기",
+        Some(w) if w.starts_with("입력 필요") || w.starts_with("다이얼로그") => "응답 대기",
+        _ => "승인 대기",
+    }
+}
+
 /// 훅 이벤트의 효과 — 상태 전이 3종 외에 2차 소스가 채우는 것 (FR-D-15·18):
 /// activity(도구명)와 subagents(동시 실행 수). 상태를 바꾸지 않는 이벤트가 상태를
 /// 건드리지 않도록 효과를 분리해 둔다 (순수 함수 — 테스트 대상).
 pub enum HookEffect {
     Status(&'static str),
+    /// 사람의 선택을 기다리는 프롬프트 (ask_waiting_for) — waiting + 문맥 한 줄.
+    /// 레지스트리 재스캔이 되돌리지 못하게 고정된다 (Tracked::asking)
+    Ask(&'static str),
     Activity(Option<String>),
     SubagentDelta(i64),
     Ignore,
@@ -377,9 +430,13 @@ pub enum HookEffect {
 
 pub fn hook_effect(event: &str, payload: &serde_json::Value) -> HookEffect {
     match event {
-        "PreToolUse" => HookEffect::Activity(
-            payload.get("tool_name").and_then(|v| v.as_str()).map(str::to_string),
-        ),
+        "PreToolUse" => {
+            let tool = payload.get("tool_name").and_then(|v| v.as_str());
+            match tool.and_then(ask_waiting_for) {
+                Some(reason) => HookEffect::Ask(reason),
+                None => HookEffect::Activity(tool.map(str::to_string)),
+            }
+        }
         "PostToolUse" => HookEffect::Activity(None),
         "SubagentStart" => HookEffect::SubagentDelta(1),
         "SubagentStop" => HookEffect::SubagentDelta(-1),
@@ -399,7 +456,7 @@ pub fn apply_hook(app: &AppHandle, session: &str, event: &str, payload: &serde_j
     }
     // 상태 전이만 이벤트 테이블·알림까지 간다 (FR-D-17) — activity·subagents 변경은
     // 도구 호출마다 일어나므로 방송만 하고 기록하지 않는다 (피드는 전이의 기록이다)
-    let mut quiet = !matches!(effect, HookEffect::Status(_));
+    let mut quiet = !matches!(effect, HookEffect::Status(_) | HookEffect::Ask(_));
     let rt: tauri::State<AgentRt> = app.state();
     let mut evt = None;
     if let Ok(mut map) = rt.by_uuid.lock() {
@@ -412,6 +469,7 @@ pub fn apply_hook(app: &AppHandle, session: &str, event: &str, payload: &serde_j
                     let waiting = (*status == "waiting")
                         .then(|| payload.get("message").and_then(|m| m.as_str()).map(str::to_string))
                         .flatten();
+                    t.asking = false; // 턴 경계(Stop·UserPromptSubmit)를 넘었다 — 프롬프트는 닫혔다
                     if t.last_status == *status && t.last_waiting == waiting {
                         break; // 변화 없음 — 방송하지 않는다
                     }
@@ -424,10 +482,24 @@ pub fn apply_hook(app: &AppHandle, session: &str, event: &str, payload: &serde_j
                         t.subagents = 0;
                     }
                 }
+                // 사람의 선택을 기다리는 프롬프트 — 도구 시작(PreToolUse)에서 곧바로 waiting으로
+                // 올린다. 답이 들어오면 같은 도구의 PostToolUse가 Activity(None)로 와서 풀린다.
+                HookEffect::Ask(reason) => {
+                    let waiting = Some((*reason).to_string());
+                    t.asking = true;
+                    t.activity = None; // 도구명 부연은 여기서 의미가 없다 — 문맥은 waiting_for가 준다
+                    if t.last_status == "waiting" && t.last_waiting == waiting {
+                        break;
+                    }
+                    t.last_status = "waiting".into();
+                    t.last_waiting = waiting;
+                    t.hook_ms = crate::workspace::now_ms(); // P-3 — 훅이 더 신선하다는 표식
+                }
                 HookEffect::Activity(tool) => {
                     // 도구 실행 시작 = 승인 완료 — waiting에 고착돼 있으면 busy로 되돌린다.
                     // degraded(레지스트리 없음) 모드에선 이 전이가 없으면 다음 Stop까지 "승인 대기"로 남는다
                     let unstick = t.last_status == "waiting";
+                    t.asking = false; // 답이 들어왔거나(PostToolUse) 다른 도구가 시작됐다
                     if t.activity == *tool && !unstick {
                         break;
                     }
@@ -710,11 +782,12 @@ fn scan(app: &AppHandle) {
                 });
                 let status = rec.status.clone().unwrap_or_else(|| "idle".into());
                 let seq = next_seq();
+                let waiting = rec.waiting_for.as_deref().map(registry_waiting_for);
                 adopted.push(AgentStateEvt {
                     session: app_session.clone(),
                     agent_session: uuid.clone(),
                     status: status.clone(),
-                    waiting_for: rec.waiting_for.clone(),
+                    waiting_for: waiting.clone(),
                     activity: None,
                     subagents: 0,
                     cost_usd: None,
@@ -733,7 +806,7 @@ fn scan(app: &AppHandle) {
                         cwd,
                         name,
                         last_status: status,
-                        last_waiting: rec.waiting_for.clone(),
+                        last_waiting: waiting,
                         pty_gen: gen, // 페인이 죽으면 on_pty_exit이 dead로 닫을 수 있게
                         seq,
                         adopted: true,
@@ -809,9 +882,15 @@ fn scan(app: &AppHandle) {
                 if *mtime_ms <= t.hook_ms {
                     continue;
                 }
+                // 선택 프롬프트가 떠 있는 동안은 재스캔이 상태를 만지지 않는다 (Tracked::asking).
+                // 레지스트리는 이 시간을 "질의 진행 중"으로 보아 busy를 쓰므로, 그대로 받으면
+                // 사람이 답하기도 전에 waiting이 2초 만에 풀려 페인이 다시 작업 중으로 보인다.
+                if t.asking {
+                    continue;
+                }
                 // status 부재 시 기존 값 유지 (FR-D-64 — 훅 폴백은 다음 단계)
                 let status = rec.status.clone().unwrap_or_else(|| t.last_status.clone());
-                let waiting = rec.waiting_for.clone();
+                let waiting = rec.waiting_for.as_deref().map(registry_waiting_for);
                 if status != t.last_status || waiting != t.last_waiting {
                     t.last_status = status.clone();
                     t.last_waiting = waiting.clone();
@@ -934,5 +1013,42 @@ mod tests {
             super::hook_effect("PreCompact", &serde_json::Value::Null),
             HookEffect::Ignore
         ));
+    }
+
+    /// 사람이 골라야 끝나는 도구는 부연이 아니라 상태다 — 여기가 Activity로 새면 선택
+    /// 프롬프트가 떠 있는 내내 페인이 "작업 중"으로 보이고, 대화도 인박스에서 멈춘다
+    #[test]
+    fn ask_tools_become_waiting_not_activity() {
+        let ask = serde_json::json!({ "tool_name": "AskUserQuestion" });
+        assert!(matches!(
+            super::hook_effect("PreToolUse", &ask),
+            HookEffect::Ask(r) if r.contains("질문")
+        ));
+        let plan = serde_json::json!({ "tool_name": "ExitPlanMode" });
+        assert!(matches!(
+            super::hook_effect("PreToolUse", &plan),
+            HookEffect::Ask(r) if r.contains("계획")
+        ));
+        // 나머지 도구는 그대로 부연 — 상태를 건드리지 않는다
+        assert!(matches!(
+            super::hook_effect("PreToolUse", &serde_json::json!({ "tool_name": "Read" })),
+            HookEffect::Activity(Some(ref t)) if t == "Read"
+        ));
+        assert_eq!(super::ask_waiting_for("Bash"), None);
+    }
+
+    /// 레지스트리 영문 문맥은 우리 어휘로 옮기고, 모르는 값은 그대로 둔다 (B16).
+    /// 알림 제목은 무엇을 기다리는지에 따라 갈린다 (B17).
+    #[test]
+    fn registry_context_is_translated_and_titles_split() {
+        assert_eq!(super::registry_waiting_for("permission prompt"), "권한 승인 대기");
+        assert_eq!(super::registry_waiting_for("input needed"), "입력 필요 — 이 페인에서 답해야 진행됩니다");
+        // 모르는 값은 원문 유지 (FR-D-64) — 조용히 지어내지 않는다
+        assert_eq!(super::registry_waiting_for("brand new state"), "brand new state");
+
+        assert_eq!(super::waiting_title(Some(super::WAIT_QUESTION)), "질문 대기");
+        assert_eq!(super::waiting_title(Some(super::WAIT_PLAN)), "계획 승인 대기");
+        assert_eq!(super::waiting_title(Some("권한 승인 대기")), "승인 대기");
+        assert_eq!(super::waiting_title(None), "승인 대기"); // 모르면 종전대로
     }
 }

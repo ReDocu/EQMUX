@@ -152,6 +152,23 @@ export function effectivePermissions(s: Session, job: Job | undefined): Permissi
   return s.permOverride ?? job?.permissions;
 }
 
+/** 지금 이 페인에 관리 에이전트가 붙어 있는가.
+ *
+ *  판정은 status만 본다. `agentSessionId`로 재면 안 된다 — 그것은 "언젠가 붙은 적이 있다"는
+ *  과거 기록이라 지워지지 않고(agent_session 매핑은 재시작 때 DB에서 되살아난다), 셸로 돌아온
+ *  페인·복원된 슬롯까지 "붙어 있음"으로 오판한다. shell = 맨 셸, dead = 프로세스 없음. */
+export const agentAttached = (s: Session): boolean => s.status !== "shell" && s.status !== "dead";
+
+/** 지금 이 세션의 PTY에 텍스트를 입력해도 되는가 (P-2 · G7) — idle일 때만 참.
+ *
+ *  이 판정을 대화 전달(M3)·임무 브리프(FR-E-55)·역할 갱신 안내(FR-E-44)가 함께 쓴다.
+ *  경로마다 따로 재면 한 곳이 빠지고, 빠진 곳은 그대로 사고가 된다:
+ *   - shell  → 사람이 치던 미제출 명령 뒤에 붙어 그 명령이 실행된다
+ *   - waiting → 승인 다이얼로그가 떠 있다. 본문이 오답이 되고 \r이 기본 항목을 실행한다 (G7)
+ *   - busy·starting → 턴 중간에 끼어든다. 대기시켰다가 idle 전이에 흘려보내는 것이 맞다
+ *  즉시 넣을 수 없을 때 무엇을 할지(인박스 적재·화면 에코·생략)는 호출부가 각자 정한다. */
+export const canInject = (s: Session | undefined): boolean => s?.status === "idle";
+
 /** 세션 표시 이름 (P5 · FR-E-36) — 분리된 이름이 있으면 그것, 없으면 페르소나 이름 */
 export const sessionDisplayName = (s: Session, personaName: string): string =>
   s.name?.trim() || personaName;
