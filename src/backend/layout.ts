@@ -66,8 +66,12 @@ let restored = false;
  *  디바운스(800ms) 중인 스테일 layout.json이 현재 상태(닫은 탭·현재 화면)를 되돌린다. */
 export async function restoreLayout(): Promise<void> {
   if (restored || !isTauri()) return;
+  // 로드가 실패하면(IPC 실패) 복원도 저장도 하지 않는다 — 설정과 같은 결함이었다.
+  // 예전엔 실패해도 startLayoutSync가 돌아, 첫 변경이 빈 기본 레이아웃을 저장본에 덮었다.
+  const data = await invoke<LayoutData | null>("layout_load").catch(() => undefined);
+  if (data === undefined) return; // restored·loadOk를 세우지 않는다 (다음 호출에서 재시도)
   restored = true;
-  const data = await invoke<LayoutData | null>("layout_load").catch(() => null);
+  loadOk = true;
   if (!data) return;
   // 배치 복원 — 워크스페이스별 맵 우선 (U7), 구버전 단일 값은 모든 워크스페이스의 초기값으로
   if (data.paneLayoutsByWs && typeof data.paneLayoutsByWs === "object") {
@@ -105,6 +109,7 @@ export async function restoreLayout(): Promise<void> {
 }
 
 let syncStarted = false;
+let loadOk = false; // layout_load 성공 여부 — 실패했으면 저장을 시작하지 않는다
 let lastWs: string | undefined; // 관제 탭에 있을 때도 직전 워크스페이스를 기억한다
 
 let timer: ReturnType<typeof setTimeout> | undefined;
@@ -140,7 +145,7 @@ export function flushLayoutNow(): void {
 
 /** 변경 감지 → 800ms 디바운스 저장. 반드시 restoreLayout 이후에 시작한다. */
 export function startLayoutSync(): void {
-  if (syncStarted || !isTauri()) return;
+  if (syncStarted || !loadOk || !isTauri()) return;
   syncStarted = true;
   const save = () => {
     clearTimeout(timer);

@@ -484,8 +484,13 @@ export function ControlCenter(props: { workspace: Workspace }) {
    *  (conversation.ts의 주입 판정과 같은 기준). agentSessionId로 재면 안 된다: 그것은 과거
    *  기록(agent_session 매핑)이라 한 번 붙은 뒤로는 지워지지 않고, 복원(team_load가 DB에서
    *  끌어옴)이나 채택 세션 종료(claude만 죽고 셸이 남아 Rust가 shell로 되돌림) 뒤에도 남아
-   *  있어서, 맨 셸인 페인에서 기동 경로가 영영 사라진다. */
-  const needsAgent = (s: Session) => !!roleAgent(s) && s.status === "shell";
+   *  있어서, 맨 셸인 페인에서 기동 경로가 영영 사라진다.
+   *
+   *  단, status는 훅·레지스트리 경로라 비면 shell로 남는다 (훅 미설치·채택 실패·관측 저하).
+   *  기동은 killAndWait로 페인을 통째로 끝내므로, 그 상태에서 버튼을 누르면 지금 돌고 있는
+   *  에이전트가 죽는다. 그래서 Job 트리 실측(s.agent)이 에이전트를 보고 있으면 감춘다 —
+   *  프로세스 생존은 status와 독립된 실시간 소스다 (agentprobe 5초 폴링). */
+  const needsAgent = (s: Session) => !!roleAgent(s) && s.status === "shell" && !s.agent;
   const launchAgent = async (s: Session) => {
     const a = roleAgent(s);
     if (!a) return;

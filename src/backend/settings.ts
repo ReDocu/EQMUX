@@ -112,27 +112,42 @@ if (typeof window !== "undefined") {
   });
 }
 
+/** 부트스트랩 체인이 아니라 모듈 로드 시점에 시작한다 — 설정 화면은 첫 프레임부터
+ *  열 수 있는 오버레이인데(App.tsx), 로드 전에는 settings()가 DEFAULT_SETTINGS다.
+ *  updateSettings는 객체 전체를 저장하므로 그 창에서 한 번만 눌러도 저장본이 통째로
+ *  기본값으로 덮인다 — 재시작하면 설정이 사라져 있는 원인. */
+let loadOk = !isTauri(); // Tauri 밖에서는 저장 자체를 안 하므로 참으로 둔다
+const ready: Promise<void> = isTauri()
+  ? invoke<unknown>("settings_load").then(
+      (raw) => {
+        // Null 응답(저장본 없음·손상)은 정상 — 기본값이 맞는 기준선이다.
+        // invoke 자체가 실패한 경우만 저장을 막는다 (기본값으로 파일을 덮지 않기 위해).
+        setSettings(sanitize(raw));
+        applyTheme();
+        loadOk = true;
+      },
+      () => {},
+    )
+  : Promise.resolve();
+
+/** 부트스트랩 로드 — restoreTeams(maxSlots)·restoreLayout(startView)보다 먼저 await된다 */
+export const loadSettings = (): Promise<void> => ready;
+
 /** 음소거 토글 (FR-G-35) — id는 세션 id 또는 워크스페이스 id */
 export function toggleMuted(id: string): void {
-  const cur = settings().muted;
-  updateSettings({ muted: cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id] });
+  void ready.then(() => {
+    const cur = settings().muted; // 로드 뒤에 읽는다 — 기본값 []에 얹으면 기존 음소거가 날아간다
+    updateSettings({ muted: cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id] });
+  });
 }
 
-let loaded = false;
-
-/** 부트스트랩 로드 — restoreLayout이 startView를 참조하므로 그보다 먼저 불린다 */
-export async function loadSettings(): Promise<void> {
-  if (loaded || !isTauri()) return;
-  loaded = true;
-  const raw = await invoke<unknown>("settings_load").catch(() => null);
-  setSettings(sanitize(raw));
-  applyTheme();
-}
-
-/** 변경 즉시 저장 — 파일 + Rust 메모리 사본(알림 게이트)이 함께 갱신된다 */
+/** 변경 즉시 저장 — 파일 + Rust 메모리 사본(알림 게이트)이 함께 갱신된다.
+ *  로드가 끝난 뒤에 적용한다 — 기본값 기준선으로 저장본을 덮지 않기 위해 */
 export function updateSettings(patch: Partial<AppSettings>): void {
-  const next = sanitize({ ...settings(), ...patch });
-  setSettings(next);
-  applyTheme();
-  if (isTauri()) void invoke("settings_save", { data: next }).catch(() => {});
+  void ready.then(() => {
+    const next = sanitize({ ...settings(), ...patch });
+    setSettings(next);
+    applyTheme();
+    if (isTauri() && loadOk) void invoke("settings_save", { data: next }).catch(() => {});
+  });
 }

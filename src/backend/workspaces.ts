@@ -56,6 +56,9 @@ function toWorkspace(w: WsInfo): Workspace {
 /** 레지스트리를 다시 읽어 목 백엔드의 워크스페이스 목록을 실물로 교체하고 팀 슬롯을 복원한다 */
 export async function refreshWorkspaces(): Promise<void> {
   if (!isTauri()) return;
+  // 설정이 제일 먼저다 — restoreTeams·그리드가 maxSlots를, restoreLayout이 startView를 본다.
+  // 모듈 로드 시점에 이미 시작된 로드를 기다리는 것뿐이라 추가 지연은 없다.
+  await loadSettings();
   const list = await invoke<WsInfo[]>("ws_registry").catch(() => [] as WsInfo[]);
   backend.hydrateWorkspaces(list.map(toWorkspace));
   // 유령 뷰 정규화 — 현재 탭의 워크스페이스가 레지스트리에서 사라졌으면 관제로 돌아간다.
@@ -81,9 +84,7 @@ export async function refreshWorkspaces(): Promise<void> {
       .flatMap((w) => [refreshMissions(w.id), refreshConversation(w.id)]),
   );
   // 레이아웃 복원 (FR-C-22·30) — 워크스페이스가 실재해야 탭을 열 수 있다.
-  // 설정을 먼저 로드해야 startView 옵션(FR-G-02)이 복원에 반영된다.
   // 동기화는 복원 뒤에 시작 — 부트스트랩 중간 상태로 저장본을 덮지 않는다.
-  await loadSettings();
   await restoreLayout();
   startLayoutSync();
 }
