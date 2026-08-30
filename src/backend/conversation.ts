@@ -188,10 +188,23 @@ export function pendingInbox(): { sessionId: string; count: number }[] {
     .map(([sessionId, q]) => ({ sessionId, count: q.length }));
 }
 
+/** 수신 세션의 페르소나 표시 이름 — 역할 없는 세션이면 undefined */
+function personaNameOf(sessionId: string): string | undefined {
+  const s = backend.listSessions().find((x) => x.id === sessionId);
+  if (!s?.personaId) return undefined;
+  return backend.listPersonas().find((p) => p.id === s.personaId)?.name ?? s.personaId;
+}
+
 /** 주입 본문 — 한 줄로 눌러서 보낸다. 에이전트 TUI에서 개행은 곧 제출이라, 본문에 줄바꿈이
- *  있으면 첫 줄만 들어가고 나머지가 다음 프롬프트로 새거나 중간에 턴이 시작된다. */
-function fmt(m: ConversationMessage): string {
-  return `[EQMUX 메시지·${m.type}] ${m.from}: ${m.body.replace(/\s*\r?\n\s*/g, " ")}`;
+ *  있으면 첫 줄만 들어가고 나머지가 다음 프롬프트로 새거나 중간에 턴이 시작된다.
+ *
+ *  꼬리의 페르소나 리마인더 — 역할(캐릭터)은 SessionStart에 한 번 실리고 나면 대화가 길어질수록
+ *  멀어진다. 그 상태로 도착한 메시지는 운영 알림처럼 보여서 에이전트가 기본 어투로 답했다
+ *  (페르소나가 에이전트간 대화에서만 빠지던 자리). 수신자 이름을 매 건에 한 조각 얹어 끊는다. */
+function fmt(m: ConversationMessage, persona?: string): string {
+  const body = m.body.replace(/\s*\r?\n\s*/g, " ");
+  const head = `[EQMUX 메시지·${m.type}] ${m.from}: ${body}`;
+  return persona ? `${head} (답신은 ${persona}의 말투로)` : head;
 }
 
 const SUBMIT_DELAY_MS = 80; // 본문 접수 → 제출 사이. TUI가 붙여넣기를 정리할 시간을 준다
@@ -208,7 +221,9 @@ function injectMessage(sessionId: string, m: ConversationMessage): void {
   const prev = injectQueue.get(sessionId) ?? Promise.resolve();
   const next = prev
     .then(async () => {
-      writePty(sessionId, fmt(m));
+      // 페르소나는 큐에 넣을 때가 아니라 실제로 쓸 때 읽는다 — 앞 메시지를 기다리는 동안
+      // 재캐스팅될 수 있고, 그때는 새 인물의 이름이 맞다
+      writePty(sessionId, fmt(m, personaNameOf(sessionId)));
       await sleep(SUBMIT_DELAY_MS);
       writePty(sessionId, "\r"); // 제출 — 여기서 비로소 수신자의 턴이 돈다
       await sleep(TURN_GAP_MS);

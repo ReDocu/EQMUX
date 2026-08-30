@@ -47,7 +47,8 @@ pub struct RolePayload {
     pub permissions: RolePermissions,
     pub responsibility: String,
     pub forbidden: String,
-    /// 고급 캐릭터 시트 (선택) — 전재하지 않고 경로 포인터만 실린다 (FR-E-40과 같은 태도)
+    /// 고급 캐릭터 시트 (선택) — 역할 파일에는 경로 포인터만 실린다 (FR-E-40과 같은 태도).
+    /// 시트 본문은 SessionStart 훅이 이 포인터를 따라가 컨텍스트에 싣는다 (cli.rs role_context)
     #[serde(default)]
     pub character_path: Option<String>,
     #[serde(default)]
@@ -236,7 +237,7 @@ pub fn save(ws_path: &str, p: &RolePayload) -> Result<String, String> {
             None => name.to_string(),
         };
         out.push_str(&format!(
-            "\n## 캐릭터\n\"{who}\" 캐릭터로 응답한다 — 시작 전에 시트를 읽을 것:\n{sheet}\n시트와 말투·성격 섹션이 겹치면 시트가 우선. 책임·금지·권한은 캐릭터보다 항상 우선.\n"
+            "\n## 캐릭터\n\"{who}\" 캐릭터로 응답한다 — 시트 본문은 세션 시작에 함께 실린다:\n{sheet}\n팀 메시지(eqmux send)와 대화 응답은 캐릭터 말투로 쓴다 — 말투를 빼는 것은 코드·커밋 메시지·파일 산출물뿐이다.\n시트와 말투·성격 섹션이 겹치면 시트가 우선. 책임·금지·권한은 캐릭터보다 항상 우선.\n"
         ));
     }
     if !p.responsibility.is_empty() {

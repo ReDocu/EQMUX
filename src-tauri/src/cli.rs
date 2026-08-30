@@ -206,7 +206,8 @@ fn friendly(err: &str) -> String {
     }
 }
 
-/// SessionStart 훅의 stdout (FR-D-05 · §10.2) — 역할 파일을 세션 컨텍스트로 싣는다.
+/// SessionStart 훅의 stdout (FR-D-05 · §10.2) — 역할 파일을 세션 컨텍스트로 싣는다
+/// (고급 단계면 그 파일이 가리키는 캐릭터 시트까지 — role_context 참고).
 ///
 /// --append-system-prompt의 2줄 포인터는 "읽어라"는 지시일 뿐이라, 가벼운 첫 메시지에는
 /// 모델이 파일을 열지 않고 답해버린다 (페르소나가 첫 턴부터 빠지는 원인). 훅 컨텍스트는
@@ -220,17 +221,58 @@ fn session_start_context() -> Option<String> {
     role_context(&path)
 }
 
+/// 캐릭터 시트 인라인 상한 — 시트는 사용자가 직접 쓰는 파일이라 크기를 앱이 통제하지 않는다.
+const MAX_SHEET_CHARS: usize = 20_000;
+
+/// 역할 파일의 캐릭터 블록이 가리키는 시트 경로 (고급 단계에만 있다).
+/// roles.rs가 경로를 한 줄로 쓰므로 `.character.md`로 끝나는 줄이 곧 포인터다.
+fn sheet_path_in(body: &str) -> Option<String> {
+    body.lines()
+        .map(str::trim)
+        .find(|l| l.ends_with(".character.md"))
+        .map(str::to_string)
+}
+
+/// 시트 본문 — 길면 앞부분만 싣는다 (정체성·성격·말투 규칙이 앞에 온다).
+fn sheet_body(path: &str) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    if text.trim().is_empty() {
+        return None;
+    }
+    if text.chars().count() > MAX_SHEET_CHARS {
+        let cut: String = text.chars().take(MAX_SHEET_CHARS).collect();
+        return Some(format!("{cut}\n\n(시트가 길어 여기까지만 실었다 — 나머지는 원본 파일을 읽을 것)"));
+    }
+    Some(text)
+}
+
 /// 역할 파일 → 훅 출력 JSON. 환경변수를 벗겨 둬야 테스트할 수 있다 (env는 프로세스 전역).
+///
+/// 고급 단계(캐릭터 시트)는 역할 파일에 경로 포인터만 실린다 (roles.rs) — 그런데 포인터는
+/// 역할 파일 자체와 똑같은 이유로 안 읽힌다. 말투 규칙·대사 예시가 컨텍스트에 없으니
+/// 에이전트간 대화에서 캐릭터가 통째로 빠졌다. 여기서 시트 본문까지 이어 붙여 끊는다.
+/// 파일은 여전히 유일한 원본이다 — 앱이 사본을 들지 않고 매 세션 시작에 다시 읽는다.
 fn role_context(path: &str) -> Option<String> {
     let body = std::fs::read_to_string(path).ok()?;
     if body.trim().is_empty() {
         return None;
     }
-    let ctx = format!(
+    let mut ctx = format!(
         "이 세션에 부여된 역할이다 (원본 파일: {path}). 첫 응답부터 이 인물·책임·금지·권한을 따른다.
 
 {body}"
     );
+    if let Some(sheet) = sheet_path_in(&body) {
+        if let Some(text) = sheet_body(&sheet) {
+            ctx.push_str(&format!(
+                "
+아래는 위 캐릭터 블록이 가리키는 시트 본문이다 (원본 파일: {sheet}) — 이미 실었으니 따로 열지 않아도 된다. 말투·성격의 원본은 이 시트다.
+팀 메시지(eqmux send)와 대화 응답의 본문은 대화다 — 캐릭터 말투를 쓴다. 말투를 빼는 것은 코드·커밋 메시지·파일 산출물뿐이다.
+
+{text}"
+            ));
+        }
+    }
     Some(
         serde_json::json!({
             "hookSpecificOutput": { "hookEventName": "SessionStart", "additionalContext": ctx }
@@ -326,6 +368,37 @@ mod tests {
 ").unwrap();
         assert!(super::role_context(&f.to_string_lossy()).is_none());
         assert!(super::role_context(&dir.join("없는파일.md").to_string_lossy()).is_none());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 고급 단계 — 역할 파일은 시트 경로만 들고 있다. 그 포인터를 따라가 시트 본문(말투 규칙·
+    /// 대사 예시)까지 컨텍스트에 실려야 한다. 여기가 비면 캐릭터는 이름만 남고 말투가 빠진다.
+    #[test]
+    fn session_start_context_inlines_the_character_sheet() {
+        let dir = std::env::temp_dir().join(format!("eqmux-sheet-{}", crate::workspace::now_ms()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sheet = dir.join("hilde.character.md");
+        std::fs::write(&sheet, "## 말투 규칙\n- 어미·어조: 짧고 단정한 반말\n\n## 대사 예시\n- \"기억해 둬.\"\n").unwrap();
+        let role = dir.join("role.md");
+        std::fs::write(
+            &role,
+            format!(
+                "# 힐데 — 문서\n\n## 캐릭터\n\"힐데 (카운터사이드)\" 캐릭터로 응답한다 — 시트 본문은 세션 시작에 함께 실린다:\n{}\n",
+                sheet.to_string_lossy()
+            ),
+        )
+        .unwrap();
+        let out = super::role_context(&role.to_string_lossy()).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let ctx = v["hookSpecificOutput"]["additionalContext"].as_str().unwrap();
+        assert!(ctx.contains("짧고 단정한 반말") && ctx.contains("기억해 둬")); // 시트 본문이 실렸다
+        assert!(ctx.contains("팀 메시지")); // 메시지 본문도 캐릭터 말투라는 안내가 함께 간다
+
+        // 시트가 사라진 뒤에도 역할 파일만으로 성립해야 한다 (포인터는 남지만 본문은 없다)
+        std::fs::remove_file(&sheet).unwrap();
+        let out = super::role_context(&role.to_string_lossy()).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert!(v["hookSpecificOutput"]["additionalContext"].as_str().unwrap().contains("힐데"));
         std::fs::remove_dir_all(&dir).ok();
     }
 

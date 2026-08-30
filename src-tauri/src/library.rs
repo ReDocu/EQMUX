@@ -529,7 +529,8 @@ pub fn delete_job(app_root: &Path, id: &str) -> Result<(), String> {
 }
 
 // ── 고급 캐릭터 시트 (3단계 페르소나) — personas/<id>.character.md. 존재 = 고급 단계.
-// 역할 파일에는 전재하지 않고 포인터만 실린다 (FR-E-40과 같은 태도) — 에이전트가 직접 읽는다.
+// 역할 파일에는 전재하지 않고 포인터만 실린다 (FR-E-40과 같은 태도) — 시트 본문은
+// SessionStart 훅이 그 포인터를 따라가 컨텍스트에 싣는다 (cli.rs role_context).
 // 전역 계층에만 쓴다 — 워크스페이스 오버라이드 시트는 .eqmux/personas 파일로 직접 만든다 (FR-E-28과 동일).
 
 #[derive(Serialize)]
@@ -566,7 +567,7 @@ fn character_template(persona_id: &str, persona_name: &str) -> String {
 ## 경계 (고정 — 수정하지 않음)\n\
 - 기술 정보·보고의 정확성이 캐릭터 연기보다 우선한다\n\
 - 캐릭터를 이유로 금지·권한 규칙을 넘지 않는다\n\
-- 코드 · 커밋 메시지 · 파일 산출물은 캐릭터 말투를 쓰지 않는다\n"
+- 코드 · 커밋 메시지 · 파일 산출물은 캐릭터 말투를 쓰지 않는다 — 팀 메시지(eqmux send)와 대화 응답은 캐릭터 말투로 쓴다\n"
     )
 }
 
@@ -709,7 +710,7 @@ pub fn seed(app_root: &Path) {
 ## 경계 (고정 — 수정하지 않음)\n\
 - 기술 정보·보고의 정확성이 캐릭터 연기보다 우선한다\n\
 - 캐릭터를 이유로 금지·권한 규칙을 넘지 않는다\n\
-- 코드 · 커밋 메시지 · 파일 산출물은 캐릭터 말투를 쓰지 않는다\n";
+- 코드 · 커밋 메시지 · 파일 산출물은 캐릭터 말투를 쓰지 않는다 — 팀 메시지(eqmux send)와 대화 응답은 캐릭터 말투로 쓴다\n";
         let _ = save_character(app_root, "luca", example, None);
     }
 }
