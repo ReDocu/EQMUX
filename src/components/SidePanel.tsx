@@ -3,6 +3,7 @@
 // 전체 화면 팝업으로 승격 — 앱 바의 임무 버튼이 연다.
 // 위치 전환 — 플렉스 order로 좌/우를 오간다 (app-row · tf-body 양쪽 컨테이너 공용).
 import { For, Show } from "solid-js";
+import { unseenPortCount } from "../backend/ports";
 import { panelSide, panelTab, setPanelOpen, setPanelSide, setPanelTab } from "../state";
 import type { PanelTab } from "../state";
 import { t } from "../i18n";
@@ -26,8 +27,17 @@ export function SidePanel() {
       <div class="panel-tabs">
         <For each={TABS}>
           {(tb) => (
-            <button class="panel-tab" classList={{ active: panelTab() === tb.key }} onClick={() => setPanelTab(tb.key)}>
+            <button
+              class="panel-tab"
+              classList={{ active: panelTab() === tb.key }}
+              title={tb.key === "ports" && unseenPortCount() > 0 ? t("세션이 연 새 포트가 있습니다") : undefined}
+              onClick={() => setPanelTab(tb.key)}
+            >
               {t(tb.label)}
+              {/* 새 세션 포트 (M31) — 알림은 여기까지다. 여는 것은 포트 패널 안의 클릭이다 */}
+              <Show when={tb.key === "ports" && unseenPortCount() > 0}>
+                <span class="unread-dot" />
+              </Show>
             </button>
           )}
         </For>

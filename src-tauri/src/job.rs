@@ -69,29 +69,42 @@ mod win {
             }
         }
 
-        /// 잡에 속한 pid 목록 — 포트 귀속(H)·메모리 합산이 같은 원천을 쓴다
+        /// 잡에 속한 pid 목록 — 포트 귀속(H)·에이전트 감지·메모리 합산이 같은 원천을 쓴다.
+        ///
+        /// 버퍼는 늘려 가며 묻는다. 고정 크기로 두면 프로세스가 그보다 많은 잡에서
+        /// QueryInformationJobObject가 ERROR_MORE_DATA로 실패하고 목록이 통째로 비는데,
+        /// 그러면 그 세션이 연 포트가 전부 "시스템 포트"로 떨어져 포트 패널에서 사라진다.
+        /// 실패해도 assigned는 채워 주므로 보통 두 번째 시도에서 끝난다.
         pub fn pids(&self) -> Vec<u32> {
-            unsafe {
-                const CAP: usize = 128;
-                #[repr(C)]
-                struct PidList {
-                    assigned: u32,
-                    in_list: u32,
-                    pids: [usize; CAP],
+            // JOBOBJECT_BASIC_PROCESS_ID_LIST — DWORD 둘 뒤에 ULONG_PTR 배열.
+            // 배열 오프셋은 x86·x64 모두 8이다 (x86은 정렬 4로 딱 맞고, x64는 정렬 8로 채워진다).
+            const HEADER: usize = 8;
+            // usize 벡터로 잡는다 — 커널이 ULONG_PTR을 쓰므로 정렬이 보장돼야 한다 (u8 벡터는 정렬 1)
+            let words = HEADER / std::mem::size_of::<usize>();
+            let mut cap = 128usize; // 대부분의 세션은 여기서 끝난다
+            for _ in 0..4 {
+                let mut buf: Vec<usize> = vec![0; words + cap];
+                let bytes = (words + cap) * std::mem::size_of::<usize>();
+                unsafe {
+                    let ok = QueryInformationJobObject(
+                        self.0,
+                        JobObjectBasicProcessIdList,
+                        buf.as_mut_ptr() as *mut std::ffi::c_void,
+                        bytes as u32,
+                        std::ptr::null_mut(),
+                    ) != 0;
+                    let head = buf.as_ptr() as *const u32;
+                    let assigned = *head as usize;
+                    let in_list = *head.add(1) as usize;
+                    if !ok {
+                        // 모자랐다 — 실측 assigned가 있으면 그만큼, 없으면 두 배로 다시 묻는다
+                        cap = if assigned > cap { assigned } else { cap * 2 } + 8;
+                        continue;
+                    }
+                    return (0..in_list.min(cap)).map(|i| buf[words + i] as u32).collect();
                 }
-                let mut list = PidList { assigned: 0, in_list: 0, pids: [0; CAP] };
-                if QueryInformationJobObject(
-                    self.0,
-                    JobObjectBasicProcessIdList,
-                    &mut list as *mut _ as *mut std::ffi::c_void,
-                    std::mem::size_of::<PidList>() as u32,
-                    std::ptr::null_mut(),
-                ) == 0
-                {
-                    return Vec::new();
-                }
-                (0..(list.in_list as usize).min(CAP)).map(|i| list.pids[i] as u32).collect()
             }
+            Vec::new()
         }
 
         /// 프로세스 트리 메모리 (FR-C-09 · C11) — (현재 워킹셋 합, 잡 피크 커밋).

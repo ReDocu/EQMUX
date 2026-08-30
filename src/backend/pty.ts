@@ -189,6 +189,17 @@ export function openExternal(url: string): void {
   void invoke("open_external", { url }).catch(() => {});
 }
 
+/** 터미널 경로 더블클릭 → 탐색기에서 열기. 파일이면 그 파일이 선택된 채로, 폴더면 그 폴더가 열린다.
+ *  상대 경로는 세션 cwd 기준으로 푼다. 실재하지 않으면 false — 더블클릭은 선택 제스처이기도 해서
+ *  화면에 따라 조용히 넘길 자리가 있다. */
+export async function revealPath(path: string, cwd?: string): Promise<boolean> {
+  if (!isTauri()) return false;
+  return invoke("reveal_path", { path, cwd: cwd ?? null }).then(
+    () => true,
+    () => false,
+  );
+}
+
 export function onPtyOutput(id: string, cb: (data: string) => void): () => void {
   if (!outputSubs.has(id)) outputSubs.set(id, new Set());
   outputSubs.get(id)!.add(cb);

@@ -64,6 +64,8 @@ export const dict: Record<string, string> = {
   "· 목": "· mock",
   "포트 · 프로세스 · 세션 검색": "Search port · process · session",
   "주소 복사": "Copy address",
+  "브라우저 패널에서 열기": "Open in the browser panel",
+  "세션이 연 새 포트가 있습니다": "A session opened a new port",
   "세션이 연 LISTENING 포트가 없습니다": "No LISTENING ports opened by sessions",
   "포트 사용 요약": "Port usage summary",
   "세션 포트": "Session ports",
@@ -75,11 +77,15 @@ export const dict: Record<string, string> = {
 
   // ── 브라우저 패널 (BrowserPanelTab) ──
   브라우저: "Browser",
-  "세션 포트 미리보기": "Session port preview",
+  "세션 포트 · 웹 미리보기": "Session ports · web preview",
   새로고침: "Refresh",
-  "localhost · 127.0.0.1 대상만 미리봅니다 — 외부 웹은 사용자의 브라우저에서":
-    "Previews localhost · 127.0.0.1 only — use your own browser for the open web",
-  "127.0.0.1:5173 — Enter로 열기": "127.0.0.1:5173 — press Enter to open",
+  뒤로: "Back",
+  앞으로: "Forward",
+  "브라우저 닫기": "Close browser",
+  "목 모드는 localhost 미리보기만 됩니다 — 앱에서 실행하세요":
+    "The browser mock previews localhost only — run the app for the real webview",
+  "주소 입력 — Enter로 열기 (127.0.0.1:5173 · https://…)":
+    "Type an address — Enter opens (127.0.0.1:5173 · https://…)",
   "위 포트 칩을 누르거나 주소를 입력하세요": "Click a port chip above or type an address",
   "세션이 LISTENING 포트를 열면 칩이 나타납니다": "Chips appear when a session opens a LISTENING port",
   "Tauri에서 실행하면 실측 포트가 연결됩니다": "Run in Tauri to see live ports",

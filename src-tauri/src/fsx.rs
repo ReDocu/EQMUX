@@ -310,6 +310,113 @@ pub async fn fs_delete(ws_path: String, rel: String) -> Result<(), String> {
         .map_err(|e| e.to_string())?
 }
 
+// ── 탐색기에서 열기 (터미널 경로 더블클릭) ─────────────────────────────
+// 여기만 워크스페이스 밖을 허용한다 — 붙여넣은 이미지는 %TEMP%\eqmux-pastes\에 저장되므로
+// 트리 가드에 걸리면 아예 열 수가 없다. 대신 내용은 한 바이트도 읽지 않는다:
+// 이미 존재하는 경로를 OS 탐색기에 넘기는 것이 전부고, 대상은 사용자가 화면에서 집은 문자열이다.
+
+/// 경로에 이어 붙은 위치 꼬리(`a.rs:12:5` · `a.rs:12`)를 뗀다.
+/// 드라이브 문자(`C:`)는 꼬리가 아니다 — 콜론 앞이 두 글자 이하면 건드리지 않는다.
+fn strip_line_col(s: &str) -> Option<String> {
+    let mut cut = s;
+    let mut hit = false;
+    for _ in 0..2 {
+        let Some(i) = cut.rfind(':') else { break };
+        let (head, tail) = cut.split_at(i);
+        if head.len() > 2 && tail.len() > 1 && tail[1..].chars().all(|c| c.is_ascii_digit()) {
+            cut = head;
+            hit = true;
+        } else {
+            break;
+        }
+    }
+    hit.then(|| cut.to_string())
+}
+
+fn push_candidate(out: &mut Vec<String>, s: &str) {
+    let s = s.trim();
+    if !s.is_empty() && !out.iter().any(|o| o == s) {
+        out.push(s.to_string());
+    }
+}
+
+/// 화면에서 집어 온 덩어리를 후보로 좁힌다 (긴 것부터).
+/// 터미널의 경로는 앞뒤가 깨끗하지 않다 — 따옴표·괄호가 감싸고, `:12:5` 같은 위치가 붙고,
+/// 뒤에 다른 낱말이 딸려 온다. 경로 안에 공백이 있으면 낱말 경계로는 자를 수 없으므로,
+/// 꼬리를 한 낱말씩 떼어 가며 처음으로 실재하는 후보를 고르는 방식만 남는다.
+fn narrow(raw: &str) -> Vec<String> {
+    const WRAP: [char; 11] = ['"', '\'', '`', '(', ')', '[', ']', '{', '}', '<', '>'];
+    const TAIL: [char; 9] = ['.', ',', ';', ':', ')', ']', '}', '!', '?'];
+    let mut out: Vec<String> = Vec::new();
+    push_candidate(&mut out, raw);
+    let mut cur = raw.trim().trim_matches(|c| WRAP.contains(&c)).trim().to_string();
+    push_candidate(&mut out, &cur);
+    if let Some(cut) = strip_line_col(&cur) {
+        push_candidate(&mut out, &cut);
+        cur = cut;
+    }
+    cur = cur.trim_end_matches(|c| TAIL.contains(&c)).to_string();
+    push_candidate(&mut out, &cur);
+    for _ in 0..12 {
+        let Some(i) = cur.rfind(' ') else { break };
+        cur.truncate(i);
+        push_candidate(&mut out, cur.trim_end_matches(|c| TAIL.contains(&c)));
+    }
+    out
+}
+
+/// 후보 중 처음으로 실재하는 경로. 상대 경로는 세션 cwd 기준으로 푼다 (cwd가 없으면 건너뛴다).
+pub fn resolve_reveal_target(raw: &str, cwd: Option<&str>) -> Option<PathBuf> {
+    for cand in narrow(raw) {
+        let p = Path::new(&cand);
+        let full = if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            match cwd.filter(|d| !d.is_empty()) {
+                Some(d) => Path::new(d).join(p),
+                None => continue,
+            }
+        };
+        if full.exists() {
+            return Some(full);
+        }
+    }
+    None
+}
+
+/// `\\?\` 확장 프리픽스 제거 — canonicalize는 붙이고 탐색기는 읽지 못한다.
+fn strip_verbatim(p: &Path) -> String {
+    let s = p.to_string_lossy().into_owned();
+    match s.strip_prefix(r"\\?\UNC\") {
+        Some(rest) => format!(r"\\{rest}"),
+        None => s.strip_prefix(r"\\?\").unwrap_or(&s).to_string(),
+    }
+}
+
+/// 탐색기에서 열기 — 파일은 그 파일이 선택된 채로, 폴더는 그 폴더가 열린다.
+/// 없는 경로는 사유를 돌려준다 (조용히 넘길지 알릴지는 부르는 화면이 정한다).
+#[tauri::command]
+pub fn reveal_path(path: String, cwd: Option<String>) -> Result<(), String> {
+    let target = resolve_reveal_target(&path, cwd.as_deref()).ok_or("경로를 찾을 수 없습니다")?;
+    let is_dir = target.is_dir();
+    let abs = fs::canonicalize(&target)
+        .map(|p| strip_verbatim(&p))
+        .unwrap_or_else(|_| target.to_string_lossy().into_owned());
+    // 인자 주입 방지 — 따옴표로 감싸 넘기므로 따옴표·제어문자가 섞인 경로는 거절한다
+    if abs.contains('"') || abs.chars().any(|c| c.is_control()) {
+        return Err("경로에 쓸 수 없는 문자가 있습니다".into());
+    }
+    // raw_arg — 탐색기는 `/select,"경로"` 형태를 기대한다. std의 자동 인용은 인자 전체를
+    // 감싸버려(`"/select,C:\a b\c.png"`) 공백 있는 경로에서 어긋난다.
+    use std::os::windows::process::CommandExt;
+    std::process::Command::new("explorer")
+        .raw_arg(if is_dir { format!("\"{abs}\"") } else { format!("/select,\"{abs}\"") })
+        .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -391,6 +498,33 @@ mod tests {
         // 걷기를 마친 폴더는 표시가 붙지 않는다
         assert!(!t.nodes.iter().find(|n| n.rel == "a/b").unwrap().truncated);
         assert!(!t.truncated); // 개수 상한에는 안 걸렸다
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 터미널에서 집은 덩어리 좁히기 — 감싼 따옴표·위치 꼬리·뒤에 딸려온 낱말을 떼어 내고
+    /// 공백이 든 경로를 살려 낸다. 못 찾으면 아무것도 고르지 않는다 (조용한 무시의 근거).
+    #[test]
+    fn reveal_narrows_a_screen_chunk_to_a_real_path() {
+        let dir = std::env::temp_dir().join(format!("eqmux-reveal-{}", crate::workspace::now_ms()));
+        fs::create_dir_all(dir.join("공백 폴더")).unwrap();
+        let file = dir.join("공백 폴더").join("a b.png");
+        fs::write(&file, "x").unwrap();
+        let p = file.to_string_lossy().into_owned();
+
+        assert_eq!(resolve_reveal_target(&p, None).as_deref(), Some(file.as_path()));
+        assert_eq!(resolve_reveal_target(&format!("\"{p}\""), None).as_deref(), Some(file.as_path()));
+        assert_eq!(resolve_reveal_target(&format!("{p} 입니다"), None).as_deref(), Some(file.as_path()));
+        assert_eq!(resolve_reveal_target(&format!("{p}:12:5"), None).as_deref(), Some(file.as_path()));
+        assert_eq!(resolve_reveal_target(&format!("({p}),"), None).as_deref(), Some(file.as_path()));
+        // 상대 경로는 세션 cwd 기준 — cwd가 없으면 풀지 않는다
+        let cwd = dir.to_string_lossy().into_owned();
+        assert_eq!(resolve_reveal_target("공백 폴더/a b.png", Some(&cwd)), Some(dir.join("공백 폴더/a b.png")));
+        assert!(resolve_reveal_target("공백 폴더/a b.png", None).is_none());
+        // 폴더도 대상이다
+        assert_eq!(resolve_reveal_target(&dir.join("공백 폴더").to_string_lossy(), None), Some(dir.join("공백 폴더")));
+        // 없는 것은 열지 않는다
+        assert!(resolve_reveal_target("C:\\없는\\경로.png", None).is_none());
+        assert!(resolve_reveal_target("그냥낱말", Some(&cwd)).is_none());
         fs::remove_dir_all(&dir).ok();
     }
 }

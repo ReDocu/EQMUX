@@ -1,38 +1,62 @@
-// 포트 패널 (rBkF0) — 세션 포트 + 시스템 포트. Tauri에서는 netstat 실측을 5초 폴링한다 (PRD H).
+// 포트 패널 (rBkF0) — 세션 포트 + 시스템 포트. 실측은 공용 감시기(backend/ports)가 들고 있다 (M31).
+// 패널이 직접 폴링하지 않는 이유: 패널을 닫아 둔 동안 열린 포트를 놓치기 때문이다. 여기서는
+// 마운트 동안 주기만 빠르게 올리고(holdFastPoll) 결과를 그린다.
 // 세션 귀속은 Job Object pid 대조 — 관측 전용이며 프로세스 종료는 제공하지 않는다 (git 패널과 같은 원칙).
-import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
+// "열기"는 자동이 아니다 — 새 포트는 NEW 칩과 탭 뱃지로 알리고, 여는 것은 언제나 이 클릭이다.
+import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show, untrack } from "solid-js";
 import { backend, PORT_SUMMARY, SESSION_PORTS } from "../backend/mock";
-import { portsSnapshot } from "../backend/panels";
-import type { PortRow } from "../backend/panels";
+import {
+  holdFastPoll,
+  isExposed,
+  isNewPort,
+  markPortsSeen,
+  portAddress,
+  portsLive,
+  portUrl,
+  sessionPorts,
+  systemPorts,
+} from "../backend/ports";
+import type { PortEntry } from "../backend/ports";
 import { clipWriteText, isTauri } from "../backend/pty";
+import { openInBrowserPanel } from "../state";
 import { t } from "../i18n";
 
 interface Row {
+  key: string;
   port: number;
-  host: string;
+  host: string; // 대표 바인딩 — 열기·복사에 쓰는 쪽
   proc: string;
   session?: string; // 세션 이름 (귀속 시)
   badge: "LISTENING" | "DEBUG";
+  isNew: boolean;
+  exposed: boolean;
+  url: string;
 }
 
+const mockRow = (port: number, host: string, proc: string, session?: string): Row => ({
+  key: `mock${port}`,
+  port,
+  host,
+  proc,
+  session,
+  badge: port === 9229 ? "DEBUG" : "LISTENING",
+  isNew: false,
+  exposed: false,
+  url: `http://${host}:${port}`,
+});
+
 const MOCK_SYSTEM: Row[] = [
-  { port: 135, host: "0.0.0.0", proc: "svchost", badge: "LISTENING" },
-  { port: 445, host: "0.0.0.0", proc: "System", badge: "LISTENING" },
-  { port: 5432, host: "127.0.0.1", proc: "postgres", badge: "LISTENING" },
+  mockRow(135, "0.0.0.0", "svchost"),
+  mockRow(445, "0.0.0.0", "System"),
+  mockRow(5432, "127.0.0.1", "postgres"),
 ];
 
 export function PortsPanelTab() {
   const [query, setQuery] = createSignal("");
   const [sysOpen, setSysOpen] = createSignal(false);
-  const [real, setReal] = createSignal<PortRow[] | undefined>(undefined);
 
-  onMount(() => {
-    if (!isTauri()) return;
-    const load = () => void portsSnapshot().then(setReal);
-    load();
-    const t = setInterval(load, 5_000);
-    onCleanup(() => clearInterval(t));
-  });
+  // 패널을 보고 있는 동안만 빠른 주기 — 닫으면 감시기가 알아서 느려진다
+  onMount(() => onCleanup(holdFastPoll()));
 
   const personaName = (sessionId: string) => {
     const s = backend.listSessions().find((x) => x.id === sessionId);
@@ -40,23 +64,33 @@ export function PortsPanelTab() {
     return p?.name ?? sessionId.split("@")[0];
   };
 
+  const toRow = (e: PortEntry): Row => ({
+    key: e.key,
+    port: e.port,
+    host: e.host,
+    proc: e.process,
+    session: e.session ? personaName(e.session) : undefined,
+    badge: e.port === 9229 ? "DEBUG" : "LISTENING",
+    isNew: isNewPort(e),
+    exposed: isExposed(e),
+    url: portUrl(e),
+  });
+
   const rows = createMemo<{ session: Row[]; system: Row[] }>(() => {
-    const r = real();
-    if (isTauri() && r) {
-      const toRow = (p: PortRow): Row => ({
-        port: p.port,
-        host: p.host,
-        proc: p.process,
-        session: p.session ? personaName(p.session) : undefined,
-        badge: p.port === 9229 ? "DEBUG" : "LISTENING",
-      });
-      const all = r.map(toRow);
-      return { session: all.filter((x) => x.session), system: all.filter((x) => !x.session) };
+    if (isTauri() && portsLive()) {
+      return { session: sessionPorts().map(toRow), system: systemPorts().map(toRow) };
     }
     return {
-      session: SESSION_PORTS.map((p) => ({ port: p.port, host: p.host, proc: p.proc, session: p.session, badge: p.badge })),
+      session: SESSION_PORTS.map((p) => mockRow(p.port, p.host, p.proc, p.session)),
       system: MOCK_SYSTEM,
     };
+  });
+
+  // 패널을 보고 있다 = 확인했다 — 목록이 바뀔 때마다 탭 뱃지를 끈다.
+  // untrack — markPortsSeen이 읽는 확인 표시까지 의존성에 걸면 자기 쓰기로 한 번 더 돈다
+  createEffect(() => {
+    rows().session;
+    untrack(markPortsSeen);
   });
 
   const filtered = createMemo(() =>
@@ -66,30 +100,28 @@ export function PortsPanelTab() {
     }),
   );
 
-  // 요약 — 충돌 = 같은 포트를 여러 pid가 리슨, 외부 노출 = 루프백이 아닌 바인딩
+  // 요약 — 충돌 = 같은 포트 번호를 여러 프로세스가 리슨, 외부 노출 = 루프백 밖 바인딩
   const summary = createMemo(() => {
+    if (!isTauri() || !portsLive()) return PORT_SUMMARY;
     const all = [...rows().session, ...rows().system];
-    if (!isTauri() || !real()) return PORT_SUMMARY;
     const counts = new Map<number, number>();
     for (const p of all) counts.set(p.port, (counts.get(p.port) ?? 0) + 1);
-    const conflicts = [...counts.values()].filter((n) => n > 1).length;
-    const loopback = (h: string) => h.startsWith("127.") || h === "[::1]" || h === "localhost";
-    const exposed = all.filter((p) => !loopback(p.host) && p.host !== "0.0.0.0" && p.host !== "[::]").length
-      + all.filter((p) => (p.host === "0.0.0.0" || p.host === "[::]") && rows().session.includes(p)).length;
-    return { session: rows().session.length, system: rows().system.length, conflicts, exposed };
+    return {
+      session: rows().session.length,
+      system: rows().system.length,
+      conflicts: [...counts.values()].filter((n) => n > 1).length,
+      exposed: all.filter((p) => p.exposed).length,
+    };
   });
 
-  const copyAddr = (p: Row) => {
-    const host = p.host === "0.0.0.0" || p.host === "[::]" ? "127.0.0.1" : p.host;
-    void clipWriteText(`${host}:${p.port}`);
-  };
+  const copyAddr = (p: Row) => void clipWriteText(portAddress(p));
 
   return (
     <div class="portsp">
       <div class="panel-head-row">
         <span class="panel-title">{t("포트")}</span>
         <span class="mono muted" style={{ "font-size": "10px" }}>
-          {summary().session + summary().system} OPEN {t(isTauri() && real() ? "· 실측" : "· 목")}
+          {summary().session + summary().system} OPEN {t(isTauri() && portsLive() ? "· 실측" : "· 목")}
         </span>
       </div>
 
@@ -108,13 +140,16 @@ export function PortsPanelTab() {
       </div>
       <For each={filtered()}>
         {(p) => (
-          <div class="card inset portsp-row">
+          <div class="card inset portsp-row" classList={{ fresh: p.isNew }}>
             <span class="portsp-dot" classList={{ debug: p.badge === "DEBUG" }} />
             <div class="portsp-copy">
               <div class="portsp-top">
                 <span class="mono" style={{ "font-weight": 700 }}>
                   :{p.port}
                 </span>
+                <Show when={p.isNew}>
+                  <span class="badge blue">NEW</span>
+                </Show>
                 <span class="badge" classList={{ green: p.badge === "LISTENING", amber: p.badge === "DEBUG" }}>
                   {p.badge}
                 </span>
@@ -124,6 +159,9 @@ export function PortsPanelTab() {
               </div>
             </div>
             <div class="portsp-actions">
+              <button class="portsp-act" title={t("브라우저 패널에서 열기")} onClick={() => openInBrowserPanel(p.url)}>
+                ↗
+              </button>
               <button class="portsp-act" title={t("주소 복사")} onClick={() => copyAddr(p)}>
                 ⧉
               </button>

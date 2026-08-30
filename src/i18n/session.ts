@@ -118,4 +118,9 @@ export const dict: Record<string, string> = {
   검색: "Search",
   "화면 지우기": "Clear screen",
   "이미지 붙여넣기 → 파일 저장 후 경로 삽입": "Paste image → saved to file, path inserted",
+  "탐색기에서 열기": "Reveal in File Explorer",
+  더블클릭: "Double-click",
+  "탐색기에서 열 수 없습니다 — 실재하는 경로가 아닙니다": "Can't open File Explorer — no such path",
+  "경로 더블클릭 → 탐색기에서 열기 (실재하는 경로만)":
+    "Double-click a path → reveal in File Explorer (existing paths only)",
 };

@@ -72,6 +72,16 @@ export function openPanel(tab: PanelTab) {
   setPanelOpen(true);
 }
 
+/** 브라우저 패널 열기 요청 (M31) — 포트 패널의 "열기"가 남기고 브라우저 패널이 받는다.
+ *  포트 패널이 웹뷰를 직접 부르지 않는 이유: 웹뷰 바운드는 브라우저 패널의 DOM 자리에서만
+ *  읽을 수 있어서다. 같은 주소를 다시 눌러도 열려야 하므로 값이 아니라 매번 새 객체다
+ *  (focusRequest와 같은 이유). 요청을 소비한 쪽이 undefined로 비운다. */
+export const [browserRequest, setBrowserRequest] = createSignal<{ url: string } | undefined>(undefined);
+export function openInBrowserPanel(url: string) {
+  setBrowserRequest({ url });
+  openPanel("browser");
+}
+
 /** 페인 배치 (srpYm) — 6종 배치 모드. 배치 적용은 즉시 터미널 그리드에 반영된다. */
 export type PaneLayout = "grid-col" | "grid-row" | "stack-v" | "row-h" | "main-right" | "main-bottom";
 export const PANE_LAYOUTS: { key: PaneLayout; name: string; desc: string }[] = [

@@ -6,6 +6,7 @@ import { startMessageBus } from "./backend/conversation";
 import { backend } from "./backend/mock";
 import { startAgentProbe } from "./backend/agentprobe";
 import { startMemorySampling } from "./backend/memory";
+import { startPortWatch } from "./backend/ports";
 import { ensurePtyListeners, isTauri, setPtyExitHook } from "./backend/pty";
 import { crashRecovery } from "./backend/recovery";
 import type { CrashReport } from "./backend/recovery";
@@ -56,6 +57,8 @@ export function App() {
   onMount(() => startAgentProbe());
   // 외부 편집 감지 (FR-E-73) — .eqmux 변화 → 임무·라이브러리 재실측 (파일이 이긴다, FR-E-74)
   onMount(() => startFileWatch());
+  // 세션 포트 감시 (M31) — 패널을 닫아 둔 동안 열린 포트도 잡아 둔다. 패널이 켜질 때 주기가 빨라진다
+  onMount(() => startPortWatch());
 
   // 비정상 종료 복구 (FR-C-35) — 직전 실행이 크래시였으면 직전 세션 목록을 1회 보여준다
   const [crash, setCrash] = createSignal<CrashReport | undefined>(undefined);

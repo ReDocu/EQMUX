@@ -102,6 +102,58 @@ pub fn snapshot(session_pids: &HashMap<String, Vec<u32>>) -> Vec<PortRow> {
 mod tests {
     use super::*;
 
+    /// 귀속 사슬 통합 테스트 (M31) — 세션이 연 포트가 정말 그 세션으로 잡히는가.
+    /// GUI 없이 실제 사슬을 그대로 탄다: Job 생성 → assign_pid → 진짜 리슨 프로세스 →
+    /// Job::pids() → netstat → 귀속 조인. "포트 패널에 뜬다"의 백엔드 절반이 이것이다.
+    /// node가 없으면 조용히 건너뛴다 — 이 테스트의 주제는 node가 아니다.
+    #[cfg(windows)]
+    #[test]
+    fn attributes_a_port_opened_inside_a_session_job() {
+        use std::process::{Command, Stdio};
+
+        const PORT: u16 = 47823; // 등록된 서비스가 없는 대역
+
+        let Some(job) = crate::job::Job::new_kill_on_close() else {
+            eprintln!("Job Object를 만들 수 없다 — 건너뜀");
+            return;
+        };
+        let spawned = Command::new("node")
+            .args(["-e", &format!("require('http').createServer().listen({PORT},'127.0.0.1')")])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+            .spawn();
+        let Ok(mut child) = spawned else {
+            eprintln!("node를 실행할 수 없다 — 건너뜀");
+            return;
+        };
+        // 잡에 편입 — 실패하면 귀속이 성립할 수 없으므로 그대로 실패시킨다
+        assert!(job.assign_pid(child.id()), "assign_pid 실패 — 세션 트리를 잡으로 묶지 못했다");
+
+        // 리슨이 올라올 때까지 기다린다 (프로세스 기동 + 바인딩)
+        let mut attributed = None;
+        for _ in 0..40 {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            let pids = job.pids();
+            assert!(!pids.is_empty(), "Job::pids()가 비었다 — 귀속이 통째로 무너지는 경로");
+            let map = HashMap::from([("sess-1".to_string(), pids)]);
+            if let Some(row) = snapshot(&map).into_iter().find(|r| r.port == PORT) {
+                attributed = Some(row);
+                break;
+            }
+        }
+
+        let row = attributed.expect("47823 LISTENING을 netstat에서 찾지 못했다");
+        assert_eq!(row.session.as_deref(), Some("sess-1"), "세션에 귀속되지 않았다");
+        assert_eq!(row.pid, child.id());
+        assert_eq!(row.process, "node");
+        assert_eq!(row.host, "127.0.0.1");
+
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
     #[test]
     fn parses_listening_lines_only() {
         let out = "\n  프로토콜  로컬 주소  외부 주소  상태  PID\n  TCP    127.0.0.1:5173         0.0.0.0:0              LISTENING       4321\n  TCP    [::1]:1420             [::]:0                 LISTENING       99\n  TCP    10.0.0.5:52000         142.250.0.1:443        ESTABLISHED     7\n  UDP    0.0.0.0:5353           *:*                                    8\n";

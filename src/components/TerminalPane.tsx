@@ -25,6 +25,7 @@ import {
   onPtyOutput,
   openExternal,
   resizePty,
+  revealPath,
   scrollbackTail,
   spawnPty,
   writePty,
@@ -232,6 +233,85 @@ function copySelection(term: Terminal): void {
   if (term.hasSelection()) clipWriteText(term.getSelection());
 }
 
+// ── 경로 더블클릭 → 탐색기 (M30) ────────────────────────────────────────
+// 화면의 경로를 손으로 긁어 탐색기 주소창에 붙여 넣는 왕복을 없앤다.
+// "실재하는 경로인가"는 Rust가 판정하고(reveal_path), 여기서는 "어디부터 어디까지가
+// 경로인가"만 집는다. 더블클릭은 낱말 선택 제스처이기도 하므로, 아무 낱말에나 창이
+// 뜨지 않도록 구분자가 없는 덩어리는 애초에 후보로 올리지 않는다.
+
+/** 경로에 올 수 없는 글자 = 확실한 경계. 공백은 경로 안에 올 수 있으니 경계가 아니다 */
+const PATH_BREAK = /["'`<>|*?\t]/;
+
+/** 더블클릭한 셀이 놓인 논리 줄과 그 안의 문자 인덱스.
+ *  줄바꿈으로 이어진 행(wrapped)은 한 줄로 잇는다 — 긴 경로는 행 끝에서 잘려 이어진다.
+ *  전각 문자는 2칸을 쓰면서 1글자라 열 번호와 문자열 인덱스가 어긋난다 — 셀을 훑어 맞춘다. */
+function logicalLineAt(term: Terminal, cellY: number, cellX: number): { line: string; index: number } | undefined {
+  const buf = term.buffer.active;
+  let top = cellY;
+  while (top > 0 && buf.getLine(top)?.isWrapped) top--;
+  let line = "";
+  let index = -1;
+  const cell = buf.getNullCell(); // 셀마다 새 객체를 만들지 않도록 한 개를 돌려 쓴다 (xterm 권장)
+  for (let y = top; y < buf.length; y++) {
+    const row = buf.getLine(y);
+    if (!row || (y > top && !row.isWrapped)) break;
+    for (let x = 0; x < term.cols; x++) {
+      if (!row.getCell(x, cell)) break;
+      const trailing = cell.getWidth() === 0; // 전각 문자의 뒤 칸 — 글자는 앞 칸이 이미 담았다
+      if (y === cellY && x === cellX) index = trailing ? Math.max(0, line.length - 1) : line.length;
+      if (!trailing) line += cell.getChars() || " ";
+    }
+  }
+  return index < 0 ? undefined : { line, index };
+}
+
+/** 줄 안에서 index를 품은 경로 후보. 뒤에 딸려온 군더더기는 Rust가 실재 확인으로 떼어 내므로
+ *  여기서는 넉넉히 집는다. 절대 경로는 클릭 앞의 드라이브 문자·UNC까지 되짚어 시작을 잡는다
+ *  (경로 안 공백을 낱말 경계로 자르면 "Program Files"가 통째로 날아간다). */
+function pathChunkAt(line: string, index: number): string | undefined {
+  const ch = line[index];
+  if (!ch || ch === " " || PATH_BREAK.test(ch)) return undefined;
+  let s = index;
+  while (s > 0 && !PATH_BREAK.test(line[s - 1])) s--;
+  let e = index;
+  while (e + 1 < line.length && !PATH_BREAK.test(line[e + 1])) e++;
+  const span = line.slice(s, e + 1);
+  const at = index - s;
+  let begin = -1;
+  const abs = /[A-Za-z]:[\\/]|\\\\[^\\/\s]/g;
+  for (let m = abs.exec(span); m; m = abs.exec(span)) {
+    if (m.index > at) break;
+    begin = m.index;
+  }
+  let chunk: string;
+  if (begin >= 0) {
+    chunk = span.slice(begin);
+  } else {
+    // 상대 경로 — 공백으로 끊은 낱말 하나 (cwd 기준 해석은 Rust가 한다)
+    let ws = at;
+    while (ws > 0 && span[ws - 1] !== " ") ws--;
+    let we = at;
+    while (we + 1 < span.length && span[we + 1] !== " ") we++;
+    chunk = span.slice(ws, we + 1);
+  }
+  chunk = chunk.trimEnd();
+  return /[\\/]/.test(chunk) ? chunk : undefined;
+}
+
+/** 선택(더블클릭 직후 = xterm이 고른 낱말)에서 경로를 뽑아 탐색기에서 연다.
+ *  손으로 그은 선택이 이미 경로 모양이면 그 경계를 먼저 믿고, 아니면 줄에서 집어 온 덩어리를 쓴다. */
+async function revealFromTerminal(term: Terminal, cwd: string): Promise<boolean> {
+  const sel = term.getSelection().trim();
+  const range = term.getSelectionPosition();
+  const at = range ? logicalLineAt(term, range.start.y, range.start.x) : undefined;
+  const chunk = at ? pathChunkAt(at.line, at.index) : undefined;
+  const tries = [/[\\/]/.test(sel) ? sel : undefined, chunk].filter((c): c is string => !!c);
+  for (const cand of new Set(tries)) {
+    if (await revealPath(cand, cwd)) return true;
+  }
+  return false;
+}
+
 /**
  * 지금 사용자가 터미널 밖 입력 요소에 타이핑 중인가.
  * 다이얼로그가 떠 있거나 input/textarea/select·contenteditable에 커서가 있으면 참.
@@ -340,26 +420,35 @@ async function initSession(
   // Ctrl+C = 선택 있으면 복사, 없으면 SIGINT (Windows Terminal 방식) · Ctrl+Shift+C = 항상 선택 복사.
   // Ctrl(+Shift)+V = 붙여넣기(이미지 포함) — Tauri에서는 Ctrl+V도 네이티브 클립보드 경로로 가로챈다
   // (WebView2 웹 API 우회).
+  //
+  // 가로챈 키는 false만 돌려서는 끝이 아니다. xterm은 손을 뗄 뿐 브라우저 기본 동작은 막지 않아서,
+  // Ctrl+V는 그대로 paste 이벤트를 낳고 xterm이 textarea·컨테이너에 걸어 둔 paste 리스너가
+  // 같은 글을 한 번 더 PTY로 흘려보낸다 — 붙여넣기가 2번 되는 원인. 그래서 우리가 처리한 키는
+  // 기본 동작까지 같이 끊는다.
+  const handled = (ev: KeyboardEvent) => {
+    ev.preventDefault(); // 브라우저 기본 복사·붙여넣기 차단 — 중복 입력 방지
+    return false; // xterm은 이 키를 처리하지 않는다
+  };
   term.attachCustomKeyEventHandler((ev) => {
     if (ev.type === "keydown" && ev.ctrlKey) {
       const k = ev.key.toLowerCase();
       if (ev.shiftKey && k === "c") {
         copySelection(term);
-        return false;
+        return handled(ev);
       }
       if (k === "c" && !ev.shiftKey && !ev.altKey && term.hasSelection()) {
         copySelection(term);
         term.clearSelection();
-        return false;
+        return handled(ev);
       }
       if (k === "v" && (ev.shiftKey || isTauri())) {
         void pasteFromClipboard(props.sessionId, term);
-        return false;
+        return handled(ev);
       }
       // 터미널 내 검색 (M30) — TUI로 Ctrl+F를 흘리지 않고 검색 바를 연다
       if (k === "f" && !ev.shiftKey && !ev.altKey) {
         setSearchSession(props.sessionId);
-        return false;
+        return handled(ev);
       }
     }
     return true;
@@ -461,6 +550,22 @@ export function TerminalPane(props: {
   let host!: HTMLDivElement;
   let historyEl: HTMLDivElement | undefined;
   const [menu, setMenu] = createSignal<{ x: number; y: number; hasSel: boolean } | undefined>(undefined);
+
+  // ── 경로 더블클릭 → 탐색기 (M30) — 실재하는 경로일 때만 창이 뜬다 ──
+  const [hint, setHint] = createSignal<string | undefined>(undefined);
+  let hintTimer: ReturnType<typeof setTimeout> | undefined;
+  const revealSelection = async (loud: boolean) => {
+    const e = REGISTRY.get(props.sessionId);
+    if (!e) return;
+    const ok = await revealFromTerminal(e.term, props.cwd);
+    // 더블클릭은 낱말 선택 제스처이기도 하다 — 빗나간 더블클릭까지 알림으로 되받지 않는다.
+    // 메뉴로 명시해 부른 경우(loud)에만 왜 안 열렸는지 말한다.
+    if (!ok && loud) {
+      setHint(t("탐색기에서 열 수 없습니다 — 실재하는 경로가 아닙니다"));
+      clearTimeout(hintTimer);
+      hintTimer = setTimeout(() => setHint(undefined), 2600);
+    }
+  };
 
   // ── 재개 제안 (FR-C-33·34) — 복원된 역할 세션은 사용자가 고를 때까지 아무것도 뜨지 않는다 ──
   const [restoreErr, setRestoreErr] = createSignal<string | undefined>(undefined);
@@ -593,6 +698,10 @@ export function TerminalPane(props: {
     const closeMenu = () => setMenu(undefined);
     window.addEventListener("mousedown", closeMenu);
 
+    // 경로 더블클릭 → 탐색기 — xterm의 낱말 선택은 그대로 두고 그 위에 얹는다
+    const onDblClick = () => void revealSelection(false);
+    host.addEventListener("dblclick", onDblClick);
+
     const syncSize = () => {
       if (host.clientWidth < 40 || host.clientHeight < 24) return; // 0-크기 측정 방지
       // 렌더러가 아직 셀 크기를 못 재면 fit이 비정상 값(cols<2)을 내놓는다 — 그 프레임은 건너뛴다
@@ -683,7 +792,9 @@ export function TerminalPane(props: {
       ro.disconnect();
       window.removeEventListener("resize", queueSync);
       host.removeEventListener("contextmenu", onContextMenu);
+      host.removeEventListener("dblclick", onDblClick);
       window.removeEventListener("mousedown", closeMenu);
+      clearTimeout(hintTimer);
       // 터미널은 dispose하지 않는다 — REGISTRY가 세션 수명 동안 유지한다
     });
   });
@@ -731,6 +842,9 @@ export function TerminalPane(props: {
               ✕
             </button>
           </div>
+        </Show>
+        <Show when={hint()}>
+          <div class="card term-hint mono">{hint()}</div>
         </Show>
         <Show when={isTauri() && atTop() && !history()}>
           <button class="btn term-history-chip" onClick={() => void openHistory()}>
@@ -819,12 +933,21 @@ export function TerminalPane(props: {
                 { label: t("복사"), kbd: "Ctrl+Shift+C", disabled: !m().hasSel, action: () => menuAction(copySelection) },
                 { label: t("붙여넣기"), kbd: "Ctrl+Shift+V", action: () => menuAction((term) => void pasteFromClipboard(props.sessionId, term)) },
                 { label: t("모두 선택"), action: () => menuAction((term) => term.selectAll()) },
+                {
+                  label: t("탐색기에서 열기"),
+                  kbd: t("더블클릭"),
+                  disabled: !m().hasSel,
+                  action: () => menuAction(() => void revealSelection(true)),
+                },
                 { label: t("검색"), kbd: "Ctrl+F", action: () => menuAction(() => setSearchSession(props.sessionId)) },
                 { label: t("화면 지우기"), action: () => menuAction((term) => term.clear()) },
               ],
               // 보기·이동·세션 — 소유 화면이 얹는다 (danger 항목은 컴포넌트가 마지막으로 모은다)
               ...(props.extraMenu?.() ?? []),
-              [{ label: t("이미지 붙여넣기 → 파일 저장 후 경로 삽입"), note: true }],
+              [
+                { label: t("이미지 붙여넣기 → 파일 저장 후 경로 삽입"), note: true },
+                { label: t("경로 더블클릭 → 탐색기에서 열기 (실재하는 경로만)"), note: true },
+              ],
             ]}
           />
         )}

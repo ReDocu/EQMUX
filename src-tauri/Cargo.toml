@@ -9,7 +9,8 @@ license = "MIT"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# unstable — 브라우저 패널의 자식 웹뷰(Window::add_child, M17 확장)가 이 플래그 뒤에 있다
+tauri = { version = "2", features = ["unstable"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 portable-pty = "0.9"

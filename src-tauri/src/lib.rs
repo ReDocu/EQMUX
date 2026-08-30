@@ -16,6 +16,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 pub(crate) mod agent;
 mod agentscan;
+mod browser;
 mod cli;
 mod clip;
 mod diff;
@@ -2199,6 +2200,11 @@ pub fn run() {
             sessions_memory,
             sessions_agents,
             ports_snapshot,
+            browser::browser_open,
+            browser::browser_bounds,
+            browser::browser_visible,
+            browser::browser_nav,
+            browser::browser_close,
             fsx::fs_tree,
             fsx::fs_preview,
             fsx::fs_read,
@@ -2206,6 +2212,7 @@ pub fn run() {
             fsx::fs_create,
             fsx::fs_rename,
             fsx::fs_delete,
+            fsx::reveal_path,
             diff_changed_files,
             diff_file,
             commit_changed_files,
