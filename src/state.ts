@@ -26,6 +26,27 @@ export function toggleOverlay(k: OverlayKind): void {
   setOverlay(overlay() === k ? undefined : k);
 }
 
+/** 임무 탐색기 팝업의 안쪽 전환 (0.3.7) — 탐색기 ↔ 임무를 팝업을 닫지 않고 오간다.
+ *  임무는 원래 View(화면 #8)라 팝업에서 나가야만 볼 수 있었다. 팝업이 두 화면을 다 품고,
+ *  이 신호가 어느 쪽을 그릴지 정한다. 팝업을 열 때마다 탐색기로 되돌린다 (App.tsx) —
+ *  "로컬 폴더"를 눌렀는데 임무 목록이 뜨는 일이 없게. */
+export type ExplorerTab = "explorer" | "missions";
+export const [explorerTab, setExplorerTab] = createSignal<ExplorerTab>("explorer");
+
+/** 임무 탐색기 팝업을 지정한 자리에서 연다 (0.3.7) — 입구가 이름대로 열리게 한다:
+ *  앱 바 "임무"는 임무로, 컨트롤 센터 "로컬 폴더"는 탐색기로. 이미 그 자리를 보고 있으면
+ *  토글로 닫고, 다른 자리를 보고 있으면 닫지 않고 그 자리로 옮긴다.
+ *  임무는 워크스페이스 문맥이 있어야 성립하므로, 없으면 탐색기로 착지한다 (첫 실행 관제). */
+export function toggleExplorer(tab: ExplorerTab): void {
+  const target: ExplorerTab = tab === "missions" && !scopeWorkspace() ? "explorer" : tab;
+  if (overlay() === "explorer" && explorerTab() === target) {
+    setOverlay(undefined);
+    return;
+  }
+  setExplorerTab(target);
+  setOverlay("explorer");
+}
+
 export type PanelTab = "conversation" | "git" | "ports" | "logs" | "browser";
 
 const [viewSig, setViewRaw] = createSignal<View>({ kind: "control" });

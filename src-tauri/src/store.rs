@@ -92,7 +92,8 @@ CREATE TABLE IF NOT EXISTS message (
 );
 ";
 
-const SCROLLBACK_CAP_PER_SESSION: i64 = 100_000; // FR-C-50
+const SCROLLBACK_CAP_PER_SESSION: i64 = 1_000; // FR-C-50 — 0.3.7에서 10만 → 1,000줄
+const CAP_CHECK_EVERY: i64 = 200; // 상한의 1/5마다 점검 — 실보관량이 상한을 크게 넘지 않게
 const RETENTION_DAYS_MS: i64 = 30 * 86_400_000;
 const BATCH_MAX: usize = 200; // FR-C-21 — 100ms 창 또는 누적 N줄 중 먼저
 
@@ -151,7 +152,38 @@ pub(crate) fn open_db(root: &Path, ws: &str) -> rusqlite::Result<Connection> {
     let cutoff = now_ms() - RETENTION_DAYS_MS;
     let _ = conn.execute("DELETE FROM scrollback WHERE ts < ?1", params![cutoff]);
     let _ = conn.execute("DELETE FROM scrollback_fts WHERE ts < ?1", params![cutoff]);
+    // 세션당 상한도 열 때 한 번 적용한다 — 상한을 낮춘 뒤 처음 여는 DB에는 옛 상한으로 쌓인
+    // 줄이 남아 있고, 그 세션이 다시 살아나지 않으면 적재 경로의 정리는 영영 돌지 않는다.
+    // 검색이 최신 SCROLLBACK_CAP_PER_SESSION줄만 보게 하려면 여는 김에 여기서 끊어 준다.
+    trim_to_cap(&conn);
     Ok(conn)
+}
+
+/// 세션마다 최신 SCROLLBACK_CAP_PER_SESSION줄만 남긴다 (FR-C-50) — 본문과 FTS를 함께 자른다.
+/// 적재 경로가 CAP_CHECK_EVERY줄마다 하는 것과 같은 자르기를, 더는 살아 있지 않은 세션에도 한 번 준다.
+fn trim_to_cap(conn: &Connection) {
+    let sessions: Vec<(String, i64)> =
+        match conn.prepare("SELECT session_id, MAX(seq) FROM scrollback GROUP BY session_id") {
+            Ok(mut stmt) => match stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?))) {
+                Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
+                Err(_) => return,
+            },
+            Err(_) => return,
+        };
+    for (id, max_seq) in sessions {
+        let floor = max_seq - SCROLLBACK_CAP_PER_SESSION;
+        if floor <= 0 {
+            continue;
+        }
+        let _ = conn.execute(
+            "DELETE FROM scrollback WHERE session_id = ?1 AND seq <= ?2",
+            params![id, floor],
+        );
+        let _ = conn.execute(
+            "DELETE FROM scrollback_fts WHERE session_id = ?1 AND seq <= ?2",
+            params![id, floor],
+        );
+    }
 }
 
 impl Store {
@@ -338,10 +370,10 @@ fn flush(
         }
         let _ = tx.commit();
 
-        // 세션당 100,000줄 상한 (FR-C-50) — 5,000줄마다 점검
+        // 세션당 1,000줄 상한 (FR-C-50) — CAP_CHECK_EVERY줄마다 점검
         for id in touched.keys() {
             if let Some(cur) = cursors.get_mut(id) {
-                if cur.lines_since_cap >= 5_000 {
+                if cur.lines_since_cap >= CAP_CHECK_EVERY {
                     cur.lines_since_cap = 0;
                     let _ = conn.execute(
                         "DELETE FROM scrollback WHERE session_id = ?1 AND seq <= ?2",
@@ -491,6 +523,29 @@ pub fn export_lines(
         count += 1;
     }
     Ok(count)
+}
+
+/// 스크롤백 본문 초기화 (사용자 조작) — 세션 메타·이벤트·명령·메시지·재개 앵커는 남기고
+/// scrollback과 FTS만 비운다 (FR-C-53 — 정리 대상은 스크롤백 본문만).
+/// 지운 뒤 WAL을 본체로 접고(TRUNCATE) VACUUM으로 파일 크기까지 되돌린다 — 지우기만 하면
+/// SQLite는 빈 페이지를 재사용할 뿐 파일이 줄지 않아, 상태바의 WAL 수치가 그대로 남는다.
+pub fn purge_scrollback(root: &Path, ws: &str) -> Result<i64, String> {
+    let path = db_path(root, ws);
+    if !path.exists() {
+        return Ok(0);
+    }
+    let conn = Connection::open(&path).map_err(|e| e.to_string())?;
+    // 쓰기 스레드의 배치 커밋과 겹칠 수 있다 — 즉시 실패 대신 잠깐 기다린다
+    let _ = conn.busy_timeout(Duration::from_secs(2));
+    let removed: i64 = conn
+        .query_row("SELECT COUNT(*) FROM scrollback", [], |r| r.get(0))
+        .unwrap_or(0);
+    conn.execute("DELETE FROM scrollback", []).map_err(|e| e.to_string())?;
+    let _ = conn.execute("DELETE FROM scrollback_fts", []); // FTS5 없는 빌드는 조용히 넘어간다
+    // 파일 줄이기는 실패해도 에러로 만들지 않는다 — 줄은 이미 지워졌고, 크기는 다음 기회에 준다
+    let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)");
+    let _ = conn.execute_batch("VACUUM");
+    Ok(removed)
 }
 
 /// TUI 리페인트 잔해 판정 — 상자 그리기 문자가 절반 이상인 줄은 스필하지 않는다.
@@ -729,6 +784,94 @@ mod tests {
         assert_eq!(page1.last().unwrap().seq, 20);
         let latest = page(&dir, "ws", "s1", None, 5).unwrap();
         assert_eq!(latest.last().unwrap().seq, 50);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 상한 축소 (0.3.7) — 옛 상한으로 쌓인 DB도 여는 순간 세션마다 최신 1,000줄만 남고,
+    /// 잘려 나간 옛 줄은 검색에도 잡히지 않는다 (FR-C-50)
+    #[test]
+    fn open_trims_each_session_to_cap() {
+        let dir = std::env::temp_dir().join(format!("eqmux-cap-{}", crate::workspace::now_ms()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let total = SCROLLBACK_CAP_PER_SESSION + 500;
+        {
+            let conn = open_db(&dir, "ws").unwrap();
+            let now = now_ms(); // 30일 보존 정리에 걸리지 않게 현재 시각으로 넣는다
+            for i in 1..=total {
+                let text = format!("line {i} {}", if i == 1 { "oldneedle" } else { "hay" });
+                conn.execute(
+                    "INSERT INTO scrollback (session_id, seq, ts, text) VALUES (?1, ?2, ?3, ?4)",
+                    params!["s1", i, now, text],
+                )
+                .unwrap();
+                let _ = conn.execute(
+                    "INSERT INTO scrollback_fts (text, session_id, seq, ts) VALUES (?1, ?2, ?3, ?4)",
+                    params![text, "s1", i, now],
+                );
+            }
+        }
+        drop(open_db(&dir, "ws").unwrap()); // 다시 여는 것만으로 상한이 적용된다
+
+        let conn = Connection::open(db_path(&dir, "ws")).unwrap();
+        let kept: i64 = conn
+            .query_row("SELECT COUNT(*) FROM scrollback WHERE session_id = ?1", params!["s1"], |r| r.get(0))
+            .unwrap();
+        assert_eq!(kept, SCROLLBACK_CAP_PER_SESSION);
+        let oldest: i64 = conn
+            .query_row("SELECT MIN(seq) FROM scrollback WHERE session_id = ?1", params!["s1"], |r| r.get(0))
+            .unwrap();
+        assert_eq!(oldest, total - SCROLLBACK_CAP_PER_SESSION + 1);
+        drop(conn);
+
+        assert!(search(&dir, "ws", "oldneedle", None, 10).unwrap().is_empty());
+        let recent = search(&dir, "ws", "hay", None, 5).unwrap();
+        assert_eq!(recent.len(), 5);
+        assert_eq!(recent[0].seq, total); // 최신부터
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 사용자 초기화 — 저장된 줄과 FTS는 비고, 세션 메타·이벤트는 남는다 (FR-C-53)
+    #[test]
+    fn purge_clears_lines_but_keeps_session_rows() {
+        let dir = std::env::temp_dir().join(format!("eqmux-purge-{}", crate::workspace::now_ms()));
+        std::fs::create_dir_all(&dir).unwrap();
+        {
+            let conn = open_db(&dir, "ws").unwrap();
+            let now = now_ms();
+            conn.execute(
+                "INSERT INTO session (id, workspace, created_at) VALUES ('s1', 'ws', ?1)",
+                params![now],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO event (ts, session_id, kind, payload) VALUES (?1, 's1', 'session-start', '/tmp')",
+                params![now],
+            )
+            .unwrap();
+            for i in 1..=20i64 {
+                let text = format!("line {i} needle");
+                conn.execute(
+                    "INSERT INTO scrollback (session_id, seq, ts, text) VALUES ('s1', ?1, ?2, ?3)",
+                    params![i, now, text],
+                )
+                .unwrap();
+                let _ = conn.execute(
+                    "INSERT INTO scrollback_fts (text, session_id, seq, ts) VALUES (?3, 's1', ?1, ?2)",
+                    params![i, now, text],
+                );
+            }
+        }
+        assert_eq!(purge_scrollback(&dir, "ws").unwrap(), 20);
+        assert!(search(&dir, "ws", "needle", None, 10).unwrap().is_empty());
+        assert!(page(&dir, "ws", "s1", None, 10).unwrap().is_empty());
+
+        let conn = Connection::open(db_path(&dir, "ws")).unwrap();
+        let sessions: i64 = conn.query_row("SELECT COUNT(*) FROM session", [], |r| r.get(0)).unwrap();
+        let events: i64 = conn.query_row("SELECT COUNT(*) FROM event", [], |r| r.get(0)).unwrap();
+        assert_eq!((sessions, events), (1, 1)); // 세션 목록·이벤트는 살아남는다
+        drop(conn);
+
+        assert_eq!(purge_scrollback(&dir, "ws").unwrap(), 0); // 두 번 눌러도 안전하다
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

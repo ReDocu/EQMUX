@@ -111,6 +111,18 @@ export async function storeUsageReal(workspace: string): Promise<StoreUsageReal 
   return invoke<StoreUsageReal>("store_usage_real", { workspace }).catch(() => undefined);
 }
 
+export interface StorePurgeResult {
+  lines: number;
+  freedBytes: number;
+}
+
+/** 저장 기록 초기화 (FR-C-52 — 사용자 조작). 디스크의 스크롤백·검색 색인만 비운다 —
+ *  화면에 떠 있는 링버퍼와 세션 메타·이벤트·대화는 그대로다. 실패는 그대로 던져 호출부가 보여 준다 */
+export async function storePurgeScrollback(workspace: string): Promise<StorePurgeResult | undefined> {
+  if (!isTauri()) return undefined;
+  return invoke<StorePurgeResult>("store_purge_scrollback", { workspace });
+}
+
 export function writePty(id: string, data: string): void {
   if (!isTauri()) return;
   void invoke("pty_write", { id, data }).catch(() => {});

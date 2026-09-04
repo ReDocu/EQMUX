@@ -2991,6 +2991,16 @@
 .explorer-fullscreen .msnp-content {
   grid-template-columns: 320px minmax(0, 1fr); /* 패널의 168px 트리를 넓힌다 */
 }
+/* 팝업 안쪽 전환 줄 (0.3.7) — 헤더 바로 아래. 지금은 임무 탐색기만 쓴다 (탐색기 ↔ 임무) */
+.ov-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--eq-line);
+}
+
 /* 팝업 본문 — .screen(height:100%)과 패널형 콘텐츠가 다 들어갈 수 있게 flex로 채운다 */
 .overlay-screen-body {
   display: flex;

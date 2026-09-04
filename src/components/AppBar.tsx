@@ -12,6 +12,7 @@ import {
   setPanelOpen,
   setView,
   tick,
+  toggleExplorer,
   toggleOverlay,
   view,
 } from "../state";
@@ -114,11 +115,13 @@ export function AppBar() {
           </Show>
         </button>
         {/* 도구 4종은 전부 전체 화면 팝업이다 — overlay 신호 하나라서 동시에 하나만 열린다 */}
+        {/* 이름대로 임무 자리에서 연다 (0.3.7) — 파일 탐색기는 같은 팝업의 옆 세그먼트다.
+            컨트롤 센터의 "로컬 폴더"는 같은 팝업을 탐색기 자리에서 연다 */}
         <button
           class="tool"
           classList={{ active: overlay() === "explorer" }}
-          title={t("임무 · 파일 탐색기 — 전체 화면 팝업 (M25)")}
-          onClick={() => toggleOverlay("explorer")}
+          title={t("임무 배정 — 전체 화면 팝업 (헤더에서 파일 탐색기로 전환)")}
+          onClick={() => toggleExplorer("missions")}
         >
           {t("임무")}
         </button>

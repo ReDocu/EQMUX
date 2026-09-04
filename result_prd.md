@@ -177,7 +177,7 @@ design.pen은 32개 최상위 노드로 구성된다.
 |---|---|---|
 | 시작과 복원 | 시작 화면 `관제 대시보드` · 마지막 탭 복원 `꺼짐` · 스크롤백 재생 `500 lines` | FR-G-02 · FR-C-31 |
 | 알림 | OS 알림 `waiting · dead` · 창 포커스 시 `억제` · waiting 사운드 `꺼짐` | G3 · G6 |
-| 저장소 | 세션당 `100,000 lines` · 워크스페이스 `500 MB` · 전역 `2 GB · 30 days` | FR-C-50 |
+| 저장소 | 세션당 `1,000 lines` · 워크스페이스 `500 MB` · 전역 `2 GB · 30 days` | FR-C-50 |
 | 런타임 | CLI 버전 `2.1.226 verified` · 상태 소스 `registry + hook` · watch 폴백 `2s polling` | FR-D-62 · FR-D-10·11 |
 | 권한 정책 | 기본 구현 `acceptEdits` · 리뷰·검증 `manual` · 권한 변경 `재개 기반 재시작` · **"bypassPermissions는 앱에서 제공하지 않습니다"** | §4.5.1 · E11′ |
 | 보안 | `~/.claude/settings` `수정 안 함` · repo `.claude` `수정 안 함` · Hook settings `세션별 추가` | D3 · FR-D-30~32 |

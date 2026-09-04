@@ -5,12 +5,13 @@
 // 링버퍼 꼭대기(FR-C-13)에서는 디스크 기록 칩이 떠서 스토어 스크롤백을 조각 로드한다 (FR-C-14).
 import { createEffect, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { Terminal } from "@xterm/xterm";
-import type { ITheme } from "@xterm/xterm";
+import type { ILink, ILinkProvider, ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import { UnicodeGraphemesAddon } from "@xterm/addon-unicode-graphemes";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
+import { noteWebglContextLoss, provideTerminalStats } from "../backend/diag";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import "@xterm/xterm/css/xterm.css";
 import { cleanScrollback, pageScrollback } from "../backend/panels";
@@ -83,9 +84,18 @@ interface TermEntry {
   unsubs?: (() => void)[];
   /** 마운트 중인 페인의 즉시 fit — 줌 같은 이산 크기 변화가 RO 디바운스를 건너뛰게 한다 */
   sync?: () => void;
+  /** 경로 링크 클릭이 실패했을 때(실재하지 않는 경로) — 마운트 중인 페인이 힌트 표시를 꽂는다 */
+  onRevealFail?: () => void;
 }
 
 const REGISTRY = new Map<string, TermEntry>();
+
+// 화면 손상 진단 (임시) — 살아 있는 터미널·열린 렌더러 수. 진단이 이 파일을 import하면
+// 순환이 되므로 방향을 뒤집어 여기서 꽂는다. WebGL 컨텍스트는 열린 터미널당 하나다.
+provideTerminalStats(() => ({
+  terminals: REGISTRY.size,
+  opened: [...REGISTRY.values()].filter((e) => e.opened).length,
+}));
 
 // 색 팔레트 교체 (설정 · 화면) — 살아 있는 터미널은 컴포넌트 밖 REGISTRY에 있어 반응성이 닿지 않는다.
 // settings.applyTheme가 토큰을 세운 뒤 이 이벤트를 쏘면 전 터미널이 새 ANSI 팔레트를 다시 읽는다.
@@ -312,6 +322,73 @@ async function revealFromTerminal(term: Terminal, cwd: string): Promise<boolean>
   return false;
 }
 
+// ── 경로 클릭 → 탐색기 — 절대 경로를 URL처럼 링크로 만든다 ─────────────────
+// 붙여넣은 이미지 경로(`"%TEMP%\eqmux-pastes\*.png"`)처럼 화면에 찍힌 절대 경로는
+// 호버하면 밑줄이 생기고 클릭하면 탐색기가 뜬다 (URL 링크와 같은 제스처).
+// 감지는 모양만 본다 — 실재 여부는 클릭 시점에 Rust(reveal_path)가 판정하고,
+// 없으면 페인이 힌트로 알린다. 상대 경로는 cwd 해석이 필요해 더블클릭 제스처가 담당한다.
+
+/** 절대 경로 후보 — 따옴표로 감싼 것(공백 포함 가능)과 맨몸(공백에서 끊김). 드라이브 문자·UNC. */
+const PATH_LINK = /"((?:[A-Za-z]:[\\/]|\\\\)[^"]+)"|(?:[A-Za-z]:[\\/]|\\\\)[^\s"'`<>|*?]+/g;
+
+/** 화면 행(y)이 속한 논리 줄의 텍스트와, 문자열 인덱스 → 셀 좌표 매핑.
+ *  전각 문자는 2칸(w=2)이고, 자소 군집은 한 셀에 여러 코드 유닛이 담기므로
+ *  코드 유닛마다 셀 항목을 넣어 인덱스가 어긋나지 않게 한다. */
+function lineWithCells(
+  term: Terminal,
+  y: number,
+): { text: string; cells: { x: number; y: number; w: number }[] } | undefined {
+  const buf = term.buffer.active;
+  let top = y;
+  while (top > 0 && buf.getLine(top)?.isWrapped) top--;
+  let text = "";
+  const cells: { x: number; y: number; w: number }[] = [];
+  const cell = buf.getNullCell(); // 셀마다 새 객체를 만들지 않도록 한 개를 돌려 쓴다 (xterm 권장)
+  for (let row = top; row < buf.length; row++) {
+    const line = buf.getLine(row);
+    if (!line || (row > top && !line.isWrapped)) break;
+    for (let x = 0; x < term.cols; x++) {
+      if (!line.getCell(x, cell)) break;
+      const w = cell.getWidth();
+      if (w === 0) continue; // 전각 문자의 뒤 칸 — 글자는 앞 칸이 이미 담았다
+      const chars = cell.getChars() || " ";
+      text += chars;
+      for (let i = 0; i < chars.length; i++) cells.push({ x, y: row, w });
+    }
+  }
+  return cells.length > 0 ? { text, cells } : undefined;
+}
+
+/** 논리 줄에서 절대 경로를 찾아 링크로 돌려준다. 따옴표는 링크 범위에서 뺀다 —
+ *  클릭이 넘기는 텍스트가 곧 경로가 되게. 뒤에 딸린 문장부호는 Rust가 실재 확인으로 떼어 낸다. */
+function pathLinkProvider(term: Terminal, entry: TermEntry): ILinkProvider {
+  return {
+    provideLinks(lineNo: number, cb: (links: ILink[] | undefined) => void) {
+      const info = lineWithCells(term, lineNo - 1); // xterm의 줄 번호는 1부터
+      if (!info) return cb(undefined);
+      const links: ILink[] = [];
+      PATH_LINK.lastIndex = 0;
+      for (let m = PATH_LINK.exec(info.text); m; m = PATH_LINK.exec(info.text)) {
+        const text = m[1] ?? m[0];
+        const begin = m[1] ? m.index + 1 : m.index;
+        const s = info.cells[begin];
+        const e = info.cells[begin + text.length - 1];
+        if (!s || !e) continue;
+        links.push({
+          text,
+          range: { start: { x: s.x + 1, y: s.y + 1 }, end: { x: e.x + e.w, y: e.y + 1 } },
+          activate: () => {
+            void revealPath(text).then((ok) => {
+              if (!ok) entry.onRevealFail?.();
+            });
+          },
+        });
+      }
+      cb(links.length > 0 ? links : undefined);
+    },
+  };
+}
+
 /**
  * 지금 사용자가 터미널 밖 입력 요소에 타이핑 중인가.
  * 다이얼로그가 떠 있거나 input/textarea/select·contenteditable에 커서가 있으면 참.
@@ -396,7 +473,10 @@ function createEntry(): TermEntry {
   term.loadAddon(search);
   // 링크 감지 (PRD A, M30) — URL 클릭은 기본 브라우저로 보낸다 (브라우저 패널은 localhost 전용)
   term.loadAddon(new WebLinksAddon((_ev, uri) => openExternal(uri)));
-  return { term, fit, search, opened: false, initialized: false, lastCols: 0, lastRows: 0 };
+  const entry: TermEntry = { term, fit, search, opened: false, initialized: false, lastCols: 0, lastRows: 0 };
+  // 경로 클릭 → 탐색기 — 브라우저 dev에서는 탐색기를 열 수단이 없으므로 링크로 만들지 않는다
+  if (isTauri()) term.registerLinkProvider(pathLinkProvider(term, entry));
+  return entry;
 }
 
 /** 최초 1회 — 스트림 구독·재생·스폰. 리마운트에서는 다시 실행되지 않는다.
@@ -551,20 +631,21 @@ export function TerminalPane(props: {
   let historyEl: HTMLDivElement | undefined;
   const [menu, setMenu] = createSignal<{ x: number; y: number; hasSel: boolean } | undefined>(undefined);
 
-  // ── 경로 더블클릭 → 탐색기 (M30) — 실재하는 경로일 때만 창이 뜬다 ──
+  // ── 경로 더블클릭·링크 클릭 → 탐색기 (M30) — 실재하는 경로일 때만 창이 뜬다 ──
   const [hint, setHint] = createSignal<string | undefined>(undefined);
   let hintTimer: ReturnType<typeof setTimeout> | undefined;
+  const showRevealFail = () => {
+    setHint(t("탐색기에서 열 수 없습니다 — 실재하는 경로가 아닙니다"));
+    clearTimeout(hintTimer);
+    hintTimer = setTimeout(() => setHint(undefined), 2600);
+  };
   const revealSelection = async (loud: boolean) => {
     const e = REGISTRY.get(props.sessionId);
     if (!e) return;
     const ok = await revealFromTerminal(e.term, props.cwd);
     // 더블클릭은 낱말 선택 제스처이기도 하다 — 빗나간 더블클릭까지 알림으로 되받지 않는다.
     // 메뉴로 명시해 부른 경우(loud)에만 왜 안 열렸는지 말한다.
-    if (!ok && loud) {
-      setHint(t("탐색기에서 열 수 없습니다 — 실재하는 경로가 아닙니다"));
-      clearTimeout(hintTimer);
-      hintTimer = setTimeout(() => setHint(undefined), 2600);
-    }
+    if (!ok && loud) showRevealFail();
   };
 
   // ── 재개 제안 (FR-C-33·34) — 복원된 역할 세션은 사용자가 고를 때까지 아무것도 뜨지 않는다 ──
@@ -682,6 +763,8 @@ export function TerminalPane(props: {
     }
     const e = entry;
     let cancelled = false;
+    // 경로 링크 클릭 실패(실재하지 않는 경로) — 밑줄 있는 링크가 소리 없이 무시되면 고장처럼 보인다
+    e.onRevealFail = showRevealFail;
     void ensureDragDrop();
 
     // 위로 스크롤 최상단 감지 (FR-C-13) — 인메모리 5,000줄의 꼭대기 = 디스크 기록의 입구
@@ -741,7 +824,12 @@ export function TerminalPane(props: {
         // WebGL 렌더러 — 컨텍스트가 유실되면 애드온을 폐기해 기본 렌더러로 폴백한다
         try {
           const webgl = new WebglAddon();
-          webgl.onContextLoss(() => webgl.dispose());
+          // 유실은 조용히 DOM 렌더러로 강등된다 — 몇 번, 어느 세션에서 일어나는지 남긴다.
+          // 브라우저는 컨텍스트 수가 한계를 넘으면 가장 오래된 것부터 강제로 잃게 만든다
+          webgl.onContextLoss(() => {
+            noteWebglContextLoss(props.sessionId);
+            webgl.dispose();
+          });
           e.term.loadAddon(webgl);
         } catch {
           /* WebGL 미지원 환경 — 기본 렌더러 사용 */
@@ -786,6 +874,7 @@ export function TerminalPane(props: {
     onCleanup(() => {
       cancelled = true;
       if (e.sync === syncSize) e.sync = undefined;
+      if (e.onRevealFail === showRevealFail) e.onRevealFail = undefined;
       scrollDisp?.dispose();
       clearTimeout(resizeTimer);
       clearTimeout(settleTimer);

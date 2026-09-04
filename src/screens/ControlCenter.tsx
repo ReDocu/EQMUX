@@ -13,7 +13,6 @@ import {
   setDefaultShell,
   setFocusRequest,
   setLayoutPickerOpen,
-  setOverlay,
   setPaneLayout,
   setSelectedSession,
   setTerminalFull,
@@ -21,6 +20,7 @@ import {
   SHELLS,
   terminalFull,
   tick,
+  toggleExplorer,
 } from "../state";
 import { ContextMenu, Eyebrow, PersonaDot, StatusLabel } from "../components/ui";
 import type { MenuGroup } from "../components/ui";
@@ -30,7 +30,7 @@ import type { FeedEvent } from "../backend/events";
 import { branchList, worktreeAdd, worktreeAttach, worktreeList } from "../backend/git";
 import type { BranchInfo, WorktreeInfo } from "../backend/git";
 import { autoAssignDefault, refreshMissions } from "../backend/missions";
-import { clipWriteText, echoPty, isTauri, killPty, storeUsageReal } from "../backend/pty";
+import { clipWriteText, echoPty, isTauri, killPty, storePurgeScrollback, storeUsageReal } from "../backend/pty";
 import type { StoreUsageReal } from "../backend/pty";
 import { removeRoleFile } from "../backend/roles";
 import { maxSlots } from "../backend/settings";
@@ -129,14 +129,33 @@ export function ControlCenter(props: { workspace: Workspace }) {
 
   // 저장 사용량 실측 (FR-C-52) — Tauri에서만. 브라우저 목업은 mock 수치 유지.
   const [realUsage, setRealUsage] = createSignal<StoreUsageReal | undefined>(undefined);
+  const loadUsage = () => void storeUsageReal(props.workspace.id).then(setRealUsage);
   onMount(() => {
     if (!isTauri()) return;
     void refreshMissions(props.workspace.id); // 임무 파일 실측 — 밖에서 편집됐어도 여기서 따라잡는다
-    const load = () => void storeUsageReal(props.workspace.id).then(setRealUsage);
-    load();
-    const t = setInterval(load, 10_000);
+    loadUsage();
+    const t = setInterval(loadUsage, 10_000);
     onCleanup(() => clearInterval(t));
   });
+
+  // 저장 기록 초기화 (FR-C-52 — 사용자 조작) — 상태바의 WAL·lines를 직접 0으로 되돌린다.
+  // 되돌릴 수 없으므로 세션 제거와 같은 확인 한 단계를 둔다 (즉시 실행하지 않는다)
+  const [purgeOpen, setPurgeOpen] = createSignal(false);
+  const [purging, setPurging] = createSignal(false);
+  const [purgeErr, setPurgeErr] = createSignal<string | undefined>(undefined);
+  const doPurge = async () => {
+    setPurging(true);
+    setPurgeErr(undefined);
+    try {
+      await storePurgeScrollback(props.workspace.id);
+      loadUsage(); // 비운 결과를 상태바가 바로 반영하게 — 10초 주기를 기다리지 않는다
+      setPurgeOpen(false);
+    } catch (e) {
+      setPurgeErr(String(e));
+    } finally {
+      setPurging(false);
+    }
+  };
 
   // 워크스페이스 스코프 이벤트 (FR-G-41) — 스트립의 SessionService 칸을 실데이터로
   const [wsFeed, setWsFeed] = createSignal<FeedEvent[]>([]);
@@ -678,6 +697,21 @@ export function ControlCenter(props: { workspace: Workspace }) {
           </span>
         )}
       </Show>
+      {/* 저장 기록 초기화 (FR-C-52) — 왼쪽 WAL·lines 수치의 짝. 실측이 있는 Tauri에서만 뜬다.
+          지우는 것은 디스크 기록뿐이고 화면 스크롤백은 그대로 남는다 */}
+      <Show when={realUsage()}>
+        <button
+          class="sb-ev"
+          title={t("이 워크스페이스에 저장된 줄과 검색 색인을 비웁니다 — 화면 스크롤백은 그대로")}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={() => {
+            setPurgeErr(undefined);
+            setPurgeOpen(true);
+          }}
+        >
+          ⌫ {t("기록 비우기")}
+        </button>
+      </Show>
       <button
         class="sb-ev"
         title={t("SessionService 이벤트 · 저장 상태")}
@@ -702,7 +736,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
           <div class="sb-pop-store mono muted">
             {t(realUsage() ? "저장 (실측)" : "저장 (목)")} ·{" "}
             {realUsage()
-              ? `workspaces/${props.workspace.id}/session.db · ${t("100ms 배치 · 30일/10만줄 보존")}`
+              ? `workspaces/${props.workspace.id}/session.db · ${t("100ms 배치 · 30일/1,000줄 보존")}`
               : `${usage().dbFile} · ${usage().dbSizeMb} MB · ${usage().dbPercent}%`}
           </div>
         </div>
@@ -944,7 +978,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
           <button
             class="rail-ms rail-folder"
             title={`${props.workspace.path} — ${t("앱 내 파일 탐색기에서 열기")}`}
-            onClick={() => setOverlay("explorer")}
+            onClick={() => toggleExplorer("explorer")}
           >
             <span class="rail-folder-txt">
               <span class="eyebrow">{t("로컬 폴더")}</span>
@@ -1281,6 +1315,35 @@ export function ControlCenter(props: { workspace: Workspace }) {
             </div>
           </div>
         )}
+      </Show>
+      {/* 저장 기록 초기화 확인 — 역할 세션 제거와 같은 형태. 무엇이 남는지까지 적는다 */}
+      <Show when={purgeOpen()}>
+        <div class="overlay" onClick={() => setPurgeOpen(false)}>
+          <div class="dialog" style={{ width: "440px", padding: "16px 18px" }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ "font-weight": 800, "font-size": "14px" }}>{t("저장 기록 초기화")}</div>
+            <div class="mono muted" style={{ "font-size": "12px", margin: "6px 0 10px" }}>
+              workspaces/{props.workspace.id}/session.db · WAL{" "}
+              {((realUsage()?.db_size_bytes ?? 0) / 1024).toFixed(0)} KB ·{" "}
+              {(realUsage()?.total_lines ?? 0).toLocaleString()} lines
+            </div>
+            <div class="card inset" style={{ padding: "8px 10px", "font-size": "11px", "line-height": 1.6 }}>
+              {t("저장된 스크롤백과 검색 색인을 모두 비우고 WAL을 접습니다. 세션 목록·이벤트·대화·재개 정보와 화면에 떠 있는 스크롤백은 그대로 남습니다. 되돌릴 수 없습니다.")}
+            </div>
+            <Show when={purgeErr()}>
+              <div class="mono" style={{ color: "var(--eq-red)", "font-size": "11px", "margin-top": "8px" }}>
+                {t("초기화 실패")} — {purgeErr()}
+              </div>
+            </Show>
+            <div style={{ display: "flex", gap: "8px", "justify-content": "flex-end", "margin-top": "14px" }}>
+              <button class="btn" onClick={() => setPurgeOpen(false)}>
+                {t("취소")}
+              </button>
+              <button class="btn danger" disabled={purging()} onClick={() => void doPurge()}>
+                {purging() ? t("비우는 중…") : t("기록 비우기")}
+              </button>
+            </div>
+          </div>
+        </div>
       </Show>
     </div>
   );

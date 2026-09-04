@@ -23,7 +23,7 @@ type Wired = {
 };
 type Fixed = { k: string; label: string };
 type Link = { k: string; label: string; url: () => string };
-type Section = { title: string; desc: string; wired?: Wired[]; fixed?: Fixed[]; links?: Link[] };
+type Section = { title: string; desc: string; wired?: Wired[]; fixed?: Fixed[]; info?: Fixed[]; links?: Link[] };
 
 function pick<T>(options: T[], value: T): number {
   const i = options.indexOf(value);
@@ -152,7 +152,7 @@ const SECTIONS: Section[] = [
       },
     ],
     fixed: [
-      { k: "세션당 상한", label: "100,000 lines" },
+      { k: "세션당 상한", label: "1,000 lines" },
       { k: "보존 기간", label: "30 days" },
       { k: "배치 커밋", label: "100ms / 200행" },
     ],
@@ -199,6 +199,15 @@ const SECTIONS: Section[] = [
         label: "브라우저에서 열기",
         url: () => FEEDBACK_FORM[settings().language],
       },
+    ],
+  },
+  {
+    title: "정보",
+    desc: "하나의 git 저장소를 4명의 AI 에이전트 팀이 함께 작업하고, 사람이 그것을 관제하는 데스크톱 앱입니다.",
+    info: [
+      { k: "제품", label: "EQMUX — 멀티 에이전트 관제 MUX" },
+      { k: "버전", label: `v${__APP_VERSION__}` },
+      { k: "라이선스", label: "MIT" },
     ],
   },
 ];
@@ -252,6 +261,16 @@ export function Settings() {
                       <span class="v mono setting-v fixed" title={t("고정 정책 — 설정으로 바꾸지 않습니다")}>
                         {t(it.label)}
                       </span>
+                    </div>
+                  )}
+                </For>
+              </Show>
+              <Show when={sec.info}>
+                <For each={sec.info}>
+                  {(it) => (
+                    <div class="kv">
+                      <span class="k">{t(it.k)}</span>
+                      <span class="v mono setting-v fixed">{t(it.label)}</span>
                     </div>
                   )}
                 </For>

@@ -38,7 +38,17 @@ export const dict: Record<string, string> = {
   "(목)": "(mock)",
   "저장 (실측)": "Storage (live)",
   "저장 (목)": "Storage (mock)",
-  "100ms 배치 · 30일/10만줄 보존": "100ms batches · 30-day/100K-line retention",
+  "100ms 배치 · 30일/1,000줄 보존": "100ms batches · 30-day/1,000-line retention",
+
+  // ── 저장 기록 초기화 (FR-C-52) ──
+  "기록 비우기": "Clear history",
+  "저장 기록 초기화": "Clear stored history",
+  "이 워크스페이스에 저장된 줄과 검색 색인을 비웁니다 — 화면 스크롤백은 그대로":
+    "Clears the lines and search index stored for this workspace — on-screen scrollback stays",
+  "저장된 스크롤백과 검색 색인을 모두 비우고 WAL을 접습니다. 세션 목록·이벤트·대화·재개 정보와 화면에 떠 있는 스크롤백은 그대로 남습니다. 되돌릴 수 없습니다.":
+    "Empties the stored scrollback and its search index, then truncates the WAL. Sessions, events, conversations, resume anchors and the scrollback on screen all stay. This cannot be undone.",
+  "비우는 중…": "Clearing…",
+  "초기화 실패": "Clear failed",
 
   // ── 상단 바 ──
   트랜스크립트: "Transcript",

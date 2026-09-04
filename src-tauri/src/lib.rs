@@ -19,6 +19,7 @@ mod agentscan;
 mod browser;
 mod cli;
 mod clip;
+mod diag;
 mod diff;
 mod fsx;
 pub(crate) mod ipc;
@@ -87,7 +88,7 @@ struct PtyExit {
 }
 
 /// 세션 로그 (1차 — 파일 append). PRD 12의 rusqlite WAL 스토어가 오면 그 뒤로 들어간다.
-fn log_dir() -> PathBuf {
+pub(crate) fn log_dir() -> PathBuf {
     let home = std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\".into());
     Path::new(&home).join(".eqmux").join("logs")
 }
@@ -98,6 +99,25 @@ fn log_file_name(id: &str) -> String {
         .map(|c| if c.is_alphanumeric() || matches!(c, '@' | '-' | '_' | '.') { c } else { '_' })
         .collect();
     format!("{safe}.log")
+}
+
+/// 이월 버퍼에서 완전한 UTF-8 접두사만 떼어 낸다 — PTY 읽기 경계는 다중바이트 문자
+/// (한글 3B·이모지 4B) 중간에 떨어질 수 있어, 잘린 꼬리(≤3바이트)는 남겨 다음 읽기와
+/// 이어 붙인다. 청크마다 곧장 from_utf8_lossy를 부르면 잘린 글자가 U+FFFD 2~3개로 굳고,
+/// 그 순간 셀 수가 ConPTY의 내부 화면 모델과 어긋난다 — 이후의 차등 리페인트(칸 건너뛰기
+/// `[1C`·절대 좌표)가 전부 밀려 화면 겹침·이전 프레임 중복으로 나타난다.
+fn take_complete_utf8(pending: &mut Vec<u8>) -> String {
+    let end = match std::str::from_utf8(pending) {
+        Ok(_) => pending.len(),
+        // error_len() None = 끝에서 잘린 문자 — 그 앞까지만 떼고 꼬리는 이월한다.
+        // Some = 스트림 중간의 진짜 깨진 바이트 — 기다려도 온전해지지 않으므로 그대로
+        // lossy 통과시킨다 (ConPTY는 유효한 UTF-8만 내보내므로 실제로는 오지 않는 경로다)
+        Err(e) if e.error_len().is_none() => e.valid_up_to(),
+        Err(_) => pending.len(),
+    };
+    let out = String::from_utf8_lossy(&pending[..end]).into_owned();
+    pending.drain(..end);
+    out
 }
 
 fn epoch_secs() -> u64 {
@@ -302,6 +322,7 @@ fn spawn_pty_session(
         let mut assembler = LineAssembler::new();
         let mut last_spilled = String::new();
         let mut buf = [0u8; 8192];
+        let mut pending: Vec<u8> = Vec::new(); // 읽기 경계에서 잘린 UTF-8 꼬리 이월 (≤3바이트)
         loop {
             match reader.read(&mut buf) {
                 Ok(0) | Err(_) => break,
@@ -309,7 +330,11 @@ fn spawn_pty_session(
                     if let Some(f) = log_file.as_mut() {
                         let _ = f.write_all(&buf[..n]);
                     }
-                    let data = String::from_utf8_lossy(&buf[..n]).into_owned();
+                    pending.extend_from_slice(&buf[..n]);
+                    let data = take_complete_utf8(&mut pending);
+                    if data.is_empty() {
+                        continue; // 이번 읽기 전체가 잘린 글자의 앞부분 — 다음 읽기와 합친다
+                    }
                     // SGR 저장 (FR-C-15) — 설정으로 끌 수 있다 (용량 절감). 평문 적재는 계속된다
                     let sgr_on = setting_bool(&app, "sgrStore", true);
                     assembler.push(&data, |line, styled| {
@@ -328,6 +353,10 @@ fn spawn_pty_session(
                     let _ = out_tx.send(data);
                 }
             }
+        }
+        // EOF — 이월 버퍼에 남은 잘린 꼬리는 이제 온전해질 수 없다. lossy로 마저 내보낸다
+        if !pending.is_empty() {
+            let _ = out_tx.send(String::from_utf8_lossy(&pending).into_owned());
         }
         // 코얼레서가 잔여 배치를 모두 방출한 뒤에 pty-exit가 나가야 한다 — 순서 보장
         drop(out_tx);
@@ -785,6 +814,15 @@ fn scrollback_export(
     Ok(Some(ExportResult { path: dest.to_string_lossy().into_owned(), lines: count }))
 }
 
+/// DB 본체 + WAL 합계 — 상태바가 "WAL … KB"로 보여 주는 값 (store_usage_real과 같은 셈법)
+fn db_bytes(path: &Path) -> u64 {
+    let mut size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    if let Ok(m) = std::fs::metadata(path.with_extension("db-wal")) {
+        size += m.len();
+    }
+    size
+}
+
 #[derive(Serialize)]
 struct SessionUsage {
     id: String,
@@ -840,6 +878,32 @@ fn store_usage_real(store_state: State<StoreState>, workspace: String) -> Result
         total_lines: total,
         sessions,
     })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StorePurgeResult {
+    lines: i64,
+    freed_bytes: u64,
+}
+
+/// 스크롤백 초기화 (FR-C-52 — 사용자 조작) — 이 워크스페이스 DB의 저장된 줄을 모두 버리고
+/// WAL·파일 크기를 되돌린다. 세션 목록·이벤트·대화·재개 앵커는 남는다 (FR-C-53).
+/// 화면의 스크롤백(인메모리 링버퍼)은 건드리지 않는다 — 지우는 것은 디스크 기록뿐이다.
+#[tauri::command]
+fn store_purge_scrollback(
+    store_state: State<StoreState>,
+    workspace: String,
+) -> Result<StorePurgeResult, String> {
+    let path = store::db_path(&store_state.0.root(), &workspace);
+    if !path.exists() {
+        return Ok(StorePurgeResult { lines: 0, freed_bytes: 0 });
+    }
+    // 대기 배치를 먼저 커밋한다 — 안 그러면 지운 직후 방금 출력이 되살아난다 (scrollback_export와 같은 순서)
+    let _ = flush_store(&store_state.0, std::time::Duration::from_secs(2));
+    let before = db_bytes(&path);
+    let lines = store::purge_scrollback(&store_state.0.root(), &workspace)?;
+    Ok(StorePurgeResult { lines, freed_bytes: before.saturating_sub(db_bytes(&path)) })
 }
 
 // ── 에이전트 런타임 (PRD D) — 기동·재개·권한 재시작. Claude 지식은 agent.rs에만 있다 ──
@@ -2058,6 +2122,24 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .manage(PtyState::default())
+        // 화면 손상 진단 (임시 계측, diag.rs) — 배율·모니터가 바뀌는 순간을 남긴다.
+        // 프런트는 이 순간을 볼 수 없다: 창을 배율이 다른 모니터로 옮겨도 CSS 크기는
+        // 그대로라 ResizeObserver도 resize 이벤트도 울리지 않는다. 여기서만 잡힌다.
+        // 보정은 하지 않는다 — 원인을 확정하기 전에 가리면 원인을 못 찾는다.
+        .on_window_event(|window, event| {
+            let kind = match event {
+                tauri::WindowEvent::ScaleFactorChanged { .. } => "scale-factor-changed",
+                tauri::WindowEvent::Moved(_) => "moved",
+                tauri::WindowEvent::Resized(_) => "resized",
+                tauri::WindowEvent::Focused(true) => "focused",
+                _ => return,
+            };
+            let app = window.app_handle();
+            if diag::note_window_event(app, kind) {
+                // 의미 있는 변화일 때만 프런트를 깨워 같은 순간의 자기 좌표를 남기게 한다
+                let _ = app.emit_to("main", "diag-geometry", ());
+            }
+        })
         .setup(|app| {
             // 스토어 루트 = 앱 데이터 (FR-C-20a — repo 안에 바이너리를 두지 않는다)
             let root = app.path().app_data_dir()?;
@@ -2178,6 +2260,7 @@ pub fn run() {
             scrollback_page,
             scrollback_export,
             store_usage_real,
+            store_purge_scrollback,
             events_query,
             msg_list,
             msg_send,
@@ -2205,6 +2288,9 @@ pub fn run() {
             browser::browser_visible,
             browser::browser_nav,
             browser::browser_close,
+            diag::diag_geometry,
+            diag::diag_note,
+            diag::diag_log_path,
             fsx::fs_tree,
             fsx::fs_preview,
             fsx::fs_read,
@@ -2231,4 +2317,67 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("EQMUX 실행 실패");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::take_complete_utf8;
+
+    /// 한글 3바이트가 읽기 경계에서 1+2로 잘려도 U+FFFD 없이 이어 붙는다
+    #[test]
+    fn hangul_split_across_reads_stays_whole() {
+        let bytes = "가나다".as_bytes(); // 9바이트, 글자당 3바이트
+        let mut pending = bytes[..4].to_vec(); // '나'의 첫 바이트에서 절단
+        assert_eq!(take_complete_utf8(&mut pending), "가");
+        assert_eq!(pending, &bytes[3..4]); // 잘린 꼬리는 이월된다
+        pending.extend_from_slice(&bytes[4..]);
+        assert_eq!(take_complete_utf8(&mut pending), "나다");
+        assert!(pending.is_empty());
+    }
+
+    /// 구분선(U+2500 반복)이 잘려도 글자·셀 수가 변하지 않는다 — 화면 겹침 버그의 실제 트리거.
+    /// 잘린 U+2500이 U+FFFD 2~3개가 되면 그 행이 강제 줄바꿈되어 이후 화면 전체가 밀린다.
+    #[test]
+    fn divider_run_split_keeps_cell_count() {
+        let run = "─".repeat(120);
+        let bytes = run.as_bytes();
+        let mut pending = bytes[..200].to_vec(); // 3의 배수가 아닌 지점 = 글자 중간 절단
+        let first = take_complete_utf8(&mut pending);
+        pending.extend_from_slice(&bytes[200..]);
+        let second = take_complete_utf8(&mut pending);
+        let joined = format!("{first}{second}");
+        assert_eq!(joined, run);
+        assert!(!joined.contains('\u{FFFD}'));
+        assert!(pending.is_empty());
+    }
+
+    /// 4바이트 이모지가 1/2/3바이트 지점 어디에서 잘려도 온전히 복원된다
+    #[test]
+    fn emoji_split_at_every_boundary_stays_whole() {
+        let bytes = "a😀b".as_bytes(); // 1 + 4 + 1 바이트
+        for cut in 1..bytes.len() {
+            let mut pending = bytes[..cut].to_vec();
+            let first = take_complete_utf8(&mut pending);
+            pending.extend_from_slice(&bytes[cut..]);
+            let second = take_complete_utf8(&mut pending);
+            assert_eq!(format!("{first}{second}"), "a😀b", "cut={cut}");
+            assert!(pending.is_empty(), "cut={cut}");
+        }
+    }
+
+    /// 스트림 중간의 진짜 깨진 바이트는 붙들지 않고 즉시 lossy 통과 — 출력 지연·교착 방지
+    #[test]
+    fn invalid_bytes_pass_through_immediately() {
+        let mut pending = vec![b'a', 0xFF, b'b'];
+        assert_eq!(take_complete_utf8(&mut pending), "a\u{FFFD}b");
+        assert!(pending.is_empty());
+    }
+
+    /// 순수 ASCII(대부분의 VT 시퀀스)는 그대로 통과한다
+    #[test]
+    fn ascii_passes_untouched() {
+        let mut pending = b"\x1b[25;3Hplain".to_vec();
+        assert_eq!(take_complete_utf8(&mut pending), "\x1b[25;3Hplain");
+        assert!(pending.is_empty());
+    }
 }

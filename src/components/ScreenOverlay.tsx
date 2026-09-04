@@ -1,7 +1,7 @@
 // 전체 화면 팝업 셸 (M25 확장) — NAV 도구 4종(임무·워크스페이스·역할·설정)이 공유한다.
 // 앱 바(항상 보임)의 버튼이 토글하므로 터미널 전체 화면 위에서도 열린다 (z 50 > 40).
 // overlay 신호가 하나라서 동시에 하나만 열린다 — 열림/닫힘 관리는 state.overlay가 소유한다.
-import { onCleanup, onMount } from "solid-js";
+import { onCleanup, onMount, Show } from "solid-js";
 import type { JSX } from "solid-js";
 import { setOverlay } from "../state";
 import { t } from "../i18n";
@@ -11,6 +11,8 @@ export function ScreenOverlay(props: {
   icon?: string;
   /** true를 돌려주면 ESC 닫기를 막는다 — 임무 탐색기의 미저장 편집 보호가 쓴다 */
   guard?: () => boolean;
+  /** 헤더 아래 전환 줄 (0.3.7) — 팝업이 화면을 둘 이상 품을 때만 준다 (임무 탐색기) */
+  nav?: JSX.Element;
   children: JSX.Element;
 }) {
   onMount(() => {
@@ -40,6 +42,9 @@ export function ScreenOverlay(props: {
           </button>
         </div>
       </div>
+      <Show when={props.nav}>
+        <div class="ov-nav">{props.nav}</div>
+      </Show>
       <div class="overlay-screen-body">{props.children}</div>
     </div>
   );

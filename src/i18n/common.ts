@@ -6,6 +6,8 @@ export const dict: Record<string, string> = {
   세션: "Session",
   슬롯: "Slot",
   임무: "Missions",
+  탐색기: "Explorer", // 임무 탐색기 팝업의 안쪽 전환 (0.3.7)
+  "워크스페이스를 먼저 여세요": "Open a workspace first",
   직무: "Job",
   페르소나: "Persona",
   역할: "Role",

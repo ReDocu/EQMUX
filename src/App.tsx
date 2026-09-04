@@ -6,6 +6,7 @@ import { startMessageBus } from "./backend/conversation";
 import { backend } from "./backend/mock";
 import { startAgentProbe } from "./backend/agentprobe";
 import { startMemorySampling } from "./backend/memory";
+import { diagSnapshot, startDiagnostics } from "./backend/diag";
 import { startPortWatch } from "./backend/ports";
 import { ensurePtyListeners, isTauri, setPtyExitHook } from "./backend/pty";
 import { crashRecovery } from "./backend/recovery";
@@ -14,7 +15,20 @@ import { performShutdown } from "./backend/shutdown";
 import { startTeamSync } from "./backend/team";
 import { startFileWatch } from "./backend/watch";
 import { refreshWorkspaces } from "./backend/workspaces";
-import { exitOpen, layoutPickerOpen, overlay, panelOpen, setExitOpen, setLayoutPickerOpen, setView, terminalFull, view } from "./state";
+import {
+  exitOpen,
+  explorerTab,
+  layoutPickerOpen,
+  overlay,
+  panelOpen,
+  scopeWorkspace,
+  setExitOpen,
+  setExplorerTab,
+  setLayoutPickerOpen,
+  setView,
+  terminalFull,
+  view,
+} from "./state";
 import type { View } from "./state";
 import { t } from "./i18n";
 import { ScreenOverlay } from "./components/ScreenOverlay";
@@ -37,6 +51,24 @@ import { WorkspaceConnection } from "./screens/WorkspaceConnection";
 export function App() {
   const v = view;
 
+  // 임무 탐색기 팝업의 안쪽 전환 (0.3.7) — 임무는 화면 View, 탐색기는 팝업이라 서로 오갈
+  // 길이 단방향이었다. 팝업이 둘을 다 품고 이 세그먼트가 고른다. 임무는 워크스페이스
+  // 문맥이 있어야 성립하므로, 없으면 눌리지 않는다 (첫 실행 관제 화면)
+  const explorerNav = () => (
+    <div class="cc-seg">
+      <button classList={{ on: explorerTab() === "explorer" }} onClick={() => setExplorerTab("explorer")}>
+        {t("탐색기")}
+      </button>
+      <button
+        classList={{ on: explorerTab() === "missions" }}
+        disabled={!scopeWorkspace()}
+        title={scopeWorkspace() ? undefined : t("워크스페이스를 먼저 여세요")}
+        onClick={() => setExplorerTab("missions")}
+      >
+        {t("임무")}
+      </button>
+    </div>
+  );
   // 전역 pty-output/exit 수신 — spawnPty 경로에만 맡기면 에이전트 전용 실행·재부착 세션이
   // 출력을 못 받는다. 셸 exit은 여기서 상태에 반영한다 (에이전트는 agent-state가 관장)
   onMount(() => {
@@ -59,6 +91,27 @@ export function App() {
   onMount(() => startFileWatch());
   // 세션 포트 감시 (M31) — 패널을 닫아 둔 동안 열린 포트도 잡아 둔다. 패널이 켜질 때 주기가 빨라진다
   onMount(() => startPortWatch());
+
+  // 화면 손상 진단 (임시 계측, backend/diag) — 배율·모니터 변화와 자식 웹뷰 좌표 어긋남을 남긴다.
+  // 자동 보정은 하지 않는다: 원인을 확정하기 전에 가리면 원인을 못 찾는다
+  onMount(() => startDiagnostics());
+
+  // Ctrl+Alt+D — "지금 화면이 깨졌다" 표식. 계측은 항상 돌지만 사람이 이상을 본 순간이
+  // 로그에 찍혀 있어야 그 앞뒤를 볼 수 있다. 눌린 것이 보이도록 잠깐 확인 문구를 띄운다
+  const [diagMark, setDiagMark] = createSignal<string | undefined>(undefined);
+  onMount(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.ctrlKey || !e.altKey || e.key.toLowerCase() !== "d") return;
+      e.preventDefault();
+      setDiagMark("진단 기록 중…");
+      void diagSnapshot("USER-MARK 화면 손상 신고").then(() => {
+        setDiagMark("진단에 기록했습니다 — .eqmux/logs/diagnostics.log");
+        setTimeout(() => setDiagMark(undefined), 2600);
+      });
+    };
+    window.addEventListener("keydown", onKey);
+    onCleanup(() => window.removeEventListener("keydown", onKey));
+  });
 
   // 비정상 종료 복구 (FR-C-35) — 직전 실행이 크래시였으면 직전 세션 목록을 1회 보여준다
   const [crash, setCrash] = createSignal<CrashReport | undefined>(undefined);
@@ -161,10 +214,34 @@ export function App() {
           <SidePanel />
         </Show>
       </div>
+      {/* 진단 표식 확인 (Ctrl+Alt+D) — 임시 계측이 사는 동안만 있는 문구다 */}
+      <Show when={diagMark()}>
+        {(msg) => (
+          <div
+            class="mono"
+            style={{
+              position: "fixed",
+              bottom: "12px",
+              left: "12px",
+              "z-index": 9999,
+              padding: "6px 10px",
+              "font-size": "11px",
+              background: "var(--eq-surface)",
+              border: "1px solid var(--eq-blue)",
+              "border-radius": "var(--eq-r-sm)",
+            }}
+          >
+            {msg()}
+          </div>
+        )}
+      </Show>
       {/* 전체 화면 팝업 4종 — overlay 신호 하나라서 동시에 하나만 열린다 (M25 확장) */}
       <Show when={overlay() === "explorer"}>
-        <ScreenOverlay title={t("임무 · 파일 탐색기")} icon="≡" guard={editorGuard}>
-          <MissionExplorerTab />
+        <ScreenOverlay title={t("임무 · 파일 탐색기")} icon="≡" guard={editorGuard} nav={explorerNav()}>
+          {/* 임무는 워크스페이스 문맥이 있어야 성립한다 — 없으면(첫 실행 관제) 탐색기로 남는다 */}
+          <Show when={explorerTab() === "missions" && scopeWorkspace()} fallback={<MissionExplorerTab />}>
+            {(w) => <Missions wsId={w().id} />}
+          </Show>
         </ScreenOverlay>
       </Show>
       <Show when={overlay() === "connect"}>

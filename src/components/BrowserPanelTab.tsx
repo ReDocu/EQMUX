@@ -15,6 +15,7 @@ import {
   onBrowserNav,
   rectBounds,
 } from "../backend/browser";
+import { diagNote, reportBrowserRect } from "../backend/diag";
 import { holdFastPoll, portUrl, sessionPorts } from "../backend/ports";
 import { isTauri } from "../backend/pty";
 import { browserRequest, panelSide, setBrowserRequest } from "../state";
@@ -41,7 +42,11 @@ export function BrowserPanelTab() {
   onMount(() => onCleanup(holdFastPoll()));
 
   const syncBounds = () => {
-    if (viewEl && active()) void browserBounds(rectBounds(viewEl));
+    if (!viewEl || !active()) return;
+    const b = rectBounds(viewEl);
+    // 진단 — 방금 보낸 "의도한 좌표". Rust가 잰 실제 좌표와의 차이가 화면 손상 후보 1의 증거다
+    reportBrowserRect(b);
+    void browserBounds(b);
   };
   // 레이아웃 확정 뒤에 좌표를 읽는다 — 마운트·패널 이동 직후의 rect는 아직 옛값이다.
   // 핸들을 들고 있다가 언마운트 때 취소한다 — 떨어진 노드의 rect(0×0)가 웹뷰로 가면 깜빡인다
@@ -70,10 +75,13 @@ export function BrowserPanelTab() {
       return;
     }
     if (!viewEl) return;
-    browserOpen(full, rectBounds(viewEl))
+    const b = rectBounds(viewEl);
+    browserOpen(full, b)
       .then(() => {
         setAddr(full);
         setActive(true);
+        reportBrowserRect(b);
+        diagNote(`BROWSER-OPEN ${full} rect=${b.x},${b.y} ${b.w}x${b.h}`);
       })
       .catch((e) => setError(String(e)));
   };
@@ -84,6 +92,8 @@ export function BrowserPanelTab() {
     if (isTauri()) {
       void browserClose();
       setActive(false);
+      reportBrowserRect(undefined);
+      diagNote("BROWSER-CLOSE");
     }
   };
 
@@ -114,7 +124,10 @@ export function BrowserPanelTab() {
       cancelAnimationFrame(boundsRaf);
       // 교대 마운트가 끝난 다음 틱에 판정 — 정말 패널을 떠났을 때만 숨긴다
       setTimeout(() => {
-        if (mountCount === 0) void browserVisible(false);
+        if (mountCount !== 0) return;
+        void browserVisible(false);
+        reportBrowserRect(undefined);
+        diagNote("BROWSER-HIDE (패널 이탈)");
       }, 0);
     });
   });
@@ -155,7 +168,9 @@ export function BrowserPanelTab() {
       covered = now;
       if (!active()) return;
       void browserVisible(!now);
-      if (!now) syncSoon();
+      diagNote(`BROWSER-${now ? "HIDE" : "SHOW"} (덮개)`);
+      if (now) reportBrowserRect(undefined);
+      else syncSoon();
     };
     const mo = new MutationObserver(() => {
       if (!raf) raf = requestAnimationFrame(check);

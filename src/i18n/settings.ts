@@ -117,4 +117,13 @@ export const dict: Record<string, string> = {
   "문의 폼": "Feedback form",
   "브라우저에서 열기": "Open in browser",
   "기본 브라우저로 엽니다": "Opens in your default browser",
+
+  // 정보
+  정보: "About",
+  "하나의 git 저장소를 4명의 AI 에이전트 팀이 함께 작업하고, 사람이 그것을 관제하는 데스크톱 앱입니다.":
+    "A desktop app where a team of 4 AI agents works on one git repository together, overseen by a human.",
+  제품: "Product",
+  "EQMUX — 멀티 에이전트 관제 MUX": "EQMUX — multi-agent mission-control MUX",
+  버전: "Version",
+  라이선스: "License",
 };

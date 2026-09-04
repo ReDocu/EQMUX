@@ -9,7 +9,7 @@ import { refreshMissions } from "../backend/missions";
 import { sendConversation } from "../backend/conversation";
 import { isTauri } from "../backend/pty";
 import { t, tf } from "../i18n";
-import { openPanel, scopeWorkspace, selectedSession, setOverlay, setView, tick } from "../state";
+import { openPanel, scopeWorkspace, selectedSession, setExplorerTab, setOverlay, tick } from "../state";
 
 // 브라우저 dev 폴백 트리 (기존 목)
 const MOCK_TREE: FsNode[] = [
@@ -515,14 +515,9 @@ export function MissionExplorerTab() {
           </div>
         </div>
         <div style={{ display: "flex", gap: "6px" }}>
-          <button
-            class="btn"
-            disabled={!ws()}
-            onClick={() => {
-              if (!ws()) return;
-              setView({ kind: "missions", wsId: ws()!.id }); // setView가 팝업을 접는다
-            }}
-          >
+          {/* 임무로 전환 — 팝업을 닫지 않는다 (헤더 세그먼트의 "임무"와 같은 자리).
+              활성 조건도 세그먼트와 같다: 팝업이 임무를 그릴 수 있는 워크스페이스 문맥일 때만 */}
+          <button class="btn" disabled={!scopeWorkspace()} onClick={() => setExplorerTab("missions")}>
             {t("임무 관리")}
           </button>
           <button class="btn primary" onClick={sendBrief}>
