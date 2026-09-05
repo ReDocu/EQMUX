@@ -12,6 +12,7 @@ import {
   updateSettings,
 } from "../backend/settings";
 import type { AppSettings } from "../backend/settings";
+import { agentClis, agentClisReady, refreshAgentClis } from "../backend/agentprobe";
 import { isTauri, openExternal } from "../backend/pty";
 import { t } from "../i18n";
 import { Eyebrow } from "../components/ui";
@@ -307,6 +308,81 @@ export function Settings() {
             </div>
           )}
         </For>
+        <CliAgentsCard />
+      </div>
+    </div>
+  );
+}
+
+/** CLI 에이전트 명부 (설치 실측) — 설정값이 아니라 환경 사실이라 SECTIONS의 kv 틀 밖에 둔다.
+ *  세션 추가 진입점이 보는 것과 같은 목록이다: 여기서 "설치됨"인 것만 거기 카드로 나온다.
+ *  그래서 세 갈래로 나눈다 — 무엇을 열 수 있고, 열면 무엇이 붙는지가 갈리는 지점이 거기다.
+ *
+ *  claude만 관리 실행이다: 역할 주입·권한 플래그·훅·재개가 붙는다 (agent.rs ClaudeCodeAdapter).
+ *  나머지는 셸에 명령을 치는 것과 같아서 관제에는 "실행 중"으로만 잡힌다 — 그 차이를 감추면
+ *  "왜 이 에이전트는 대화가 안 오지"가 된다. */
+function CliAgentsCard() {
+  const managed = () => agentClis().filter((a) => a.managed && a.installed);
+  const shellRun = () => agentClis().filter((a) => !a.managed && a.installed);
+  const missing = () => agentClis().filter((a) => !a.installed);
+
+  const row = (a: { cmd: string; name: string }, note: string) => (
+    <div class="kv">
+      <span class="k">
+        {a.name} <span class="mono muted">{a.cmd}</span>
+      </span>
+      <span class="v mono setting-v fixed">{t(note)}</span>
+    </div>
+  );
+
+  const group = (title: string, desc: string, list: () => { cmd: string; name: string }[], note: string) => (
+    <Show when={list().length > 0}>
+      <div style={{ "margin-top": "8px" }}>
+        <div style={{ "font-weight": 700, "font-size": "11px" }}>{t(title)}</div>
+        <div class="muted" style={{ "font-size": "10px", "margin-bottom": "2px" }}>
+          {t(desc)}
+        </div>
+        <For each={list()}>{(a) => row(a, note)}</For>
+      </div>
+    </Show>
+  );
+
+  return (
+    <div class="card" style={{ padding: "12px 14px" }}>
+      <Eyebrow>{t("CLI 에이전트")}</Eyebrow>
+      <div class="muted" style={{ "font-size": "11px", margin: "4px 0 8px" }}>
+        {t("PATH 실측 — 설치된 것만 세션 추가에서 열 수 있습니다. 감지 목록과 같은 명부라, 열 수 있는 것은 관제에도 잡힙니다.")}
+      </div>
+
+      {/* 실측 전에는 아무것도 단정하지 않는다 — 빈 목록을 "전부 미설치"로 그리면 거짓말이 된다 */}
+      <Show
+        when={agentClisReady()}
+        fallback={<div class="muted mono" style={{ "font-size": "11px" }}>{t("확인 중…")}</div>}
+      >
+        {group(
+          "관리 실행",
+          "역할·권한 플래그·훅·재개가 붙습니다. 세션 추가의 [클로드코드 에이전트 열기]가 이 경로입니다.",
+          managed,
+          "설치됨",
+        )}
+        {group(
+          "셸 실행",
+          "셸에 명령을 치는 것과 같습니다 — 역할·훅·재개는 붙지 않고 관제에는 실행 중으로만 보입니다.",
+          shellRun,
+          "설치됨",
+        )}
+        {group(
+          "미설치",
+          "PATH에 없습니다 — 세션 추가에 나오지 않습니다. 설치한 뒤 다시 확인하세요.",
+          missing,
+          "없음",
+        )}
+      </Show>
+
+      <div style={{ display: "flex", "justify-content": "flex-end", "margin-top": "10px" }}>
+        <button class="btn" disabled={!isTauri()} onClick={() => void refreshAgentClis()} title={t("PATH를 다시 훑습니다")}>
+          {t("다시 확인")}
+        </button>
       </div>
     </div>
   );

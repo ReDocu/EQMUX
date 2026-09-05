@@ -146,9 +146,77 @@ fn cmdline(_pid: u32) -> Option<String> {
     None
 }
 
+/// PATH에 그 CLI가 있는가 — 세션 추가 진입점이 "설치된 것만" 내놓는 데 쓴다.
+/// `where.exe`는 PATHEXT까지 훑으므로 npm이 깔아 두는 `codex.cmd` 같은 래퍼도 잡힌다.
+/// 실행 가능 여부까지는 보지 않는다 — 없는 것을 권하지 않는 데까지가 이 확인의 몫이다.
+pub fn on_path(name: &str) -> bool {
+    if !is_cli_name(name) {
+        return false;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        std::process::Command::new("where.exe")
+            .arg(name)
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW — GUI 앱에서 콘솔 창 억제
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+/// CLI 에이전트 한 줄 — 설정 화면과 세션 추가 진입점이 같은 명부를 본다.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentCli {
+    /// 실행 명령이자 감지 토큰 — 둘이 같은 문자열이라 "열 수 있는 것은 관제에도 잡힌다"
+    pub cmd: &'static str,
+    pub name: &'static str,
+    pub installed: bool,
+    /// EQMUX가 관리하는 스폰 경로가 있는가 — 역할 주입·훅·재개(agent.rs의 ClaudeCodeAdapter).
+    /// 나머지는 셸에 명령을 치는 것과 같아서 관제에는 "실행 중"으로만 보인다.
+    pub managed: bool,
+}
+
+/// 명부 실측 — KNOWN(감지 목록)을 그대로 쓴다. 여는 목록과 알아보는 목록이 어긋나면
+/// "띄웠는데 관제에는 안 보인다"가 되므로 두 목록은 하나여야 한다.
+pub fn roster() -> Vec<AgentCli> {
+    KNOWN
+        .iter()
+        .map(|(cmd, name)| AgentCli {
+            cmd,
+            name,
+            installed: on_path(cmd),
+            managed: *cmd == "claude",
+        })
+        .collect()
+}
+
+/// 물어봐도 되는 이름인가 — 알려진 CLI 이름만 오는 자리라 영숫자·하이픈으로 좁힌다.
+/// 프런트에서 오는 문자열이 그대로 프로세스 인자가 되므로 여기가 신뢰 경계다.
+fn is_cli_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 32
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cli_name_guard() {
+        assert!(is_cli_name("codex"));
+        assert!(is_cli_name("cursor-agent"));
+        assert!(!is_cli_name("")); // 빈 이름
+        assert!(!is_cli_name("codex & calc")); // 셸 메타문자
+        assert!(!is_cli_name(r"..\..\evil.exe")); // 경로 탈출
+        assert!(!is_cli_name(&"a".repeat(33))); // 길이 상한
+    }
 
     #[test]
     fn token_boundaries() {

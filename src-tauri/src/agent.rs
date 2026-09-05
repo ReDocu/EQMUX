@@ -492,6 +492,93 @@ pub fn hook_effect(event: &str, payload: &serde_json::Value) -> HookEffect {
     }
 }
 
+/// 이 페인이 지금 돌리고 있는 추적 (uuid). 한 페인의 추적은 하나여야 하지만, 정리 전
+/// 창(스폰 직후의 starting · 채택 직후)에는 둘일 수 있다. HashMap 순서에 맡기면 훅과 비용이
+/// 죽은 추적에 붙어, 방송되는 agent_session이 두 uuid 사이를 오간다 — 화면의 재개 앵커가
+/// 이미 끝난 대화로 튀고(B38) 상태도 두 추적 사이에서 깜빡인다.
+/// 가장 최근에 순번을 받은 것이 지금 도는 프로세스다.
+fn current_uuid(map: &HashMap<String, Tracked>, session: &str) -> Option<String> {
+    map.iter()
+        .filter(|(_, t)| t.app_session == session && t.last_status != "dead")
+        .max_by_key(|(_, t)| t.seq)
+        .map(|(u, _)| u.clone())
+}
+
+/// 훅 효과를 추적 상태에 적용한다 — 전이 판정의 정본 (AppHandle 없이 도는 순수 함수).
+/// 반환 `Some(quiet)`: 방송해야 한다. quiet면 이벤트 기록·알림 없이 방송만 (FR-D-17 —
+/// activity·subagents는 도구 호출마다 일어나므로 피드에 남기지 않는다. 피드는 전이의 기록이다).
+/// `None`: 변화 없음 — 방송하지 않는다. 이때도 asking·activity 정리는 이미 반영돼 있다.
+fn apply_effect(
+    t: &mut Tracked,
+    effect: &HookEffect,
+    payload: &serde_json::Value,
+    now: i64,
+) -> Option<bool> {
+    match effect {
+        HookEffect::Status(status) => {
+            let waiting = (*status == "waiting")
+                .then(|| payload.get("message").and_then(|m| m.as_str()).map(str::to_string))
+                .flatten();
+            t.asking = false; // 턴 경계(Stop·UserPromptSubmit)를 넘었다 — 프롬프트는 닫혔다
+            if t.last_status == *status && t.last_waiting == waiting {
+                return None; // 변화 없음 — 방송하지 않는다
+            }
+            t.last_status = (*status).into();
+            t.status_ms = now;
+            t.last_waiting = waiting;
+            t.hook_ms = now; // P-3 — 훅이 더 신선하다는 표식
+            if *status == "idle" {
+                // 턴 종료 — 도구·서브에이전트 부연도 함께 접는다 (FR-D-15)
+                t.activity = None;
+                t.subagents = 0;
+            }
+            Some(false)
+        }
+        // 사람의 선택을 기다리는 프롬프트 — 도구 시작(PreToolUse)에서 곧바로 waiting으로
+        // 올린다. 답이 들어오면 같은 도구의 PostToolUse가 Activity(None)로 와서 풀린다.
+        HookEffect::Ask(reason) => {
+            let waiting = Some((*reason).to_string());
+            t.asking = true;
+            t.activity = None; // 도구명 부연은 여기서 의미가 없다 — 문맥은 waiting_for가 준다
+            if t.last_status == "waiting" && t.last_waiting == waiting {
+                return None;
+            }
+            t.last_status = "waiting".into();
+            t.status_ms = now;
+            t.last_waiting = waiting;
+            t.hook_ms = now; // P-3 — 훅이 더 신선하다는 표식
+            Some(false)
+        }
+        HookEffect::Activity(tool) => {
+            // 도구 실행 시작 = 승인 완료 — waiting에 고착돼 있으면 busy로 되돌린다.
+            // degraded(레지스트리 없음) 모드에선 이 전이가 없으면 다음 Stop까지 "승인 대기"로 남는다
+            let unstick = t.last_status == "waiting";
+            t.asking = false; // 답이 들어왔거나(PostToolUse) 다른 도구가 시작됐다
+            if t.activity == *tool && !unstick {
+                return None;
+            }
+            t.activity = tool.clone();
+            if !unstick {
+                return Some(true); // 부연만 바뀌었다 — 기록 없이 방송만
+            }
+            t.last_status = "busy".into();
+            t.status_ms = now;
+            t.last_waiting = None;
+            t.hook_ms = now; // P-3 — 이 전이도 훅 소스다
+            Some(false) // 상태 전이이므로 피드·알림 경로로 보낸다
+        }
+        HookEffect::SubagentDelta(d) => {
+            let next = (t.subagents + d).max(0);
+            if t.subagents == next {
+                return None;
+            }
+            t.subagents = next;
+            Some(true)
+        }
+        HookEffect::Ignore => None,
+    }
+}
+
 /// 훅 2차 소스 — 레지스트리 스캔(1차)과 같은 diff 경로로 emit_state 한 곳에 합류한다.
 /// 레지스트리보다 빠르게 도착하므로 waiting 알림·인박스 전달의 지연이 줄어든다.
 pub fn apply_hook(app: &AppHandle, session: &str, event: &str, payload: &serde_json::Value) {
@@ -499,95 +586,35 @@ pub fn apply_hook(app: &AppHandle, session: &str, event: &str, payload: &serde_j
     if matches!(effect, HookEffect::Ignore) {
         return;
     }
-    // 상태 전이만 이벤트 테이블·알림까지 간다 (FR-D-17) — activity·subagents 변경은
-    // 도구 호출마다 일어나므로 방송만 하고 기록하지 않는다 (피드는 전이의 기록이다)
-    let mut quiet = !matches!(effect, HookEffect::Status(_) | HookEffect::Ask(_));
     let rt: tauri::State<AgentRt> = app.state();
-    let mut evt = None;
+    let mut out = None;
     if let Ok(mut map) = rt.by_uuid.lock() {
-        for (uuid, t) in map.iter_mut() {
-            if t.app_session != session || t.last_status == "dead" {
-                continue;
+        if let Some(uuid) = current_uuid(&map, session) {
+            let Some(t) = map.get_mut(&uuid) else { return };
+            if let Some(quiet) = apply_effect(t, &effect, payload, crate::workspace::now_ms()) {
+                t.seq = next_seq();
+                out = Some((
+                    quiet,
+                    AgentStateEvt {
+                        session: session.to_string(),
+                        agent_session: uuid.clone(),
+                        status: t.last_status.clone(),
+                        waiting_for: t.last_waiting.clone(),
+                        activity: t.activity.clone(),
+                        subagents: t.subagents,
+                        cost_usd: t.cost_usd,
+                        resumable: resumable(&t.cwd, &uuid),
+                        version: None,
+                        exit_code: None,
+                        degraded: t.degraded,
+                        seq: t.seq,
+                        since_ms: Some(t.status_ms),
+                    },
+                ));
             }
-            match &effect {
-                HookEffect::Status(status) => {
-                    let waiting = (*status == "waiting")
-                        .then(|| payload.get("message").and_then(|m| m.as_str()).map(str::to_string))
-                        .flatten();
-                    t.asking = false; // 턴 경계(Stop·UserPromptSubmit)를 넘었다 — 프롬프트는 닫혔다
-                    if t.last_status == *status && t.last_waiting == waiting {
-                        break; // 변화 없음 — 방송하지 않는다
-                    }
-                    t.last_status = (*status).into();
-                    t.status_ms = crate::workspace::now_ms();
-                    t.last_waiting = waiting;
-                    t.hook_ms = crate::workspace::now_ms() as i64; // P-3 — 훅이 더 신선하다는 표식
-                    if *status == "idle" {
-                        // 턴 종료 — 도구·서브에이전트 부연도 함께 접는다 (FR-D-15)
-                        t.activity = None;
-                        t.subagents = 0;
-                    }
-                }
-                // 사람의 선택을 기다리는 프롬프트 — 도구 시작(PreToolUse)에서 곧바로 waiting으로
-                // 올린다. 답이 들어오면 같은 도구의 PostToolUse가 Activity(None)로 와서 풀린다.
-                HookEffect::Ask(reason) => {
-                    let waiting = Some((*reason).to_string());
-                    t.asking = true;
-                    t.activity = None; // 도구명 부연은 여기서 의미가 없다 — 문맥은 waiting_for가 준다
-                    if t.last_status == "waiting" && t.last_waiting == waiting {
-                        break;
-                    }
-                    t.last_status = "waiting".into();
-                    t.status_ms = crate::workspace::now_ms();
-                    t.last_waiting = waiting;
-                    t.hook_ms = crate::workspace::now_ms(); // P-3 — 훅이 더 신선하다는 표식
-                }
-                HookEffect::Activity(tool) => {
-                    // 도구 실행 시작 = 승인 완료 — waiting에 고착돼 있으면 busy로 되돌린다.
-                    // degraded(레지스트리 없음) 모드에선 이 전이가 없으면 다음 Stop까지 "승인 대기"로 남는다
-                    let unstick = t.last_status == "waiting";
-                    t.asking = false; // 답이 들어왔거나(PostToolUse) 다른 도구가 시작됐다
-                    if t.activity == *tool && !unstick {
-                        break;
-                    }
-                    t.activity = tool.clone();
-                    if unstick {
-                        t.last_status = "busy".into();
-                        t.status_ms = crate::workspace::now_ms();
-                        t.last_waiting = None;
-                        t.hook_ms = crate::workspace::now_ms() as i64; // P-3 — 이 전이도 훅 소스다
-                        quiet = false; // 상태 전이이므로 피드·알림 경로로 보낸다
-                    }
-                }
-                HookEffect::SubagentDelta(d) => {
-                    let next = (t.subagents + d).max(0);
-                    if t.subagents == next {
-                        break;
-                    }
-                    t.subagents = next;
-                }
-                HookEffect::Ignore => break,
-            }
-            t.seq = next_seq();
-            evt = Some(AgentStateEvt {
-                session: session.to_string(),
-                agent_session: uuid.clone(),
-                status: t.last_status.clone(),
-                waiting_for: t.last_waiting.clone(),
-                activity: t.activity.clone(),
-                subagents: t.subagents,
-                cost_usd: t.cost_usd,
-                resumable: resumable(&t.cwd, uuid),
-                version: None,
-                exit_code: None,
-                degraded: t.degraded,
-                seq: t.seq,
-                since_ms: Some(t.status_ms),
-            });
-            break;
         }
     }
-    if let Some(e) = evt {
+    if let Some((quiet, e)) = out {
         if quiet {
             let _ = app.emit("agent-state", e);
         } else {
@@ -610,16 +637,14 @@ pub fn apply_statusline(app: &AppHandle, session: &str, payload: &serde_json::Va
     let rt: tauri::State<AgentRt> = app.state();
     let mut evt = None;
     if let Ok(mut map) = rt.by_uuid.lock() {
-        for (uuid, t) in map.iter_mut() {
-            if t.app_session != session || t.last_status == "dead" {
-                continue;
-            }
+        if let Some(uuid) = current_uuid(&map, session) {
+            let Some(t) = map.get_mut(&uuid) else { return };
             let changed = match t.cost_usd {
                 Some(prev) => (cost - prev).abs() >= 0.01,
                 None => true,
             };
             if !changed {
-                break;
+                return;
             }
             t.cost_usd = Some(cost);
             t.seq = next_seq();
@@ -631,14 +656,13 @@ pub fn apply_statusline(app: &AppHandle, session: &str, payload: &serde_json::Va
                 activity: t.activity.clone(),
                 subagents: t.subagents,
                 cost_usd: t.cost_usd,
-                resumable: resumable(&t.cwd, uuid),
+                resumable: resumable(&t.cwd, &uuid),
                 version: None,
                 exit_code: None,
                 degraded: t.degraded,
                 seq: t.seq,
                 since_ms: Some(t.status_ms),
             });
-            break;
         }
     }
     if let Some(e) = evt {
@@ -726,6 +750,104 @@ pub fn pane_for_pid(
         .map(|(id, (_, gen))| (id.clone(), *gen))
 }
 
+/// 레지스트리 디렉터리 → sessionId별 레코드 (§10.1). 파일은 claude 프로세스 pid마다 하나이고,
+/// 프로세스가 죽어도 지워지지 않는다. `--resume`은 같은 sessionId로 새 pid 파일을 쓰므로 한
+/// sessionId에 파일이 여럿 남고, read_dir 순서에 맡기면 죽은 프로세스의 낡은 레코드가 이긴다.
+/// 그러면 그 레코드의 pid는 어느 잡에도 없어 채택(A)이 실패하고, mtime이 낡아 스테일 가드(P-3)가
+/// 상태 갱신까지 막는다 — 재개한 에이전트가 영영 페인에 붙지 않는 자리가 여기다.
+/// 가장 최근에 쓰인 파일이 살아 있는 프로세스다.
+fn read_registry(entries: fs::ReadDir) -> HashMap<String, (RegistryRecord, i64)> {
+    let mut found: HashMap<String, (RegistryRecord, i64)> = HashMap::new();
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if p.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(text) = fs::read_to_string(&p) else { continue };
+        let Ok(rec) = serde_json::from_str::<RegistryRecord>(&text) else { continue };
+        let Some(sid) = rec.session_id.clone() else { continue };
+        // 파일 mtime = 이 레지스트리 상태의 신선도 (P-3) — 훅 도착 시각과 비교한다
+        let mtime_ms = fs::metadata(&p)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        if found.get(&sid).is_some_and(|(_, prev)| *prev >= mtime_ms) {
+            continue; // 같은 sessionId의 더 낡은 파일 — 죽은 프로세스의 것이다
+        }
+        found.insert(sid, (rec, mtime_ms));
+    }
+    found
+}
+
+/// 채택 직전 정리 — 한 페인의 추적은 하나다 (관리 기동 agent_spawn의 retain과 같은 규칙).
+/// "레지스트리에 아직 있으면 남긴다"로는 걷히지 않는다: 파일은 프로세스가 죽어도 남으므로
+/// 직전 프로세스의 추적이 그대로 살아, 한 페인의 상태가 둘로 갈린다.
+/// 아직 레지스트리에 안 나타난 갓 기동(starting)만 남긴다.
+fn keep_on_adopt(t: &Tracked, adopting: &str) -> bool {
+    t.app_session != adopting || t.last_status == "starting"
+}
+
+/// 레지스트리 레코드 → 추적 상태 갱신 판정 — 2초 재스캔의 정본 (AppHandle 없이 도는 순수 함수).
+/// 반환 true면 상태가 바뀌었다 = 방송 대상.
+fn apply_registry(
+    t: &mut Tracked,
+    rec_status: Option<&str>,
+    rec_waiting: Option<&str>,
+    mtime_ms: i64,
+) -> bool {
+    if t.last_status == "dead" {
+        return false;
+    }
+    // 스테일 가드 (P-3) — 훅이 이 파일보다 나중에 상태를 바꿨다면 재스캔이 되돌리지
+    // 않는다. 방치하면 2초 주기 재스캔이 가짜 idle을 만들어 M3 인박스를 오주입한다.
+    if mtime_ms <= t.hook_ms {
+        return false;
+    }
+    // 선택 프롬프트가 떠 있는 동안은 재스캔이 상태를 만지지 않는다 (Tracked::asking).
+    // 레지스트리는 이 시간을 "질의 진행 중"으로 보아 busy를 쓰므로, 그대로 받으면
+    // 사람이 답하기도 전에 waiting이 2초 만에 풀려 페인이 다시 작업 중으로 보인다.
+    // 다만 idle은 턴이 끝났다는 뜻이고, 그러면 프롬프트도 이미 닫혔다 — 여기서 고정을 푼다.
+    // 이 출구가 없으면 답을 받은 PostToolUse 훅을 놓친 세션이 영영 waiting에 굳고,
+    // 재스캔이 통째로 막혀 idle 전이가 안 나가니 인박스(M3)도 영영 배출되지 않는다.
+    if t.asking {
+        if rec_status != Some("idle") {
+            return false;
+        }
+        t.asking = false;
+    }
+    // status 부재 시 기존 값 유지 (FR-D-64 — 훅 폴백은 다음 단계)
+    let status = rec_status.map(str::to_string).unwrap_or_else(|| t.last_status.clone());
+    let waiting = rec_waiting.map(registry_waiting_for);
+    if status == t.last_status && waiting == t.last_waiting {
+        return false;
+    }
+    t.last_status = status;
+    t.last_waiting = waiting;
+    t.status_ms = mtime_ms; // 레지스트리가 그 상태를 쓴 시각 (B19)
+    if t.last_status == "idle" {
+        t.activity = None; // 턴 종료 부연 정리 — 훅 경로(apply_effect)와 같은 규칙
+        t.subagents = 0;
+    }
+    true
+}
+
+/// 채택 세션이 아직 살아 있는가 (A) — 잡 프로세스 트리에 그 pid가 남아 있는지로 본다.
+/// 관리 기동(!adopted)은 PTY EOF가 dead를 닫으므로 여기서 판정하지 않는다.
+/// 이미 dead인 추적도 살아 있다고 답한다 — 페인이 죽어 잡이 통째로 사라진 세션을 shell로
+/// 되돌리면, 종료된 에이전트가 셸로 돌아온 것처럼 보이고 그 페인에 메시지가 주입된다 (P-2).
+fn adopted_alive(t: &Tracked, job_pids: &HashMap<String, (Vec<u32>, u64)>) -> bool {
+    if !t.adopted || t.last_status == "dead" {
+        return true;
+    }
+    t.pid.is_some_and(|pid| {
+        job_pids
+            .get(&t.app_session)
+            .is_some_and(|(pids, _)| pids.contains(&pid))
+    })
+}
+
 /// 레지스트리 스캔 — sessionId 일치(FR-D-12)가 1순위, 없으면 pid로 채택한다 (A)
 fn scan(app: &AppHandle) {
     let rt: tauri::State<AgentRt> = app.state();
@@ -785,26 +907,7 @@ fn scan(app: &AppHandle) {
         });
     }
     let Ok(entries) = entries else { return };
-    let mut found: HashMap<String, (RegistryRecord, i64)> = HashMap::new();
-    for entry in entries.flatten() {
-        let p = entry.path();
-        if p.extension().map(|e| e == "json").unwrap_or(false) {
-            if let Ok(text) = fs::read_to_string(&p) {
-                if let Ok(rec) = serde_json::from_str::<RegistryRecord>(&text) {
-                    if let Some(sid) = rec.session_id.clone() {
-                        // 파일 mtime = 이 레지스트리 상태의 신선도 (P-3) — 훅 도착 시각과 비교한다
-                        let mtime_ms = fs::metadata(&p)
-                            .and_then(|m| m.modified())
-                            .ok()
-                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                            .map(|d| d.as_millis() as i64)
-                            .unwrap_or(0);
-                        found.insert(sid, (rec, mtime_ms));
-                    }
-                }
-            }
-        }
-    }
+    let found = read_registry(entries);
     // ── 채택 (A · FR-D-12 확장) — 앱이 띄우지 않은 claude를 pid로 페인에 잇는다 ──
     //
     // 셸 우선 모델에서는 사용자가 페인 안에서 손으로 `claude`를 띄우거나 재기동하는 일이 흔하고,
@@ -835,11 +938,8 @@ fn scan(app: &AppHandle) {
                 let Some((app_session, gen)) = pane_for_pid(&job_pids, pid) else {
                     continue; // 우리 페인의 자식이 아니다 — 남의 터미널에서 도는 claude
                 };
-                // 같은 페인의 죽은 추적(직전 프로세스)은 걷어낸다 — 한 페인의 상태가 둘로
-                // 갈리지 않게. 아직 레지스트리에 안 나타난 갓 기동(starting)은 건드리지 않는다.
-                map.retain(|u, t| {
-                    t.app_session != app_session || t.last_status == "starting" || found.contains_key(u)
-                });
+                // 같은 페인의 직전 추적은 걷어낸다 — 한 페인의 상태가 둘로 갈리지 않게
+                map.retain(|_, t| keep_on_adopt(t, &app_session));
                 // session_origin과 같은 우선순위(추적 맵 → 원점 → 폴백)를 잠금 재진입 없이 편다.
                 let (ws, cwd) = map
                     .values()
@@ -916,12 +1016,7 @@ fn scan(app: &AppHandle) {
     let mut lost: Vec<AgentStateEvt> = Vec::new();
     if let (false, Ok(mut map)) = (job_pids.is_empty(), rt.by_uuid.lock()) {
         map.retain(|uuid, t| {
-            let alive = !t.adopted
-                || t.pid.is_some_and(|pid| {
-                    job_pids
-                        .get(&t.app_session)
-                        .is_some_and(|(pids, _)| pids.contains(&pid))
-                });
+            let alive = adopted_alive(t, &job_pids);
             if !alive {
                 lost.push(AgentStateEvt {
                     session: t.app_session.clone(),
@@ -953,45 +1048,25 @@ fn scan(app: &AppHandle) {
                 continue;
             }
             if let Some((rec, mtime_ms)) = found.get(&uuid) {
-                // 스테일 가드 (P-3) — 훅이 이 파일보다 나중에 상태를 바꿨다면 재스캔이 되돌리지
-                // 않는다. 방치하면 2초 주기 재스캔이 가짜 idle을 만들어 M3 인박스를 오주입한다.
-                if *mtime_ms <= t.hook_ms {
+                if !apply_registry(t, rec.status.as_deref(), rec.waiting_for.as_deref(), *mtime_ms) {
                     continue;
                 }
-                // 선택 프롬프트가 떠 있는 동안은 재스캔이 상태를 만지지 않는다 (Tracked::asking).
-                // 레지스트리는 이 시간을 "질의 진행 중"으로 보아 busy를 쓰므로, 그대로 받으면
-                // 사람이 답하기도 전에 waiting이 2초 만에 풀려 페인이 다시 작업 중으로 보인다.
-                if t.asking {
-                    continue;
-                }
-                // status 부재 시 기존 값 유지 (FR-D-64 — 훅 폴백은 다음 단계)
-                let status = rec.status.clone().unwrap_or_else(|| t.last_status.clone());
-                let waiting = rec.waiting_for.as_deref().map(registry_waiting_for);
-                if status != t.last_status || waiting != t.last_waiting {
-                    t.last_status = status.clone();
-                    t.last_waiting = waiting.clone();
-                    t.status_ms = *mtime_ms; // 레지스트리가 그 상태를 쓴 시각 (B19)
-                    if status == "idle" {
-                        t.activity = None; // 턴 종료 부연 정리 — 훅 경로(apply_hook)와 같은 규칙
-                        t.subagents = 0;
-                    }
-                    t.seq = next_seq();
-                    updates.push(AgentStateEvt {
-                        session: t.app_session.clone(),
-                        agent_session: uuid.clone(),
-                        status,
-                        waiting_for: waiting,
-                        activity: t.activity.clone(),
-                        subagents: t.subagents,
-                        cost_usd: t.cost_usd,
-                        resumable: resumable(&t.cwd, &uuid),
-                        version: rec.version.clone(),
-                        exit_code: None,
-                        degraded: t.degraded,
-                        seq: t.seq,
-                        since_ms: Some(t.status_ms),
-                    });
-                }
+                t.seq = next_seq();
+                updates.push(AgentStateEvt {
+                    session: t.app_session.clone(),
+                    agent_session: uuid.clone(),
+                    status: t.last_status.clone(),
+                    waiting_for: t.last_waiting.clone(),
+                    activity: t.activity.clone(),
+                    subagents: t.subagents,
+                    cost_usd: t.cost_usd,
+                    resumable: resumable(&t.cwd, &uuid),
+                    version: rec.version.clone(),
+                    exit_code: None,
+                    degraded: t.degraded,
+                    seq: t.seq,
+                    since_ms: Some(t.status_ms),
+                });
             }
         }
     }
@@ -1002,7 +1077,191 @@ fn scan(app: &AppHandle) {
 
 #[cfg(test)]
 mod tests {
-    use super::HookEffect;
+    use super::{
+        adopted_alive, apply_effect, apply_registry, current_uuid, hook_effect, keep_on_adopt,
+        read_registry, HookEffect, Tracked,
+    };
+    use std::collections::HashMap;
+
+    /// 추적 하나 — 상태 이름만 갈아 끼운다. 나머지는 기본값(훅 없음·채택 아님)
+    fn tracked(status: &str) -> Tracked {
+        Tracked {
+            app_session: "노엘@ws".into(),
+            last_status: status.into(),
+            ..Default::default()
+        }
+    }
+
+    fn pre(tool: &str) -> HookEffect {
+        hook_effect("PreToolUse", &serde_json::json!({ "tool_name": tool }))
+    }
+
+    fn nil() -> serde_json::Value {
+        serde_json::Value::Null
+    }
+
+    // apply_effect의 반환 규약: Some(false)=상태 전이(피드·알림까지) · Some(true)=부연만
+    // (방송만) · None=변화 없음(방송 안 함). 세 값이 갈리는 자리가 곧 회귀가 나던 자리다.
+    const TRANSITION: Option<bool> = Some(false);
+    const QUIET: Option<bool> = Some(true);
+    const SILENT: Option<bool> = None;
+
+    /// 사람이 골라야 끝나는 프롬프트는 2초 재스캔이 내려서는 안 된다 — 레지스트리는 그
+    /// 시간을 "질의 진행 중"으로 보아 busy를 쓰므로, 그대로 받으면 답하기도 전에 페인이
+    /// 다시 작업 중으로 보이고 대화(M3)가 busy 세션에 주입되지 않는다.
+    #[test]
+    fn ask_prompt_survives_a_busy_rescan() {
+        let mut t = tracked("busy");
+        assert_eq!(apply_effect(&mut t, &pre("AskUserQuestion"), &nil(), 1_000), TRANSITION);
+        assert_eq!(t.last_status, "waiting");
+        assert!(t.asking);
+        // 더 신선한 레지스트리 파일이라도 busy로 되돌리지 못한다
+        assert!(!apply_registry(&mut t, Some("busy"), None, 2_000));
+        assert_eq!(t.last_status, "waiting");
+    }
+
+    /// 그 고정에는 출구가 있어야 한다 — 답을 받은 PostToolUse 훅을 놓치면(파이프 유실·
+    /// degraded) asking이 영영 참으로 남아 재스캔이 통째로 막히고, 페인은 waiting에 굳은 채
+    /// idle 전이가 안 나가 인박스(M3)도 영영 배출되지 않는다. 레지스트리의 idle = 턴 종료 =
+    /// 프롬프트도 닫혔다는 뜻이므로 그때 푼다.
+    #[test]
+    fn ask_prompt_unsticks_when_the_registry_ends_the_turn() {
+        let mut t = tracked("busy");
+        apply_effect(&mut t, &pre("ExitPlanMode"), &nil(), 1_000);
+        assert!(t.asking);
+        assert!(apply_registry(&mut t, Some("idle"), None, 2_000));
+        assert_eq!(t.last_status, "idle");
+        assert!(!t.asking); // 고정 해제 — 다음 재스캔부터 정상 추종
+    }
+
+    /// P-3 — 훅이 더 나중이면 오래된 레지스트리 파일이 신선한 상태를 되돌리지 않는다.
+    /// 방치하면 2초 주기 재스캔이 가짜 idle을 만들어 인박스를 오주입한다.
+    #[test]
+    fn a_stale_registry_file_never_overrides_a_fresher_hook() {
+        let mut t = tracked("idle");
+        assert_eq!(apply_effect(&mut t, &hook_effect("UserPromptSubmit", &nil()), &nil(), 1_000), TRANSITION);
+        assert_eq!(t.hook_ms, 1_000);
+        assert!(!apply_registry(&mut t, Some("idle"), None, 900)); // 더 오래된 파일
+        assert!(!apply_registry(&mut t, Some("idle"), None, 1_000)); // 동시각도 훅이 이긴다
+        assert_eq!(t.last_status, "busy");
+        assert!(apply_registry(&mut t, Some("idle"), None, 1_001)); // 더 새 파일은 따른다
+        assert_eq!(t.last_status, "idle");
+    }
+
+    /// 도구 실행 시작 = 승인 완료 — waiting 고착을 busy로 푼다. 이 전이는 부연이 아니라
+    /// 상태 변화이므로 피드·알림 경로로 나가야 한다 (degraded 모드의 유일한 해제 경로)
+    #[test]
+    fn a_tool_start_unsticks_a_waiting_pane_as_a_transition() {
+        let mut t = tracked("waiting");
+        t.last_waiting = Some("권한 승인 대기".into());
+        assert_eq!(apply_effect(&mut t, &pre("Bash"), &nil(), 500), TRANSITION);
+        assert_eq!(t.last_status, "busy");
+        assert_eq!(t.last_waiting, None);
+        assert_eq!(t.activity.as_deref(), Some("Bash"));
+        assert_eq!(t.hook_ms, 500); // 해제도 훅 소스다 — 재스캔이 되돌리지 못하게
+    }
+
+    /// 같은 도구가 다시 와도 변화가 없으면 방송하지 않는다. 부연만 바뀌는 갱신은 조용히 —
+    /// 도구 호출마다 피드에 줄이 쌓이면 전이의 기록이라는 의미가 사라진다 (FR-D-17)
+    #[test]
+    fn activity_updates_are_quiet_and_repeats_are_silent() {
+        let mut t = tracked("busy");
+        assert_eq!(apply_effect(&mut t, &pre("Read"), &nil(), 100), QUIET);
+        assert_eq!(apply_effect(&mut t, &pre("Read"), &nil(), 200), SILENT);
+        assert_eq!(apply_effect(&mut t, &pre("Edit"), &nil(), 300), QUIET);
+        assert_eq!(t.status_ms, 0); // 부연은 상태 시각을 건드리지 않는다 (B19)
+    }
+
+    /// 턴이 끝나면 도구·서브에이전트 부연도 함께 접는다 — 훅과 레지스트리 두 경로 모두
+    #[test]
+    fn idle_folds_activity_and_subagents_on_both_sources() {
+        let mut t = tracked("busy");
+        t.activity = Some("Bash".into());
+        t.subagents = 2;
+        apply_effect(&mut t, &hook_effect("Stop", &nil()), &nil(), 1_000);
+        assert_eq!((t.activity.clone(), t.subagents), (None, 0));
+
+        let mut t = tracked("busy");
+        t.activity = Some("Bash".into());
+        t.subagents = 2;
+        assert!(apply_registry(&mut t, Some("idle"), None, 1_000));
+        assert_eq!((t.activity, t.subagents), (None, 0));
+    }
+
+    /// SubagentStop이 Start보다 많이 와도(훅 유실·재기동) 음수로 내려가지 않는다
+    #[test]
+    fn subagent_count_never_goes_negative() {
+        let mut t = tracked("busy");
+        assert_eq!(apply_effect(&mut t, &hook_effect("SubagentStop", &nil()), &nil(), 0), SILENT);
+        assert_eq!(t.subagents, 0);
+        apply_effect(&mut t, &hook_effect("SubagentStart", &nil()), &nil(), 0);
+        apply_effect(&mut t, &hook_effect("SubagentStop", &nil()), &nil(), 0);
+        apply_effect(&mut t, &hook_effect("SubagentStop", &nil()), &nil(), 0);
+        assert_eq!(t.subagents, 0);
+    }
+
+    /// Notification 훅의 message가 대기 문맥이 된다 — 같은 문맥이 다시 오면 조용히
+    #[test]
+    fn notification_carries_its_message_as_the_waiting_context() {
+        let mut t = tracked("busy");
+        let payload = serde_json::json!({ "message": "권한 승인 대기" });
+        let effect = hook_effect("Notification", &payload);
+        assert_eq!(apply_effect(&mut t, &effect, &payload, 1_000), TRANSITION);
+        assert_eq!(t.last_waiting.as_deref(), Some("권한 승인 대기"));
+        assert_eq!(apply_effect(&mut t, &effect, &payload, 2_000), SILENT);
+        assert_eq!(t.status_ms, 1_000); // 변화 없는 훅은 대기 시작 시각을 갱신하지 않는다 (B19)
+    }
+
+    /// status 부재 레코드는 기존 상태를 유지한다 (FR-D-64 부분 파싱) — 지어내지 않는다
+    #[test]
+    fn a_record_without_a_status_keeps_the_last_one() {
+        let mut t = tracked("busy");
+        assert!(!apply_registry(&mut t, None, None, 1_000));
+        assert_eq!(t.last_status, "busy");
+        // 문맥만 바뀌어도 방송 대상이다 — 화면 배지가 그 한 줄로 갈린다
+        assert!(apply_registry(&mut t, None, Some("permission prompt"), 2_000));
+        assert_eq!(t.last_waiting.as_deref(), Some("권한 승인 대기"));
+        assert_eq!(t.last_status, "busy");
+    }
+
+    /// 죽은 추적은 재스캔이 되살리지 않는다
+    #[test]
+    fn a_dead_tracking_is_left_alone_by_the_rescan() {
+        let mut t = tracked("dead");
+        assert!(!apply_registry(&mut t, Some("idle"), None, 9_999));
+        assert_eq!(t.last_status, "dead");
+    }
+
+    /// 채택 세션(A)의 생존 — 잡에서 pid가 사라지면 페인은 살아 있으므로 shell로 되돌린다.
+    /// 관리 기동은 PTY EOF가 dead를 닫으므로 여기서 판정하지 않는다.
+    /// 이미 dead인 추적을 shell로 되살리면 종료된 에이전트가 셸로 돌아온 것처럼 보이고,
+    /// 그 페인에 메시지가 주입된다 (P-2) — 페인이 죽어 잡이 통째로 사라진 자리가 그 경로다.
+    #[test]
+    fn liveness_loses_a_vanished_agent_but_never_resurrects_a_dead_one() {
+        let mut jobs: HashMap<String, (Vec<u32>, u64)> = HashMap::new();
+        jobs.insert("노엘@ws".into(), (vec![100, 202], 7));
+        jobs.insert("카이@ws".into(), (vec![300], 1));
+
+        let mut adopted = tracked("idle");
+        adopted.adopted = true;
+        adopted.pid = Some(202);
+        assert!(adopted_alive(&adopted, &jobs)); // 잡 트리에 그대로 있다
+
+        adopted.pid = Some(999); // claude만 죽고 셸이 남았다 — EOF가 없으니 dead도 없다
+        assert!(!adopted_alive(&adopted, &jobs));
+
+        adopted.last_status = "dead".into(); // 페인이 죽어 잡이 사라진 세션
+        assert!(adopted_alive(&adopted, &jobs));
+
+        let managed = tracked("idle"); // adopted=false — EOF가 닫는다
+        assert!(adopted_alive(&managed, &jobs));
+
+        let mut orphan = tracked("idle"); // 페인 자체가 잡 목록에 없다
+        orphan.adopted = true;
+        orphan.pid = Some(100);
+        orphan.app_session = "사라진@ws".into();
+        assert!(!adopted_alive(&orphan, &jobs));
+    }
 
     /// 트랜스크립트 경로 이스케이프 (QA) — Claude Code는 ASCII 영숫자만 남기고 나머지를 '-'로.
     /// `_`·`.`·공백·한글이 든 cwd에서 resumable이 오판되던 회귀를 막는다.
@@ -1052,6 +1311,72 @@ mod tests {
         // 남의 터미널에서 도는 claude는 어느 잡에도 없다 — 채택하지 않는다
         assert_eq!(super::pane_for_pid(&jobs, 999), None);
         assert_eq!(super::pane_for_pid(&std::collections::HashMap::new(), 100), None);
+    }
+
+    /// 레지스트리 파일은 claude pid마다 하나이고 프로세스가 죽어도 남는다. `--resume`은 같은
+    /// sessionId로 새 pid 파일을 쓰므로 한 sessionId에 파일이 둘 남고, read_dir 순서에 맡기면
+    /// 죽은 프로세스의 낡은 레코드가 이긴다 — 그 pid는 어느 잡에도 없어 채택이 실패하고,
+    /// 낡은 mtime이 스테일 가드(P-3)에 걸려 상태 갱신까지 막힌다. 최신 파일이 이겨야 한다.
+    #[test]
+    fn read_registry_prefers_the_live_record_over_the_dead_one() {
+        let dir = std::env::temp_dir().join(format!("eqmux-reg-{}", crate::workspace::now_ms()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let rec = |pid: u32, status: &str| {
+            format!(
+                r#"{{"pid":{pid},"sessionId":"same-uuid","status":"{status}","kind":"interactive","cwd":"D:\\ws"}}"#
+            )
+        };
+        std::fs::write(dir.join("1000.json"), rec(1000, "busy")).unwrap(); // 죽은 프로세스가 남긴 것
+        std::fs::write(dir.join("2.json"), "not json at all").unwrap(); // 손상 파일은 건너뛴다
+        std::fs::write(dir.join("note.txt"), rec(3, "idle")).unwrap(); // json이 아니다
+        std::thread::sleep(std::time::Duration::from_millis(30)); // mtime 해상도 확보
+        std::fs::write(dir.join("0007.json"), rec(7, "idle")).unwrap(); // --resume 후 살아 있는 쪽
+
+        let found = read_registry(std::fs::read_dir(&dir).unwrap());
+        assert_eq!(found.len(), 1); // 같은 sessionId는 하나로 접힌다
+        let (rec, _) = found.get("same-uuid").unwrap();
+        assert_eq!(rec.pid, Some(7)); // 파일 이름 순서("0007" < "1000")가 아니라 최신 mtime
+        assert_eq!(rec.status.as_deref(), Some("idle"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 한 페인의 추적은 하나다 (관리 기동 agent_spawn의 retain과 같은 규칙). 레지스트리에
+    /// 남아 있는지로 거르면 직전 프로세스의 추적이 안 걷힌다 — 파일은 죽어도 남기 때문이다.
+    #[test]
+    fn adoption_leaves_one_tracking_per_pane() {
+        let stale = tracked("idle"); // 직전 프로세스 — 레지스트리 파일이 아직 남아 있어도 걷는다
+        assert!(!keep_on_adopt(&stale, "노엘@ws"));
+
+        let starting = tracked("starting"); // 갓 기동 — 아직 레지스트리에 안 나타났다
+        assert!(keep_on_adopt(&starting, "노엘@ws"));
+
+        let other = tracked("busy"); // 남의 페인은 건드리지 않는다
+        assert!(keep_on_adopt(&other, "카이@ws"));
+    }
+
+    /// 정리 전 창에서 한 페인에 추적이 둘이면, 훅·비용이 어디에 붙을지가 HashMap 순서로
+    /// 갈린다 — 방송되는 agent_session이 두 uuid를 오가고 화면의 재개 앵커가 끝난 대화로
+    /// 튄다 (B38). 가장 최근에 순번을 받은 것이 지금 도는 프로세스다.
+    #[test]
+    fn hooks_land_on_the_panes_current_tracking() {
+        let mut map: HashMap<String, Tracked> = HashMap::new();
+        let mut old = tracked("busy");
+        old.seq = 3;
+        map.insert("uuid-old".into(), old);
+        let mut new = tracked("idle");
+        new.seq = 9;
+        map.insert("uuid-new".into(), new);
+        let mut dead = tracked("dead"); // 죽은 추적은 순번이 가장 커도 고르지 않는다
+        dead.seq = 99;
+        map.insert("uuid-dead".into(), dead);
+        let mut elsewhere = tracked("busy");
+        elsewhere.app_session = "카이@ws".into();
+        elsewhere.seq = 50;
+        map.insert("uuid-kai".into(), elsewhere);
+
+        assert_eq!(current_uuid(&map, "노엘@ws").as_deref(), Some("uuid-new"));
+        assert_eq!(current_uuid(&map, "카이@ws").as_deref(), Some("uuid-kai"));
+        assert_eq!(current_uuid(&map, "없는@ws"), None);
     }
 
     #[test]

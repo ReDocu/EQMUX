@@ -58,7 +58,13 @@ pub(crate) fn setting_bool(app: &AppHandle, key: &str, default: bool) -> bool {
 }
 
 struct PtySession {
-    master: Box<dyn MasterPty + Send>,
+    /// 세션별 잠금 — ConPTY 리사이즈도 블로킹 호출이다 (ResizePseudoConsole은 출력 파이프가
+    /// 차 있고 리더가 비우지 못하면 반환하지 않는다). writer와 같은 이유로 전역 PtyState
+    /// 잠금 밖에서 부른다 — 한 세션이 막혀도 다른 세션의 write/resize·kill이 살아 있어야 한다.
+    master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
+    /// 리사이즈 요청 순번 — 잠금 밖에서 돌기 때문에 뒤늦게 도착한 옛 요청이
+    /// 최신 크기를 덮지 않도록 자기가 최신인지 확인하고 적용한다
+    resize_seq: Arc<std::sync::atomic::AtomicU64>,
     /// 세션별 잠금 — 블로킹 파이프 쓰기를 전역 PtyState 잠금 밖으로 뺀다.
     /// 한 세션의 stdin이 막혀도(먹통 TUI 등) 다른 세션의 write/resize와 pty_kill이 살아 있어야 한다.
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
@@ -246,7 +252,8 @@ fn spawn_pty_session(
     sessions.insert(
         id.clone(),
         PtySession {
-            master: pair.master,
+            master: Arc::new(Mutex::new(pair.master)),
+            resize_seq: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             writer: Arc::new(Mutex::new(writer)),
             child,
             gen,
@@ -468,20 +475,50 @@ fn pty_write(state: State<PtyState>, id: String, data: String) -> Result<(), Str
     w.flush().map_err(|e| e.to_string())
 }
 
+/// 이 리사이즈 요청이 아직 최신인가 — 전역 잠금 밖에서 돌기 때문에 두 요청이 겹칠 수 있고,
+/// 늦게 실행된 옛 요청이 최신 크기를 덮으면 페인이 엉뚱한 폭으로 굳는다
+fn resize_is_current(seq_cell: &std::sync::atomic::AtomicU64, seq: u64) -> bool {
+    seq_cell.load(std::sync::atomic::Ordering::Relaxed) == seq
+}
+
+/// PTY 크기 맞춤 — ConPTY의 ResizePseudoConsole은 **블로킹 호출**이다. 리사이즈 리페인트를
+/// 출력 파이프에 동기로 밀어 넣기 때문에, 그 파이프가 차 있고 리더 스레드가 비우지 못하는
+/// 동안(스토어 채널 정체·로그 쓰기 지연 등)에는 반환하지 않는다.
+///
+/// 그래서 두 가지를 지킨다. ① 전역 PtyState 잠금을 쥐고 부르지 않는다 — 한 세션의 ConPTY가
+/// 막혀도 다른 세션의 write/resize·kill과 리더 스레드의 EOF 정리가 계속 돌아야 한다 (B14와
+/// 같은 규칙, PtySession::writer 주석이 선언한 계약이다). ② 메인 스레드(이벤트 루프)에서
+/// 부르지 않는다 — 동기 커맨드로 두면 막히는 순간 앱 전체가 굳고 다시 풀리지 않는다.
+/// 페인 하나가 사라지면(세션 제거) 남은 페인이 일제히 리사이즈되므로 그 창이 가장 넓다.
 #[tauri::command]
-fn pty_resize(state: State<PtyState>, id: String, cols: u16, rows: u16) -> Result<(), String> {
-    let sessions = state.0.lock().map_err(|e| e.to_string())?;
-    let s = sessions.get(&id).ok_or("세션 없음")?;
-    // resize 호출 전에 힌트를 찍는다 — ConPTY 리페인트가 힌트보다 먼저 도착하는 경합 방지
-    s.resize_hint.store(epoch_ms(), std::sync::atomic::Ordering::Relaxed);
-    s.master
-        .resize(PtySize {
+async fn pty_resize(app: AppHandle, id: String, cols: u16, rows: u16) -> Result<(), String> {
+    let (master, seq_cell, seq) = {
+        let state: State<PtyState> = app.state();
+        let sessions = state.0.lock().map_err(|e| e.to_string())?;
+        let s = sessions.get(&id).ok_or("세션 없음")?;
+        // resize 호출 전에 힌트를 찍는다 — ConPTY 리페인트가 힌트보다 먼저 도착하는 경합 방지
+        s.resize_hint.store(epoch_ms(), std::sync::atomic::Ordering::Relaxed);
+        let seq = s.resize_seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        (s.master.clone(), s.resize_seq.clone(), seq)
+    };
+    // ponytail: 정말 막힌 ConPTY는 이 블로킹 스레드 하나를 붙든 채 남는다 (앱은 산다).
+    // 새는 것이 실측으로 보이면 그때 세션별 리사이즈 워커 하나로 직렬화한다.
+    tauri::async_runtime::spawn_blocking(move || {
+        let m = master.lock().map_err(|e| e.to_string())?;
+        // 기다리는 사이 더 새 요청이 들어왔으면 이 크기는 이미 옛 값이다 — 덮지 않는다
+        if !resize_is_current(&seq_cell, seq) {
+            return Ok(());
+        }
+        m.resize(PtySize {
             rows,
             cols,
             pixel_width: 0,
             pixel_height: 0,
         })
         .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// 블록 가능성이 있는 PTY 정리(잡 종료·kill·ConPTY 닫기)를 백그라운드로 보낸다 (B14).
@@ -1793,6 +1830,14 @@ fn sessions_agents(state: State<PtyState>) -> Vec<AgentSample> {
         .collect()
 }
 
+/// CLI 에이전트 명부 (관측 전용) — 알려진 에이전트 + PATH 설치 실측. 설정 화면이 상태를
+/// 보여주고 세션 추가 진입점이 "설치된 것만" 내놓는 데 같은 목록을 쓴다.
+/// where.exe를 목록 수만큼 돌므로 프런트가 캐시하고 명시 요청에만 다시 부른다.
+#[tauri::command]
+fn agent_clis() -> Vec<agentscan::AgentCli> {
+    agentscan::roster()
+}
+
 /// 포트 스냅숏 (PRD H) — LISTENING TCP + 세션 귀속(Job pid 대조). 관측 전용.
 #[tauri::command]
 async fn ports_snapshot(app: AppHandle) -> Vec<ports::PortRow> {
@@ -2308,6 +2353,7 @@ pub fn run() {
             clip::clip_save_image,
             sessions_memory,
             sessions_agents,
+            agent_clis,
             ports_snapshot,
             browser::browser_open,
             browser::browser_bounds,
@@ -2347,7 +2393,19 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::take_complete_utf8;
+    use super::{resize_is_current, take_complete_utf8};
+
+    /// 리사이즈 순번 가드 — 겹친 요청 중 마지막 것만 적용된다.
+    /// 어느 순서로 실행되든 옛 요청은 흘러야 페인이 엉뚱한 폭으로 굳지 않는다
+    #[test]
+    fn only_the_newest_resize_applies() {
+        let seq = std::sync::atomic::AtomicU64::new(0);
+        let bump = || seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        let first = bump();
+        let second = bump(); // 더 새 요청이 들어왔다
+        assert!(!resize_is_current(&seq, first)); // 늦게 실행돼도 덮지 않는다
+        assert!(resize_is_current(&seq, second));
+    }
 
     /// 한글 3바이트가 읽기 경계에서 1+2로 잘려도 U+FFFD 없이 이어 붙는다
     #[test]

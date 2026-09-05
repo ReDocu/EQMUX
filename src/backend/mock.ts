@@ -61,9 +61,10 @@ export interface Backend {
   startDefaultTerminal(wsId: string): Session | undefined;
   /** 슬롯에 터미널 추가 — 페르소나·직무 없이 빈 슬롯 하나를 셸 세션으로 채운다.
    *  cwd를 주면 그 경로에서 시작한다 (M36 — git 패널의 워크트리 셸 열기) */
-  addTerminal(wsId: string, shell?: string, cwd?: string): void;
-  /** 슬롯에 역할 세션 추가 — 스폰 시점에 권한 플래그가 결정되므로 재시작이 필요 없다 */
-  addRoleSession(wsId: string, personaId: string, jobId: string, opts?: { cwd?: string; worktree?: boolean }): void;
+  addTerminal(wsId: string, shell?: string, cwd?: string): Session | undefined;
+  /** 슬롯에 역할 세션 추가 — 스폰 시점에 권한 플래그가 결정되므로 재시작이 필요 없다.
+   *  만들어진 세션을 돌려준다 — 부르는 쪽이 셸이 뜬 뒤의 행동(에이전트 기동)을 걸 수 있게 */
+  addRoleSession(wsId: string, personaId: string, jobId: string, opts?: { cwd?: string; worktree?: boolean }): Session | undefined;
   /** 슬롯에서 터미널 제거 — 세션을 삭제하고 임무 배정도 해제한다 */
   removeTerminal(id: string): void;
   /** 셸 세션 cwd 변경 (브랜치 부여) — PTY 재스폰과 짝으로만 부른다.
@@ -724,28 +725,28 @@ export class MockBackend implements Backend {
     return undefined;
   }
 
-  addTerminal(wsId: string, shell?: string, cwd?: string) {
+  addTerminal(wsId: string, shell?: string, cwd?: string): Session | undefined {
     const ws = WORKSPACES.find((x) => x.id === wsId);
-    if (!ws) return;
+    if (!ws) return undefined;
     const slot = freeSlot(wsId);
     if (!slot) {
       this.logEvent("app", `세션 슬롯 가득 참 (${maxSlots()}/${maxSlots()}) · ${ws.name}`);
       this.broadcast();
-      return;
+      return undefined;
     }
-    SESSIONS.push(
-      s(`shell${slot}@${wsId}`, wsId, slot, "", "", {
-        status: "shell",
-        shell: shell ?? "pwsh",
-        cwd: cwd ?? ws.path, // 워크트리 셸 열기 (M36) — 지정 경로에서 시작
-        sinceMs: 0,
-        sinceTs: Date.now(),
-        resumeReason: "일반 셸 · cwd 유지",
-        lastOutput: cwd ? "워크트리 셸" : "기본 터미널",
-      }),
-    );
+    const created = s(`shell${slot}@${wsId}`, wsId, slot, "", "", {
+      status: "shell",
+      shell: shell ?? "pwsh",
+      cwd: cwd ?? ws.path, // 워크트리 셸 열기 (M36) — 지정 경로에서 시작
+      sinceMs: 0,
+      sinceTs: Date.now(),
+      resumeReason: "일반 셸 · cwd 유지",
+      lastOutput: cwd ? "워크트리 셸" : "기본 터미널",
+    });
+    SESSIONS.push(created);
     this.logEvent("app", `터미널 추가 · ${ws.name} SLOT ${slot} · ${shell ?? "pwsh"}${cwd ? ` · ${cwd}` : ""}`, undefined, wsId);
     this.broadcast();
+    return created;
   }
 
   removeTerminal(id: string) {
@@ -776,30 +777,30 @@ export class MockBackend implements Backend {
     this.broadcast();
   }
 
-  addRoleSession(wsId: string, personaId: string, jobId: string, opts?: { cwd?: string; worktree?: boolean }) {
+  addRoleSession(wsId: string, personaId: string, jobId: string, opts?: { cwd?: string; worktree?: boolean }): Session | undefined {
     const ws = WORKSPACES.find((x) => x.id === wsId);
-    if (!ws) return;
+    if (!ws) return undefined;
     const slot = freeSlot(wsId);
     if (!slot) {
       this.logEvent("app", `세션 슬롯 가득 참 (${maxSlots()}/${maxSlots()}) · ${ws.name}`);
       this.broadcast();
-      return;
+      return undefined;
     }
-    SESSIONS.push(
-      s(`${personaId}@${wsId}`, wsId, slot, personaId, jobId, {
-        status: "shell", // 셸 우선 모델 — 역할 세션도 셸로 시작한다
-        cwd: opts?.cwd ?? ws.path,
-        worktree: opts?.worktree ?? false,
-        sinceMs: 0,
-        sinceTs: Date.now(),
-        lastOutput: "셸로 시작 — 에이전트는 터미널에서 직접 실행",
-      }),
-    );
+    const created = s(`${personaId}@${wsId}`, wsId, slot, personaId, jobId, {
+      status: "shell", // 셸 우선 모델 — 역할 세션도 셸로 시작한다
+      cwd: opts?.cwd ?? ws.path,
+      worktree: opts?.worktree ?? false,
+      sinceMs: 0,
+      sinceTs: Date.now(),
+      lastOutput: "셸로 시작 — 에이전트는 터미널에서 직접 실행",
+    });
+    SESSIONS.push(created);
     const pName = PERSONAS.find((x) => x.id === personaId)?.name ?? personaId;
     const jName = JOBS.find((x) => x.id === jobId)?.name ?? jobId;
     const iso = opts?.worktree ? " · 워크트리" : "";
     this.logEvent("app", `역할 세션 추가 · ${pName} · ${jName} · SLOT ${slot}${iso}`, undefined, wsId);
     this.broadcast();
+    return created;
   }
 
   hydrateTeam(wsId: string, slots: TeamSlotHydrate[], aliveIds?: Set<string>) {

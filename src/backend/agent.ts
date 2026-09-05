@@ -33,6 +33,26 @@ const STATUSES: AgentStatus[] = ["starting", "busy", "waiting", "shell", "idle",
 // 창(웹뷰 재시작 직후)에서 더 오래된 페이로드가 나중에 도착해 신선한 상태를 덮지 않게 한다
 const lastSeq = new Map<string, number>();
 
+/** 이 페이로드가 이미 지나간 순번인가 (P-4). 참이면 통째로 버린다.
+ *  통과한 순번은 그 세션의 새 하한이 된다 — 판정과 기록이 한 함수인 이유다. */
+export function staleSeq(session: string, seq?: number): boolean {
+  if (typeof seq !== "number") return false; // 순번 없는 옛 페이로드는 그대로 받는다
+  const last = lastSeq.get(session);
+  if (last !== undefined && seq < last) return true;
+  lastSeq.set(session, seq);
+  return false;
+}
+
+/** 이벤트 1건 반영 — 화면과 인박스는 순서 역전 가드를 같이 통과해야 한다.
+ *  가드를 화면 쪽(applyEvt)에만 두면, 버려진 스테일 idle 페이로드로 인박스가 배출돼
+ *  이미 busy로 넘어간 세션에 사람이 치던 줄로 주입이 끼어든다 (P-2). */
+function accept(p: AgentStateEvt, fromSnapshot = false): void {
+  if (staleSeq(p.session, p.seq)) return;
+  applyEvt(p, fromSnapshot);
+  // 인박스 전달 (M3) — idle 전이가 곧 턴 종료 신호다
+  flushInboxOnState(p.session, p.status);
+}
+
 /** waiting 사운드 합침 간격 (FR-G-32) — Rust의 OS 알림 게이트(NOTIFY_MIN_INTERVAL_MS)와 같은 값.
  *  승인을 자주 묻는 에이전트에서 waiting↔busy가 오갈 때마다 울리던 것을 막는다 (B55) */
 const SOUND_MIN_INTERVAL_MS = 60_000;
@@ -41,11 +61,6 @@ const lastBeep = new Map<string, number>();
 /** Rust 이벤트(null 표기) → 목 백엔드 반영 페이로드(undefined 표기) — 수신부 공용 변환.
  *  fromSnapshot: 웹뷰 복구 스냅숏 반영 — '전이'가 아니므로 사운드를 내지 않는다 (B55) */
 function applyEvt(p: AgentStateEvt, fromSnapshot = false): void {
-  if (typeof p.seq === "number") {
-    const last = lastSeq.get(p.session);
-    if (last !== undefined && p.seq < last) return; // 스테일 — 버린다
-    lastSeq.set(p.session, p.seq);
-  }
   // waiting 사운드 (FR-G-34) — 진입 전이에만, 설정이 켜져 있을 때만 (기본 꺼짐, G6).
   // 음소거(FR-G-35) 대상이면 내지 않는다 — 세션 id 또는 소속 워크스페이스 id
   const prevSess = backend.listSessions().find((x) => x.id === p.session);
@@ -83,11 +98,7 @@ let ready: Promise<void> | undefined;
 export function ensureAgentListeners(): Promise<void> {
   if (!isTauri()) return Promise.resolve();
   if (!ready) {
-    ready = listen<AgentStateEvt>("agent-state", (e) => {
-      applyEvt(e.payload);
-      // 인박스 전달 (M3) — idle 전이가 곧 턴 종료 신호다
-      flushInboxOnState(e.payload.session, e.payload.status);
-    }).then(() => {});
+    ready = listen<AgentStateEvt>("agent-state", (e) => accept(e.payload)).then(() => {});
   }
   return ready;
 }
@@ -97,11 +108,9 @@ export function ensureAgentListeners(): Promise<void> {
 export async function applyAgentSnapshot(): Promise<void> {
   if (!isTauri()) return;
   const states = await invoke<AgentStateEvt[]>("agent_snapshot").catch(() => [] as AgentStateEvt[]);
-  for (const p of states) {
-    applyEvt(p, true);
-    // 스냅숏 시점에 이미 idle로 주차된 세션에는 앞으로 올 전이가 없다 (B49) — 여기서도 배출한다
-    flushInboxOnState(p.session, p.status);
-  }
+  // 스냅숏 시점에 이미 idle로 주차된 세션에는 앞으로 올 전이가 없다 (B49) — 여기서도 배출한다.
+  // 그 사이 실시간 이벤트가 앞서 갔다면 스냅숏은 스테일이므로 accept가 통째로 버린다.
+  for (const p of states) accept(p, true);
 }
 
 /** 에이전트 기동 (FR-D-01·02·40) — UUID는 Rust가 발급하고 반환한다.

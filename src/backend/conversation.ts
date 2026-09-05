@@ -204,16 +204,32 @@ function personaNameOf(sessionId: string): string | undefined {
   return backend.listPersonas().find((p) => p.id === s.personaId)?.name ?? s.personaId;
 }
 
+/** 페르소나 리마인더 — 역할(캐릭터)은 SessionStart에 한 번 실리고 나면 대화가 길어질수록
+ *  멀어진다. 그 상태로 도착한 메시지는 운영 알림처럼 보여서 에이전트가 기본 어투로 답했다
+ *  (페르소나가 에이전트간 대화에서만 빠지던 자리). 다만 매 건에 붙이면 같은 꼬리가 계속
+ *  반복되니, 역할이 바뀐 직후와 PERSONA_EVERY건마다만 얹는다 — 어투를 붙잡는 데 그걸로 족하다. */
+const PERSONA_EVERY = 5;
+const personaSeen = new Map<string, { name: string; n: number }>();
+
+function personaTail(sessionId: string): string {
+  const name = personaNameOf(sessionId);
+  if (!name) return "";
+  const prev = personaSeen.get(sessionId);
+  const n = prev?.name === name ? prev.n + 1 : 0;
+  personaSeen.set(sessionId, { name, n });
+  return n % PERSONA_EVERY === 0 ? ` (답신은 ${name}의 말투로)` : "";
+}
+
 /** 주입 본문 — 한 줄로 눌러서 보낸다. 에이전트 TUI에서 개행은 곧 제출이라, 본문에 줄바꿈이
  *  있으면 첫 줄만 들어가고 나머지가 다음 프롬프트로 새거나 중간에 턴이 시작된다.
  *
- *  꼬리의 페르소나 리마인더 — 역할(캐릭터)은 SessionStart에 한 번 실리고 나면 대화가 길어질수록
- *  멀어진다. 그 상태로 도착한 메시지는 운영 알림처럼 보여서 에이전트가 기본 어투로 답했다
- *  (페르소나가 에이전트간 대화에서만 빠지던 자리). 수신자 이름을 매 건에 한 조각 얹어 끊는다. */
-function fmt(m: ConversationMessage, persona?: string): string {
-  const body = m.body.replace(/\s*\r?\n\s*/g, " ");
-  const head = `[EQMUX 메시지·${m.type}] ${m.from}: ${body}`;
-  return persona ? `${head} (답신은 ${persona}의 말투로)` : head;
+ *  여러 건은 한 줄로 묶는다 — 대기분을 건건이 주입하면 래퍼도 수신자의 턴도 건수만큼 든다.
+ *  묶으면 래퍼 하나에 턴 하나다. 접두를 짧게 쥐는 이유도 같다 — 건당 비용이라 길이가 곱해진다. */
+export function fmt(msgs: ConversationMessage[], tail = ""): string {
+  const flat = (m: ConversationMessage) => m.body.replace(/\s*\r?\n\s*/g, " ");
+  if (msgs.length === 1) return `[EQ·${msgs[0].type}] ${msgs[0].from}: ${flat(msgs[0])}${tail}`;
+  const items = msgs.map((m, i) => `${i + 1}) ${m.from}·${m.type}: ${flat(m)}`).join(" ");
+  return `[EQ ${msgs.length}건] ${items}${tail}`;
 }
 
 const SUBMIT_DELAY_MS = 80; // 본문 접수 → 제출 사이. TUI가 붙여넣기를 정리할 시간을 준다
@@ -221,18 +237,40 @@ const TURN_GAP_MS = 400; // 연속 주입 간격 — 앞 메시지의 턴 시작
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** 세션별 주입 큐 — 인박스 flush는 여러 건을 한꺼번에 흘리므로 직렬화가 필요하다.
+/** 세션별 주입 큐 — 묶고도 남는 덩어리가 여럿일 수 있어 직렬화는 그대로 필요하다.
  *  본문과 Enter를 한 번에 쓰면 TUI가 붙여넣기로 묶어 개행을 줄바꿈으로 삼키는 경우가 있어,
  *  본문 → 짧은 지연 → \r 두 단계로 나눈다. 이게 "도착은 했는데 턴이 안 도는" 자리였다. */
 const injectQueue = new Map<string, Promise<void>>();
 
-function injectMessage(sessionId: string, m: ConversationMessage): void {
+/** 한 번에 붙여넣는 상한 — 오래 바빴던 세션의 인박스는 수십 건까지 쌓인다. 통째로 쏟으면
+ *  TUI 붙여넣기가 감당하지 못하니 덩어리로 자르고, 사이는 주입 큐가 벌려 준다. */
+const BATCH_MAX_CHARS = 4000;
+
+export function batches(msgs: ConversationMessage[]): ConversationMessage[][] {
+  const out: ConversationMessage[][] = [];
+  let cur: ConversationMessage[] = [];
+  let n = 0;
+  for (const m of msgs) {
+    if (cur.length > 0 && n + m.body.length > BATCH_MAX_CHARS) {
+      out.push(cur);
+      cur = [];
+      n = 0;
+    }
+    cur.push(m);
+    n += m.body.length;
+  }
+  if (cur.length > 0) out.push(cur);
+  return out;
+}
+
+function injectMessages(sessionId: string, msgs: ConversationMessage[]): void {
+  if (msgs.length === 0) return;
   const prev = injectQueue.get(sessionId) ?? Promise.resolve();
   const next = prev
     .then(async () => {
-      // 페르소나는 큐에 넣을 때가 아니라 실제로 쓸 때 읽는다 — 앞 메시지를 기다리는 동안
+      // 페르소나는 큐에 넣을 때가 아니라 실제로 쓸 때 읽는다 — 앞 덩어리를 기다리는 동안
       // 재캐스팅될 수 있고, 그때는 새 인물의 이름이 맞다
-      writePty(sessionId, fmt(m, personaNameOf(sessionId)));
+      writePty(sessionId, fmt(msgs, personaTail(sessionId)));
       await sleep(SUBMIT_DELAY_MS);
       writePty(sessionId, "\r"); // 제출 — 여기서 비로소 수신자의 턴이 돈다
       await sleep(TURN_GAP_MS);
@@ -288,7 +326,7 @@ function deliver(wsId: string, m: ConversationMessage): void {
       echoPty(s.id, fmtEcho(m));
       park(s.id);
     } else if (canInject(s)) {
-      injectMessage(s.id, m); // 유휴 = 프롬프트가 비어 있다 → 즉시 (M3)
+      injectMessages(s.id, [m]); // 유휴 = 프롬프트가 비어 있다 → 즉시 (M3)
     } else {
       park(s.id);
     }
@@ -303,7 +341,8 @@ export function flushInboxOnState(sessionId: string, status: string | undefined)
   inbox.delete(sessionId);
   setInboxTick((t) => t + 1);
   scheduleInboxSave(); // 전달 완료 — 캐시의 대기분도 비운다
-  for (const m of q) injectMessage(sessionId, m); // 큐가 직렬화한다 — 한꺼번에 쏟지 않는다
+  // 대기분은 한 줄로 묶어 턴 하나로 흘린다 — 넘치는 만큼만 덩어리가 갈리고 큐가 사이를 벌린다
+  for (const b of batches(q)) injectMessages(sessionId, b);
 }
 
 // ── message-new 수신 — 발신 경로가 하나(msg_send)라서 수신 경로도 하나다 ──

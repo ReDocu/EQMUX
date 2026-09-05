@@ -7,7 +7,7 @@ import { fsCreate, fsDelete, fsPreview, fsRead, fsRename, fsTree, fsWrite } from
 import type { FsNode, FsTree } from "../backend/panels";
 import { refreshMissions } from "../backend/missions";
 import { sendConversation } from "../backend/conversation";
-import { isTauri } from "../backend/pty";
+import { isTauri, revealPath } from "../backend/pty";
 import { t, tf } from "../i18n";
 import { openPanel, scopeWorkspace, selectedSession, setExplorerTab, setOverlay, tick } from "../state";
 
@@ -288,9 +288,15 @@ export function MissionExplorerTab() {
           <div style={{ "font-weight": 700, "font-size": "11px" }}>
             {persona()?.name ?? t("세션 없음")} · {job()?.name ?? "—"}
           </div>
-          <div class="mono muted" style={{ "font-size": "10px" }}>
+          {/* 워크스페이스 경로 클릭 → Windows 탐색기 (앱 안 트리는 옆에 이미 있으므로 여기는 OS로 나간다) */}
+          <button
+            class="msnp-path mono muted"
+            disabled={!isTauri() || !ws()}
+            title={t("탐색기에서 열기")}
+            onClick={() => void revealPath(ws()!.path)}
+          >
             {ws()?.path ?? t("워크스페이스 없음")}
-          </div>
+          </button>
         </div>
         <span class="badge blue mono">⎇ {ws()?.branch ?? "—"}</span>
       </div>

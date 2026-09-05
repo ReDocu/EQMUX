@@ -29,8 +29,9 @@ import { queryEvents } from "../backend/events";
 import type { FeedEvent } from "../backend/events";
 import { branchList, worktreeAdd, worktreeAttach, worktreeList } from "../backend/git";
 import type { BranchInfo, WorktreeInfo } from "../backend/git";
+import { agentClis, agentClisReady } from "../backend/agentprobe";
 import { autoAssignDefault, refreshMissions } from "../backend/missions";
-import { clipWriteText, echoPty, isTauri, killPty, storePurgeScrollback, storeUsageReal } from "../backend/pty";
+import { clipWriteText, echoPty, isTauri, killPty, onPtyOutput, storePurgeScrollback, storeUsageReal, writePty } from "../backend/pty";
 import type { StoreUsageReal } from "../backend/pty";
 import { removeRoleFile } from "../backend/roles";
 import { maxSlots } from "../backend/settings";
@@ -46,12 +47,27 @@ import {
   sessionTermSize,
   syncSessionTerminal,
   TerminalPane,
+  whenSessionReady,
 } from "../components/TerminalPane";
-import { t } from "../i18n";
+import { t, tf } from "../i18n";
 import { SessionDetailPanel } from "./SessionDetailPanel";
 import { TranscriptPane } from "./TranscriptPane";
 import type { Session, Workspace } from "../types";
 import { effectivePermissions, sessionDisplayName } from "../types";
+
+/** 셸에 에이전트 명령을 쳐 넣는다 — claude 말고는 EQMUX가 관리하는 스폰 경로가 없다
+ *  (역할 주입·훅·재개는 agent.rs의 ClaudeCodeAdapter 전용). 사람이 터미널에 직접 치는 것과
+ *  같은 자리이고, 관제 표시는 agentscan이 프로세스 트리에서 잡아 준다.
+ *
+ *  스폰 직후에 바로 쓰면 PSReadLine이 초기화 전에 받은 입력을 버려 아무 일도 일어나지 않는다.
+ *  첫 출력이 곧 "셸이 그리기 시작했다"는 신호라 그때까지 기다린다.
+ *  ponytail: 첫 출력 + 짧은 여유. 프로필이 아주 긴 셸에서 어긋나면 프롬프트 문자열을 봐야 한다. */
+function runCliIn(id: string, cmd: string): void {
+  const off = onPtyOutput(id, () => {
+    off();
+    setTimeout(() => writePty(id, `${cmd}\r`), 250);
+  });
+}
 
 /** 레일에 앉힐 폴더 표기 — 마지막 두 마디만. 전체 경로는 title이 갖고 있고, 좁은 레일에서
  *  드라이브부터 늘어놓으면 정작 구분이 되는 끝이 잘린다 (…/EQMux_workspace/EQMUX). */
@@ -354,6 +370,17 @@ export function ControlCenter(props: { workspace: Workspace }) {
     backend.addTerminal(props.workspace.id, defaultShell().label);
     setAddOpen(false);
   };
+  // 셸 실행 에이전트 열기 (codex 등) — 설치 확인은 카드를 내놓을 때 이미 끝났다.
+  // 셸 세션 그대로다: 역할도 훅도 붙지 않으므로 대화 전달은 기본 터미널과 같이
+  // 화면 에코까지만 간다 (P-2). 관리 에이전트는 이 경로가 아니라 addRoleSession이다.
+  const addCliSession = (cmd: string) => {
+    const created = backend.addTerminal(props.workspace.id, defaultShell().label);
+    if (created) whenSessionReady(created.id, (id) => runCliIn(id, cmd));
+    setAddOpen(false);
+  };
+  // 설정 화면의 명부와 같은 소스 — 관리 경로가 있는 claude는 위 역할 카드가 이미 맡는다
+  const shellClis = () => agentClis().filter((a) => a.installed && !a.managed);
+  const claudeMissing = () => agentClisReady() && !agentClis().some((a) => a.managed && a.installed);
   const [shellMenuOpen, setShellMenuOpen] = createSignal(false);
   const shellCmdFor = (s: Session) => SHELLS.find((x) => x.label === s.shell)?.cmd;
   const addRoleSession = async () => {
@@ -370,9 +397,13 @@ export function ControlCenter(props: { workspace: Workspace }) {
         return;
       }
     }
-    backend.addRoleSession(props.workspace.id, addPersona(), addJob(), opts);
+    const created = backend.addRoleSession(props.workspace.id, addPersona(), addJob(), opts);
     // 기본 임무 자동 배정 (FR-E-56) — 임무 없는 새 역할 세션에만
     void autoAssignDefault(props.workspace.id, `${addPersona()}@${props.workspace.id}`);
+    // "열기"가 곧 기동이다 — 셸이 뜨는 대로 역할·권한·훅이 붙은 에이전트로 다시 연다.
+    // 예전에는 여기서 맨 셸만 뜨고, 사람이 페인의 [▶ 에이전트 기동]을 따로 찾아 눌러야 했다.
+    // 그 버튼은 그대로 남는다 — 중지한 세션을 다시 띄우는 자리는 여전히 거기다.
+    if (created) whenSessionReady(created.id, () => void launchAgent(created));
     setAddOpen(false);
   };
   const [removeTarget, setRemoveTarget] = createSignal<Session | undefined>(undefined);
@@ -997,7 +1028,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
             )}
           </For>
           <Show when={sessions().length < maxSlots()}>
-            <button class="rail-av add mono" title={t("빈 슬롯에 세션 추가 — 기본 터미널 또는 역할 세션")} onClick={openAdd}>
+            <button class="rail-av add mono" title={t("빈 슬롯에 세션 추가 — 클로드코드 · 코덱스 · 기본 터미널")} onClick={openAdd}>
               {t("+ 세션 추가")}
             </button>
           </Show>
@@ -1255,7 +1286,8 @@ export function ControlCenter(props: { workspace: Workspace }) {
         </div>
       </Show>
 
-      {/* 세션 추가 — 기본 터미널 / 역할 세션 2택. 역할 세션은 스폰 시점에 권한이 결정된다. */}
+      {/* 세션 추가 — 여는 것을 그대로 고른다 (클로드코드 · 코덱스 · 기본 터미널).
+          설치되지 않은 CLI는 카드를 내놓지 않는다 — 눌러 봐야 command not found가 전부다. */}
       <Show when={addOpen()}>
         <div class="overlay" onClick={() => setAddOpen(false)}>
           <div class="dialog" style={{ width: "460px", padding: "16px 18px" }} onClick={(e) => e.stopPropagation()}>
@@ -1264,22 +1296,20 @@ export function ControlCenter(props: { workspace: Workspace }) {
               {props.workspace.name} · {sessions().length}/{maxSlots()} {t("슬롯 사용 중")}
             </div>
 
-            <button class="card add-choice" onClick={addTerminal}>
-              <div>
-                <div style={{ "font-weight": 700, "font-size": "12px" }}>&gt;_ {t("기본 터미널")}</div>
-                <div class="muted" style={{ "font-size": "11px" }}>
-                  {t("역할 없이 즉시 시작 · 언제든 역할 부여 가능")}
-                </div>
-              </div>
-              <span class="mono muted">→</span>
-            </button>
-
             <div class="card add-choice role" onClick={(e) => e.stopPropagation()}>
               <div style={{ width: "100%" }}>
-                <div style={{ "font-weight": 700, "font-size": "12px" }}>⛬ {t("역할 세션")}</div>
+                <div style={{ "font-weight": 700, "font-size": "12px" }}>⛬ {t("클로드코드 에이전트 열기")}</div>
                 <div class="muted" style={{ "font-size": "11px", "margin-bottom": "8px" }}>
-                  {t("페르소나·직무를 정해 시작 · 권한 플래그는 스폰 시점에 적용")}
+                  {t("페르소나·직무를 정해 바로 기동 · 역할·권한 플래그·훅이 붙은 유일한 경로")}
                 </div>
+                {/* PATH에 claude가 없으면 기동은 스폰에서 실패한다 — 누르기 전에 말한다.
+                    카드를 숨기지는 않는다: 역할 세션은 팀 편성의 기본 단위라 자리가 사라지면
+                    "왜 없지"가 된다. 설치 상태는 설정 > CLI 에이전트에서 다시 확인할 수 있다. */}
+                <Show when={claudeMissing()}>
+                  <div class="mono st-dead" style={{ "font-size": "10px", "margin-bottom": "8px" }}>
+                    {t("PATH에 claude가 없습니다 — 설치 후 설정 > CLI 에이전트에서 다시 확인하세요")}
+                  </div>
+                </Show>
                 <Show
                   when={availablePersonas().length > 0}
                   fallback={<div class="muted mono" style={{ "font-size": "11px" }}>{t("남은 페르소나가 없습니다")}</div>}
@@ -1292,7 +1322,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
                       <For each={backend.listJobs()}>{(j) => <option value={j.id}>{j.name}</option>}</For>
                     </select>
                     <button class="btn primary" onClick={() => void addRoleSession()}>
-                      {t("생성")}
+                      {t("열기")}
                     </button>
                   </div>
                   {/* 세션 격리 (FR-E-62 · E1′) — 기본은 repo 공유 (FR-E-60) */}
@@ -1313,6 +1343,33 @@ export function ControlCenter(props: { workspace: Workspace }) {
                 </Show>
               </div>
             </div>
+
+            {/* 셸 실행 에이전트 — PATH에 있는 것만. 명령을 치는 것과 같아서 EQMUX가 붙이는 것은 없다 */}
+            <For each={shellClis()}>
+              {(a) => (
+                <button class="card add-choice" onClick={() => addCliSession(a.cmd)}>
+                  <div>
+                    <div style={{ "font-weight": 700, "font-size": "12px" }}>
+                      ◆ {tf("{name} 열기", { name: a.name })}
+                    </div>
+                    <div class="muted" style={{ "font-size": "11px" }}>
+                      {tf("셸에서 {cmd} 실행 · 역할·훅·재개는 붙지 않고 관제에는 실행 중으로만 보입니다", { cmd: a.cmd })}
+                    </div>
+                  </div>
+                  <span class="mono muted">→</span>
+                </button>
+              )}
+            </For>
+
+            <button class="card add-choice" onClick={addTerminal}>
+              <div>
+                <div style={{ "font-weight": 700, "font-size": "12px" }}>&gt;_ {t("기본 터미널 열기")}</div>
+                <div class="muted" style={{ "font-size": "11px" }}>
+                  {t("역할 없이 즉시 시작 · 언제든 역할 부여 가능")}
+                </div>
+              </div>
+              <span class="mono muted">→</span>
+            </button>
 
             <div style={{ display: "flex", "justify-content": "flex-end", "margin-top": "12px" }}>
               <button class="btn" onClick={() => setAddOpen(false)}>

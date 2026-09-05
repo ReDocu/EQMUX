@@ -107,6 +107,24 @@ if (typeof window !== "undefined") {
   });
 }
 
+/** 셸이 실제로 뜬 뒤에 이어 붙일 한 가지 행동 — 세션 추가 진입점이 "열자마자 무엇을 할지"를
+ *  여기 건다 (에이전트 기동 · codex 실행). 사람이 카드를 누른 그 한 번의 선택을 셸이 준비될
+ *  때까지 미뤄 두는 것뿐이라 "자동 실행 없음"(FR-C-33)의 경계는 그대로다 — 그 경계는 시점이
+ *  아니라 "사람이 골랐는가"에 있다. 스폰 게이트는 여전히 셸 하나뿐이다.
+ *
+ *  세션이 만들어진 직후에 걸어야 한다: 셸이 이미 떠 있는 세션에는 부르는 쪽이 직접 하면 된다. */
+const pendingReady = new Map<string, (id: string) => void>();
+export function whenSessionReady(id: string, cb: (id: string) => void): void {
+  pendingReady.set(id, cb);
+}
+
+function fireSessionReady(id: string): void {
+  const cb = pendingReady.get(id);
+  if (!cb) return;
+  pendingReady.delete(id); // 한 번만 — 재스폰·재부착이 같은 행동을 다시 일으키지 않게
+  cb(id);
+}
+
 /** 재스폰 중인 세션 (브랜치 부여 · 에이전트 기동) — kill과 spawn 사이의 짧은 dead 구간을
  *  화면이 진짜 종료로 오해하지 않게 한다. 재스폰이 끝나거나 실패하면 반드시 비운다. */
 const [respawning, setRespawning] = createSignal<string[]>([]);
@@ -605,6 +623,7 @@ async function initSession(
     await spawnPty(props.sessionId, props.cwd, term.cols, term.rows, props.wsId, props.shell);
     entry.lastCols = term.cols;
     entry.lastRows = term.rows;
+    fireSessionReady(props.sessionId); // 세션 추가에서 고른 다음 행동 (에이전트 기동 · codex)
   } else {
     // 목 폴백 — 브라우저 dev에서는 정적 라인 + 로컬 에코 (1회만 기록)
     const prompt = `\x1b[38;5;110mPS ${props.cwd}>\x1b[0m `;

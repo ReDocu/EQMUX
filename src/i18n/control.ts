@@ -75,7 +75,8 @@ export const dict: Record<string, string> = {
   "선택 터미널에 브랜치 부여": "Assign branch to selected terminal",
   "경로 복사": "Copy path",
   "삭제는 두지 않는다 — git worktree remove (FR-E-64)": "No delete here — use git worktree remove (FR-E-64)",
-  "빈 슬롯에 세션 추가 — 기본 터미널 또는 역할 세션": "Add a session to an empty slot — default terminal or role session",
+  "빈 슬롯에 세션 추가 — 클로드코드 · 코덱스 · 기본 터미널":
+    "Add a session to an empty slot — Claude Code · Codex · default terminal",
   // ── 에이전트 기동 ──
   "에이전트 기동": "Start agent",
   "이 셸을 끝내고 역할·권한·훅이 붙은 에이전트로 다시 엽니다":
@@ -116,8 +117,15 @@ export const dict: Record<string, string> = {
   // ── 세션 추가·제거 다이얼로그 ──
   "슬롯 사용 중": "slots in use",
   "역할 없이 즉시 시작 · 언제든 역할 부여 가능": "Starts instantly without a role · assign one anytime",
-  "페르소나·직무를 정해 시작 · 권한 플래그는 스폰 시점에 적용":
-    "Start with a persona and job · permission flags apply at spawn",
+  "클로드코드 에이전트 열기": "Open Claude Code agent",
+  "페르소나·직무를 정해 바로 기동 · 역할·권한 플래그·훅이 붙은 유일한 경로":
+    "Pick a persona and job and launch right away · the only path that carries the role, permission flags and hooks",
+  "{name} 열기": "Open {name}",
+  "셸에서 {cmd} 실행 · 역할·훅·재개는 붙지 않고 관제에는 실행 중으로만 보입니다":
+    "Runs {cmd} in a shell · no role, hooks or resume attach; control center only shows it running",
+  "PATH에 claude가 없습니다 — 설치 후 설정 > CLI 에이전트에서 다시 확인하세요":
+    "claude is not on PATH — install it, then re-check under Settings > CLI agents",
+  "기본 터미널 열기": "Open default terminal",
   "남은 페르소나가 없습니다": "No personas left",
   "워크트리 격리 — .eqmux/worktrees/<세션> · 전용 브랜치 eqmux/<세션>":
     "Worktree isolation — .eqmux/worktrees/<session> · dedicated branch eqmux/<session>",
@@ -127,6 +135,25 @@ export const dict: Record<string, string> = {
   "제거하면 팀 편성의 이 슬롯이 비워지고 임무 배정이 해제되며 PTY 프로세스가 종료됩니다. 변경은 다음 캐스팅 저장 때 .eqmux/team.json에 반영됩니다.":
     "Removing empties this slot in the team composition, unassigns its missions, and terminates the PTY process. The change is written to .eqmux/team.json on the next casting save.",
   "세션 제거": "Remove session",
+
+  // ── 설정 > CLI 에이전트 ──
+  "CLI 에이전트": "CLI agents",
+  "PATH 실측 — 설치된 것만 세션 추가에서 열 수 있습니다. 감지 목록과 같은 명부라, 열 수 있는 것은 관제에도 잡힙니다.":
+    "Measured against PATH — only installed CLIs can be opened from Add session. Same roster as detection, so anything you can open also shows up in the control center.",
+  "확인 중…": "Checking…",
+  "관리 실행": "Managed launch",
+  "역할·권한 플래그·훅·재개가 붙습니다. 세션 추가의 [클로드코드 에이전트 열기]가 이 경로입니다.":
+    "Carries the role, permission flags, hooks and resume. [Open Claude Code agent] in Add session uses this path.",
+  "셸 실행": "Shell launch",
+  "셸에 명령을 치는 것과 같습니다 — 역할·훅·재개는 붙지 않고 관제에는 실행 중으로만 보입니다.":
+    "Same as typing the command in a shell — no role, hooks or resume attach; the control center only shows it running.",
+  "미설치": "Not installed",
+  "PATH에 없습니다 — 세션 추가에 나오지 않습니다. 설치한 뒤 다시 확인하세요.":
+    "Not on PATH — it does not appear in Add session. Install it, then re-check.",
+  설치됨: "installed",
+  없음: "missing",
+  "다시 확인": "Re-check",
+  "PATH를 다시 훑습니다": "Scans PATH again",
 
   // ── TranscriptPane ──
   "목 데이터": "Mock data",
