@@ -605,6 +605,7 @@ export class MockBackend implements Backend {
     sess.restored = false; // 재개 제안(FR-C-33)을 접는다 — 어느 표면에서 재개했든 동일
     sess.status = "busy";
     sess.sinceMs = 0;
+    sess.sinceTs = Date.now();
     sess.exitCode = undefined;
     sess.lastOutput = "재개됨 · transcript 복원";
     this.logEvent("state", "dead → busy · 재개", id);
@@ -622,6 +623,7 @@ export class MockBackend implements Backend {
       sess.status = "dead";
       sess.exitCode = code ?? undefined;
       sess.sinceMs = 0;
+      sess.sinceTs = Date.now();
       sess.waitingFor = undefined;
       sess.lastOutput = `프로세스 종료 · exit ${code ?? "?"}`;
       this.logEvent("state", `프로세스 종료 · exit ${code ?? "?"}`, id);
@@ -635,6 +637,7 @@ export class MockBackend implements Backend {
     sess.status = "dead";
     sess.exitCode = 0;
     sess.sinceMs = 0;
+    sess.sinceTs = Date.now();
     sess.subagents = 0;
     sess.waitingFor = undefined;
     sess.lastOutput = "종료됨 · exit 0";
@@ -648,6 +651,7 @@ export class MockBackend implements Backend {
     sess.restartNeeded = false;
     sess.status = "busy";
     sess.sinceMs = 0;
+    sess.sinceTs = Date.now();
     sess.lastOutput = "재시작됨 · 대화 유지";
     this.logEvent("state", "재개 기반 재시작 · 권한 반영", id);
     this.broadcast();
@@ -691,6 +695,7 @@ export class MockBackend implements Backend {
             status: "shell",
             cwd: ws?.path ?? `C:\\workspace\\${wsId}`, // 실물 경로 — 목 기본값이 Tauri로 새지 않게
             sinceMs: 0,
+            sinceTs: Date.now(),
             lastOutput: "셸로 시작 — 에이전트는 터미널에서 직접 실행",
           }),
         );
@@ -707,6 +712,7 @@ export class MockBackend implements Backend {
         existing.status = "shell";
         existing.exitCode = undefined;
         existing.sinceMs = 0;
+        existing.sinceTs = Date.now();
         existing.lastOutput = "기본 터미널 · 재시작";
         this.logEvent("state", "기본 터미널 재시작", existing.id);
         this.broadcast();
@@ -733,6 +739,7 @@ export class MockBackend implements Backend {
         shell: shell ?? "pwsh",
         cwd: cwd ?? ws.path, // 워크트리 셸 열기 (M36) — 지정 경로에서 시작
         sinceMs: 0,
+        sinceTs: Date.now(),
         resumeReason: "일반 셸 · cwd 유지",
         lastOutput: cwd ? "워크트리 셸" : "기본 터미널",
       }),
@@ -763,6 +770,7 @@ export class MockBackend implements Backend {
     sess.status = "shell";
     sess.exitCode = undefined;
     sess.sinceMs = 0;
+    sess.sinceTs = Date.now();
     sess.lastOutput = "브랜치 부여 · 워크트리 이동";
     this.logEvent("state", `워크트리 이동 · ${cwd}`, id);
     this.broadcast();
@@ -783,6 +791,7 @@ export class MockBackend implements Backend {
         cwd: opts?.cwd ?? ws.path,
         worktree: opts?.worktree ?? false,
         sinceMs: 0,
+        sinceTs: Date.now(),
         lastOutput: "셸로 시작 — 에이전트는 터미널에서 직접 실행",
       }),
     );
@@ -823,6 +832,7 @@ export class MockBackend implements Backend {
           worktree: !!sl.worktree,
           worktreeMissing: worktreeMissing || undefined,
           sinceMs: 0,
+          sinceTs: Date.now(),
           restored: !alive,
           revived: alive,
           resumable: sl.resumable,
@@ -868,6 +878,7 @@ export class MockBackend implements Backend {
         status: "shell",
         cwd: ws.path,
         sinceMs: 0,
+        sinceTs: Date.now(),
         revived: true,
         resumeReason: "일반 셸 · cwd 유지",
         lastOutput: "웹뷰 재시작 · 세션 이어짐",
@@ -939,7 +950,9 @@ export class MockBackend implements Backend {
     if (evt.version) sess.agentVersion = evt.version;
     sess.exitCode = evt.exitCode;
     if (evt.status && prev !== evt.status) {
-      sess.sinceMs = 0;
+      // 채택 세션은 앱이 붙기 전부터 그 상태였다 — Rust가 실은 시각이 있으면 그걸 쓴다 (B19)
+      sess.sinceTs = evt.sinceMs ?? Date.now();
+      sess.sinceMs = Math.max(0, Date.now() - sess.sinceTs);
       // 미확인 마킹은 알림 대상과 같은 2종뿐이다 (FR-G-45)
       if (evt.status === "waiting" || evt.status === "dead") sess.unseen = true;
       if (evt.status !== "dead") sess.restartNeeded = sess.restartNeeded && evt.status === "starting";
@@ -1204,7 +1217,12 @@ export class MockBackend implements Backend {
     this.listeners.add(cb);
     if (!this.timer) {
       this.timer = setInterval(() => {
-        for (const sess of SESSIONS) sess.sinceMs += 30000;
+        // 기준점(sinceTs)이 있으면 거기서 계산한다 (B19) — 누산은 창이 백그라운드로 내려가
+        // 타이머가 스로틀되는 만큼 덜 센다. 기준점 없는 목 시드만 종전대로 누산한다.
+        const now = Date.now();
+        for (const sess of SESSIONS) {
+          sess.sinceMs = sess.sinceTs === undefined ? sess.sinceMs + 30000 : Math.max(0, now - sess.sinceTs);
+        }
         this.listeners.forEach((l) => l());
       }, 30000);
     }

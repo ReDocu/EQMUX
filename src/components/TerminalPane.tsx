@@ -27,16 +27,17 @@ import {
   openExternal,
   resizePty,
   revealPath,
+  noteUserInput,
   scrollbackTail,
   setTerminalDisposer,
   spawnPty,
   writePty,
 } from "../backend/pty";
-import { resumeAgent, spawnAgent } from "../backend/agent";
+import { spawnAgent } from "../backend/agent";
 import { backend } from "../backend/mock";
 import { settings } from "../backend/settings";
 import { t, tf } from "../i18n";
-import { selectedSession, tick } from "../state";
+import { selectedSession } from "../state";
 import { ContextMenu } from "./ui";
 import type { MenuGroup } from "./ui";
 import type { Permissions } from "../types";
@@ -80,7 +81,6 @@ interface TermEntry {
   lastCols: number;
   lastRows: number;
   /** 재개 제안 대기 (FR-C-33·34) — 복원된 역할 세션. 사용자가 선택할 때까지 아무것도 스폰하지 않는다 */
-  pendingRestore?: { resumable: boolean; reason?: string };
   /** pty 구독 해제 — dispose 시 함께 정리하지 않으면 disposed 터미널이 클로저로 영구 잔류한다 */
   unsubs?: (() => void)[];
   /** 마운트 중인 페인의 즉시 fit — 줌 같은 이산 크기 변화가 RO 디바운스를 건너뛰게 한다 */
@@ -113,12 +113,6 @@ const [respawning, setRespawning] = createSignal<string[]>([]);
 export const isRespawning = (id: string) => respawning().includes(id);
 const doneRespawning = (id: string) => setRespawning((v) => v.filter((x) => x !== id));
 
-// pendingRestore는 REGISTRY(비반응형)에 살므로, 변경을 화면에 알리는 전용 틱을 둔다
-const [restoreTick, setRestoreTick] = createSignal(0);
-function setPendingRestore(entry: TermEntry, v: TermEntry["pendingRestore"]) {
-  entry.pendingRestore = v;
-  setRestoreTick((t) => t + 1);
-}
 
 // 터미널 내 검색 (PRD A, M30) — Ctrl+F로 연다. 한 번에 한 페인만 검색 바를 띄운다.
 // 상태는 모듈 시그널에 둔다 — 키 핸들러는 initSession(1회)에 등록되고 페인 컴포넌트는 리마운트되기 때문.
@@ -516,7 +510,6 @@ async function initSession(
     wsId?: string;
     shell?: string;
     agent?: { name: string; permissions: Permissions };
-    restore?: { resumable: boolean; reason?: string };
     revive?: boolean;
     mockLines?: string[];
   },
@@ -574,7 +567,10 @@ async function initSession(
         term.write(`\r\n\x1b[31m프로세스 종료 · exit ${code ?? "?"}\x1b[0m\r\n`);
       }),
     ];
-    term.onData((data) => writePty(props.sessionId, data));
+    term.onData((data) => {
+      noteUserInput(props.sessionId, data); // 주입이 이 줄과 합쳐지지 않게 (B20)
+      writePty(props.sessionId, data);
+    });
 
     // 앱 재시작 복구 (FR-C-31·32) — 스토어의 확정 줄을 흐리게 재생하고 경계를 긋는다.
     // 기존 DB에 남은 TUI 잔해(프레임 조각·연속 중복)는 재생에서 걸러낸다 — 판정은 공용(cleanScrollback)
@@ -588,9 +584,7 @@ async function initSession(
       term.writeln(
         props.revive
           ? "\x1b[90m─── 웹뷰 재시작 — 실행 중인 세션에 재부착 (FR-C-06) ───\x1b[0m"
-          : props.restore
-            ? "\x1b[90m─── 재개 대기 — 이전 PTY는 종료되었습니다 (자동 실행 안 함) ───\x1b[0m"
-            : "\x1b[90m─── 새 세션 시작 ───\x1b[0m",
+          : "\x1b[90m─── 새 세션 시작 ───\x1b[0m",
       );
     }
     // 웹뷰 재시작 재부착 (FR-C-06) — PTY는 Rust에 살아 있다. 스폰 없이 출력 구독만 잇고,
@@ -603,20 +597,6 @@ async function initSession(
       entry.lastRows = term.rows;
       resizePty(props.sessionId, term.cols, Math.max(2, term.rows - 1));
       setTimeout(() => resizePty(props.sessionId, term.cols, term.rows), 150);
-      return;
-    }
-    // 복원된 역할 세션 (FR-C-33) — 재개 가능 여부를 판별해 제안만 하고, 실행은 사용자 몫이다 (C5)
-    if (props.restore && props.agent) {
-      if (props.restore.resumable) {
-        term.writeln("\x1b[90m이전 에이전트 세션이 있습니다 — 아래 제안에서 재개하거나 새로 시작하세요\x1b[0m");
-      } else {
-        // 재개 불가는 페인에 명시한다 (FR-C-34)
-        term.writeln(`\x1b[33m재개 불가 — ${props.restore.reason ?? "트랜스크립트 없음"}\x1b[0m`);
-        term.writeln("\x1b[90m새 대화로 시작하거나 셸로 시작할 수 있습니다\x1b[0m");
-      }
-      entry.lastCols = term.cols;
-      entry.lastRows = term.rows;
-      setPendingRestore(entry, props.restore);
       return;
     }
     // 셸 우선 모델 — 처음 켜는 세션은 역할이 있어도 전부 일반 셸이다. 여기는 유일한
@@ -654,7 +634,6 @@ export function TerminalPane(props: {
   wsId?: string;
   shell?: string;
   agent?: { name: string; permissions: Permissions };
-  restore?: { resumable: boolean; reason?: string };
   revive?: boolean;
   mockLines?: string[];
   /** 페인 소유 화면(컨트롤 센터)이 얹는 세션 액션 그룹 — 편집 그룹 뒤에 붙는다 (시안 §06) */
@@ -681,61 +660,9 @@ export function TerminalPane(props: {
     if (!ok && loud) showRevealFail();
   };
 
-  // ── 재개 제안 (FR-C-33·34) — 복원된 역할 세션은 사용자가 고를 때까지 아무것도 뜨지 않는다 ──
-  const [restoreErr, setRestoreErr] = createSignal<string | undefined>(undefined);
-  const pendingRestore = () => {
-    restoreTick();
-    return REGISTRY.get(props.sessionId)?.pendingRestore;
-  };
-  // 다른 표면(세션 상세 패널)에서 재개했으면 제안을 접는다 — restored 해제가 그 신호다
-  const stillRestored = () => {
-    tick();
-    return backend.listSessions().find((x) => x.id === props.sessionId)?.restored !== false;
-  };
-  const clearRestore = () => {
-    const e = REGISTRY.get(props.sessionId);
-    if (e) setPendingRestore(e, undefined);
-  };
-  const restoreAction = async (kind: "resume" | "fresh" | "shell") => {
-    const e = REGISTRY.get(props.sessionId);
-    if (!e) return;
-    setRestoreErr(undefined);
-    try {
-      if (kind === "resume" && props.agent) {
-        await resumeAgent(
-          props.sessionId,
-          props.wsId ?? "default",
-          props.cwd,
-          props.agent.name,
-          props.agent.permissions,
-          e.term.cols,
-          e.term.rows,
-        );
-        backend.resumeSession(props.sessionId);
-      } else if (kind === "fresh" && props.agent) {
-        await spawnAgent(
-          props.sessionId,
-          props.wsId ?? "default",
-          props.cwd,
-          props.agent.name,
-          props.agent.permissions,
-          e.term.cols,
-          e.term.rows,
-        );
-      } else {
-        await spawnPty(props.sessionId, props.cwd, e.term.cols, e.term.rows, props.wsId, props.shell);
-      }
-    } catch (err) {
-      // 실패 이유를 페인에 정직하게 표시 (FR-D-08) — 제안은 남겨 다시 시도할 수 있게 한다
-      setRestoreErr(String(err));
-      e.term.writeln(`\r\n\x1b[31m${kind === "resume" ? "재개" : "기동"} 실패 — ${String(err)}\x1b[0m`);
-      return;
-    }
-    e.lastCols = e.term.cols;
-    e.lastRows = e.term.rows;
-    clearRestore();
-    e.term.focus();
-  };
+  // 재개 제안 카드(FR-C-33·34)는 셸 우선 모델 전환 때 진입 조건(props.restore·props.agent)이
+  // 끊겨 어떤 경로로도 뜨지 않는 죽은 코드로 남아 있었다 (B29). 재개는 세션 상세·종료된 슬롯의
+  // 명시 액션이 담당하고, B33에서 크래시 안내도 그 경로를 가리키도록 고쳤으므로 여기서 지운다.
 
   // ── 터미널 내 검색 (PRD A, M30) — Enter 다음 · Shift+Enter 이전 · ESC 닫기 ──
   let searchInput: HTMLInputElement | undefined;
@@ -1005,47 +932,6 @@ export function TerminalPane(props: {
           <button class="btn term-history-chip" onClick={() => void openHistory()}>
             {t("▲ 디스크 기록 보기 — 링버퍼 위 기록 (FR-C-13)")}
           </button>
-        </Show>
-        {/* 재개 제안 (FR-C-33) — 자동 실행 없음. 재개 불가는 명시한다 (FR-C-34) */}
-        <Show when={pendingRestore() && stillRestored()}>
-          {(_) => {
-            const r = () => pendingRestore()!;
-            return (
-              <div class="card pane-restore" onMouseDown={(ev) => ev.stopPropagation()}>
-                <div class="mono" style={{ "font-size": "11px", "font-weight": 700 }}>
-                  <Show
-                    when={r().resumable}
-                    fallback={<span class="st-dead">{t("재개 불가")} — {t(r().reason ?? "트랜스크립트 없음")}</span>}
-                  >
-                    <span class="st-busy">{t("이전 에이전트 세션 발견 — 재개 대기")}</span>
-                  </Show>
-                </div>
-                <div class="muted" style={{ "font-size": "10px" }}>
-                  {r().resumable
-                    ? t("같은 대화를 --resume으로 이어갑니다. 자동 실행하지 않습니다 (C5).")
-                    : t("이전 대화를 이어갈 수 없습니다 — 새 대화 또는 셸로 시작하세요.")}
-                </div>
-                <div class="pane-restore-actions">
-                  <Show when={r().resumable}>
-                    <button class="btn primary" onClick={() => void restoreAction("resume")}>
-                      {t("▶ 이전 대화 재개")}
-                    </button>
-                  </Show>
-                  <button class="btn" classList={{ primary: !r().resumable }} onClick={() => void restoreAction("fresh")}>
-                    {t("새 대화 시작")}
-                  </button>
-                  <button class="btn ghost" onClick={() => void restoreAction("shell")}>
-                    {t("셸로 시작")}
-                  </button>
-                </div>
-                <Show when={restoreErr()}>
-                  <div class="mono st-dead" style={{ "font-size": "10px" }}>
-                    {restoreErr()}
-                  </div>
-                </Show>
-              </div>
-            );
-          }}
         </Show>
         <Show when={history()}>
           {(h) => (

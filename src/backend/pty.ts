@@ -123,6 +123,30 @@ export async function storePurgeScrollback(workspace: string): Promise<StorePurg
   return invoke<StorePurgeResult>("store_purge_scrollback", { workspace });
 }
 
+// ── 사람의 미제출 입력 (B20) — 주입이 그 줄과 합쳐지지 않게 하는 근거 ──
+// 터미널 onData(사람의 키 입력)만 여기로 온다. 주입은 writePty를 직접 부르므로 섞이지 않는다.
+const typingSince = new Map<string, number>();
+// ponytail: 미제출 여부를 프롬프트 버퍼가 아니라 키 입력으로 추정한다. 60초가 지나면 사람이
+// 자리를 떴다고 보고 푼다 — 정확히 재려면 셸/TUI의 줄 편집 상태를 알아야 한다.
+const TYPING_TTL_MS = 60_000;
+
+/** 사람이 이 페인에 뭔가 쳤다 — Enter·Ctrl+C는 그 줄을 끝내므로 표식을 지운다 */
+export function noteUserInput(id: string, data: string): void {
+  if (data === "\r" || data === "\n" || data === "\x03" || data === "\x1b") typingSince.delete(id);
+  else if (data) typingSince.set(id, Date.now());
+}
+
+/** 그 페인에 사람이 치다 만 입력이 남아 있는가 (B20) */
+export function humanTyping(id: string): boolean {
+  const t = typingSince.get(id);
+  if (t === undefined) return false;
+  if (Date.now() - t > TYPING_TTL_MS) {
+    typingSince.delete(id);
+    return false;
+  }
+  return true;
+}
+
 export function writePty(id: string, data: string): void {
   if (!isTauri()) return;
   void invoke("pty_write", { id, data }).catch(() => {});

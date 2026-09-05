@@ -1035,6 +1035,7 @@ fn agent_spawn_inner(
                 permission_mode,
                 disallowed,
                 last_status: "starting".into(),
+                status_ms: workspace::now_ms(),
                 last_waiting: None,
                 pty_gen: gen,
                 seq,
@@ -1066,6 +1067,7 @@ fn agent_spawn_inner(
             exit_code: None,
             degraded: false,
             seq,
+            since_ms: Some(workspace::now_ms()),
         },
     );
     Ok(uuid)
@@ -1923,6 +1925,7 @@ fn agent_snapshot(app: AppHandle) -> Vec<agent::AgentStateEvt> {
             exit_code: None,
             degraded: t.degraded,
             seq: t.seq, // P-4 — 스냅숏은 마지막 발급 순번 그대로 (실시간 이벤트와 역전 판별)
+            since_ms: Some(t.status_ms), // 웹뷰만 다시 떠도 경과가 '방금'으로 되돌아가지 않게 (B19)
         })
         .collect()
 }

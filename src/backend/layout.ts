@@ -33,7 +33,8 @@ interface LayoutData {
   shell?: string;
   selectedSession?: string;
   lastWorkspace?: string; // 마지막으로 보던 워크스페이스 탭 — startView="last"일 때만 복원
-  paneRatios?: Record<string, PaneRatio>; // 분할선 드래그 비율 (M30) — 배치별
+  paneRatios?: Record<string, PaneRatio>; // 구버전 — 배치별 전역. 읽기 폴백으로만 남는다 (B21)
+  paneRatiosByWs?: Record<string, Record<string, PaneRatio>>; // 비율도 워크스페이스별 (B21)
   panelSide?: string; // 사이드 패널 위치 — "left" | "right"
 }
 
@@ -85,15 +86,30 @@ export async function restoreLayout(): Promise<void> {
     for (const w of backend.listWorkspaces()) legacy[w.id] = data.paneLayout;
     setPaneLayouts(legacy);
   }
-  // 분할선 비율 복원 (M30) — 배치별로 검증해 통과한 것만
-  if (data.paneRatios && typeof data.paneRatios === "object") {
-    const restored: Partial<Record<PaneLayout, PaneRatio>> = {};
+  // 분할선 비율 복원 (M30 · B21) — 배치별로 검증해 통과한 것만, 워크스페이스 스코프로.
+  // 구 저장본(배치별 전역)은 모든 워크스페이스의 기본값으로 흘려 넣는다 — 마이그레이션이 무해하다.
+  const sanitizeByLayout = (src: Record<string, PaneRatio>) => {
+    const out: Partial<Record<PaneLayout, PaneRatio>> = {};
     for (const l of PANE_LAYOUTS) {
-      const r = sanitizeRatio(l.key, data.paneRatios[l.key]);
-      if (r) restored[l.key] = r;
+      const r = sanitizeRatio(l.key, src[l.key]);
+      if (r) out[l.key] = r;
     }
-    if (Object.keys(restored).length > 0) setPaneRatios(restored);
+    return out;
+  };
+  const byWs: Record<string, Partial<Record<PaneLayout, PaneRatio>>> = {};
+  if (data.paneRatios && typeof data.paneRatios === "object") {
+    const legacy = sanitizeByLayout(data.paneRatios);
+    if (Object.keys(legacy).length > 0) {
+      for (const w of backend.listWorkspaces()) byWs[w.id] = { ...legacy };
+      byWs._default = { ...legacy };
+    }
   }
+  if (data.paneRatiosByWs && typeof data.paneRatiosByWs === "object") {
+    for (const [ws, src] of Object.entries(data.paneRatiosByWs)) {
+      if (src && typeof src === "object") byWs[ws] = { ...byWs[ws], ...sanitizeByLayout(src) };
+    }
+  }
+  if (Object.keys(byWs).length > 0) setPaneRatios(byWs);
   const sh = SHELLS.find((s) => s.label === data.shell);
   if (sh) setDefaultShell(sh);
   if (data.panelSide === "left" || data.panelSide === "right") setPanelSide(data.panelSide);
@@ -126,7 +142,7 @@ function doSaveLayout(): void {
     shell: defaultShell().label,
     selectedSession: selectedSession(),
     lastWorkspace: v.kind === "workspace" ? (v as { id: string }).id : lastWs,
-    paneRatios: paneRatios(),
+    paneRatiosByWs: paneRatios() as Record<string, Record<string, PaneRatio>>,
     panelSide: panelSide(),
   };
   lastWs = data.lastWorkspace;

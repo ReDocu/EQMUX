@@ -1,6 +1,7 @@
 // EQMUX 도메인 타입 — PRD C §7.1 · PRD D §4.2.1/§7.1 · PRD G §7.1 스키마의 TS 대응.
 // 백엔드(Tauri Rust)와 주고받는 계약이므로 여기 외의 곳에서 도메인 형태를 재정의하지 않는다.
 import { t, tf } from "./i18n";
+import { humanTyping } from "./backend/pty";
 
 /** PRD D §4.2.1 — 에이전트 어휘 6종을 그대로 채택 (G2) */
 export type AgentStatus = "starting" | "busy" | "waiting" | "shell" | "idle" | "dead";
@@ -115,7 +116,11 @@ export interface Session {
    *  루트 폴백이다. 표시 전용: worktree 플래그(team.json 원본)를 이걸로 지우지 않는다 (B40) */
   worktreeMissing?: boolean;
   unseen?: boolean; // 미확인 (FR-G-44·45) — waiting·dead 진입 2종에만 마킹, 열람 시 해제
-  sinceMs: number; // 현재 status 진입 이후 경과
+  sinceMs: number; // 현재 status 진입 이후 경과 (표시값 — sinceTs에서 파생)
+  /** 현재 status로 들어간 시각 epoch ms (B19) — 있으면 경과를 여기서 계산한다.
+   *  프런트 누산 타이머는 창이 백그라운드면 스로틀돼 덜 세고, 채택 세션은 앱이 붙기 전부터
+   *  그 상태였다. 목 시드는 sinceMs를 직접 정하므로 이 값을 두지 않는다 */
+  sinceTs?: number;
   scrollbackLines: number;
   memoryMb?: number; // C11 · FR-C-09
   memoryPeakMb?: number;
@@ -138,6 +143,7 @@ export interface AgentStateApply {
   version?: string;
   exitCode?: number;
   degraded?: boolean; // 관측 저하 (FR-D-62·63) — 낮은 신뢰 표시 (FR-G-27)
+  sinceMs?: number; // 이 상태로 들어간 시각 epoch ms (B19) — 없으면 수신 시각을 쓴다
 }
 
 /** team.json 복원 슬롯 + 재개·워크트리 결합 정보 (team_load 반환의 소비 형태) */
@@ -172,8 +178,14 @@ export const agentAttached = (s: Session): boolean => s.status !== "shell" && s.
  *   - shell  → 사람이 치던 미제출 명령 뒤에 붙어 그 명령이 실행된다
  *   - waiting → 승인 다이얼로그가 떠 있다. 본문이 오답이 되고 \r이 기본 항목을 실행한다 (G7)
  *   - busy·starting → 턴 중간에 끼어든다. 대기시켰다가 idle 전이에 흘려보내는 것이 맞다
- *  즉시 넣을 수 없을 때 무엇을 할지(인박스 적재·화면 에코·생략)는 호출부가 각자 정한다. */
-export const canInject = (s: Session | undefined): boolean => s?.status === "idle";
+ *  즉시 넣을 수 없을 때 무엇을 할지(인박스 적재·화면 에코·생략)는 호출부가 각자 정한다.
+ *
+ *  idle은 "프롬프트가 비어 있다"는 가정이었는데, 에이전트가 idle인 순간이 곧 사람이 그 페인에
+ *  무언가 치고 있는 순간이다 (B20). 그때 주입하면 본문이 사람이 치던 줄 뒤에 이어 붙고 \r이
+ *  둘을 합쳐 제출한다 — 쓰던 프롬프트는 사라지고 의도하지 않은 문장이 그 세션의 턴을 시작시킨다.
+ *  기본 터미널에는 같은 위험 때문에 화면 에코만 하는 가드가 이미 있다 (P-2). */
+export const canInject = (s: Session | undefined): boolean =>
+  s?.status === "idle" && !humanTyping(s.id);
 
 /** 세션 표시 이름 (P5 · FR-E-36) — 분리된 이름이 있으면 그것, 없으면 페르소나 이름 */
 export const sessionDisplayName = (s: Session, personaName: string): string =>

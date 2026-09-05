@@ -154,18 +154,24 @@ export function defaultRatios(layout: PaneLayout): PaneRatio {
       return { rows: [2 / 3, 1 / 3] };
   }
 }
-export const [paneRatios, setPaneRatios] = createSignal<Partial<Record<PaneLayout, PaneRatio>>>({});
+/** 비율은 배치별이면서 워크스페이스별이다 (B21) — '어떤 배치를 쓰는가'가 워크스페이스별인데
+ *  (U7) 비율만 배치 키 하나로 두면, 한 팀에서 분할선을 끌 때 같은 배치를 쓰는 다른 팀의
+ *  비율까지 함께 바뀐다. 워크스페이스마다 세션 수·용도가 다르다는 U7의 근거가 비율에도 같다. */
+export const [paneRatios, setPaneRatios] =
+  createSignal<Record<string, Partial<Record<PaneLayout, PaneRatio>>>>({});
 /** 현재 배치의 유효 비율 — 저장본이 없거나 트랙 수가 다르면(슬롯 상한 변경) 기본값 */
 export function ratioFor(layout: PaneLayout): PaneRatio {
   const d = defaultRatios(layout);
-  const o = paneRatios()[layout];
+  const o = paneRatios()[layoutScope()]?.[layout];
   const axis = (ov: number[] | undefined, def: number[] | undefined) =>
     ov && def && ov.length === def.length ? ov : def;
   return { cols: axis(o?.cols, d.cols), rows: axis(o?.rows, d.rows) };
 }
 /** 한 축 갱신 — 분할선 드래그가 부른다 */
 export function setRatioAxis(layout: PaneLayout, axis: "cols" | "rows", fractions: number[]): void {
-  setPaneRatios({ ...paneRatios(), [layout]: { ...ratioFor(layout), [axis]: fractions } });
+  const ws = layoutScope();
+  const forWs = { ...paneRatios()[ws], [layout]: { ...ratioFor(layout), [axis]: fractions } };
+  setPaneRatios({ ...paneRatios(), [ws]: forWs });
 }
 
 /** 터미널 전체 화면 (포커스 모드) — 앱 바는 유지되고 그 아래 영역만 덮는다 */

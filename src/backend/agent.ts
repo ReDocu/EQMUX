@@ -16,6 +16,7 @@ export interface AgentStateEvt {
   agentSession: string;
   status: string;
   waitingFor: string | null;
+  sinceMs: number | null; // 이 상태로 들어간 시각 epoch ms (B19)
   activity: string | null; // 훅 2차 소스 (FR-D-15) — 현재 도구명
   subagents: number; // 동시 실행 서브에이전트 수 (FR-D-18)
   costUsd: number | null; // statusLine 누적 비용 (FR-D-19)
@@ -72,6 +73,7 @@ function applyEvt(p: AgentStateEvt, fromSnapshot = false): void {
     version: p.version ?? undefined,
     exitCode: p.exitCode ?? undefined,
     degraded: p.degraded,
+    sinceMs: p.sinceMs ?? undefined,
   });
 }
 

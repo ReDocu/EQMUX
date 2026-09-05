@@ -37,6 +37,10 @@ pub struct Tracked {
     /// 훅(2차 소스)이 마지막으로 상태를 바꾼 시각 ms (P-3) — 레지스트리 재스캔이 이보다
     /// 오래된 파일 상태로 신선한 훅 상태를 되돌리지 않게 하는 가드
     pub hook_ms: i64,
+    /// 지금 상태로 들어간 시각 epoch ms (B19) — 화면의 '· N분째'가 이걸로 계산된다.
+    /// 프런트 누산 타이머는 창이 백그라운드면 스로틀돼 덜 세고, 채택 세션은 앱이 붙기 전부터
+    /// 기다리고 있었다. 오래 기다린 순서로 처리하려는 사람에게 그 차이가 곧 잘못된 우선순위다.
+    pub status_ms: i64,
     /// 상태 이벤트 순번 (P-4) — 전역 단조 증가. 스냅숏과 실시간 이벤트가 겹치는 창에서
     /// 프런트가 더 오래된 페이로드를 버릴 수 있게 한다
     pub seq: u64,
@@ -118,6 +122,8 @@ pub struct AgentStateEvt {
     pub degraded: bool,
     /// 순번 (P-4) — 프런트의 순서 역전 가드. 스냅숏은 마지막 발급 순번을 그대로 싣는다
     pub seq: u64,
+    /// 이 상태로 들어간 시각 epoch ms (B19) — 없으면 프런트가 수신 시각을 쓴다
+    pub since_ms: Option<i64>,
 }
 
 /// 세션 레지스트리 레코드 (§10.1) — 부분 파싱 (FR-D-64): 모르는 필드는 무시,
@@ -513,6 +519,7 @@ pub fn apply_hook(app: &AppHandle, session: &str, event: &str, payload: &serde_j
                         break; // 변화 없음 — 방송하지 않는다
                     }
                     t.last_status = (*status).into();
+                    t.status_ms = crate::workspace::now_ms();
                     t.last_waiting = waiting;
                     t.hook_ms = crate::workspace::now_ms() as i64; // P-3 — 훅이 더 신선하다는 표식
                     if *status == "idle" {
@@ -531,6 +538,7 @@ pub fn apply_hook(app: &AppHandle, session: &str, event: &str, payload: &serde_j
                         break;
                     }
                     t.last_status = "waiting".into();
+                    t.status_ms = crate::workspace::now_ms();
                     t.last_waiting = waiting;
                     t.hook_ms = crate::workspace::now_ms(); // P-3 — 훅이 더 신선하다는 표식
                 }
@@ -545,6 +553,7 @@ pub fn apply_hook(app: &AppHandle, session: &str, event: &str, payload: &serde_j
                     t.activity = tool.clone();
                     if unstick {
                         t.last_status = "busy".into();
+                        t.status_ms = crate::workspace::now_ms();
                         t.last_waiting = None;
                         t.hook_ms = crate::workspace::now_ms() as i64; // P-3 — 이 전이도 훅 소스다
                         quiet = false; // 상태 전이이므로 피드·알림 경로로 보낸다
@@ -573,6 +582,7 @@ pub fn apply_hook(app: &AppHandle, session: &str, event: &str, payload: &serde_j
                 exit_code: None,
                 degraded: t.degraded,
                 seq: t.seq,
+                since_ms: Some(t.status_ms),
             });
             break;
         }
@@ -626,6 +636,7 @@ pub fn apply_statusline(app: &AppHandle, session: &str, payload: &serde_json::Va
                 exit_code: None,
                 degraded: t.degraded,
                 seq: t.seq,
+                since_ms: Some(t.status_ms),
             });
             break;
         }
@@ -643,6 +654,7 @@ pub fn on_pty_exit(app: &AppHandle, id: &str, code: Option<u32>, gen: u64) {
         for (uuid, t) in map.iter_mut() {
             if t.app_session == id && t.pty_gen == gen && t.last_status != "dead" {
                 t.last_status = "dead".into();
+                t.status_ms = crate::workspace::now_ms();
                 t.activity = None;
                 t.subagents = 0;
                 t.seq = next_seq();
@@ -659,6 +671,7 @@ pub fn on_pty_exit(app: &AppHandle, id: &str, code: Option<u32>, gen: u64) {
                     exit_code: code.map(i64::from),
                     degraded: t.degraded,
                     seq: t.seq,
+                    since_ms: Some(t.status_ms),
                 });
                 break;
             }
@@ -752,6 +765,7 @@ fn scan(app: &AppHandle) {
                 exit_code: None,
                 degraded: t.degraded,
                 seq: t.seq,
+                since_ms: Some(t.status_ms),
             });
         }
     }
@@ -806,7 +820,7 @@ fn scan(app: &AppHandle) {
         let origins: HashMap<String, (String, String)> =
             rt.session_origin.lock().map(|m| m.clone()).unwrap_or_default();
         if let Ok(mut map) = rt.by_uuid.lock() {
-            for (uuid, (rec, _)) in found.iter() {
+            for (uuid, (rec, mtime_ms)) in found.iter() {
                 if map.contains_key(uuid) {
                     continue; // 이미 추적 중 (관리 기동이거나 앞선 스캔이 채택했다)
                 }
@@ -854,6 +868,8 @@ fn scan(app: &AppHandle) {
                     exit_code: None,
                     degraded: false,
                     seq,
+                    // 앱이 붙기 전부터 그 상태였다 — 레코드가 쓰인 시각이 전이 시각이다 (B19)
+                    since_ms: Some(*mtime_ms),
                 });
                 let name = app_session.split('@').next().unwrap_or(&app_session).to_string();
                 map.insert(
@@ -865,6 +881,7 @@ fn scan(app: &AppHandle) {
                         name,
                         last_status: status,
                         last_waiting: waiting,
+                        status_ms: *mtime_ms, // 채택 시점이 아니라 그 상태가 된 시각 (B19)
                         pty_gen: gen, // 페인이 죽으면 on_pty_exit이 dead로 닫을 수 있게
                         seq,
                         adopted: true,
@@ -919,6 +936,7 @@ fn scan(app: &AppHandle) {
                     exit_code: None,
                     degraded: false,
                     seq: next_seq(),
+                    since_ms: Some(crate::workspace::now_ms()),
                 });
             }
             alive // 추적에서 뺀다 — 사용자가 다시 띄우면 그때 새 uuid로 다시 채택된다
@@ -952,6 +970,7 @@ fn scan(app: &AppHandle) {
                 if status != t.last_status || waiting != t.last_waiting {
                     t.last_status = status.clone();
                     t.last_waiting = waiting.clone();
+                    t.status_ms = *mtime_ms; // 레지스트리가 그 상태를 쓴 시각 (B19)
                     if status == "idle" {
                         t.activity = None; // 턴 종료 부연 정리 — 훅 경로(apply_hook)와 같은 규칙
                         t.subagents = 0;
@@ -970,6 +989,7 @@ fn scan(app: &AppHandle) {
                         exit_code: None,
                         degraded: t.degraded,
                         seq: t.seq,
+                        since_ms: Some(t.status_ms),
                     });
                 }
             }
