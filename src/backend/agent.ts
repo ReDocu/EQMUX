@@ -32,8 +32,14 @@ const STATUSES: AgentStatus[] = ["starting", "busy", "waiting", "shell", "idle",
 // 창(웹뷰 재시작 직후)에서 더 오래된 페이로드가 나중에 도착해 신선한 상태를 덮지 않게 한다
 const lastSeq = new Map<string, number>();
 
-/** Rust 이벤트(null 표기) → 목 백엔드 반영 페이로드(undefined 표기) — 수신부 공용 변환 */
-function applyEvt(p: AgentStateEvt): void {
+/** waiting 사운드 합침 간격 (FR-G-32) — Rust의 OS 알림 게이트(NOTIFY_MIN_INTERVAL_MS)와 같은 값.
+ *  승인을 자주 묻는 에이전트에서 waiting↔busy가 오갈 때마다 울리던 것을 막는다 (B55) */
+const SOUND_MIN_INTERVAL_MS = 60_000;
+const lastBeep = new Map<string, number>();
+
+/** Rust 이벤트(null 표기) → 목 백엔드 반영 페이로드(undefined 표기) — 수신부 공용 변환.
+ *  fromSnapshot: 웹뷰 복구 스냅숏 반영 — '전이'가 아니므로 사운드를 내지 않는다 (B55) */
+function applyEvt(p: AgentStateEvt, fromSnapshot = false): void {
   if (typeof p.seq === "number") {
     const last = lastSeq.get(p.session);
     if (last !== undefined && p.seq < last) return; // 스테일 — 버린다
@@ -45,7 +51,14 @@ function applyEvt(p: AgentStateEvt): void {
   const mutedList = settings().muted;
   const isMuted = mutedList.includes(p.session) || (prevSess && mutedList.includes(prevSess.workspaceId));
   if (p.status === "waiting" && prevSess?.status !== "waiting" && settings().waitingSound && !isMuted) {
-    beepWaiting();
+    // OS 알림과 같은 게이트를 통과시킨다 (B55) — 설정 카드가 "창 포커스 시 · 억제 (FR-G-31)"를
+    // 고정 정책으로 선언하는데 사운드만 그 밖에 있었다. 스냅숏은 전이가 아니라 초기값이다.
+    const now = Date.now();
+    const recent = (lastBeep.get(p.session) ?? 0) + SOUND_MIN_INTERVAL_MS > now;
+    if (!fromSnapshot && !document.hasFocus() && !recent) {
+      lastBeep.set(p.session, now);
+      beepWaiting();
+    }
   }
   backend.applyAgentState({
     session: p.session,
@@ -82,7 +95,11 @@ export function ensureAgentListeners(): Promise<void> {
 export async function applyAgentSnapshot(): Promise<void> {
   if (!isTauri()) return;
   const states = await invoke<AgentStateEvt[]>("agent_snapshot").catch(() => [] as AgentStateEvt[]);
-  for (const p of states) applyEvt(p);
+  for (const p of states) {
+    applyEvt(p, true);
+    // 스냅숏 시점에 이미 idle로 주차된 세션에는 앞으로 올 전이가 없다 (B49) — 여기서도 배출한다
+    flushInboxOnState(p.session, p.status);
+  }
 }
 
 /** 에이전트 기동 (FR-D-01·02·40) — UUID는 Rust가 발급하고 반환한다.

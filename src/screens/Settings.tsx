@@ -6,6 +6,7 @@ import {
   DEFAULT_SETTINGS,
   PALETTES,
   settings,
+  settingsSaveError,
   SLOT_OPTIONS,
   STATUSLINE_MODES,
   updateSettings,
@@ -213,7 +214,12 @@ const SECTIONS: Section[] = [
 ];
 
 export function Settings() {
-  const isDefault = () => JSON.stringify(settings()) === JSON.stringify(DEFAULT_SETTINGS);
+  // 음소거(FR-G-35)는 이 화면에 행이 없다 — 세션 상세에서만 켜고 끈다. 비교와 복원 양쪽에서
+  // 빼야 '보이는 값이 전부 기본값이면 버튼이 꺼진다'가 성립하고, 복원이 보이지 않는 목록을
+  // 조용히 지우지 않는다 (B53)
+  const visible = (x: AppSettings) => JSON.stringify({ ...x, muted: [] });
+  const isDefault = () => visible(settings()) === visible(DEFAULT_SETTINGS);
+  const restoreDefaults = () => updateSettings({ ...DEFAULT_SETTINGS, muted: settings().muted });
 
   return (
     <div class="screen">
@@ -224,10 +230,17 @@ export function Settings() {
             {t(isTauri() ? "settings.json 즉시 저장" : "브라우저 dev — 저장 없음")} · {t("값을 클릭하면 다음 옵션으로")}
           </div>
         </div>
-        <button class="btn" disabled={isDefault()} onClick={() => updateSettings(DEFAULT_SETTINGS)}>
+        <button class="btn" disabled={isDefault()} onClick={restoreDefaults}>
           {t("기본값 복원")}
         </button>
       </div>
+      {/* 저장 실패 (B54) — 화면 값과 파일이 갈라진 상태를 숨기지 않는다 */}
+      <Show when={settingsSaveError()}>
+        <div class="card inset" style={{ margin: "0 0 8px", padding: "8px 10px", "font-size": "11px" }}>
+          <span class="st-dead">{t("저장 실패 — 다음 실행에 반영되지 않습니다")}</span>
+          <div class="mono muted" style={{ "margin-top": "4px" }}>{settingsSaveError()}</div>
+        </div>
+      </Show>
       <div class="screen-body settings-grid">
         <For each={SECTIONS}>
           {(sec) => (

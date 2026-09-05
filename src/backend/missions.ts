@@ -85,8 +85,11 @@ export async function toggleAssign(
   const m = backend.listMissions().find((x) => x.id === missionId && x.workspaceId === wsId);
   if (!m) return;
   const wasAssigned = m.assigned.includes(sessionId);
+  // 역할 파일과 같은 cwd 규약 (FR-E-63 · B59) — repo 루트에 쓰면 워크트리 세션은 에이전트가
+  // 읽는 파일이 아니라 루트의 반쪽 스텁에 임무가 들어가고, 화면만 ✓가 붙는다
+  const sess = backend.listSessions().find((x) => x.id === sessionId);
   await invoke("mission_assign", {
-    wsPath: path,
+    wsPath: sess?.cwd || path,
     session: sessionId,
     missionId: wasAssigned ? null : missionId,
   }).catch(() => {});

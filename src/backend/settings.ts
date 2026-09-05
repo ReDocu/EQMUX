@@ -141,6 +141,10 @@ export function toggleMuted(id: string): void {
   });
 }
 
+/** 마지막 settings.json 저장 실패 (B54) — 있으면 설정 화면이 배너로 알린다 */
+const [saveError, setSaveError] = createSignal<string | undefined>(undefined);
+export const settingsSaveError = saveError;
+
 /** 변경 즉시 저장 — 파일 + Rust 메모리 사본(알림 게이트)이 함께 갱신된다.
  *  로드가 끝난 뒤에 적용한다 — 기본값 기준선으로 저장본을 덮지 않기 위해 */
 export function updateSettings(patch: Partial<AppSettings>): void {
@@ -148,6 +152,13 @@ export function updateSettings(patch: Partial<AppSettings>): void {
     const next = sanitize({ ...settings(), ...patch });
     setSettings(next);
     applyTheme();
-    if (isTauri() && loadOk) void invoke("settings_save", { data: next }).catch(() => {});
+    if (isTauri() && loadOk) {
+      // 저장 실패를 삼키지 않는다 (B54) — 화면은 이미 새 값을 그렸으므로, 파일에 안 남았다는
+      // 사실을 알리지 않으면 사용자는 다음 실행에 값이 되돌아간 이유를 알 길이 없다
+      void invoke("settings_save", { data: next }).then(
+        () => setSaveError(undefined),
+        (e) => setSaveError(String(e)),
+      );
+    }
   });
 }

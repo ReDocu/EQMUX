@@ -60,7 +60,9 @@ fn numstat_path(raw: &str) -> String {
 
 /// 변경 파일 목록 — status --porcelain(상태) + diff --numstat(±집계). 이름변경은 새 경로 기준.
 pub fn changed_files(ws_path: &str) -> Result<Vec<ChangedFile>, String> {
-    let porcelain = git(&["status", "--porcelain"], ws_path)?;
+    // -uall — 기본값(normal)은 새 폴더를 `?? src/newfeature/` 한 줄로 접는다. 그러면 목록에
+    // 디렉터리 경로가 파일인 척 올라와 줄 수 집계도 diff 열람도 실패한다 (B60)
+    let porcelain = git(&["status", "--porcelain", "-uall"], ws_path)?;
     // 경로 → (+, −) — untracked는 numstat에 없으므로 파일 줄 수로 대체한다
     let mut stats: std::collections::HashMap<String, (String, String)> = std::collections::HashMap::new();
     // --find-renames — porcelain(status)의 rename 판정과 numstat의 짝짓기를 일치시킨다 (P-9)

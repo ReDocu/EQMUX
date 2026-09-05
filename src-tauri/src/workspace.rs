@@ -415,7 +415,8 @@ pub fn overview(path: &str) -> Result<GitOverview, String> {
     let mut modified = 0u32;
     let mut deleted = 0u32;
     let mut changed = 0u32;
-    if let Ok(status) = git(&["status", "--porcelain"], path) {
+    // -uall — 새 폴더가 한 줄로 접히면 diff 뱃지가 실제 새 파일 수보다 작게 나온다 (B60)
+    if let Ok(status) = git(&["status", "--porcelain", "-uall"], path) {
         for line in status.lines() {
             let mut chars = line.chars();
             let (Some(x), Some(y)) = (chars.next(), chars.next()) else { continue };

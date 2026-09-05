@@ -121,7 +121,12 @@ export const dict: Record<string, string> = {
   붙여넣기: "Paste",
   "모두 선택": "Select all",
   검색: "Search",
-  "화면 지우기": "Clear screen",
+  "스크롤백까지 지우기": "Clear including scrollback",
+  "스크롤백까지 지우기 — 에이전트 화면(TUI)에서는 불가":
+    "Clear including scrollback — unavailable on an agent (TUI) screen",
+  "{n}줄을 붙여넣어 실행합니다": "Pasting {n} lines — they will run",
+  "직무 권한을 찾을 수 없습니다 — 역할을 다시 지정하세요":
+    "No job permissions found — assign the role again",
   "이미지 붙여넣기 → 파일 저장 후 경로 삽입": "Paste image → saved to file, path inserted",
   "탐색기에서 열기": "Reveal in File Explorer",
   더블클릭: "Double-click",

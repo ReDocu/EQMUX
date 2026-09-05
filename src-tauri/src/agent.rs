@@ -342,23 +342,57 @@ fn maybe_notify(app: &AppHandle, evt: &AgentStateEvt) {
         n
     };
     let name = evt.session.split('@').next().unwrap_or(&evt.session);
+    // 표시 언어를 따른다 (B66) — 알림은 창을 안 볼 때 쓰라고 있는 기능이라 읽히지 않으면
+    // 기능 자체가 무의미하다. 사전은 프런트에 있으므로 여기서는 이 문구들만 분기한다.
+    let en = crate::setting_str(app, "language").as_deref() == Some("en");
+    let (title, body) = notify_text(evt, name, suppressed, en);
+    let _ = app.notification().builder().title(title).body(body).show();
+}
+
+/// 토스트 제목·본문 조립 (B66) — 순수 함수라 언어 분기를 테스트로 고정할 수 있다
+fn notify_text(evt: &AgentStateEvt, name: &str, suppressed: u32, en: bool) -> (String, String) {
     let title = if evt.status == "waiting" {
-        format!("{name} · {}", waiting_title(evt.waiting_for.as_deref()))
+        format!("{name} · {}", waiting_title(evt.waiting_for.as_deref(), en))
+    } else if en {
+        format!("{name} · exited")
     } else {
         format!("{name} · 종료됨")
     };
     let mut body = if evt.status == "waiting" {
-        evt.waiting_for.clone().unwrap_or_else(|| "사람의 응답이 필요합니다".into())
+        match evt.waiting_for.as_deref() {
+            Some(w) if en => translate_waiting(w).to_string(),
+            Some(w) => w.to_string(),
+            None if en => "Needs a human response".into(),
+            None => "사람의 응답이 필요합니다".into(),
+        }
     } else {
-        match evt.exit_code {
-            Some(c) => format!("exit {c} · 재개 {}", if evt.resumable { "가능" } else { "불가" }),
-            None => "프로세스가 종료되었습니다".into(),
+        match (evt.exit_code, en) {
+            (Some(c), true) => format!("exit {c} · resume {}", if evt.resumable { "available" } else { "unavailable" }),
+            (Some(c), false) => format!("exit {c} · 재개 {}", if evt.resumable { "가능" } else { "불가" }),
+            (None, true) => "The process exited".into(),
+            (None, false) => "프로세스가 종료되었습니다".into(),
         }
     };
     if suppressed > 0 {
-        body.push_str(&format!(" (그 사이 전이 {suppressed}건 합침)"));
+        body.push_str(&if en {
+            format!(" ({suppressed} transition(s) coalesced)")
+        } else {
+            format!(" (그 사이 전이 {suppressed}건 합침)")
+        });
     }
-    let _ = app.notification().builder().title(title).body(body).show();
+    (title, body)
+}
+
+/// waiting_for 원문 → 영어. 모르는 값은 원문 유지 (FR-D-64 · 프런트 t()와 같은 폴백 규칙)
+fn translate_waiting(w: &str) -> &str {
+    match w {
+        WAIT_QUESTION => "Waiting on a question — answer in this pane to continue",
+        WAIT_PLAN => "Waiting on plan approval — answer in this pane to continue",
+        "권한 승인 대기" => "Waiting for permission approval",
+        "입력 필요 — 이 페인에서 답해야 진행됩니다" => "Input needed — answer in this pane to continue",
+        "다이얼로그 응답 대기" => "Waiting on a dialog response",
+        other => other,
+    }
 }
 
 /// 훅 이벤트 → 상태 (D3 · FR-D-30 계열). 모르는 이벤트는 None — 조용히 무시한다.
@@ -409,12 +443,14 @@ pub fn registry_waiting_for(raw: &str) -> String {
 
 /// OS 알림 제목의 꼬리 (B17) — 잠금 화면·알림 센터는 제목만 보여주는 일이 잦다.
 /// 우리가 만든 어휘만 갈라 보고, 모르는 문맥은 종전대로 "승인 대기".
-fn waiting_title(waiting_for: Option<&str>) -> &'static str {
+fn waiting_title(waiting_for: Option<&str>, en: bool) -> &'static str {
     match waiting_for {
-        Some(w) if w == WAIT_QUESTION => "질문 대기",
-        Some(w) if w == WAIT_PLAN => "계획 승인 대기",
-        Some(w) if w.starts_with("입력 필요") || w.starts_with("다이얼로그") => "응답 대기",
-        _ => "승인 대기",
+        Some(w) if w == WAIT_QUESTION => if en { "question" } else { "질문 대기" },
+        Some(w) if w == WAIT_PLAN => if en { "plan approval" } else { "계획 승인 대기" },
+        Some(w) if w.starts_with("입력 필요") || w.starts_with("다이얼로그") => {
+            if en { "response needed" } else { "응답 대기" }
+        }
+        _ => if en { "approval needed" } else { "승인 대기" },
     }
 }
 
@@ -1068,9 +1104,11 @@ mod tests {
         // 모르는 값은 원문 유지 (FR-D-64) — 조용히 지어내지 않는다
         assert_eq!(super::registry_waiting_for("brand new state"), "brand new state");
 
-        assert_eq!(super::waiting_title(Some(super::WAIT_QUESTION)), "질문 대기");
-        assert_eq!(super::waiting_title(Some(super::WAIT_PLAN)), "계획 승인 대기");
-        assert_eq!(super::waiting_title(Some("권한 승인 대기")), "승인 대기");
-        assert_eq!(super::waiting_title(None), "승인 대기"); // 모르면 종전대로
+        assert_eq!(super::waiting_title(Some(super::WAIT_QUESTION), false), "질문 대기");
+        assert_eq!(super::waiting_title(Some(super::WAIT_PLAN), false), "계획 승인 대기");
+        assert_eq!(super::waiting_title(Some("권한 승인 대기"), false), "승인 대기");
+        assert_eq!(super::waiting_title(None, false), "승인 대기"); // 모르면 종전대로
+        // 표시 언어가 영어면 토스트도 영어다 (B66) — 앱 밖으로 나가는 유일한 신호다
+        assert_eq!(super::waiting_title(Some(super::WAIT_QUESTION), true), "question");
     }
 }

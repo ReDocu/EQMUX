@@ -164,7 +164,7 @@ fn handle(app: &AppHandle, line: &str) -> Result<serde_json::Value, String> {
             let to_raw = req["to"].as_str().unwrap_or("@all");
             // 원점은 스폰 관문이 남긴다 — 에이전트 추적 맵을 요구하면 셸 세션은 영영 못 보낸다
             let (ws, cwd) = crate::session_origin(app, session).ok_or("UNKNOWN_SESSION")?;
-            let to = resolve_recipient(app, &ws, &cwd, to_raw)?;
+            let to = resolve_recipient(&ws, &cwd, to_raw)?;
             publish(app, &ws, session, &to, kind, body)
         }
         "report" => {
@@ -226,15 +226,15 @@ fn publish(
     Ok(json!({"ok": true, "id": row.id}))
 }
 
-/// "@이름" → 세션 id (M4) — 세션 id 그대로 / 페르소나 id / 페르소나 이름(2단 라이브러리) 순서.
+/// "@이름" → 세션 id (M4) — 세션 id 그대로 / 슬롯 표시 이름 / 페르소나 id / 페르소나 이름 순서.
 /// 세션 id 형식이 `<페르소나>@<워크스페이스>`라서 합성으로 충분하다.
+///
+/// 후보는 그 워크스페이스의 team.json 로스터다 (B52). 라이브러리 전체를 훑으면 팀에 편성되지
+/// 않은 페르소나 이름으로도 '그럴듯한' 세션 id가 합성돼, CLI는 "전송됨"을 찍고 원장에는 적재되고
+/// 대화창에는 날 id가 뜨는데 아무도 받지 않는다. 슬롯 표시 이름(P5)을 후보에 넣어 대화 패널의
+/// 멘션 규칙과 범위도 맞춘다 — 그쪽에서 되는 이름이 CLI에서만 안 되던 반대 방향의 어긋남.
 #[cfg_attr(not(windows), allow(dead_code))]
-fn resolve_recipient(
-    app: &AppHandle,
-    ws: &str,
-    ws_path: &str,
-    raw: &str,
-) -> Result<String, String> {
+fn resolve_recipient(ws: &str, ws_path: &str, raw: &str) -> Result<String, String> {
     let m = raw.trim().trim_start_matches('@');
     if m.is_empty() || m == "all" {
         return Ok("@all".into());
@@ -242,11 +242,10 @@ fn resolve_recipient(
     if m.contains('@') {
         return Ok(m.to_string()); // 이미 세션 id
     }
-    let store: State<crate::StoreState> = app.state();
-    let lib = crate::library::list(&store.0.root(), Some(ws_path));
-    for p in &lib.personas {
-        if p.id == m || p.name == m {
-            return Ok(format!("{}@{ws}", p.id));
+    for sl in &crate::team::load(ws_path).slots {
+        let display = sl.name.as_deref().unwrap_or(&sl.persona_name);
+        if sl.persona == m || sl.persona_name == m || display == m {
+            return Ok(format!("{}@{ws}", sl.persona));
         }
     }
     Err("UNKNOWN_RECIPIENT".into())

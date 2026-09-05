@@ -19,7 +19,7 @@ import {
 import type { PortEntry } from "../backend/ports";
 import { clipWriteText, isTauri } from "../backend/pty";
 import { openInBrowserPanel } from "../state";
-import { t } from "../i18n";
+import { t, tf } from "../i18n";
 
 interface Row {
   key: string;
@@ -100,7 +100,9 @@ export function PortsPanelTab() {
     }),
   );
 
-  // 요약 — 충돌 = 같은 포트 번호를 여러 프로세스가 리슨, 외부 노출 = 루프백 밖 바인딩
+  // 요약 — 충돌 = 같은 포트 번호를 여러 프로세스가 리슨(시스템 포트 포함),
+  // 외부 노출 = 루프백 밖에 바인딩된 '세션' 포트. 시스템 포트를 함께 세면 Windows 파일공유
+  // (NetBIOS 139 등)만으로도 항상 ⚠가 켜져, 보안 성격의 경고가 상시 오탐이 된다 (B61)
   const summary = createMemo(() => {
     if (!isTauri() || !portsLive()) return PORT_SUMMARY;
     const all = [...rows().session, ...rows().system];
@@ -110,7 +112,7 @@ export function PortsPanelTab() {
       session: rows().session.length,
       system: rows().system.length,
       conflicts: [...counts.values()].filter((n) => n > 1).length,
-      exposed: all.filter((p) => p.exposed).length,
+      exposed: rows().session.filter((p) => p.exposed).length,
     };
   });
 
@@ -208,7 +210,7 @@ export function PortsPanelTab() {
               { v: summary().session, k: "세션 포트" },
               { v: summary().system, k: "시스템 포트" },
               { v: summary().conflicts, k: "충돌" },
-              { v: summary().exposed, k: "외부 노출" },
+              { v: summary().exposed, k: "세션 외부 노출" },
             ]}
           >
             {(m) => (
@@ -226,7 +228,12 @@ export function PortsPanelTab() {
         <div class="portsp-notice">
           <Show
             when={summary().exposed === 0}
-            fallback={<><span class="st-waiting">⚠</span> {t("루프백 밖으로 바인딩된 포트가 있습니다.")}</>}
+            fallback={
+              <>
+                <span class="st-waiting">⚠</span>{" "}
+                {tf("세션 포트 {n}개가 루프백 밖에 바인딩되어 있습니다.", { n: String(summary().exposed) })}
+              </>
+            }
           >
             <span class="st-green">✓</span> {t("세션 포트가 루프백에만 바인딩되어 있습니다.")}
           </Show>

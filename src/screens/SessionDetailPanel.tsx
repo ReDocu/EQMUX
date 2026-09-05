@@ -8,7 +8,7 @@ import { autoAssignDefault } from "../backend/missions";
 import { backend } from "../backend/mock";
 import { exportSessionScrollback } from "../backend/panels";
 import { nudgeRoleReload, removeRoleFile, saveRoleFile } from "../backend/roles";
-import { isTauri, killPty, openLogDir } from "../backend/pty";
+import { isTauri, killPty, openLogDir, storeUsageReal } from "../backend/pty";
 import { sessionTermSize } from "../components/TerminalPane";
 import { settings, toggleMuted } from "../backend/settings";
 import { t } from "../i18n";
@@ -42,6 +42,20 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
       unsub();
     });
   });
+  // 스크롤백 줄 수는 실측에서 읽는다 (B62) — Session.scrollbackLines는 목 시드 전용이라
+  // 실행 모드에서는 항상 0이다. 열 때 한 번 재고 세션이 바뀌면 다시 잰다.
+  const [realLines, setRealLines] = createSignal<number | undefined>(undefined);
+  createEffect(
+    on(
+      () => `${s().workspaceId}:${s().id}`,
+      () => {
+        setRealLines(undefined);
+        void storeUsageReal(s().workspaceId).then((u) =>
+          setRealLines(u?.sessions.find((x) => x.id === s().id)?.lines),
+        );
+      },
+    ),
+  );
   const persona = () => backend.listPersonas().find((p) => p.id === s().personaId);
   const job = () => backend.listJobs().find((j) => j.id === s().jobId);
   const mission = () => backend.listMissions().find((m) => m.id === s().missionId);
@@ -458,7 +472,7 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
       <details class="acc">
         <summary>{t("영속성")}</summary>
         <div class="card inset" style={{ padding: "4px 10px" }}>
-          <KV k={t("스크롤백")} v={`${(s().scrollbackLines / 1000).toFixed(1)}K lines`} />
+          <KV k={t("스크롤백")} v={`${((realLines() ?? s().scrollbackLines) / 1000).toFixed(1)}K lines`} />
           <Show when={isTauri()}>
             <KV
               k={t("세션 로그")}

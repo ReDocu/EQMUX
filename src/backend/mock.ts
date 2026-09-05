@@ -2,6 +2,7 @@
 // M1에서 TauriBackend(invoke/Channel)로 교체하며, 화면은 Backend 인터페이스만 안다 (C9 모듈 경계).
 // 컬렉션은 createMutable 프록시다 — in-place 변경이 곧 반응성이라, 상세 모달·<For> 행처럼
 // tick()을 다시 읽지 않는 표면도 즉시 갱신된다 (B1~B4 재발 방지).
+import { invoke } from "@tauri-apps/api/core";
 import { createMutable } from "solid-js/store";
 import { forgetAgent, isTauri, killPty } from "./pty";
 import { HARD_MAX_SLOTS, maxSlots } from "./settings";
@@ -39,7 +40,8 @@ export interface Backend {
 
   // ── M0 목 mutation — M1에서 SessionService invoke로 교체 ──
   sendMessage(from: string, to: string, type: ConversationMessage["type"], body: string): void;
-  markAllRead(): void;
+  /** 모두 읽음 — wsId를 주면 그 워크스페이스 스트림만 (B51) */
+  markAllRead(wsId?: string): void;
   /** 메시지 원장 실측으로 그 워크스페이스 스트림을 교체 (PRD F) — Tauri에서만 호출된다 */
   hydrateMessages(wsId: string, list: ConversationMessage[]): void;
   /** message-new 이벤트 1건 반영 — 이미 있는 id는 무시한다 */
@@ -53,7 +55,10 @@ export interface Backend {
   restartSession(id: string): void;
   applyCasting(wsId: string, slots: { personaId: string; jobId: string }[]): void;
   /** 기본 터미널 (S9u2S) — 역할 없는 셸 세션을 빈 슬롯에 시작한다. 이미 있으면 재사용. */
-  startDefaultTerminal(wsId: string): void;
+  /** 기본 터미널 열기 — 죽어 있던 세션을 되살린 경우 그 세션을 돌려준다.
+   *  호출부가 PTY를 다시 스폰해야 한다 (B58): 상태만 shell로 되돌리면 프로세스 없이
+   *  '실행 중'으로 남아 입력이 전부 증발한다 */
+  startDefaultTerminal(wsId: string): Session | undefined;
   /** 슬롯에 터미널 추가 — 페르소나·직무 없이 빈 슬롯 하나를 셸 세션으로 채운다.
    *  cwd를 주면 그 경로에서 시작한다 (M36 — git 패널의 워크트리 셸 열기) */
   addTerminal(wsId: string, shell?: string, cwd?: string): void;
@@ -264,8 +269,11 @@ const s = (
   cwd: `C:\\workspace\\${ws}`,
   status: "idle",
   subagents: 0,
-  resumable: true,
-  resumeReason: "transcript + cwd 일치",
+  // 재개는 트랜스크립트가 실재할 때만 참이다 (B56) — 실측이 들어오는 경로(hydrateTeam의
+  // sl.resumable · applyAgentState의 evt.resumable)에서만 올린다. 기본값을 참으로 두면
+  // 에이전트를 한 번도 안 띄운 맨 셸까지 종료 확인창이 "재개 가능"이라고 말한다.
+  resumable: false,
+  resumeReason: "transcript 없음",
   degraded: false,
   restartNeeded: false,
   sinceMs: 3 * 60000,
@@ -499,8 +507,15 @@ export class MockBackend implements Backend {
     this.listeners.forEach((l) => l());
   }
 
-  private logEvent(kind: EventRecord["kind"], message: string, sessionId?: string) {
+  /** 인메모리 계측(브라우저 데모) + 실행 모드에서는 event 테이블에도 적재한다 (B63).
+   *  워크스페이스를 못 풀면(저장소 등록·라이브러리 저장 같은 전역 조작) 데모 계측으로만 남는다 —
+   *  DB가 워크스페이스 단위라 둘 자리가 없다 (FR-C-20a). */
+  private logEvent(kind: EventRecord["kind"], message: string, sessionId?: string, wsId?: string) {
     EVENTS.unshift({ id: `e${seq++}`, time: nowTime(), kind, message, sessionId });
+    const ws = wsId ?? SESSIONS.find((x) => x.id === sessionId)?.workspaceId;
+    if (isTauri() && ws) {
+      void invoke("events_log", { workspace: ws, session: sessionId ?? null, kind, message }).catch(() => {});
+    }
   }
 
   listWorkspaces() {
@@ -539,8 +554,13 @@ export class MockBackend implements Backend {
     this.broadcast();
   }
 
-  markAllRead() {
-    for (const m of MESSAGES) m.unread = false;
+  markAllRead(wsId?: string) {
+    // MESSAGES는 모든 워크스페이스의 스트림이 한 배열에 섞여 있다 — 범위를 안 좁히면 화면은
+    // 전역으로 지우는데 원장(msg_mark_read)은 그 워크스페이스만 갱신해, 앱을 다시 켤 때
+    // 다른 팀의 미확인이 아무 설명 없이 되살아난다 (B51). 목 시드(wsId 없음)는 종전대로 함께 내린다.
+    for (const m of MESSAGES) {
+      if (!wsId || !m.workspaceId || m.workspaceId === wsId) m.unread = false;
+    }
     this.broadcast();
   }
 
@@ -676,11 +696,11 @@ export class MockBackend implements Backend {
         );
       }
     }
-    this.logEvent("app", "캐스팅 적용 · team.json 저장");
+    this.logEvent("app", "캐스팅 적용 · team.json 저장", undefined, wsId);
     this.broadcast();
   }
 
-  startDefaultTerminal(wsId: string) {
+  startDefaultTerminal(wsId: string): Session | undefined {
     const existing = SESSIONS.find((x) => x.workspaceId === wsId && x.personaId === "");
     if (existing) {
       if (existing.status === "dead") {
@@ -690,10 +710,12 @@ export class MockBackend implements Backend {
         existing.lastOutput = "기본 터미널 · 재시작";
         this.logEvent("state", "기본 터미널 재시작", existing.id);
         this.broadcast();
+        return existing; // 호출부가 PTY를 다시 스폰한다 (B58)
       }
-      return;
+      return undefined;
     }
     this.addTerminal(wsId);
+    return undefined;
   }
 
   addTerminal(wsId: string, shell?: string, cwd?: string) {
@@ -715,7 +737,7 @@ export class MockBackend implements Backend {
         lastOutput: cwd ? "워크트리 셸" : "기본 터미널",
       }),
     );
-    this.logEvent("app", `터미널 추가 · ${ws.name} SLOT ${slot} · ${shell ?? "pwsh"}${cwd ? ` · ${cwd}` : ""}`);
+    this.logEvent("app", `터미널 추가 · ${ws.name} SLOT ${slot} · ${shell ?? "pwsh"}${cwd ? ` · ${cwd}` : ""}`, undefined, wsId);
     this.broadcast();
   }
 
@@ -767,7 +789,7 @@ export class MockBackend implements Backend {
     const pName = PERSONAS.find((x) => x.id === personaId)?.name ?? personaId;
     const jName = JOBS.find((x) => x.id === jobId)?.name ?? jobId;
     const iso = opts?.worktree ? " · 워크트리" : "";
-    this.logEvent("app", `역할 세션 추가 · ${pName} · ${jName} · SLOT ${slot}${iso}`);
+    this.logEvent("app", `역할 세션 추가 · ${pName} · ${jName} · SLOT ${slot}${iso}`, undefined, wsId);
     this.broadcast();
   }
 
@@ -994,7 +1016,7 @@ export class MockBackend implements Backend {
       branch,
       assigned: [],
     });
-    this.logEvent("mission", `임무 생성 · ${name}`);
+    this.logEvent("mission", `임무 생성 · ${name}`, undefined, wsId);
     this.broadcast();
   }
 
@@ -1003,7 +1025,7 @@ export class MockBackend implements Backend {
     if (!m) return;
     const order: Mission["status"][] = ["todo", "in-progress", "in-review", "done"];
     m.status = order[(order.indexOf(m.status) + 1) % order.length];
-    this.logEvent("mission", `${m.name} → ${m.status}`);
+    this.logEvent("mission", `${m.name} → ${m.status}`, undefined, m.workspaceId);
     this.broadcast();
   }
 
@@ -1057,7 +1079,7 @@ export class MockBackend implements Backend {
       this.logEvent("app", `동시 오픈 상한 ${MAX_OPEN_WORKSPACES} 도달 (B9)`);
     } else if (!ws.open) {
       ws.open = true;
-      this.logEvent("app", `워크스페이스 열림 · ${ws.name}`);
+      this.logEvent("app", `워크스페이스 열림 · ${ws.name}`, undefined, ws.id);
     }
     this.broadcast();
   }
@@ -1066,7 +1088,7 @@ export class MockBackend implements Backend {
     const ws = WORKSPACES.find((x) => x.id === id);
     if (!ws || !ws.open) return;
     ws.open = false;
-    this.logEvent("app", `워크스페이스 닫힘 · ${ws.name} (세션은 백그라운드 유지)`);
+    this.logEvent("app", `워크스페이스 닫힘 · ${ws.name} (세션은 백그라운드 유지)`, undefined, ws.id);
     this.broadcast();
   }
 
@@ -1076,7 +1098,7 @@ export class MockBackend implements Backend {
     ws.pathMissing = false;
     ws.branch = "main";
     ws.branchNote = "main · 경로 재지정됨";
-    this.logEvent("app", `경로 재지정 · ${ws.name}`);
+    this.logEvent("app", `경로 재지정 · ${ws.name}`, undefined, ws.id);
     this.broadcast();
   }
 

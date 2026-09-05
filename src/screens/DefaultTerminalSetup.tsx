@@ -1,6 +1,7 @@
 // 기본 터미널 구성 (S9u2S) — 역할 없는 셸 세션 설정. 저장 후 워크스페이스를 연다.
 import { For } from "solid-js";
 import { backend } from "../backend/mock";
+import { respawnSessionShell } from "../components/TerminalPane";
 import { maxSlots } from "../backend/settings";
 import { t, tf } from "../i18n";
 import { setView } from "../state";
@@ -10,7 +11,10 @@ export function DefaultTerminalSetup(props: { wsId: string }) {
 
   const openTerminal = () => {
     backend.openWorkspace(props.wsId);
-    backend.startDefaultTerminal(props.wsId); // 역할 없는 셸 세션 → 실제 PTY 부착
+    // 역할 없는 셸 세션 → 실제 PTY 부착. 죽어 있던 세션을 되살렸다면 PTY도 다시 띄운다 (B58) —
+    // 페인의 initialized 래치는 세션이 제거될 때만 풀리므로 재마운트가 대신 스폰해 주지 않는다
+    const revived = backend.startDefaultTerminal(props.wsId);
+    if (revived) void respawnSessionShell(revived.id, revived.cwd, revived.workspaceId, revived.shell);
     setView({ kind: "workspace", id: props.wsId });
   };
 

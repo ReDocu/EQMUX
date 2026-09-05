@@ -240,8 +240,24 @@ async function pasteFromClipboard(sessionId: string, term: Terminal): Promise<vo
     return;
   }
   const text = await clipReadText();
-  if (text) term.paste(text);
+  if (!text) return;
+  // 브래킷 붙여넣기(DECSET 2004)를 켠 TUI는 개행을 실행으로 바꾸지 않는다 — 그대로 넘긴다.
+  // 맨 셸(pwsh·cmd)은 켜지 않으므로 xterm이 개행을 CR로 바꿔 붙는 즉시 실행된다 (B45):
+  // 마지막 개행은 떼어 마지막 줄은 사용자가 Enter를 치게 하고, 그러고도 줄이 남으면 확인을 받는다.
+  if (term.modes.bracketedPasteMode) {
+    term.paste(text);
+    return;
+  }
+  const body = text.replace(/\r?\n$/, "");
+  if (/\r?\n/.test(body)) {
+    setPasteAsk({ id: sessionId, text: body });
+    return;
+  }
+  term.paste(body);
 }
+
+/** 여러 줄 붙여넣기 확인 (B45) — 세션별 1건. 페인이 카드로 그린다 */
+const [pasteAsk, setPasteAsk] = createSignal<{ id: string; text: string } | undefined>(undefined);
 
 function copySelection(term: Terminal): void {
   if (term.hasSelection()) clipWriteText(term.getSelection());
@@ -449,6 +465,12 @@ async function ensureDragDrop(): Promise<void> {
   });
 }
 
+/** 뷰포트가 맨 아래에 붙어 있는가 — 크기 변화·재부착에서 읽던 자리를 지킬지 판단한다 (B46) */
+function atBottom(term: Terminal): boolean {
+  const b = term.buffer.active;
+  return b.viewportY >= b.baseY;
+}
+
 function createEntry(): TermEntry {
   const term = new Terminal({
     fontFamily: '"IBM Plex Mono", ui-monospace, monospace',
@@ -529,11 +551,18 @@ async function initSession(
         void pasteFromClipboard(props.sessionId, term);
         return handled(ev);
       }
-      // 터미널 내 검색 (M30) — TUI로 Ctrl+F를 흘리지 않고 검색 바를 연다
+      // 터미널 내 검색 (M30) — TUI로 Ctrl+F를 흘리지 않고 검색 바를 연다.
+      // 토글이다 (B48) — 열린 상태에서 또 누르면 닫힌다. 아니면 포커스가 터미널로 간 뒤
+      // 그 키가 삼켜지기만 해 키보드로는 빠져나갈 길이 없어진다.
       if (k === "f" && !ev.shiftKey && !ev.altKey) {
-        setSearchSession(props.sessionId);
+        setSearchSession(searchSession() === props.sessionId ? undefined : props.sessionId);
         return handled(ev);
       }
+    }
+    // 검색 바가 열려 있을 때의 ESC는 바를 닫는다 (B48) — 그 조건에서만 PTY로 흘리지 않는다
+    if (ev.type === "keydown" && ev.key === "Escape" && searchSession() === props.sessionId) {
+      setSearchSession(undefined);
+      return handled(ev);
     }
     return true;
   });
@@ -804,12 +833,13 @@ export function TerminalPane(props: {
       }
       // 크기가 실제로 바뀌었으면 전체 리페인트 — 리사이즈 직후 렌더 찌꺼기 방지
       if (changed) {
+        const wasAtBottom = atBottom(e.term); // refresh 전에 잰다 (B46)
         try {
           e.term.refresh(0, Math.max(0, e.term.rows - 1));
         } catch {
           /* 렌더러 미준비 시 무시 */
         }
-        e.term.scrollToBottom();
+        if (wasAtBottom) e.term.scrollToBottom();
       }
     };
 
@@ -841,6 +871,7 @@ export function TerminalPane(props: {
       } else if (e.term.element && e.term.element.parentElement !== host) {
         host.appendChild(e.term.element); // 리마운트 = DOM 재부착만
       }
+      const wasAtBottom = atBottom(e.term); // 재부착도 읽던 자리를 지킨다 (B46)
       syncSize();
       if (!e.initialized) {
         e.initialized = true;
@@ -852,7 +883,7 @@ export function TerminalPane(props: {
       } catch {
         /* 렌더러 미준비 시 무시 */
       }
-      e.term.scrollToBottom();
+      if (wasAtBottom) e.term.scrollToBottom();
       // 마운트 시점에 이미 선택된 세션이면 포커스 — 선택 효과는 open 전에 지나갔을 수 있다
       focusIfSelected();
     };
@@ -888,10 +919,16 @@ export function TerminalPane(props: {
       host.removeEventListener("dblclick", onDblClick);
       window.removeEventListener("mousedown", closeMenu);
       clearTimeout(hintTimer);
+      // 검색 바 상태는 모듈 전역이라 언마운트해도 남는다 — 트랜스크립트 탭에 갔다 오면 검색어만
+      // 빈 유령 바가 되살아나 마운트 즉시 키보드 포커스를 가져간다 (B48). 붙여넣기 확인도 같다.
+      if (searchSession() === props.sessionId) setSearchSession(undefined);
+      if (pasteAsk()?.id === props.sessionId) setPasteAsk(undefined);
       // 터미널은 dispose하지 않는다 — REGISTRY가 세션 수명 동안 유지한다
     });
   });
 
+  /** 대체 화면(TUI)인가 — 그 위에서 clear를 부르면 화면이 어긋난 채 굳는다 (B47) */
+  const altBuffer = () => REGISTRY.get(props.sessionId)?.term.buffer.active.type === "alternate";
   const menuAction = (fn: (term: Terminal) => void) => {
     const e = REGISTRY.get(props.sessionId);
     if (e) fn(e.term);
@@ -933,6 +970,31 @@ export function TerminalPane(props: {
             </button>
             <button class="btn ghost" title={t("닫기 (ESC)")} onClick={closeSearch}>
               ✕
+            </button>
+          </div>
+        </Show>
+        {/* 여러 줄 붙여넣기 확인 (B45) — 맨 셸에서는 붙는 즉시 줄마다 실행된다 */}
+        <Show when={pasteAsk()?.id === props.sessionId}>
+          <div class="card term-search mono" onMouseDown={(ev) => ev.stopPropagation()}>
+            <span>
+              {tf("{n}줄을 붙여넣어 실행합니다", { n: String(pasteAsk()!.text.split(/\r?\n/).length) })}
+            </span>
+            <button
+              class="btn"
+              onClick={() => {
+                const ask = pasteAsk();
+                setPasteAsk(undefined);
+                const e = ask && REGISTRY.get(ask.id);
+                if (e && ask) {
+                  e.term.paste(ask.text);
+                  e.term.focus();
+                }
+              }}
+            >
+              {t("붙여넣기")}
+            </button>
+            <button class="btn ghost" onClick={() => setPasteAsk(undefined)}>
+              {t("취소")}
             </button>
           </div>
         </Show>
@@ -1033,7 +1095,17 @@ export function TerminalPane(props: {
                   action: () => menuAction(() => void revealSelection(true)),
                 },
                 { label: t("검색"), kbd: "Ctrl+F", action: () => menuAction(() => setSearchSession(props.sessionId)) },
-                { label: t("화면 지우기"), action: () => menuAction((term) => term.clear()) },
+                {
+                  // 이름은 '화면'인데 실제로는 링버퍼 5,000줄을 통째로 버린다 — 이름을 사실에
+                  // 맞추고 danger로 내린다. 대체 화면(TUI)에서는 커서 줄만 남기고 화면이
+                  // 어긋난 채 굳으므로 아예 막는다 (B47)
+                  label: altBuffer()
+                    ? t("스크롤백까지 지우기 — 에이전트 화면(TUI)에서는 불가")
+                    : t("스크롤백까지 지우기"),
+                  danger: true,
+                  disabled: altBuffer(),
+                  action: () => menuAction((term) => term.clear()),
+                },
               ],
               // 보기·이동·세션 — 소유 화면이 얹는다 (danger 항목은 컴포넌트가 마지막으로 모은다)
               ...(props.extraMenu?.() ?? []),

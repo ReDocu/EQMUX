@@ -20,6 +20,9 @@ pub struct Turn {
     /// 도구 줄의 한 줄 요약 — 접힌 상태에서 무엇을 건드렸는지 (경로·명령). 도구 턴에만 있다
     pub summary: Option<String>,
     pub detail: Option<String>, // 도구 호출의 입력·출력 — UI에서 접힘 (FR-G-83)
+    /// tool_use 블록의 id — tool_result를 짝지을 유일한 끈 (B65). 화면에는 보내지 않는다
+    #[serde(skip)]
+    pub tool_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -116,6 +119,7 @@ fn push_blocks(turns: &mut Vec<Turn>, blocks: &[serde_json::Value], role: &str, 
                             text: truncate(trimmed, 4000),
                             summary: None,
                             detail: None,
+                            tool_id: None,
                         });
                     }
                 }
@@ -132,10 +136,13 @@ fn push_blocks(turns: &mut Vec<Turn>, blocks: &[serde_json::Value], role: &str, 
                     text: format!("⚙ {name}"),
                     summary: raw.and_then(tool_summary),
                     detail: Some(truncate(&format!("입력:\n{input}"), 2000)),
+                    tool_id: b.get("id").and_then(|i| i.as_str()).map(str::to_string),
                 });
             }
             "tool_result" => {
-                // 도구 결과 — 짝이 되는 도구 턴(마지막 미완 tool)에 출력을 덧붙인다
+                // 도구 결과 — tool_use_id가 같은 도구 턴에 붙인다 (B65). 도구를 둘 이상 한 번에
+                // 부르면 기록이 use A → use B → res A → res B 순서라, '마지막 미완 tool'로 찾으면
+                // 결과가 서로 뒤바뀐다. id가 없는 옛 형식에서만 역방향 탐색으로 떨어진다.
                 let content = b
                     .get("content")
                     .map(|c| match c {
@@ -144,11 +151,14 @@ fn push_blocks(turns: &mut Vec<Turn>, blocks: &[serde_json::Value], role: &str, 
                     })
                     .unwrap_or_default();
                 let out = truncate(&content, 2000);
-                if let Some(t) = turns
-                    .iter_mut()
-                    .rev()
-                    .find(|t| t.role == "tool" && !t.detail.as_deref().unwrap_or("").contains("\n출력:"))
-                {
+                let want = b.get("tool_use_id").and_then(|i| i.as_str());
+                let hit = match want {
+                    Some(id) => turns.iter_mut().rev().find(|t| t.tool_id.as_deref() == Some(id)),
+                    None => turns.iter_mut().rev().find(|t| {
+                        t.role == "tool" && !t.detail.as_deref().unwrap_or("").contains("\n출력:")
+                    }),
+                };
+                if let Some(t) = hit {
                     if let Some(d) = t.detail.as_mut() {
                         d.push_str("\n출력:\n");
                         d.push_str(&out);
@@ -160,6 +170,7 @@ fn push_blocks(turns: &mut Vec<Turn>, blocks: &[serde_json::Value], role: &str, 
                         text: "⚑ 도구 결과".into(),
                         summary: None,
                         detail: Some(out),
+                        tool_id: None,
                     });
                 }
             }
@@ -189,6 +200,7 @@ fn parse_line(turns: &mut Vec<Turn>, line: &str) -> Result<(), ()> {
                     text: truncate(trimmed, 4000),
                     summary: None,
                     detail: None,
+                    tool_id: None,
                 });
             }
             Ok(())
@@ -272,6 +284,29 @@ mod tests {
         let d = tool.detail.as_deref().unwrap();
         assert!(d.contains("입력:") && d.contains("출력:") && d.contains("auth()")); // 짝짓기
         assert!(!data.windowed);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// B65 회귀 — 도구를 둘 이상 한 번에 부르면 기록이 use A → use B → res A → res B 순서다.
+    /// '마지막 미완 tool'로 붙이면 결과가 서로 뒤바뀌므로 tool_use_id로 짝지어야 한다.
+    #[test]
+    fn parallel_tool_results_pair_by_id() {
+        let dir = std::env::temp_dir().join(format!("eqmux-tsp-{}", crate::workspace::now_ms()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.jsonl");
+        let mut f = File::create(&path).unwrap();
+        writeln!(f, r#"{{"type":"assistant","timestamp":"2026-09-05T01:00:00.000Z","message":{{"role":"assistant","content":[{{"type":"tool_use","id":"toolu_A","name":"Read","input":{{"file_path":"src/a.ts"}}}},{{"type":"tool_use","id":"toolu_B","name":"Bash","input":{{"command":"git status"}}}}]}}}}"#).unwrap();
+        writeln!(f, r#"{{"type":"user","timestamp":"2026-09-05T01:00:01.000Z","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"toolu_A","content":"A파일 내용"}}]}}}}"#).unwrap();
+        writeln!(f, r#"{{"type":"user","timestamp":"2026-09-05T01:00:02.000Z","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"toolu_B","content":"B브랜치 상태"}}]}}}}"#).unwrap();
+
+        let data = read(&path, 200).unwrap();
+        let tools: Vec<&Turn> = data.turns.iter().filter(|t| t.role == "tool").collect();
+        assert_eq!(tools.len(), 2, "도구 턴이 둘이어야 한다");
+        let a = tools[0].detail.as_deref().unwrap();
+        let b = tools[1].detail.as_deref().unwrap();
+        assert!(tools[0].text.contains("Read") && a.contains("A파일 내용"), "Read에 A 결과: {a}");
+        assert!(tools[1].text.contains("Bash") && b.contains("B브랜치 상태"), "Bash에 B 결과: {b}");
+        assert!(!a.contains("B브랜치") && !b.contains("A파일"), "결과가 교차되면 안 된다");
         std::fs::remove_dir_all(&dir).ok();
     }
 

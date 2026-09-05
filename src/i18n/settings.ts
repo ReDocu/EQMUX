@@ -1,5 +1,7 @@
 // 설정 화면 사전 (Settings.tsx)
 export const dict: Record<string, string> = {
+  "저장 실패 — 다음 실행에 반영되지 않습니다": "Save failed — this will not apply on the next run",
+  "100ms / 200행": "100ms / 200 lines",
   // 헤드
   "settings.json 즉시 저장": "Saved to settings.json instantly",
   "브라우저 dev — 저장 없음": "Browser dev — not persisted",

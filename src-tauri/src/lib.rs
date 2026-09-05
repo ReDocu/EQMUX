@@ -1969,13 +1969,35 @@ fn settings_save(
     data: serde_json::Value,
 ) -> Result<(), String> {
     let root = store_state.0.root();
-    std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
     let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
-    workspace::atomic_write(&root.join("settings.json"), json.as_bytes())?;
+    // 메모리 사본을 먼저 갱신한다 (B54) — 알림 라우팅·음소거 게이트가 이 사본만 본다.
+    // 쓰기 실패 뒤에 갱신하면 화면은 '알림 꺼짐'인데 토스트는 계속 오는 상태가 된다.
+    // 파일 실패는 그대로 Err로 올려 프런트가 배너로 알린다 (다음 실행에는 반영되지 않는다).
     if let Ok(mut v) = settings.0.lock() {
         *v = data;
     }
+    std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+    workspace::atomic_write(&root.join("settings.json"), json.as_bytes())?;
     Ok(())
+}
+
+/// 프런트 조작 기록 (B63) — 실행 모드의 이벤트 피드 원천은 event 테이블 하나다 (FR-G-40).
+/// 임무·역할·권한·워크스페이스 조작은 프런트에만 남아 실행 모드 피드에서 통째로 빠져 있었다.
+/// 표시부는 손대지 않는다 — queryEvents가 모르는 kind도 payload를 그대로 보여준다.
+#[tauri::command]
+fn events_log(
+    store_state: State<StoreState>,
+    workspace: String,
+    session: Option<String>,
+    kind: String,
+    message: String,
+) {
+    let _ = store_state.0.sender().send(store::StoreMsg::Event {
+        ws: workspace,
+        id: session,
+        kind,
+        message: message.chars().take(200).collect(),
+    });
 }
 
 #[tauri::command]
@@ -2230,6 +2252,7 @@ pub fn run() {
             transcript_read,
             team_load,
             team_save,
+            events_log,
             worktree_ensure,
             worktree_add,
             worktree_attach,

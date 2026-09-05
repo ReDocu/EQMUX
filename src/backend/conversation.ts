@@ -118,7 +118,7 @@ export async function exportConversation(
 
 /** 모두 읽음 — 원장의 read 플래그와 화면 표시를 함께 내린다 */
 export function markConversationRead(wsId: string | undefined): void {
-  backend.markAllRead();
+  backend.markAllRead(wsId);
   if (isTauri() && wsId) void invoke("msg_mark_read", { workspace: wsId }).catch(() => {});
 }
 
@@ -173,7 +173,16 @@ async function restoreInbox(wsId: string): Promise<void> {
       inbox.set(sid, [...(inbox.get(sid) ?? []), ...msgs]);
       changed = true;
     }
-    if (changed) setInboxTick((t) => t + 1);
+    if (changed) {
+      setInboxTick((t) => t + 1);
+      // 복원된 대기분은 idle '전이'를 기다리는데, 웹뷰만 다시 뜬 경우(FR-C-06) 그 전이는 이미
+      // 지나갔다 — 되살린 직후 지금 idle인 세션에 한 번 배출한다 (B49). 아니면 카드에 "턴 종료 시
+      // 전달"이라고 뜬 채 영영 전달되지 않는다.
+      for (const sid of Object.keys(saved)) {
+        const s = backend.listSessions().find((x) => x.id === sid);
+        if (s) flushInboxOnState(s.id, s.status);
+      }
+    }
   } catch {
     /* 손상 캐시 — 무시하고 다음 저장이 덮는다 */
   }
@@ -251,34 +260,37 @@ function fmtEcho(m: ConversationMessage): string {
  *  기동 전이 정상 상태이고, 그때 온 메시지는 인박스에 쌓였다가 기동 직후 흘러간다.
  *  복원(restored) 세션도 같다 — 재시작 직후가 딱 그 상태다. 예전에는 여기서 걸러내 앱을
  *  다시 켠 직후에 보낸 @all이 아무에게도 닿지 않고 흔적도 남지 않았다.
- *  제외는 진짜로 받을 수 없는 것만 — dead(프로세스 없음). */
+ *  dead도 뺀 적이 있었는데, 그러면 전달 루프가 한 바퀴도 안 돌아 인박스에도 안 쌓이고
+ *  화면에만 정상 발신으로 남았다 (B50). 지금은 후보로 두고 deliver가 인박스에 재운다 —
+ *  재개하면 idle 전이에서 기존 flush 경로가 그대로 흘려보낸다. */
 function recipients(wsId: string, to: string) {
-  const live = backend.listSessions().filter((s) => s.workspaceId === wsId && s.status !== "dead");
+  const live = backend.listSessions().filter((s) => s.workspaceId === wsId);
   return to === "@all" ? live : live.filter((s) => s.id === to);
 }
 
 function deliver(wsId: string, m: ConversationMessage): void {
+  const park = (id: string) => {
+    const q = inbox.get(id) ?? [];
+    q.push(m);
+    inbox.set(id, q);
+    setInboxTick((t) => t + 1);
+    scheduleInboxSave(); // 인박스 영속 — 대기분은 재시작을 넘긴다
+  };
   for (const s of recipients(wsId, m.to)) {
     if (s.id === m.from) continue; // 에이전트 발신(@all)이 자기 자신에게 되돌아가지 않게
-    if (!s.personaId) {
+    if (s.status === "dead") {
+      park(s.id); // 프로세스가 없다 — 재개하면 idle 전이에서 흘러간다 (B50)
+    } else if (!s.personaId) {
       echoPty(s.id, fmtEcho(m)); // 기본 터미널 — 표시 전용, 셸 입력에는 닿지 않는다 (P-2)
     } else if (s.status === "shell") {
       // 역할은 있는데 에이전트가 아직 안 떴다 — 셸에 주입하면 사람이 치던 명령을 실행시킨다.
       // 사람이 읽도록 화면에만 에코하고, 원문은 인박스에 남겨 기동 직후 에이전트에게 전달한다.
       echoPty(s.id, fmtEcho(m));
-      const q = inbox.get(s.id) ?? [];
-      q.push(m);
-      inbox.set(s.id, q);
-      setInboxTick((t) => t + 1);
-      scheduleInboxSave();
+      park(s.id);
     } else if (canInject(s)) {
       injectMessage(s.id, m); // 유휴 = 프롬프트가 비어 있다 → 즉시 (M3)
     } else {
-      const q = inbox.get(s.id) ?? [];
-      q.push(m);
-      inbox.set(s.id, q);
-      setInboxTick((t) => t + 1);
-      scheduleInboxSave(); // 인박스 영속 — 대기분은 재시작을 넘긴다
+      park(s.id);
     }
   }
 }

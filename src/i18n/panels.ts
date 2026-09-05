@@ -71,8 +71,8 @@ export const dict: Record<string, string> = {
   "세션 포트": "Session ports",
   "시스템 포트": "System ports",
   충돌: "Conflicts",
-  "외부 노출": "Exposed",
-  "루프백 밖으로 바인딩된 포트가 있습니다.": "Some ports are bound outside loopback.",
+  "세션 외부 노출": "Session ports exposed",
+  "세션 포트 {n}개가 루프백 밖에 바인딩되어 있습니다.": "{n} session port(s) bound outside loopback.",
   "세션 포트가 루프백에만 바인딩되어 있습니다.": "Session ports are bound to loopback only.",
 
   // ── 브라우저 패널 (BrowserPanelTab) ──

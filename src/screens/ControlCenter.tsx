@@ -379,16 +379,25 @@ export function ControlCenter(props: { workspace: Workspace }) {
   // 세션 우클릭 메뉴 (U8) — 레일 행·페인 헤더 공용. 재개·중지·상세·점프를 상세 모달 없이 꺼낸다
   const [sessMenu, setSessMenu] = createSignal<{ x: number; y: number; s: Session } | undefined>(undefined);
 
-  // 인라인 재개 (U8) — 상세 모달의 doResume과 같은 경로 (FR-D-21~23)
+  // 인라인 재개 (U8) — 상세 모달의 doResume과 같은 경로 (FR-D-21~23).
+  // 실패는 반드시 화면에 남긴다 (B57) — dead 세션은 페인 대신 deadSlot이 렌더되므로
+  // "페인의 restore 카드가 보여준다"는 전제가 성립하지 않고, 그대로 두면 눌러도 아무 일도
+  // 일어나지 않는 버튼이 된다. Rust는 정확한 이유를 돌려주고 있다.
+  const [resumeErr, setResumeErr] = createSignal<{ id: string; msg: string } | undefined>(undefined);
   const resumeInline = async (s: Session) => {
+    setResumeErr(undefined);
     if (isTauri() && s.personaId) {
       const p = s.permOverride ?? job(s.jobId)?.permissions;
-      if (!p) return;
+      if (!p) {
+        setResumeErr({ id: s.id, msg: t("직무 권한을 찾을 수 없습니다 — 역할을 다시 지정하세요") });
+        return;
+      }
       const size = sessionTermSize(s.id);
       try {
         await resumeAgent(s.id, s.workspaceId, s.cwd, persona(s.personaId)?.name ?? s.personaId, p, size.cols, size.rows);
-      } catch {
-        return; // 실패는 페인의 restore 카드·이벤트 피드가 보여준다
+      } catch (err) {
+        setResumeErr({ id: s.id, msg: String(err) });
+        return;
       }
     }
     backend.resumeSession(s.id);
@@ -543,6 +552,9 @@ export function ControlCenter(props: { workspace: Workspace }) {
           </button>
         </Show>
       </div>
+      <Show when={resumeErr()?.id === s.id}>
+        <div class="pane-dead-note st-dead">{resumeErr()!.msg}</div>
+      </Show>
       {/* 터미널을 감췄으므로 남긴 출력으로 가는 길을 연다 — 종료된 세션의 마지막 출력 확인용 */}
       <button
         class="pane-dead-log"
@@ -579,7 +591,13 @@ export function ControlCenter(props: { workspace: Workspace }) {
           <div
             class="terminal-pane"
             classList={{ "pane-waiting": s.status === "waiting", "pane-dead": s.status === "dead", "pane-selected": selected()?.id === s.id }}
-            onClick={() => setSelectedSession(s.id)}
+            onClick={() => {
+              // 페인을 직접 누르는 것이 가장 자연스러운 '봤다'다 (B64) — 레일 행 클릭에만 걸어
+              // 두면 페인에서 답까지 마쳐도 미확인 점이 앱 바·관제 탭에 계속 켜져 있고 재시작해도
+              // 남는다. markSeen은 변경이 없으면 방송하지 않는다
+              setSelectedSession(s.id);
+              backend.markSeen(s.id);
+            }}
           >
             <button
               class="terminal-head mono"
@@ -688,7 +706,15 @@ export function ControlCenter(props: { workspace: Workspace }) {
         <span style={{ color: "var(--eq-green)" }}>◉</span> PTY {sessions().filter((x) => x.status !== "dead").length}
       </span>
       <span>▦ {t(PANE_LAYOUTS.find((l) => l.key === paneLayout())?.name ?? "")}</span>
-      <span>OUTPUT {(sessions().reduce((a, x) => a + x.scrollbackLines, 0) / 1000).toFixed(1)}K</span>
+      {/* Session.scrollbackLines는 목 시드에만 값이 있다 — 실행 모드에서는 아무도 갱신하지
+          않아 영원히 0.0K였다. 같은 줄의 WAL 칸이 이미 읽고 있는 실측을 쓴다 (B62) */}
+      <span>
+        OUTPUT{" "}
+        {(
+          (realUsage()?.total_lines ?? sessions().reduce((a, x) => a + x.scrollbackLines, 0)) / 1000
+        ).toFixed(1)}
+        K
+      </span>
       <span>
         {realUsage()
           ? `WAL ${(realUsage()!.db_size_bytes / 1024).toFixed(0)} KB · ${realUsage()!.total_lines.toLocaleString()} lines`
