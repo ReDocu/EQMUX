@@ -466,7 +466,15 @@ export function GitPanelTab() {
                     <Show when={wtBase() && !branches().some((b) => b.name === wtBase())}>
                       <option value={wtBase()}>{wtBase()} {t("(커밋)")}</option>
                     </Show>
-                    <For each={branches()}>{(b) => <option value={b.name}>{b.name}</option>}</For>
+                    {/* 체크아웃 팝오버와 같은 구분 — 원격 전용 이름은 로컬 브랜치와 다른 것이다 (B42) */}
+                    <For each={branches()}>
+                      {(b) => (
+                        <option value={b.name}>
+                          {b.name}
+                          {b.remote ? ` ${t("(원격)")}` : ""}
+                        </option>
+                      )}
+                    </For>
                   </select>
                   <button class="btn primary" style={{ "font-size": "10px" }} disabled={!wtName().trim() || wtBusy()} onClick={() => void createWorktree()}>
                     {wtBusy() ? t("생성 중…") : t("생성")}

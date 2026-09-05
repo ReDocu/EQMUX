@@ -234,7 +234,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
       : [
           { path: props.workspace.path, branch: props.workspace.branch ?? "main", head: "", isMain: true, isSession: false },
           ...sessions()
-            .filter((s) => s.worktree)
+            .filter((s) => s.worktree && !s.worktreeMissing)
             .map((s) => ({ path: s.cwd, branch: `eqmux/${s.id}`, head: "", isMain: false, isSession: true })),
         ];
   const normPath = (p: string) => p.replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase();

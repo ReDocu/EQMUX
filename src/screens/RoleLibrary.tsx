@@ -98,9 +98,14 @@ export function RoleLibrary() {
   const setProf = (patch: Partial<DraftProfile>) =>
     setDraftProfiles({ ...draftProfiles(), [editLevel()]: { ...prof(), ...patch } });
 
+  // 편집을 시작한 시점의 파일 상태를 여기서 붙잡는다 (P-7 · B41) — 저장 버튼이 라이브 목록에서
+  // 다시 읽으면, CONFLICT 뒤 새로고침이 mtime까지 최신으로 갈아끼워 두 번째 저장이 통과한다.
+  // 그러면 안내 문구대로 다시 누른 사용자가 남의 편집을 흔적 없이 덮는다. 캐릭터 시트와 같은 계약.
+  const [editMtime, setEditMtime] = createSignal<number | undefined>(undefined);
   const select = (p: SPersona) => {
     setSelJobId(undefined);
     setSelId(p.id);
+    setEditMtime(p.mtimeMs);
     setDraftName(p.name);
     setDraftColor(p.color);
     setDraftJob(p.job ?? "");
@@ -130,10 +135,11 @@ export function RoleLibrary() {
       personality: active.personality,
       color: draftColor(),
       job: draftJob(),
-      mtimeMs: p.mtimeMs,
+      mtimeMs: editMtime(),
     });
     setSaveErr(err ?? undefined);
     reloadScope();
+    if (!err) setEditMtime(personas().find((x) => x.id === p.id)?.mtimeMs);
     setSaved(!err);
   };
 
@@ -236,9 +242,11 @@ export function RoleLibrary() {
     forbidden: "",
   });
 
+  const [jobMtime, setJobMtime] = createSignal<number | undefined>(undefined); // B41 — 편집 시작 시점 고정
   const selectJob = (j: SJob) => {
     setSelId(undefined);
     setSelJobId(j.id);
+    setJobMtime(j.mtimeMs);
     setJDraft({
       name: j.name,
       write: j.permissions.write,
@@ -262,10 +270,11 @@ export function RoleLibrary() {
       permissions: { write: d.write, commit: d.commit, push: d.push },
       responsibility: d.responsibility,
       forbidden: d.forbidden,
-      mtimeMs: j.mtimeMs, // 편집 시작 시점의 파일 상태 (P-7)
+      mtimeMs: jobMtime(), // 편집 시작 시점의 파일 상태 (P-7 · B41)
     });
     setJobSaveErr(err ?? undefined);
     reloadScope();
+    if (!err) setJobMtime(jobs().find((x) => x.id === j.id)?.mtimeMs);
     setJobSaved(!err);
   };
 

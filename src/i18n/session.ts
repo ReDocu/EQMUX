@@ -22,6 +22,8 @@ export const dict: Record<string, string> = {
   "PID · 셸": "PID · shell",
   격리: "Isolation",
   "워크트리 · 전용 브랜치 (E1′)": "Worktree · dedicated branch (E1′)",
+  "워크트리 · 이 머신엔 없음 — repo 루트 폴백 (B40)":
+    "Worktree · not on this machine — falling back to repo root (B40)",
   "공유 · repo 루트 (FR-E-60)": "Shared · repo root (FR-E-60)",
   "이 세션의 OS 알림·사운드 음소거 (FR-G-35) — 인앱 미확인 점은 유지":
     "Mute OS notifications & sound for this session (FR-G-35) — the in-app unseen dot remains",
@@ -31,6 +33,9 @@ export const dict: Record<string, string> = {
   실행: "Execution",
   "세션 이름": "Session name",
   "실제 실행 플래그 (FR-D-41)": "Actual runtime flags (FR-D-41)",
+  "예상 실행 플래그 (FR-D-41)": "Expected runtime flags (FR-D-41)",
+  "이 앱이 띄운 기록이 없어 현재 권한으로 계산한 값입니다 — 돌고 있는 프로세스는 다를 수 있습니다.":
+    "This app has no spawn record for this session, so the value is computed from current permissions — the running process may differ.",
   "슬롯 권한 (FR-E-34)": "Slot permissions (FR-E-34)",
   "직무 기본값과 다른 슬롯 오버라이드 — team.json·역할 파일에 영속":
     "Slot override differing from job defaults — persisted to team.json and the role file",

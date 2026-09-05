@@ -9,6 +9,7 @@ import { HARD_MAX_SLOTS, maxSlots } from "./settings";
 /** 동시에 열어 둘 수 있는 워크스페이스 수 (B9) — 등록은 무제한이고 오픈만 제한된다.
  *  화면(대시보드 "열기")이 상한을 미리 알아야 조용한 no-op이 되지 않는다 */
 export const MAX_OPEN_WORKSPACES = 10;
+import { agentAttached } from "../types";
 import type {
   AgentStateApply,
   ConversationMessage,
@@ -100,6 +101,8 @@ export interface Backend {
   hydrateLibrary(jobs: Job[], personas: Persona[]): void;
   /** 등록 해제 (FR-E-09) — 목록에서만 지운다 */
   removeWorkspace(id: string): void;
+  /** 스폰 때 실제로 넘긴 실행 플래그를 기록한다 (B39) */
+  noteSpawnFlags(sessionId: string, flags: string): void;
   savePersona(p: Persona): void;
   addPersona(): void;
   saveJob(j: Job): void;
@@ -792,7 +795,11 @@ export class MockBackend implements Backend {
           name: sl.name ?? undefined, // 분리된 세션 이름 (P5) — team.json이 원본
           permOverride: sl.permissions ?? undefined, // 슬롯 권한 오버라이드 (FR-E-34)
           cwd: sl.worktreePath ?? ws.path,
-          worktree: !!sl.worktreePath,
+          // team.json의 격리 플래그는 그대로 보존한다 (B40) — 경로 실재 여부로 다시 계산하면
+          // 워크트리가 없는 머신(.eqmux/worktrees는 gitignore 대상)에서 워크스페이스를 열기만
+          // 해도 자동 저장이 그 false를 team.json에 써서 커밋된 격리 설정이 사라진다.
+          worktree: !!sl.worktree,
+          worktreeMissing: worktreeMissing || undefined,
           sinceMs: 0,
           restored: !alive,
           revived: alive,
@@ -949,6 +956,13 @@ export class MockBackend implements Backend {
     this.broadcast();
   }
 
+  noteSpawnFlags(sessionId: string, flags: string) {
+    const sess = SESSIONS.find((x) => x.id === sessionId);
+    if (!sess || sess.spawnFlags === flags) return;
+    sess.spawnFlags = flags;
+    this.broadcast();
+  }
+
   updateSessionRole(id: string, personaId: string, jobId: string) {
     const sess = SESSIONS.find((x) => x.id === id);
     if (!sess) return;
@@ -1067,6 +1081,18 @@ export class MockBackend implements Backend {
   }
 
   hydrateLibrary(jobs: Job[], personas: Persona[]) {
+    // 직무 권한이 바뀌면 그 직무로 도는 세션의 실행 플래그가 어긋난다 — 플래그는 스폰 시점에
+    // args로 박히므로 파일만 고쳐서는 돌고 있는 프로세스가 따라오지 않는다. 라이브러리 편집도
+    // 슬롯 오버라이드·직무 교체와 같은 자리에서 재시작 필요를 세운다 (E11′ · B39).
+    for (const sess of SESSIONS) {
+      if (!sess.jobId || sess.permOverride || !agentAttached(sess)) continue;
+      const before = JOBS.find((j) => j.id === sess.jobId)?.permissions;
+      const after = jobs.find((j) => j.id === sess.jobId)?.permissions;
+      if (before && after && JSON.stringify(before) !== JSON.stringify(after)) {
+        sess.restartNeeded = true;
+        this.logEvent("agent", `직무 권한 변경 · ${sess.jobId} · 재시작 필요`, sess.id);
+      }
+    }
     // 배열 참조를 바꾸지 않고 내용만 교체 — 화면·합성이 같은 배열을 계속 본다
     JOBS.splice(0, JOBS.length, ...jobs);
     PERSONAS.splice(0, PERSONAS.length, ...personas);

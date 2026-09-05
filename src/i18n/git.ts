@@ -107,6 +107,7 @@ export const dict: Record<string, string> = {
   "분기 기준 ref (start-from)": "Base ref (start-from)",
   "HEAD (현재)": "HEAD (current)",
   "(커밋)": "(commit)",
+  "(원격)": "(remote)",
   "생성 중…": "Creating…",
   생성: "Create",
   "{path} · {head} — 삭제는 제공하지 않습니다 (FR-E-64) · git worktree remove":

@@ -47,7 +47,10 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
   const mission = () => backend.listMissions().find((m) => m.id === s().missionId);
   // 유효 권한 (FR-E-34) — 슬롯 오버라이드가 있으면 그것, 없으면 직무 기본값
   const effPerms = () => s().permOverride ?? job()?.permissions;
+  // 스폰 때 실제로 넘긴 플래그가 우선이다 (B39) — 현재 권한값에서 다시 계산하면 파일만 고쳐도
+  // 화면이 따라 바뀌어, 옛 플래그로 돌고 있는 프로세스를 '실제'라는 이름으로 잘못 말하게 된다.
   const flags = () => {
+    if (s().spawnFlags) return s().spawnFlags!;
     const p = effPerms();
     return p ? flagsToString(translatePermissions(p), s().agentSessionId) : "—";
   };
@@ -264,7 +267,16 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
             <KV k={t("PID · 셸")} v={`${s().pid} · ${s().shell}`} />
           </Show>
           <Show when={s().personaId}>
-            <KV k={t("격리")} v={s().worktree ? t("워크트리 · 전용 브랜치 (E1′)") : t("공유 · repo 루트 (FR-E-60)")} />
+            <KV
+              k={t("격리")}
+              v={
+                s().worktreeMissing
+                  ? t("워크트리 · 이 머신엔 없음 — repo 루트 폴백 (B40)")
+                  : s().worktree
+                    ? t("워크트리 · 전용 브랜치 (E1′)")
+                    : t("공유 · repo 루트 (FR-E-60)")
+              }
+            />
           </Show>
           <KV k="cwd" v={s().cwd} />
           <KV
@@ -302,8 +314,13 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
       </div>
 
       <div style={{ "margin-top": "10px" }}>
-        <Eyebrow>{t("실제 실행 플래그 (FR-D-41)")}</Eyebrow>
+        <Eyebrow>{s().spawnFlags ? t("실제 실행 플래그 (FR-D-41)") : t("예상 실행 플래그 (FR-D-41)")}</Eyebrow>
         <div class="card inset flags mono">{flags()}</div>
+        <Show when={!s().spawnFlags}>
+          <div class="muted" style={{ "font-size": "10px", "margin-top": "4px" }}>
+            {t("이 앱이 띄운 기록이 없어 현재 권한으로 계산한 값입니다 — 돌고 있는 프로세스는 다를 수 있습니다.")}
+          </div>
+        </Show>
       </div>
 
       {/* 슬롯 권한 오버라이드 (FR-E-34, M31) — 직무 기본값을 이 세션에서만 덮어쓴다 */}

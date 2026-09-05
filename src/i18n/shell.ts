@@ -73,9 +73,14 @@ export const dict: Record<string, string> = {
     "Loads .eqmux/team.json · team.md and reads role files from disk. The DB is a cache; when they disagree, files win.",
   "경로 재지정 필요": "Path re-assignment needed",
   "{name} 열기": "Open {name}",
-  "레지스트리에서만 제거 — 디스크의 저장소는 그대로 (FR-E-09)":
-    "Removes from the registry only — the repo on disk stays (FR-E-09)",
-  "등록 해제 (디스크는 그대로)": "Unregister (disk untouched)",
+  "레지스트리에서만 제거 — 디스크의 저장소는 그대로 · 실행 중 세션은 종료됩니다 (FR-E-09)":
+    "Removes from the registry only — the repo on disk stays, but running sessions are terminated (FR-E-09)",
+  "등록 해제 (디스크는 그대로 · 세션 종료)": "Unregister (disk untouched · sessions end)",
+  "등록을 해제할까요?": "Unregister this workspace?",
+  "실행 중인 세션 {n}개가 지금 종료됩니다 — 재등록해도 돌아오지 않습니다.":
+    "{n} running session(s) will be terminated now — re-registering will not bring them back.",
+  "디스크의 저장소와 .eqmux 파일은 그대로 남습니다.": "The repo on disk and its .eqmux files are left untouched.",
+  "세션 종료 후 등록 해제": "Terminate sessions & unregister",
   "git 저장소가 아닙니다": "Not a git repository",
   "이 폴더에서 `git init`을 실행해 저장소로 만든 뒤 등록할까요? 기존 파일은 변경되지 않습니다.":
     "Run `git init` here to turn this folder into a repository, then register it? Existing files are not changed.",

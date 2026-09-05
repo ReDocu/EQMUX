@@ -106,7 +106,19 @@ export function WorkspaceConnection() {
     }
   };
 
+  // 등록 해제는 레지스트리에서만 지우지만, 그 워크스페이스의 세션 PTY·잡 트리는 함께 죽는다
+  // (hydrateWorkspaces가 정리한다). 라벨의 "디스크는 그대로"가 그 사실을 가리므로, 살아 있는
+  // 세션이 있으면 종료 확인창과 같은 확인을 먼저 받는다 (B43).
+  const liveOf = (id: string) => backend.listSessions().filter((s) => s.workspaceId === id && s.status !== "dead");
+  const [unregTarget, setUnregTarget] = createSignal<string | undefined>(undefined);
+
+  const askUnregister = (id: string) => {
+    if (liveOf(id).length > 0) setUnregTarget(id);
+    else void unregister(id);
+  };
+
   const unregister = async (id: string) => {
+    setUnregTarget(undefined);
     if (isTauri()) {
       await unregisterWorkspace(id).catch(() => {});
       await refreshWorkspaces();
@@ -224,10 +236,10 @@ export function WorkspaceConnection() {
                 <button
                   class="btn ghost"
                   style={{ "margin-top": "8px", width: "100%", "justify-content": "center" }}
-                  title={t("레지스트리에서만 제거 — 디스크의 저장소는 그대로 (FR-E-09)")}
-                  onClick={() => void unregister(ws().id)}
+                  title={t("레지스트리에서만 제거 — 디스크의 저장소는 그대로 · 실행 중 세션은 종료됩니다 (FR-E-09)")}
+                  onClick={() => askUnregister(ws().id)}
                 >
-                  {t("등록 해제 (디스크는 그대로)")}
+                  {t("등록 해제 (디스크는 그대로 · 세션 종료)")}
                 </button>
               </>
             )}
@@ -252,6 +264,34 @@ export function WorkspaceConnection() {
               </button>
               <button class="btn primary" onClick={() => void confirmInit()}>
                 {t("git init 후 등록")}
+              </button>
+            </div>
+          </div>
+        </div>
+      </Show>
+
+      {/* 등록 해제 확인 (B43) — 실행 중 세션이 있을 때만 뜬다 */}
+      <Show when={unregTarget()}>
+        <div class="overlay" onClick={() => setUnregTarget(undefined)}>
+          <div class="dialog" style={{ width: "440px", padding: "16px 18px" }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ "font-weight": 800, "font-size": "14px" }}>{t("등록을 해제할까요?")}</div>
+            <div class="mono muted" style={{ "font-size": "11px", margin: "6px 0 10px" }}>
+              {workspaces().find((w) => w.id === unregTarget())?.path}
+            </div>
+            <div class="card inset" style={{ padding: "8px 10px", "font-size": "11px", "line-height": 1.6 }}>
+              {tf("실행 중인 세션 {n}개가 지금 종료됩니다 — 재등록해도 돌아오지 않습니다.", {
+                n: String(liveOf(unregTarget()!).length),
+              })}
+              <div class="muted" style={{ "margin-top": "4px" }}>
+                {t("디스크의 저장소와 .eqmux 파일은 그대로 남습니다.")}
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: "8px", "justify-content": "flex-end", "margin-top": "14px" }}>
+              <button class="btn" onClick={() => setUnregTarget(undefined)}>
+                {t("취소")}
+              </button>
+              <button class="btn danger" onClick={() => void unregister(unregTarget()!)}>
+                {t("세션 종료 후 등록 해제")}
               </button>
             </div>
           </div>

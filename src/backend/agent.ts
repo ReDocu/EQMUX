@@ -9,7 +9,7 @@ import { saveRoleFile } from "./roles";
 import { settings } from "./settings";
 import { beepWaiting } from "./sound";
 import type { AgentStatus, Permissions } from "../types";
-import { translatePermissions } from "../types";
+import { flagsToString, translatePermissions } from "../types";
 
 export interface AgentStateEvt {
   session: string;
@@ -99,7 +99,7 @@ export async function spawnAgent(
   await ensureAgentListeners();
   await saveRoleFile(sessionId);
   const f = translatePermissions(permissions);
-  return invoke<string>("agent_spawn", {
+  const uuid = await invoke<string>("agent_spawn", {
     id: sessionId,
     workspace: wsId,
     cwd,
@@ -109,6 +109,10 @@ export async function spawnAgent(
     cols,
     rows,
   });
+  // 실제로 넘긴 플래그를 그대로 기억한다 (B39) — 권한 파일이 나중에 바뀌어도 돌고 있는
+  // 프로세스의 플래그는 이 값이다. 다시 계산하면 '실제'가 아니라 '현재 설정'이 된다.
+  backend.noteSpawnFlags(sessionId, flagsToString(f, uuid));
+  return uuid;
 }
 
 /** 재개 (FR-D-21~23) — 사용자 트리거 전용. 앱 재시작 후엔 스토어 매핑으로 복원된다. */
@@ -123,7 +127,7 @@ export async function resumeAgent(
 ): Promise<string> {
   await saveRoleFile(sessionId); // 복원 세션도 최신 편성으로 합성한 뒤 재개한다
   const f = translatePermissions(permissions);
-  return invoke<string>("agent_resume", {
+  const uuid = await invoke<string>("agent_resume", {
     id: sessionId,
     workspace: wsId,
     cwd,
@@ -133,6 +137,8 @@ export async function resumeAgent(
     cols,
     rows,
   });
+  backend.noteSpawnFlags(sessionId, flagsToString(f, uuid));
+  return uuid;
 }
 
 /** 권한 변경 재시작 (E11′ · FR-D-26) — 재개 기반, 대화 유지 */
@@ -144,11 +150,13 @@ export async function restartAgent(
 ): Promise<string> {
   await saveRoleFile(sessionId); // 바뀐 permissions가 frontmatter에 실려야 한다 (FR-E-46)
   const f = translatePermissions(permissions);
-  return invoke<string>("agent_restart", {
+  const uuid = await invoke<string>("agent_restart", {
     id: sessionId,
     permissionMode: f.permissionMode,
     disallowedTools: f.disallowedTools,
     cols,
     rows,
   });
+  backend.noteSpawnFlags(sessionId, flagsToString(f, uuid));
+  return uuid;
 }

@@ -137,9 +137,20 @@ export function echoPty(id: string, data: string): void {
   outputSubs.get(id)?.forEach((cb) => cb(data));
 }
 
+/** 터미널 인스턴스 폐기 훅 — TerminalPane이 등록한다 (pty ← TerminalPane 순환 import 회피).
+ *  화면 레이어를 모르는 mock이 제거 경로에서 이걸 부를 수 있게 하는 유일한 목적이다 (B44) */
+let disposeTerm: ((id: string) => void) | undefined;
+export function setTerminalDisposer(fn: (id: string) => void): void {
+  disposeTerm = fn;
+}
+
 /** 세션 영구 제거 시 백엔드 잔류 상태 정리 (P-9) — 추적 맵·알림 게이트·IPC 토큰.
- *  killPty(중지)와 별개다 — 제거 경로에서만 부른다. */
+ *  killPty(중지)와 별개다 — 제거 경로에서만 부른다.
+ *  터미널 인스턴스도 여기서 함께 폐기한다 (B44) — 남겨 두면 같은 세션 id로 슬롯이 다시 생겨도
+ *  REGISTRY 항목의 initialized가 참이라 spawnPty가 영영 안 돌고, 죽은 세션의 마지막 화면이
+ *  '실행 중'인 척 그대로 재부착된다. 세션 id는 `페르소나@워크스페이스` 결정적 관례라 반드시 충돌한다. */
 export function forgetAgent(id: string): void {
+  disposeTerm?.(id); // 브라우저 목에서도 화면 인스턴스는 폐기해야 한다 — isTauri 가드 앞에 둔다
   if (!isTauri()) return;
   void invoke("agent_forget", { id }).catch(() => {});
 }

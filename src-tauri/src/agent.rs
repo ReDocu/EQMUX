@@ -138,6 +138,9 @@ struct RegistryRecord {
     pid: Option<u32>,
     #[serde(default)]
     cwd: Option<String>,
+    /// "interactive" = 사람이 쓰는 대화창, "bg" = 부모가 띄운 배경/서브에이전트 (B38)
+    #[serde(default)]
+    kind: Option<String>,
 }
 
 fn home() -> PathBuf {
@@ -760,10 +763,23 @@ fn scan(app: &AppHandle) {
     // 멈춘다 — 도착은 하는데 상대의 턴이 돌지 않는 그 증상이 정확히 이 자리에서 생긴다.
     let mut adopted: Vec<AgentStateEvt> = Vec::new();
     if !job_pids.is_empty() {
+        // 원점 폴백은 잠금을 잡기 전에 스냅숏으로 뜬다 — by_uuid를 쥔 채 crate::session_origin을
+        // 부르면 그 안의 find_tracked가 같은 뮤텍스를 다시 잠근다. std Mutex는 재진입이 안 되므로
+        // 그 스레드는 잠금을 쥔 채 영구 정지하고, by_uuid를 만지는 모든 경로(훅·비용·dead 전이·
+        // 기동/재개·스냅숏)가 함께 멎는다 (B37).
+        let origins: HashMap<String, (String, String)> =
+            rt.session_origin.lock().map(|m| m.clone()).unwrap_or_default();
         if let Ok(mut map) = rt.by_uuid.lock() {
             for (uuid, (rec, _)) in found.iter() {
                 if map.contains_key(uuid) {
                     continue; // 이미 추적 중 (관리 기동이거나 앞선 스캔이 채택했다)
+                }
+                // 사람이 쓰는 대화창만 채택한다 — 에이전트가 띄운 서브에이전트·배경 claude도
+                // 페인 잡의 자식이라 pid로는 걸리지만, 그것을 채택하면 페인의 재개 앵커가
+                // 배경 세션 uuid로 덮여 '대화 열람·재개'가 남의 대화로 간다 (B38).
+                // kind가 없는 옛 버전 레코드는 종전대로 후보로 둔다.
+                if rec.kind.as_deref().is_some_and(|k| k != "interactive") {
+                    continue;
                 }
                 let Some(pid) = rec.pid else { continue };
                 let Some((app_session, gen)) = pane_for_pid(&job_pids, pid) else {
@@ -774,12 +790,18 @@ fn scan(app: &AppHandle) {
                 map.retain(|u, t| {
                     t.app_session != app_session || t.last_status == "starting" || found.contains_key(u)
                 });
-                let (ws, cwd) = crate::session_origin(app, &app_session).unwrap_or_else(|| {
-                    (
-                        app_session.split('@').nth(1).unwrap_or("default").to_string(),
-                        rec.cwd.clone().unwrap_or_default(),
-                    )
-                });
+                // session_origin과 같은 우선순위(추적 맵 → 원점 → 폴백)를 잠금 재진입 없이 편다.
+                let (ws, cwd) = map
+                    .values()
+                    .find(|t| t.app_session == app_session)
+                    .map(|t| (t.ws.clone(), t.cwd.clone()))
+                    .or_else(|| origins.get(&app_session).cloned())
+                    .unwrap_or_else(|| {
+                        (
+                            app_session.split('@').nth(1).unwrap_or("default").to_string(),
+                            rec.cwd.clone().unwrap_or_default(),
+                        )
+                    });
                 let status = rec.status.clone().unwrap_or_else(|| "idle".into());
                 let seq = next_seq();
                 let waiting = rec.waiting_for.as_deref().map(registry_waiting_for);

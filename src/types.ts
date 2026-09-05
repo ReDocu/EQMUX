@@ -105,9 +105,15 @@ export interface Session {
    *  없으면 직무 기본값. team.json에 영속되고 역할 파일 frontmatter에 반영된다 */
   permOverride?: Permissions;
   restartNeeded: boolean; // 권한 변경 감지 (E11′)
+  /** 스폰·재개·재시작 때 실제로 넘긴 실행 플래그 (B39) — 권한 파일이 나중에 바뀌어도
+   *  돌고 있는 프로세스의 플래그는 이 값이다. 이 앱이 띄우지 않았으면 undefined */
+  spawnFlags?: string;
   restored?: boolean; // team.json에서 복원됨 — 에이전트 자동 실행 없음, 재개 칩만 (S3)
   revived?: boolean; // 웹뷰 재시작 복구 (FR-C-06) — PTY가 살아 있어 재부착만 한다 (restored와 배타)
   worktree?: boolean; // 세션 격리 (FR-E-62 · E1′ 옵트인) — cwd가 .eqmux/worktrees/<세션>이다
+  /** 격리 슬롯인데 이 머신에 워크트리 디렉터리가 없다 (다른 머신에서 clone 등) — cwd는 repo
+   *  루트 폴백이다. 표시 전용: worktree 플래그(team.json 원본)를 이걸로 지우지 않는다 (B40) */
+  worktreeMissing?: boolean;
   unseen?: boolean; // 미확인 (FR-G-44·45) — waiting·dead 진입 2종에만 마킹, 열람 시 해제
   sinceMs: number; // 현재 status 진입 이후 경과
   scrollbackLines: number;

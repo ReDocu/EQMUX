@@ -182,6 +182,31 @@ pub fn worktree_dir(ws_path: &str, session: &str) -> PathBuf {
         .join(path_component(session))
 }
 
+/// 분기 기준 ref → 확정 커밋 해시 (B42). branch_list가 원격 접두를 떼고 주므로("origin/x" → "x")
+/// 그대로는 rev-parse에 안 걸린다 — 그때만 refs/remotes/*/<이름>에서 찾고, 여러 원격에 같은
+/// 이름이 있으면 모호하므로 고르지 않는다.
+fn resolve_start_point(ws_path: &str, base: &str) -> Result<String, String> {
+    let spec = format!("{base}^{{commit}}");
+    if let Ok(o) = git(&["rev-parse", "--verify", "--quiet", "--end-of-options", &spec], ws_path) {
+        let h = o.trim().to_string();
+        if !h.is_empty() {
+            return Ok(h);
+        }
+    }
+    // 패턴은 항상 "refs/"로 시작하므로 '-' 시작 ref 이름이 옵션으로 오인될 여지가 없다
+    let out = git(
+        &["for-each-ref", "--format=%(objectname)", &format!("refs/remotes/*/{base}")],
+        ws_path,
+    )
+    .unwrap_or_default();
+    let mut hits = out.split_whitespace();
+    match (hits.next(), hits.next()) {
+        (Some(h), None) => Ok(h.to_string()),
+        (Some(_), Some(_)) => Err(format!("분기 기준이 여러 원격에 있습니다 — {base} (원격을 붙여 고르세요)")),
+        _ => Err(format!("분기 기준을 찾을 수 없습니다 — {base}")),
+    }
+}
+
 /// 워크트리 생성 공통 — `.eqmux/worktrees/<이름>` + 브랜치 `eqmux/<이름>`. 멱등: 이미 연결돼
 /// 있으면 그대로 반환. base가 있으면 그 ref(브랜치·커밋·원격)에서 분기한다 (M36 — orca식
 /// start-from). 삭제·정리는 하지 않는다 (FR-E-64 정책 — 커밋 안 된 작업은 사람이 정리한다).
@@ -201,12 +226,18 @@ pub fn worktree_create(ws_path: &str, name: &str, base: Option<&str>) -> Result<
             .collect::<String>()
     );
     // 새 브랜치로 시도(+base ref) → 브랜치가 이미 있으면(이전 흔적) 그 브랜치를 다시 연결.
-    // base는 UI가 for-each-ref로 읽은 ref라 '--foo' 같은 크래프트된 ref 이름이 흘러들 수 있어
-    // --end-of-options로 옵션 오인을 막는다 (p·branch는 앱 생성값이라 안전)
+    // base는 확정 커밋으로 먼저 푼다 — 로컬에 없고 원격에만 있는 이름을 그대로 넘기면 git의
+    // DWIM이 `-b eqmux/<이름>`을 이기고 그 이름의 원격 추적 브랜치를 공유 repo에 만들어 버린다.
+    // 오류 하나 없이 다른 브랜치가 생기므로 폴백도 돌지 않는다 (B42).
+    // 해시는 앱이 만든 값이지만 --end-of-options는 그대로 둔다 (p·branch는 앱 생성값이라 안전)
+    let resolved = match base.filter(|b| !b.trim().is_empty()) {
+        Some(b) => Some(resolve_start_point(ws_path, b.trim())?),
+        None => None,
+    };
     let mut add_new: Vec<&str> = vec!["worktree", "add", &p, "-b", &branch];
-    if let Some(b) = base.filter(|b| !b.trim().is_empty()) {
+    if let Some(h) = resolved.as_deref() {
         add_new.push("--end-of-options");
-        add_new.push(b);
+        add_new.push(h);
     }
     if let Err(first) = git(&add_new, ws_path) {
         git(&["worktree", "add", &p, &branch], ws_path)
@@ -528,6 +559,47 @@ mod tests {
         let again = worktree_ensure(&path, "kai@ws1").unwrap();
         assert!(Path::new(&again).join("a.txt").exists());
         fs::remove_dir_all(&dir).ok();
+    }
+
+    /// B42 회귀 — 분기 기준이 '로컬에 없고 원격에만 있는 이름'일 때. 그대로 넘기면 git DWIM이
+    /// `-b eqmux/<이름>`을 이기고 공유 repo에 그 이름의 추적 브랜치를 만든다(오류 없이).
+    /// 확정 커밋으로 풀어 넘기므로 내가 지은 브랜치가 항상 이긴다.
+    #[test]
+    fn worktree_create_pins_remote_only_base_to_a_commit() {
+        let root = std::env::temp_dir().join(format!("eqmux-wtb-{}", now_ms()));
+        let up = root.join("up");
+        let dn = root.join("dn");
+        fs::create_dir_all(&up).unwrap();
+        let ups = up.to_string_lossy().into_owned();
+        git(&["init"], &ups).unwrap();
+        git(&["config", "user.email", "t@t"], &ups).unwrap();
+        git(&["config", "user.name", "t"], &ups).unwrap();
+        fs::write(up.join("a.txt"), "1").unwrap();
+        git(&["add", "."], &ups).unwrap();
+        git(&["commit", "-m", "first"], &ups).unwrap();
+        git(&["branch", "feature-x"], &ups).unwrap();
+
+        git(&["clone", &ups, &dn.to_string_lossy()], &root.to_string_lossy()).unwrap();
+        let path = dn.to_string_lossy().into_owned();
+        git(&["config", "user.email", "t@t"], &path).unwrap();
+        git(&["config", "user.name", "t"], &path).unwrap();
+        // clone 직후: feature-x는 origin에만 있다 (branch_list가 접두를 떼고 주는 그 이름)
+        assert!(git(&["rev-parse", "--verify", "refs/heads/feature-x"], &path).is_err());
+
+        let wt = worktree_create(&path, "api-fix", Some("feature-x")).unwrap();
+        let head = git(&["rev-parse", "--abbrev-ref", "HEAD"], &wt).unwrap();
+        assert_eq!(head, "eqmux/api-fix", "폼이 약속한 브랜치가 만들어져야 한다");
+        // 공유 repo에 원격 추적 로컬 브랜치가 새로 생기지 않았다
+        assert!(
+            git(&["rev-parse", "--verify", "refs/heads/feature-x"], &path).is_err(),
+            "base 이름의 로컬 브랜치가 생겼다 — DWIM이 -b를 이겼다"
+        );
+        // 그래도 분기점은 그 원격 브랜치다
+        let base = git(&["rev-parse", "refs/remotes/origin/feature-x"], &path).unwrap();
+        assert_eq!(git(&["rev-parse", "HEAD"], &wt).unwrap(), base);
+        // 없는 ref는 조용히 HEAD로 새지 않고 오류가 된다
+        assert!(worktree_create(&path, "nope", Some("no-such-ref")).is_err());
+        fs::remove_dir_all(&root).ok();
     }
 
     /// 레일 §워크트리 — 기존 브랜치 연결: 새 브랜치 없이 그 브랜치를 체크아웃, 멱등.

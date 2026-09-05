@@ -44,7 +44,7 @@ export async function savePersonaFile(p: Persona): Promise<string | null> {
   } catch (e) {
     await refreshLibrary(); // 파일이 이긴다 (FR-E-74) — 밖의 변경으로 화면을 따라잡는다
     return String(e).includes("CONFLICT")
-      ? t("파일이 밖에서 바뀌었습니다 — 목록을 새로고침했으니 확인 후 다시 저장하세요")
+      ? t("파일이 밖에서 바뀌었습니다 — 밖의 내용으로 목록을 새로고침했습니다. 항목을 다시 선택해 확인한 뒤 저장하세요")
       : t("저장 실패 — 로그 패널을 확인하세요");
   }
   await refreshLibrary();
@@ -126,7 +126,7 @@ export async function saveJobFile(j: Job): Promise<string | null> {
   } catch (e) {
     await refreshLibrary();
     return String(e).includes("CONFLICT")
-      ? t("파일이 밖에서 바뀌었습니다 — 목록을 새로고침했으니 확인 후 다시 저장하세요")
+      ? t("파일이 밖에서 바뀌었습니다 — 밖의 내용으로 목록을 새로고침했습니다. 항목을 다시 선택해 확인한 뒤 저장하세요")
       : t("저장 실패 — 로그 패널을 확인하세요");
   }
   await refreshLibrary();

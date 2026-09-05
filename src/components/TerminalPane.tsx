@@ -28,6 +28,7 @@ import {
   resizePty,
   revealPath,
   scrollbackTail,
+  setTerminalDisposer,
   spawnPty,
   writePty,
 } from "../backend/pty";
@@ -225,6 +226,9 @@ export function disposeSessionTerminal(id: string) {
     REGISTRY.delete(id);
   }
 }
+// 제거 경로는 여러 곳(캐스팅 적용·워크스페이스 등록 해제·수동 제거)이지만 전부 forgetAgent를
+// 지난다 — 폐기를 그 한 자리에 걸어 호출부마다 빠뜨릴 여지를 없앤다 (B44)
+setTerminalDisposer(disposeSessionTerminal);
 
 // ── 클립보드 — 네이티브(arboard) 경로. WebView2의 웹 Clipboard API는 권한 문제로 조용히 실패한다 ──
 
