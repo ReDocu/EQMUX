@@ -128,6 +128,9 @@ export interface Session {
    *  관측 전용: 사용자가 터미널에 직접 띄운 것을 이름만 식별한다. 미검출이면 undefined */
   agent?: string;
   lastOutput: string;
+  /** 마지막 한 줄 요약 (M35) — Stop 훅이 트랜스크립트에서 뽑아 SQLite에 남긴다.
+   *  앱을 껐다 켜도 남는 유일한 "무엇을 하고 있었는가" — 라이브 필드(activity)와 다르다 */
+  lastRecap?: string;
 }
 
 /** agent-state 이벤트·스냅숏의 반영 페이로드 (PRD D §7.1) — 인터페이스·구현·수신부가 공유한다 */

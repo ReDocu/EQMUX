@@ -21,6 +21,8 @@ pub enum StoreMsg {
     /// 세션 id는 슬롯·페르소나에서 결정적으로 만들어져 재사용되기 때문에(shell2@ws · persona@ws),
     /// 남겨 두면 다음에 같은 자리에 생긴 다른 세션이 이 대화를 자기 것으로 물려받는다.
     ForgetAgentSession { ws: String, id: String },
+    /// 마지막 한 줄 요약 (M35) — Stop 훅이 트랜스크립트에서 뽑아 보낸다. 세션당 덮어쓴다
+    Recap { ws: String, id: String, text: String },
     /// 종료 flush (FR-C-62②) — 대기 배치를 즉시 커밋하고 ack를 보낸다
     Flush(Sender<()>),
 }
@@ -128,6 +130,10 @@ pub(crate) fn open_db(root: &Path, ws: &str) -> rusqlite::Result<Connection> {
     conn.execute_batch(SCHEMA)?;
     // SGR 보존 컬럼 (FR-C-15, M32) — 기존 DB 마이그레이션. 이미 있으면 조용히 실패한다
     let _ = conn.execute("ALTER TABLE scrollback ADD COLUMN styled TEXT", []);
+    // 마지막 한 줄 요약 (M35) — 앱을 껐다 켜도 그 페인이 무엇을 하고 있었는지 남긴다.
+    // 세션당 한 행이라 event 테이블처럼 턴마다 자라지 않는다
+    let _ = conn.execute("ALTER TABLE session ADD COLUMN last_recap TEXT", []);
+    let _ = conn.execute("ALTER TABLE session ADD COLUMN last_recap_at INTEGER", []);
     // FTS5 인덱스 (FR-C-16) — 번들 SQLite에 FTS5가 없으면 조용히 넘어가고 검색은 LIKE 폴백
     let _ = conn.execute_batch(
         "CREATE VIRTUAL TABLE IF NOT EXISTS scrollback_fts USING fts5(text, session_id UNINDEXED, seq UNINDEXED, ts UNINDEXED)",
@@ -249,7 +255,8 @@ fn ws_of(msg: &StoreMsg) -> &str {
         | StoreMsg::Line { ws, .. }
         | StoreMsg::Event { ws, .. }
         | StoreMsg::AgentSession { ws, .. }
-        | StoreMsg::ForgetAgentSession { ws, .. } => ws,
+        | StoreMsg::ForgetAgentSession { ws, .. }
+        | StoreMsg::Recap { ws, .. } => ws,
         StoreMsg::Flush(_) => "default", // 도달 불가 — run 루프가 pending에 넣지 않는다
     }
 }
@@ -301,6 +308,14 @@ fn flush(
                     let _ = tx.execute(
                         "INSERT INTO event (ts, session_id, kind, payload) VALUES (?1, ?2, 'session-start', ?3)",
                         params![now, id, cwd],
+                    );
+                }
+                StoreMsg::Recap { id, text, .. } => {
+                    // 세션 행이 아직 없으면(스폰 직후 훅이 먼저 온 경우) 조용히 넘어간다 —
+                    // 다음 턴의 Stop이 다시 보내므로 한 번 놓치는 것으로 끝난다
+                    let _ = tx.execute(
+                        "UPDATE session SET last_recap = ?2, last_recap_at = ?3 WHERE id = ?1",
+                        params![id, text, now],
                     );
                 }
                 StoreMsg::SessionExit { id, code, .. } => {
@@ -548,6 +563,31 @@ pub fn purge_scrollback(root: &Path, ws: &str) -> Result<i64, String> {
     Ok(removed)
 }
 
+/// 세션별 마지막 한 줄 요약 (M35) — 앱을 껐다 켠 뒤 페인이 무엇을 하고 있었는지 되살린다.
+/// 라이브 경로(agent-state)는 에이전트가 돌고 있을 때만 있으므로, 찬 시작에서는 여기가 유일한 출처다.
+pub fn recaps(root: &Path, ws: &str) -> Vec<(String, String, i64)> {
+    let path = db_path(root, ws);
+    if !path.exists() {
+        return Vec::new();
+    }
+    let Ok(conn) = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+    else {
+        return Vec::new();
+    };
+    let _ = conn.busy_timeout(Duration::from_secs(2));
+    // 구 DB에는 컬럼이 없다 — 마이그레이션 전이면 조용히 빈 목록 (기능만 안 보이고 앱은 돈다)
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT id, last_recap, last_recap_at FROM session
+         WHERE last_recap IS NOT NULL AND last_recap <> ''",
+    ) else {
+        return Vec::new();
+    };
+    let rows = stmt.query_map([], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2).unwrap_or(0)))
+    });
+    rows.map(|it| it.flatten().collect()).unwrap_or_default()
+}
+
 /// TUI 리페인트 잔해 판정 — 상자 그리기 문자가 절반 이상인 줄은 스필하지 않는다.
 /// Claude Code처럼 인라인 박스를 다시 그리는 TUI의 프레임 조각이 스크롤백을 오염시키는 것을 막는다.
 pub fn is_tui_noise(line: &str) -> bool {
@@ -752,6 +792,62 @@ mod tests {
         c.push("\u{1b}[31mabc\u{8}\n", |t, s| out3.push((t, s)));
         assert_eq!(out3[0].0, "ab");
         assert_eq!(out3[0].1.as_deref(), Some("\u{1b}[31mab\u{1b}[0m"));
+    }
+
+    /// 한 줄 요약 저장 왕복 (M35) — 이 기능의 목적이 "앱을 껐다 켜도 남는 것"이므로
+    /// 여기가 깨지면 기능 전체가 무의미하다. 구 DB 마이그레이션(ALTER TABLE)도 함께 본다.
+    #[test]
+    fn recap_survives_reopen_and_migrates_old_db() {
+        let dir = std::env::temp_dir().join(format!("eqmux-recap-{}", crate::workspace::now_ms()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // 0.3.8까지의 DB 모양 — last_recap 컬럼이 없는 session 테이블
+        {
+            let path = db_path(&dir, "ws");
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE session (id TEXT PRIMARY KEY, workspace TEXT NOT NULL, name TEXT,
+                 cwd TEXT, shell TEXT, created_at INTEGER, last_output_at INTEGER,
+                 bytes_received INTEGER NOT NULL DEFAULT 0, exit_code INTEGER)",
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO session (id, workspace) VALUES ('kai@ws', 'ws')",
+                [],
+            )
+            .unwrap();
+        }
+        // 컬럼이 없는 DB에서도 읽기는 터지지 않고 빈 목록이어야 한다 (기능만 안 보이고 앱은 돈다)
+        assert!(recaps(&dir, "ws").is_empty());
+
+        // open_db가 마이그레이션한다 — 기존 행은 살아 있어야 한다
+        {
+            let conn = open_db(&dir, "ws").unwrap();
+            let kept: i64 = conn
+                .query_row("SELECT COUNT(*) FROM session WHERE id = 'kai@ws'", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(kept, 1, "마이그레이션이 기존 세션 행을 지우면 안 된다");
+            conn.execute(
+                "UPDATE session SET last_recap = ?2, last_recap_at = ?3 WHERE id = ?1",
+                params!["kai@ws", "PRD 7절을 갱신하고 커밋 5개로 정리했다.", 1_700i64],
+            )
+            .unwrap();
+            // 요약이 없는 세션은 목록에 끼지 않는다 — 빈 칸을 헤더에 올리지 않기 위해서다
+            conn.execute("INSERT INTO session (id, workspace) VALUES ('shell1@ws', 'ws')", [])
+                .unwrap();
+        }
+
+        // 앱을 껐다 켠 자리 — 새 연결로 읽는다
+        let rows = recaps(&dir, "ws");
+        assert_eq!(rows.len(), 1, "요약이 있는 세션만: {rows:?}");
+        assert_eq!(rows[0].0, "kai@ws");
+        assert_eq!(rows[0].1, "PRD 7절을 갱신하고 커밋 5개로 정리했다.");
+        assert_eq!(rows[0].2, 1_700);
+
+        // 없는 워크스페이스는 빈 목록 (오류가 아니다 — 첫 실행에 DB가 없는 것이 정상이다)
+        assert!(recaps(&dir, "없는워크스페이스").is_empty());
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

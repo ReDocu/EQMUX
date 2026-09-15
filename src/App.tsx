@@ -9,6 +9,7 @@ import { startMemorySampling } from "./backend/memory";
 import { diagSnapshot, startDiagnostics } from "./backend/diag";
 import { startBrowserRequests } from "./backend/browser";
 import { startPortWatch } from "./backend/ports";
+import { startRecapUpdates } from "./backend/recap";
 import { ensurePtyListeners, isTauri, setPtyExitHook } from "./backend/pty";
 import { crashRecovery } from "./backend/recovery";
 import type { CrashReport } from "./backend/recovery";
@@ -92,6 +93,8 @@ export function App() {
   onMount(() => startFileWatch());
   // eqmux browser open (PRD I) — 에이전트가 보낸 열기 요청을 패널로 넘긴다
   onMount(() => startBrowserRequests());
+  // 마지막 한 줄 요약 (M35) — 턴이 끝날 때마다 갱신, 복원은 workspaces.ts가 한다
+  onMount(() => startRecapUpdates());
   // 세션 포트 감시 (M31) — 패널을 닫아 둔 동안 열린 포트도 잡아 둔다. 패널이 켜질 때 주기가 빨라진다
   onMount(() => startPortWatch());
 

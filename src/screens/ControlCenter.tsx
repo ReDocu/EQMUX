@@ -642,7 +642,14 @@ export function ControlCenter(props: { workspace: Workspace }) {
             >
               {/* 시안 §04·§06 — SLOT 라벨·✕ 제거, 헤더는 이름·상태만. 제거는 페인 우클릭 메뉴 */}
               <span>{sessionDisplayName(s, personaName(s.personaId))}</span>
-              <span style={{ display: "inline-flex", "align-items": "center", gap: "8px" }}>
+              <span style={{ display: "inline-flex", "align-items": "center", gap: "8px", "min-width": 0 }}>
+                {/* 마지막 한 줄 요약 (M35) — 앱을 껐다 켜도 남는다. 상태·배지가 우선이라
+                    남는 폭만 쓰고 말줄임한다. 전문은 title에 (헤더는 한 줄이어야 한다) */}
+                <Show when={s.lastRecap}>
+                  <span class="mono muted pane-recap" title={s.lastRecap}>
+                    {s.lastRecap}
+                  </span>
+                </Show>
                 {/* 승인 대기 문맥 (U5) — 도착 즉시 어떤 도구 요청인지 헤더에서 보인다.
                     클릭은 Focus다: 답은 이 페인 안에서만 칠 수 있으므로 한 번에 잡아 준다 */}
                 <Show when={s.status === "waiting" && s.waitingFor}>

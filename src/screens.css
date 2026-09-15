@@ -591,6 +591,23 @@
   font-size: 11px;
   color: var(--eq-green);
 }
+/* 마지막 한 줄 요약 (M35) — 페인 헤더 오른쪽. 헤더는 한 줄이어야 하므로 남는 폭만
+   쓰고 말줄임한다(전문은 title). 좁은 페인에서는 상태 배지가 이겨야 해서 shrink를 열어 둔다 */
+.pane-recap {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 46ch;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 10px;
+  opacity: 0.75;
+}
+/* 페인이 좁으면 이름·상태가 먼저다 — 요약은 조용히 빠진다 */
+@media (max-width: 900px) {
+  .pane-recap { display: none; }
+}
+
 .terminal-body {
   padding: 12px;
   font-size: 12px;

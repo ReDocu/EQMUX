@@ -581,7 +581,103 @@ fn apply_effect(
 
 /// 훅 2차 소스 — 레지스트리 스캔(1차)과 같은 diff 경로로 emit_state 한 곳에 합류한다.
 /// 레지스트리보다 빠르게 도착하므로 waiting 알림·인박스 전달의 지연이 줄어든다.
+// ── 마지막 한 줄 요약 (M35) ────────────────────────────────────────────────
+// "이 페인이 마지막에 무엇을 했는가"를 한 문장으로 남긴다. 앱을 껐다 켜도 남아야 하므로
+// 화면 상태가 아니라 SQLite(session.last_recap)가 원본이다.
+//
+// 출처를 트랜스크립트로 고른 이유: 목적에 더 맞아 보이는 두 채널이 실제로는 비어 있다.
+// `eqmux report`는 모델이 부르지 않으면 안 오고(실측 0건), command 테이블은 선언만 돼 있다.
+// 트랜스크립트는 Claude Code가 스스로 쓰므로 관례도 모델의 협조도 필요 없다.
+
+/// 한 줄 요약의 표시 상한 — 페인 헤더 한 칸에 들어가야 한다. 넘으면 프런트가 말줄임한다
+const RECAP_MAX: usize = 160;
+
+/// 에이전트 턴 본문 → 한 문장. `recap:` 줄을 쓰는 세션이 있어 그것을 먼저 본다
+/// (사용자 관례이지 EQMUX 계약이 아니다 — 없으면 첫 문단 첫 줄로 내려간다).
+fn recap_line(text: &str) -> Option<String> {
+    let pick = text
+        .lines()
+        .map(str::trim)
+        .find(|l| {
+            let low = l.to_lowercase();
+            low.contains("recap:") && l.chars().count() > "recap:".len() + 4
+        })
+        .or_else(|| {
+            // 첫 산문 줄 — 목록·인용·제목·표는 문장이 아니고, 코드 블록은 여는 줄만이 아니라
+            // 안쪽 전부를 건너뛴다 (울타리 시작만 걸러내면 `cargo test` 같은 명령이 뽑힌다)
+            let mut fenced = false;
+            text.lines().map(str::trim).find(|l| {
+                if l.starts_with("```") {
+                    fenced = !fenced;
+                    return false;
+                }
+                // 짧은데 콜론으로 끝나면 라벨이지 문장이 아니다 ("recap:", "요약:" 같은 머리줄)
+                let label = l.ends_with(':') && l.chars().count() < 20;
+                !fenced && !l.is_empty() && !label && !l.starts_with(['-', '*', '>', '#', '|'])
+            })
+        })?;
+    // 앞의 장식(※ · 등)을 걷고, 헤더 한 줄에서 의미가 없는 마크다운 강조만 지운다.
+    // 링크·목록 같은 구조는 건드리지 않는다 — 문장을 고쳐 쓰는 것이 아니라 표시만 다듬는다
+    let cleaned = pick
+        .trim_start_matches(['※', '·', '-', '*', ' '])
+        .replace("**", "")
+        .replace('`', "");
+    let cleaned = cleaned.trim();
+    if cleaned.is_empty() {
+        return None;
+    }
+    Some(match cleaned.char_indices().nth(RECAP_MAX) {
+        Some((i, _)) => format!("{}…", &cleaned[..i]),
+        None => cleaned.to_string(),
+    })
+}
+
+/// 트랜스크립트 꼬리에서 마지막 에이전트 턴의 한 줄. 읽기는 transcript::read가 이미
+/// 하는 일이다 (2MB 꼬리 창 + 깨진 줄 건너뛰기) — 두 번째 파서를 두지 않는다.
+fn recap_from_transcript(cwd: &str, uuid: &str) -> Option<String> {
+    let data = crate::transcript::read(&transcript_path(cwd, uuid), 0).ok()?;
+    data.turns
+        .iter()
+        .rev()
+        .find(|t| t.role == "agent" && !t.text.trim().is_empty())
+        .and_then(|t| recap_line(&t.text))
+}
+
+/// Stop 훅에서 부른다 — 턴이 끝난 그 순간이 "마지막에 한 작업"이 확정되는 자리다.
+/// 실패는 조용하다: 요약이 없다고 상태 기계가 멈출 이유가 없다.
+pub fn record_recap(app: &AppHandle, session: &str) {
+    let rt: tauri::State<AgentRt> = app.state();
+    let Some((cwd, uuid)) = ({
+        let map = match rt.by_uuid.lock() {
+            Ok(m) => m,
+            Err(_) => return,
+        };
+        current_uuid(&map, session)
+            .and_then(|u| map.get(&u).map(|t| (t.cwd.clone(), u)))
+    }) else {
+        return;
+    };
+    let Some(text) = recap_from_transcript(&cwd, &uuid) else { return };
+    let Some((ws, _)) = crate::session_origin(app, session) else { return };
+    let store: tauri::State<crate::StoreState> = app.state();
+    let _ = store.0.sender().send(crate::store::StoreMsg::Recap {
+        ws: ws.clone(),
+        id: session.to_string(),
+        text: text.clone(),
+    });
+    // 화면은 재시작을 기다리지 않는다 — 지금 보고 있는 페인도 바로 바뀐다
+    let _ = app.emit(
+        "session-recap",
+        serde_json::json!({ "workspace": ws, "session": session, "text": text }),
+    );
+}
+
 pub fn apply_hook(app: &AppHandle, session: &str, event: &str, payload: &serde_json::Value) {
+    // 턴이 끝나는 자리 — 여기서만 "마지막에 한 작업"이 확정된다 (M35).
+    // 상태 반영보다 먼저 한다: effect가 Ignore여도 요약은 남아야 한다
+    if event == "Stop" {
+        record_recap(app, session);
+    }
     let effect = hook_effect(event, payload);
     if matches!(effect, HookEffect::Ignore) {
         return;
@@ -1079,7 +1175,7 @@ fn scan(app: &AppHandle) {
 mod tests {
     use super::{
         adopted_alive, apply_effect, apply_registry, current_uuid, hook_effect, keep_on_adopt,
-        read_registry, HookEffect, Tracked,
+        read_registry, recap_line, HookEffect, Tracked, RECAP_MAX,
     };
     use std::collections::HashMap;
 
@@ -1389,6 +1485,41 @@ mod tests {
     }
 
     /// 훅 2차 소스의 효과 분리 (FR-D-15·18) — 상태를 바꾸지 않는 이벤트는 부연만 채운다
+    /// 한 줄 요약 추출 (M35) — 여기가 틀리면 페인 헤더에 목록 기호나 코드 울타리가 뜬다.
+    /// recap: 줄은 사용자 관례라 우선하되, 없는 세션도 반드시 한 문장이 나와야 한다.
+    #[test]
+    fn recap_line_prefers_recap_then_falls_back_to_prose() {
+        // 관례를 쓰는 세션 — 장식(※)을 걷고 그 줄을 쓴다
+        let t = "작업을 마쳤다.\n\n※ recap: PRD 7절을 갱신하고 커밋 5개로 정리했습니다.\n- 다음: 리뷰";
+        assert_eq!(
+            recap_line(t).as_deref(),
+            Some("recap: PRD 7절을 갱신하고 커밋 5개로 정리했습니다.")
+        );
+
+        // 관례가 없으면 첫 산문 줄 — 목록·인용·제목·코드 울타리는 문장이 아니다
+        let t = "```\ncargo test\n```\n- 항목\n> 인용\n# 제목\n브라우저 패널에 CLI 조종을 붙였습니다.";
+        assert_eq!(recap_line(t).as_deref(), Some("브라우저 패널에 CLI 조종을 붙였습니다."));
+
+        // 길면 자른다 — 페인 헤더 한 칸에 들어가야 한다
+        let long = "가".repeat(RECAP_MAX + 40);
+        let cut = recap_line(&long).unwrap();
+        assert_eq!(cut.chars().count(), RECAP_MAX + 1, "상한 + 말줄임 한 글자");
+        assert!(cut.ends_with('…'));
+
+        // 마크다운 강조는 헤더에서 노이즈다 — 실제 트랜스크립트에 흔하다
+        assert_eq!(
+            recap_line("Q30 **권장안이 제 HQ11과 반대**라 `11.1`을 먼저 맞춥니다.").as_deref(),
+            Some("Q30 권장안이 제 HQ11과 반대라 11.1을 먼저 맞춥니다.")
+        );
+
+        // 건질 게 없으면 None — 빈 문장을 헤더에 올리지 않는다
+        assert!(recap_line("").is_none());
+        assert!(recap_line("   \n\n  ").is_none());
+        assert!(recap_line("- 목록만\n* 있다\n").is_none());
+        // 빈 recap: 줄은 관례로 치지 않는다 — 폴백이 받아야 한다
+        assert_eq!(recap_line("recap:\n실제 문장은 여기다.").as_deref(), Some("실제 문장은 여기다."));
+    }
+
     #[test]
     fn hook_effects_fill_activity_and_subagents() {
         let pre = serde_json::json!({ "tool_name": "Bash" });

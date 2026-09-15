@@ -90,6 +90,8 @@ export interface Backend {
   applyAgents(list: { id: string; agent: string }[]): void;
   /** 실물 에이전트 상태 반영 (PRD D agent-state 이벤트) — Tauri에서만 호출된다 */
   applyAgentState(evt: AgentStateApply): void;
+  /** 마지막 한 줄 요약 반영 (M35) */
+  applyRecap(id: string, text: string): void;
   /** PTY 종료 실측 반영 — 셸 우선 모델의 1차 dead 신호. 훅 연동 에이전트는 agent-state가 뒤따른다 (FR-D-50) */
   sessionExited(id: string, code: number | null): void;
   createMission(wsId: string, name: string, goal: string, branch?: string): void;
@@ -971,6 +973,14 @@ export class MockBackend implements Backend {
     if (sess.status === "busy") {
       sess.lastOutput = sess.activity ? `작업 중 · ${sess.activity}` : "작업 중";
     }
+    this.broadcast();
+  }
+
+  /** 한 줄 요약 반영 (M35) — 라이브(session-recap 이벤트)와 복원(session_recaps) 공용 */
+  applyRecap(id: string, text: string) {
+    const sess = SESSIONS.find((x) => x.id === id);
+    if (!sess || sess.lastRecap === text) return;
+    sess.lastRecap = text;
     this.broadcast();
   }
 

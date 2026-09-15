@@ -2036,6 +2036,13 @@ fn settings_save(
 /// 프런트 조작 기록 (B63) — 실행 모드의 이벤트 피드 원천은 event 테이블 하나다 (FR-G-40).
 /// 임무·역할·권한·워크스페이스 조작은 프런트에만 남아 실행 모드 피드에서 통째로 빠져 있었다.
 /// 표시부는 손대지 않는다 — queryEvents가 모르는 kind도 payload를 그대로 보여준다.
+/// 세션별 마지막 한 줄 요약 (M35) — 찬 시작의 유일한 출처.
+/// 에이전트가 돌고 있으면 그 뒤로는 session-recap 이벤트가 화면을 갱신한다.
+#[tauri::command]
+fn session_recaps(store_state: State<StoreState>, workspace: String) -> Vec<(String, String, i64)> {
+    store::recaps(&store_state.0.root(), &workspace)
+}
+
 #[tauri::command]
 fn events_log(
     store_state: State<StoreState>,
@@ -2305,6 +2312,7 @@ pub fn run() {
             team_load,
             team_save,
             events_log,
+            session_recaps,
             worktree_ensure,
             worktree_add,
             worktree_attach,

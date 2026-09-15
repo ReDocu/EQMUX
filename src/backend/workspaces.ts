@@ -4,6 +4,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { refreshConversation } from "./conversation";
 import { restoreUnseen, startUnseenSync } from "./flags";
+import { restoreRecaps } from "./recap";
 import { restoreLayout, startLayoutSync } from "./layout";
 import { loadSettings } from "./settings";
 import { refreshLibrary } from "./library";
@@ -75,6 +76,11 @@ export async function refreshWorkspaces(): Promise<void> {
   await restoreTeams(); // team.json → 슬롯 복원 (에이전트 자동 실행 없음, S3)
   await restoreUnseen(); // 미확인 영속 (G) — 세션이 존재해야 점이 붙는다. 동기화는 복원 뒤 시작
   startUnseenSync();
+  // 마지막 한 줄 요약 (M35) — 미확인과 같은 이유로 슬롯 복원 뒤다. 앱을 껐다 켰을 때
+  // 페인 헤더가 "무엇을 하고 있었는지"를 말하는 것이 이 기능의 전부이므로 여기가 본 경로다
+  await Promise.all(
+    backend.listWorkspaces().filter((w) => !w.pathMissing).map((w) => restoreRecaps(w.id)),
+  );
   // 임무 실측 (FR-E-59) — 슬롯 복원 뒤에 돌아야 배정이 세션 missionId에 얹힌다.
   // 대화 원장(PRD F)도 같은 타이밍에 읽는다 — 목 시드를 걷어내고 실물 스트림으로.
   await Promise.all(
