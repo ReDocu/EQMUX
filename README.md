@@ -43,7 +43,8 @@ EQMUX는 터미널 멀티플렉서(MUX)에 에이전트 팀 관제를 얹은 Win
 - **메시지 버스** — 에이전트 간 강제 타입 메시지(ask / handoff / report / review / escalate), 상태 기반 전달(유휴면 즉시, 작업 중이면 턴 종료 시), 사람도 `@세션`·`@all`로 참여, 대화 원장 전체를 Markdown 파일로 저장
 - **개발 도구 패널** — git(상태·워크트리·체크아웃)·탐색기(파일 CRUD)·포트·로그·diff 뷰어·localhost 브라우저
 - **트랜스크립트 뷰** — Claude Code JSONL 로그를 턴 단위로 열람(참조만), 도구 호출 접기, 스크롤백 폴백
-- **외부 인터페이스** — `eqmux send · report · ping` CLI + 명명 파이프, statusLine 비용 수집
+- **외부 인터페이스** — `eqmux send · report · browser · ping` CLI + 명명 파이프, statusLine 비용 수집
+- **브라우저 조종** — 에이전트가 `eqmux browser open · snapshot · click · type · get-text · eval`로 브라우저 패널을 몬다. 보이지 않는 창이 아니라 **사람이 보고 있는 그 패널**이 움직인다
 - **설정·테마** — 다크/라이트/시스템 테마, 알림 라우팅, 세션 슬롯 수(4·6·8), 재생 줄 수 등 settings.json 실저장
 
 ## 화면 둘러보기
@@ -120,6 +121,7 @@ npm run tauri build   # NSIS 인스톨러 산출 (EQMUX_x64-setup.exe)
 └─ docs/
    ├─ prd/               # 기능 PRD (결정 대장은 00-index.md)
    ├─ implementation-status.md   # PRD 대조 구현 현황
+   ├─ technical-guide.md         # 내부 시스템 기술 가이드 (UML · 시퀀스 · 유지보수 레시피)
    └─ screenshots/       # 화면 캡처
 ```
 

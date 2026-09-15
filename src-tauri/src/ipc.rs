@@ -190,6 +190,18 @@ fn handle(app: &AppHandle, line: &str) -> Result<serde_json::Value, String> {
             crate::agent::apply_hook(app, session, event, &req["payload"]);
             Ok(json!({"ok": true}))
         }
+        "browser" => {
+            // 브라우저 패널 조종 (M17 확장) — 결과 문자열은 페이지가 만든 것이라
+            // 앱 상태에는 쓰지 않고 CLI 응답으로만 흘린다 (browser.rs 머리말 참고)
+            let session = req["session"].as_str().ok_or("NO_SESSION")?;
+            verify_session(app, session, &req)?;
+            let action = req["action"].as_str().ok_or("BAD_ACTION")?;
+            let args: Vec<String> = req["args"]
+                .as_array()
+                .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+                .unwrap_or_default();
+            Ok(json!({"ok": true, "result": crate::browser::cli(app, action, &args)?}))
+        }
         "statusline" => {
             // statusLine 채널 (FR-D-19) — 세션 누적 비용 수집. 실패도 ok (상태 줄 불가침)
             let session = req["session"].as_str().ok_or("NO_SESSION")?;

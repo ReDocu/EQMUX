@@ -44,7 +44,8 @@ Auxiliary panes (editor, diff, browser) do not consume session slots.
 - **Message bus** — typed inter-agent messages (ask / handoff / report / review / escalate), state-aware delivery (immediate when idle, at end of turn when busy), humans join with `@session` and `@all`, save the whole ledger to a Markdown file
 - **Dev tool panels** — git (status · worktrees · checkout), explorer (file CRUD), ports, logs, diff viewer, localhost browser
 - **Transcript view** — read Claude Code JSONL logs turn by turn (reference only), collapsible tool calls, scrollback fallback
-- **External interface** — `eqmux send · report · ping` CLI over a named pipe, statusLine cost collection
+- **External interface** — `eqmux send · report · browser · ping` CLI over a named pipe, statusLine cost collection
+- **Browser control** — agents drive the browser panel with `eqmux browser open · snapshot · click · type · get-text · eval`. Not a hidden window — **the panel the human is watching** is the one that moves
 - **Settings · themes** — dark/light/system themes, notification routing, session slot count (4 · 6 · 8), replay line count, all persisted to settings.json
 
 ## Screens
@@ -123,6 +124,7 @@ To check only the frontend, run `npm run build` (tsc --noEmit + vite build).
 └─ docs/
    ├─ prd/               # feature PRDs (decision log in 00-index.md)
    ├─ implementation-status.md   # implementation status against the PRDs
+   ├─ technical-guide.md         # internal technical guide (UML, sequences, maintenance recipes; Korean)
    └─ screenshots/       # screen captures
 ```
 

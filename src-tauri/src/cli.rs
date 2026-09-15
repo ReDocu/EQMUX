@@ -2,6 +2,7 @@
 // (main.rs가 argv로 분기). 전송은 명명 파이프(ipc.rs) 한 줄 요청/한 줄 응답.
 //   eqmux send --type ask|handoff|report|review|escalate [--to @이름] "내용"
 //   eqmux report "진척 한 줄"          (V4 자기 보고)
+//   eqmux browser <동작> …            (브라우저 패널 조종 — browser.rs가 동작을 소유한다)
 //   eqmux _hook <Event>               (Claude Code 훅이 부른다 — stdin JSON, 항상 exit 0)
 //   eqmux ping
 // 세션 신원은 EQMUX_SESSION 환경변수 — 에이전트 세션 PTY에만 심어져 있다 (FR-D-04).
@@ -16,18 +17,23 @@ pub enum Req {
     Hook { session: String, event: String },
     /// statusLine 채널 (FR-D-19 · §10.4) — Claude Code가 주기 호출, stdin JSON에 비용이 온다
     StatusLine { session: String },
+    /// 브라우저 패널 조종 (M17 확장) — 에이전트가 사람이 보는 그 패널을 몬다
+    Browser { session: String, action: String, args: Vec<String> },
 }
+
+/// 브라우저 서브커맨드 안내 — 참조(@eN)는 snapshot이 매기고 페이지가 바뀌면 사라진다
+const BROWSER_USAGE: &str = "사용법:\n  eqmux browser open <주소>\n  eqmux browser snapshot\n  eqmux browser click \"@e3\"\n  eqmux browser type \"@e3\" <내용>\n  eqmux browser get-text\n  eqmux browser eval <JS>\n  eqmux browser back|forward|reload\n\n참조 @eN은 snapshot이 매기고 페이지가 바뀌면 사라집니다 — 탐색 뒤에는 다시 찍으세요.\nPowerShell에서 @e3은 따옴표로 감싸세요 (@는 스플래팅 기호입니다 — e3으로 써도 받습니다).";
 
 // PowerShell에서 @는 스플래팅 기호다 — 따옴표 없는 `--to @all`은 인자째 사라지고
 // 그 자리를 본문이 메워 "내용이 비어 있습니다"로 떨어진다. 기본 셸이 pwsh이므로
 // 사용법은 처음부터 따옴표를 씌운 형태로 안내한다 (cmd·bash에서도 그대로 유효하다).
-const USAGE: &str = "사용법:\n  eqmux send --type <ask|handoff|report|review|escalate> [--to \"@이름\"] \"내용\"\n  eqmux report \"진척 한 줄\"\n  eqmux ping\n\nPowerShell에서 --to 값은 따옴표로 감싸세요 — @는 스플래팅 기호라 그냥 쓰면 사라집니다.";
+const USAGE: &str = "사용법:\n  eqmux send --type <ask|handoff|report|review|escalate> [--to \"@이름\"] \"내용\"\n  eqmux report \"진척 한 줄\"\n  eqmux browser <open|snapshot|click|type|get-text|eval|back|forward|reload> …\n  eqmux ping\n\nPowerShell에서 --to 값은 따옴표로 감싸세요 — @는 스플래팅 기호라 그냥 쓰면 사라집니다.";
 
 /// main.rs의 CLI/GUI 분기 판별 — parse가 아는 서브커맨드 전부와 같이 움직여야 한다.
 /// 여기 빠진 커맨드도 이제는 GUI로 흐르지 않는다 (main.rs 게이트가 사용법으로 받는다) —
 /// 다만 파이프로 가야 할 커맨드가 사용법으로 떨어지므로 목록은 여전히 정확해야 한다.
 pub fn is_cli_command(cmd: &str) -> bool {
-    matches!(cmd, "ping" | "send" | "report" | "_hook" | "_statusline")
+    matches!(cmd, "ping" | "send" | "report" | "browser" | "_hook" | "_statusline")
 }
 
 /// 모르는 인자로 불렸을 때 (main.rs 게이트) — 사용법만 내고 끝낸다. GUI는 뜨지 않는다.
@@ -105,6 +111,10 @@ pub fn parse(args: &[String], session: Option<&str>) -> Result<Req, String> {
             let event = args.get(1).cloned().ok_or("_hook <Event>가 필요합니다")?;
             Ok(Req::Hook { session: need_session()?, event })
         }
+        "browser" => {
+            let action = args.get(1).cloned().ok_or_else(|| BROWSER_USAGE.to_string())?;
+            Ok(Req::Browser { session: need_session()?, action, args: args[2..].to_vec() })
+        }
         "_statusline" => Ok(Req::StatusLine { session: need_session()? }),
         _ => Err(USAGE.into()),
     }
@@ -134,6 +144,9 @@ fn to_line(req: &Req, token: Option<&str>) -> String {
                 "cmd": "hook", "session": session, "event": event, "payload": payload
             }))
         }
+        Req::Browser { session, action, args } => with_token(serde_json::json!({
+            "cmd": "browser", "session": session, "action": action, "args": args
+        })),
         Req::StatusLine { session } => {
             // stdin JSON에 모델·비용이 온다 (§10.4). 첫 stdout 줄 = Claude Code 상태 줄 —
             // 여기서 바로 찍는다 (앱 미실행이어도 상태 줄은 성립해야 한다).
@@ -315,6 +328,9 @@ pub fn run(args: Vec<String>) -> i32 {
                         Req::Ping => println!("EQMUX 응답 · v{}", v["version"].as_str().unwrap_or("?")),
                         Req::Send { .. } => println!("전송됨"),
                         Req::Report { .. } => println!("보고됨"),
+                        // 브라우저는 결과가 곧 답이다 — 페이지가 만든 문자열이므로
+                        // 지시가 아니라 자료로 읽어야 한다 (프롬프트 주입면)
+                        Req::Browser { .. } => println!("{}", v["result"].as_str().unwrap_or("")),
                         Req::Hook { .. } | Req::StatusLine { .. } => {}
                     }
                 }
@@ -406,7 +422,7 @@ mod tests {
     /// 하나라도 빠지면 그 채널은 사용법으로 떨어진다 (예전에는 앱 창이 새로 떴다).
     #[test]
     fn cli_branch_covers_every_subcommand() {
-        for cmd in ["ping", "send", "report", "_hook", "_statusline"] {
+        for cmd in ["ping", "send", "report", "browser", "_hook", "_statusline"] {
             assert!(is_cli_command(cmd), "{cmd}가 main.rs CLI 분기에서 빠졌다");
         }
         // 미지의 토큰은 CLI 커맨드가 아니다 — main.rs 게이트가 사용법(exit 2)으로 받는다.

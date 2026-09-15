@@ -5,6 +5,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { isTauri } from "./pty";
+import { openInBrowserPanel } from "../state";
 
 export interface BrowserBounds {
   x: number;
@@ -42,6 +43,13 @@ export async function browserNav(action: "back" | "forward" | "reload"): Promise
 export async function browserClose(): Promise<void> {
   if (!isTauri()) return;
   await invoke("browser_close").catch(() => undefined);
+}
+
+/** `eqmux browser open`(PRD I)이 보낸 열기 요청 — 패널을 브라우저 탭으로 띄우고 주소를 건넨다.
+ *  Rust가 웹뷰를 직접 못 여는 이유는 포트 패널과 같다: 바운드는 패널의 DOM 자리에서만 읽힌다. */
+export function startBrowserRequests(): void {
+  if (!isTauri()) return;
+  void listen<{ url: string }>("browser-request", (e) => openInBrowserPanel(e.payload.url));
 }
 
 /** 웹뷰 안 탐색 → 주소 바 동기화 (browser-nav 이벤트). 반환은 해제 함수 */
