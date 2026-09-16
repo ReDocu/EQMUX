@@ -14,10 +14,10 @@ interface PtyExit {
   code: number | null;
 }
 
-// 세션별 출력 버퍼 — 페인이 언마운트돼도 세션은 살아 있으므로(B1 줌·탭 전환)
-// 재부착 시 스크롤백을 복원한다. 실제 저장은 M1 후반 rusqlite WAL로 이동한다.
-const BUFFER_CAP = 200_000;
-const buffers = new Map<string, string>();
+// 세션별 출력 버퍼는 없앴다 — 재부착은 REGISTRY의 Terminal 인스턴스가 그대로 살아서 하고
+// (TerminalPane: 리마운트 = DOM 재부착만), 재시작 복원은 스토어의 scrollbackTail이 한다.
+// 남아 있던 200KB 링버퍼는 쓰는 곳이 없었는데도 출력 이벤트마다 전체를 이어 붙이고 다시
+// 잘라 냈다 — 바쁜 세션 하나가 초당 수 MB의 문자열 쓰레기를 만들던 자리다.
 const outputSubs = new Map<string, Set<(data: string) => void>>();
 const exitSubs = new Map<string, Set<(code: number | null) => void>>();
 const spawned = new Set<string>();
@@ -28,10 +28,6 @@ function ensureListeners(): Promise<void> {
     listenerReady = (async () => {
       await listen<PtyOutput>("pty-output", (e) => {
         const { id, data } = e.payload;
-        // 아는 세션만 버퍼링 — 제거된 세션의 늦은 출력이 buffers 항목을 되살려 누적되는 것 방지
-        if (!spawned.has(id) && !outputSubs.get(id)?.size) return;
-        const buf = (buffers.get(id) ?? "") + data;
-        buffers.set(id, buf.length > BUFFER_CAP ? buf.slice(-BUFFER_CAP) : buf);
         outputSubs.get(id)?.forEach((cb) => cb(data));
       });
       await listen<PtyExit>("pty-exit", (e) => {
@@ -156,8 +152,6 @@ export function writePty(id: string, data: string): void {
  *  일반 셸에 키 입력으로 주입하면 뒤따르는 \r이 사용자가 치던 미제출 명령을 그대로
  *  실행하므로, 기본 터미널로 가는 메시지는 이 경로로만 표시한다. */
 export function echoPty(id: string, data: string): void {
-  const buf = (buffers.get(id) ?? "") + data;
-  buffers.set(id, buf.length > BUFFER_CAP ? buf.slice(-BUFFER_CAP) : buf);
   outputSubs.get(id)?.forEach((cb) => cb(data));
 }
 
@@ -187,12 +181,7 @@ export function resizePty(id: string, cols: number, rows: number): void {
 export function killPty(id: string): void {
   if (!isTauri()) return;
   spawned.delete(id);
-  buffers.delete(id);
   void invoke("pty_kill", { id }).catch(() => {});
-}
-
-export function getScrollback(id: string): string {
-  return buffers.get(id) ?? "";
 }
 
 // ── 네이티브 클립보드 — WebView2 웹 Clipboard API 권한 문제를 우회한다 ──

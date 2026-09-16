@@ -637,6 +637,30 @@ enum EscState {
     OscEsc,
 }
 
+/// 이 CSI가 지금까지 쌓은 줄을 무효로 만드는가 — TUI(Ink 기반 에이전트 CLI)는 \r가 아니라
+/// 이것들로 제자리 갱신을 한다. 그래서 \r만 보던 조립기는 매 프레임을 이어 붙였다.
+///
+/// 파라미터를 봐야 한다. ESC[K(=0K)는 커서 *뒤*를 지우는 것이라 append-only 조립기에겐
+/// 아무 일도 아닌데(줄 끝 정리로 흔히 붙는다), ESC[2K는 줄 전체를 지운다.
+/// 둘을 같게 다루면 멀쩡한 줄이 통째로 사라진다.
+///
+/// ponytail: 열 위치를 세지 않는 근사다. ESC[10G처럼 1열이 아닌 곳으로 가는 복귀나
+/// 여러 줄을 거슬러 올라가는 프레임(ESC[3A)은 그 줄을 버리는 것으로 갈음한다 —
+/// 정확히 하려면 화면 모델이 필요하고, 그건 PRD A의 완전한 VT 파서 몫이다.
+fn csi_rewrites_line(final_byte: char, params: &str) -> bool {
+    // 사설 시퀀스(ESC[?25l 등)는 건드리지 않는다 — 숫자와 ;만 있는 표준형만 본다
+    if params.chars().any(|c| !c.is_ascii_digit() && c != ';') {
+        return false;
+    }
+    let first = params.split(';').next().unwrap_or("").parse::<u32>().unwrap_or(0);
+    match final_byte {
+        'K' | 'J' => first >= 1,             // 1=커서 앞, 2=전체. 0(기본)은 커서 뒤라 무의미
+        'G' | '`' => first <= 1,             // 1열 복귀 = 덮어쓰기 시작, \r와 같은 뜻
+        'H' | 'f' | 'A' | 'B' | 'd' => true, // 다른 자리로 이동 — 이 줄은 여기서 끝났다
+        _ => false,
+    }
+}
+
 impl LineAssembler {
     pub fn new() -> Self {
         LineAssembler {
@@ -717,11 +741,17 @@ impl LineAssembler {
                 },
                 EscState::Csi => {
                     if ('\u{40}'..='\u{7e}').contains(&c) {
-                        // SGR(final 'm')만 보존한다 — 커서 이동·지우기는 색 복원과 무관하다
+                        // SGR(final 'm')만 보존한다 — 색 복원과 무관한 나머지는 버린다.
+                        // 단 "버린다"와 "무시한다"는 다르다 — 제자리 갱신 시퀀스를 그냥 무시하면
+                        // 프레임이 줄에 계속 쌓인다 (스피너 300프레임 = 한 줄 6.5KB).
                         if c == 'm' {
                             self.styled
                                 .push(StyledChunk::Sgr(format!("\u{1b}[{}m", self.csi_buf)));
                             self.has_sgr = true;
+                        } else if csi_rewrites_line(c, &self.csi_buf) {
+                            self.partial.clear();
+                            self.styled.clear();
+                            self.has_sgr = false;
                         }
                         self.csi_buf.clear();
                         self.esc = EscState::None;
@@ -971,3 +1001,49 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
+#[cfg(test)]
+mod accum_tests {
+    use super::*;
+
+    /// 한 줄을 제자리에서 다시 그리는 TUI 프레임 n개를 만든다.
+    /// Ink(에이전트 CLI)가 실제로 쓰는 방식 — \r가 아니라 CSI로 지우고 열을 되돌린다.
+    fn repaint(frames: &[&str]) -> String {
+        frames.iter().map(|f| format!("\u{1b}[2K\u{1b}[G{f}")).collect::<String>() + "\n"
+    }
+
+    #[test]
+    fn csi_repaint_collapses_to_last_frame() {
+        let mut a = LineAssembler::new();
+        let mut out = Vec::new();
+        a.push(&repaint(&["Swooping… 1s", "Swooping… 2s", "Swooping… 3s"]), |l, _| out.push(l));
+        // 제자리 갱신은 마지막 프레임 하나여야 한다 — 이어 붙이면 스피너가 줄에 쌓인다
+        assert_eq!(out, vec!["Swooping… 3s".to_string()]);
+    }
+
+    #[test]
+    fn long_spinner_run_does_not_inflate_the_line() {
+        let frames: Vec<String> = (0..300).map(|i| format!("still thinking · {i}s")).collect();
+        let refs: Vec<&str> = frames.iter().map(|s| s.as_str()).collect();
+        let mut a = LineAssembler::new();
+        let (mut lines, mut styled_bytes) = (0usize, 0usize);
+        a.push(&repaint(&refs), |l, s| {
+            lines += 1;
+            styled_bytes += l.len() + s.map(|x| x.len()).unwrap_or(0);
+        });
+        // 300프레임이 한 줄로 뭉치면 4,000자 강제 flush에 걸려 여러 줄로 쏟아진다
+        assert_eq!(lines, 1, "프레임이 줄에 누적됐다 (줄 {lines}개, {styled_bytes}바이트)");
+        assert!(styled_bytes < 200, "줄 하나가 {styled_bytes}바이트 — 프레임 잔해가 남았다");
+    }
+
+    /// 위험한 쪽 — ESC[K(=0K)는 "커서 뒤를 지워라"라서 줄 끝 정리로 흔히 붙는다.
+    /// 이걸 2K처럼 다루면 멀쩡한 출력이 통째로 사라진다. 누적을 잡으려다 로그를 지우는 셈
+    #[test]
+    fn erase_to_end_of_line_keeps_the_line() {
+        let mut a = LineAssembler::new();
+        let mut out = Vec::new();
+        a.push("hello\u{1b}[K\n\u{1b}[?25lworld\u{1b}[0K\n", |l, _| out.push(l));
+        assert_eq!(out, vec!["hello".to_string(), "world".to_string()]);
+    }
+}
+
