@@ -74,11 +74,12 @@ export function noteWebglContextLoss(sessionId: string): void {
   diagNote(`WEBGL-CONTEXT-LOST session=${sessionId} total=${webglLosses}`);
 }
 
-/** 살아 있는 터미널 수를 알려 주는 훅 — TerminalPane이 자기 REGISTRY를 노출해 꽂는다.
- *  진단이 컴포넌트를 import하면 순환이 되므로 방향을 뒤집는다 */
-let terminalStats: () => { terminals: number; opened: number } = () => ({ terminals: 0, opened: 0 });
+/** 살아 있는 터미널 수와 그중 WebGL 컨텍스트를 쥔 수 — TerminalPane이 자기 REGISTRY를 노출해
+ *  꽂는다. 진단이 컴포넌트를 import하면 순환이 되므로 방향을 뒤집는다.
+ *  webgl은 상한(WEBGL_CAP) 이하로 남아야 한다 — terms는 얼마든 늘어도 된다 */
+let terminalStats: () => { terminals: number; webgl: number } = () => ({ terminals: 0, webgl: 0 });
 
-export function provideTerminalStats(fn: () => { terminals: number; opened: number }): void {
+export function provideTerminalStats(fn: () => { terminals: number; webgl: number }): void {
   terminalStats = fn;
 }
 
@@ -126,7 +127,7 @@ function shell(): string {
   const st = terminalStats();
   return (
     `dpr=${devicePixelRatio} inner=${innerWidth}x${innerHeight}` +
-    ` terms=${st.terminals}/${st.opened} webglLost=${webglLosses}` +
+    ` terms=${st.terminals} webgl=${st.webgl} webglLost=${webglLosses}` +
     (mem ? ` heapMB=${Math.round(mem.usedJSHeapSize / 1048576)}` : "")
   );
 }

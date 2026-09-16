@@ -11,6 +11,7 @@ import { SearchAddon } from "@xterm/addon-search";
 import { UnicodeGraphemesAddon } from "@xterm/addon-unicode-graphemes";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
+import { pickEvictions } from "./webglBudget";
 import { noteWebglContextLoss, provideTerminalStats } from "../backend/diag";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import "@xterm/xterm/css/xterm.css";
@@ -80,6 +81,13 @@ interface TermEntry {
   initialized: boolean;
   lastCols: number;
   lastRows: number;
+  /** WebGL 렌더러 — 컨텍스트는 터미널이 아니라 브라우저 전역의 자원이라 상한을 둔다 (webglBudget).
+   *  없으면 DOM 렌더러로 돈다. open과 달리 붙였다 뗐다 한다 — opened와 겸할 수 없는 이유다 */
+  webgl?: WebglAddon;
+  /** 페인이 지금 마운트돼 있는가 — 컨텍스트 회수 때 안 보이는 것부터 고른다 */
+  mounted: boolean;
+  /** 마지막 attach 순번 — 회수 순서 결정용 (같은 조건이면 오래된 것부터) */
+  touched: number;
   /** 재개 제안 대기 (FR-C-33·34) — 복원된 역할 세션. 사용자가 선택할 때까지 아무것도 스폰하지 않는다 */
   /** pty 구독 해제 — dispose 시 함께 정리하지 않으면 disposed 터미널이 클로저로 영구 잔류한다 */
   unsubs?: (() => void)[];
@@ -90,13 +98,50 @@ interface TermEntry {
 }
 
 const REGISTRY = new Map<string, TermEntry>();
+let attachSeq = 0;
 
-// 화면 손상 진단 (임시) — 살아 있는 터미널·열린 렌더러 수. 진단이 이 파일을 import하면
-// 순환이 되므로 방향을 뒤집어 여기서 꽂는다. WebGL 컨텍스트는 열린 터미널당 하나다.
+// 화면 손상 진단 — 살아 있는 터미널 수와 그중 WebGL 컨텍스트를 쥔 수. 진단이 이 파일을
+// import하면 순환이 되므로 방향을 뒤집어 여기서 꽂는다.
+// webgl은 WEBGL_CAP을 절대 넘으면 안 된다 — 넘는 순간이 화면이 깨지기 시작하는 순간이고,
+// 로그의 webglLost가 0으로 남는지가 이 상한의 회귀 시험이다.
 provideTerminalStats(() => ({
   terminals: REGISTRY.size,
-  opened: [...REGISTRY.values()].filter((e) => e.opened).length,
+  webgl: [...REGISTRY.values()].filter((e) => e.webgl).length,
 }));
+
+/** 이 터미널에 WebGL 렌더러를 붙인다 — 예산이 없으면 먼저 하나 회수한다.
+ *  반드시 term.open()과 크기 게이트를 지난 뒤에 부를 것: 0-크기에서 붙이면 char atlas 치수가
+ *  0이 되어, 지금 막으려는 그 깨짐을 직접 만든다. */
+function ensureWebgl(id: string, e: TermEntry): void {
+  if (e.webgl) return;
+  for (const victim of pickEvictions([...REGISTRY.values()].filter((x) => x.webgl))) dropWebgl(victim);
+  try {
+    const webgl = new WebglAddon();
+    // 상한을 지켜도 유실은 남는다 — 드라이버 리셋·TDR·절전 복귀. 그때도 조용히 강등된다
+    webgl.onContextLoss(() => {
+      noteWebglContextLoss(id);
+      dropWebgl(e);
+    });
+    e.term.loadAddon(webgl);
+    e.webgl = webgl;
+  } catch {
+    /* WebGL 미지원 환경 — DOM 렌더러로 남는다 */
+  }
+}
+
+/** 컨텍스트를 놓는다. dispose는 렌더러를 DOM으로 갈아끼울 뿐 다시 그리지는 않아
+ *  낡은 프레임이 그대로 남는다 — 그래서 여기서 전체 리페인트까지 해 준다.
+ *  (안 보이는 페인은 xterm이 다시 보일 때 알아서 전체를 그리므로 이 refresh는 무해하다) */
+function dropWebgl(e: TermEntry): void {
+  if (!e.webgl) return;
+  e.webgl.dispose();
+  e.webgl = undefined; // 죽은 애드온이 예산 계산에 유령으로 남지 않게 반드시 비운다
+  try {
+    e.term.refresh(0, Math.max(0, e.term.rows - 1));
+  } catch {
+    /* 렌더러 미준비 시 무시 */
+  }
+}
 
 // 색 팔레트 교체 (설정 · 화면) — 살아 있는 터미널은 컴포넌트 밖 REGISTRY에 있어 반응성이 닿지 않는다.
 // settings.applyTheme가 토큰을 세운 뒤 이 이벤트를 쏘면 전 터미널이 새 ANSI 팔레트를 다시 읽는다.
@@ -511,7 +556,17 @@ function createEntry(): TermEntry {
   term.loadAddon(search);
   // 링크 감지 (PRD A, M30) — URL 클릭은 기본 브라우저로 보낸다 (브라우저 패널은 localhost 전용)
   term.loadAddon(new WebLinksAddon((_ev, uri) => openExternal(uri)));
-  const entry: TermEntry = { term, fit, search, opened: false, initialized: false, lastCols: 0, lastRows: 0 };
+  const entry: TermEntry = {
+    term,
+    fit,
+    search,
+    opened: false,
+    initialized: false,
+    lastCols: 0,
+    lastRows: 0,
+    mounted: false,
+    touched: 0,
+  };
   // 경로 클릭 → 탐색기 — 브라우저 dev에서는 탐색기를 열 수단이 없으므로 링크로 만들지 않는다
   if (isTauri()) term.registerLinkProvider(pathLinkProvider(term, entry));
   return entry;
@@ -801,22 +856,15 @@ export function TerminalPane(props: {
       if (!e.opened) {
         e.term.open(host);
         e.opened = true;
-        // WebGL 렌더러 — 컨텍스트가 유실되면 애드온을 폐기해 기본 렌더러로 폴백한다
-        try {
-          const webgl = new WebglAddon();
-          // 유실은 조용히 DOM 렌더러로 강등된다 — 몇 번, 어느 세션에서 일어나는지 남긴다.
-          // 브라우저는 컨텍스트 수가 한계를 넘으면 가장 오래된 것부터 강제로 잃게 만든다
-          webgl.onContextLoss(() => {
-            noteWebglContextLoss(props.sessionId);
-            webgl.dispose();
-          });
-          e.term.loadAddon(webgl);
-        } catch {
-          /* WebGL 미지원 환경 — 기본 렌더러 사용 */
-        }
       } else if (e.term.element && e.term.element.parentElement !== host) {
         host.appendChild(e.term.element); // 리마운트 = DOM 재부착만
       }
+      // 컨텍스트는 여기서 잡는다 — 언마운트에서 놓지는 않는다. 줌·전체화면·탭 전환마다
+      // 리마운트가 일어나므로, 뗐다 붙이면 그때마다 컨텍스트 생성 + char atlas 재구축으로
+      // 히치가 난다. 대신 예산이 모자랄 때 안 보이는 페인 것부터 뺏는다 (pickEvictions).
+      e.mounted = true;
+      e.touched = ++attachSeq;
+      ensureWebgl(props.sessionId, e);
       const wasAtBottom = atBottom(e.term); // 재부착도 읽던 자리를 지킨다 (B46)
       syncSize();
       if (!e.initialized) {
@@ -854,6 +902,7 @@ export function TerminalPane(props: {
 
     onCleanup(() => {
       cancelled = true;
+      e.mounted = false; // 컨텍스트는 그대로 쥔 채 회수 1순위가 된다 (리마운트 히치 회피)
       if (e.sync === syncSize) e.sync = undefined;
       if (e.onRevealFail === showRevealFail) e.onRevealFail = undefined;
       scrollDisp?.dispose();
