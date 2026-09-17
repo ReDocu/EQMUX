@@ -90,6 +90,12 @@ export const dict: Record<string, string> = {
   "세션이 LISTENING 포트를 열면 칩이 나타납니다": "Chips appear when a session opens a LISTENING port",
   "Tauri에서 실행하면 실측 포트가 연결됩니다": "Run in Tauri to see live ports",
 
+  // ── MDView 패널 (MdViewTab) ──
+  "마크다운 파일 보기": "Markdown viewer",
+  "워크스페이스의 .md 파일을 고르거나 상대 경로를 입력하세요": "Pick a .md file in the workspace or type a relative path",
+  "상대 경로 — Enter로 열기 (docs/guide.md)": "Relative path — Enter opens (docs/guide.md)",
+  "목 모드에서는 파일을 읽을 수 없습니다 — 앱에서 실행하세요": "The mock cannot read files — run the app",
+
   // ── 분할선 (PaneDividers) ──
   "드래그 — 페인 폭 조정 · 더블클릭 — 초기화": "Drag — adjust pane width · double-click — reset",
   "드래그 — 페인 높이 조정 · 더블클릭 — 초기화": "Drag — adjust pane height · double-click — reset",

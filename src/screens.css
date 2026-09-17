@@ -2305,6 +2305,100 @@
   opacity: 1;
 }
 
+/* ── MDView 패널 — 렌더된 마크다운 본문. 색은 전부 토큰이라 테마를 따라간다 ── */
+.mdview-body {
+  flex: 1;
+  min-height: 200px;
+  overflow: auto;
+  padding: 12px 14px;
+  font-size: 12px;
+  line-height: 1.6;
+  user-select: text;
+  overflow-wrap: anywhere;
+}
+.mdview-body h1,
+.mdview-body h2,
+.mdview-body h3,
+.mdview-body h4 {
+  margin: 14px 0 6px;
+  line-height: 1.3;
+}
+.mdview-body h1 {
+  font-size: 17px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--eq-line);
+}
+.mdview-body h2 {
+  font-size: 14px;
+}
+.mdview-body h3 {
+  font-size: 12.5px;
+}
+.mdview-body p,
+.mdview-body ul,
+.mdview-body ol,
+.mdview-body pre,
+.mdview-body table,
+.mdview-body blockquote {
+  margin: 0 0 8px;
+}
+.mdview-body li > p {
+  margin: 0;
+}
+.mdview-body ul,
+.mdview-body ol {
+  padding-left: 20px;
+}
+.mdview-body a {
+  color: var(--eq-blue);
+  text-decoration: none;
+}
+.mdview-body a:hover {
+  text-decoration: underline;
+}
+.mdview-body code {
+  font-family: var(--eq-mono);
+  font-size: 11px;
+  background: var(--eq-gutter);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+.mdview-body pre {
+  background: var(--eq-gutter);
+  padding: 8px 10px;
+  border-radius: 4px;
+  overflow: auto;
+}
+.mdview-body pre code {
+  padding: 0;
+  background: none;
+}
+.mdview-body blockquote {
+  border-left: 3px solid var(--eq-line);
+  padding-left: 10px;
+  color: var(--eq-muted);
+}
+.mdview-body table {
+  border-collapse: collapse;
+}
+.mdview-body th,
+.mdview-body td {
+  border: 1px solid var(--eq-line);
+  padding: 3px 8px;
+  text-align: left;
+}
+.mdview-body th {
+  background: var(--eq-gutter);
+}
+.mdview-body hr {
+  border: 0;
+  border-top: 1px solid var(--eq-line);
+  margin: 12px 0;
+}
+.mdview-body img {
+  max-width: 100%;
+}
+
 /* ── 실행 방식 선택 (ChIvy) ── */
 .launch-progress {
   display: flex;

@@ -1,5 +1,5 @@
 // 사이드 패널 (화면 #10) — 도구 서랍. 페인이 아니라 분할 그리드 밖에 있다 (§2.1).
-// 탭 구성: 개요(대화 스트림) · git · 포트 · 로그 · 브라우저. 임무(탐색기)는 M25에서
+// 탭 구성: 개요(대화 스트림) · git · 포트 · 로그 · 브라우저 · MDView(마크다운 보기). 임무(탐색기)는 M25에서
 // 전체 화면 팝업으로 승격 — 앱 바의 임무 버튼이 연다.
 // 위치 전환 — 플렉스 order로 좌/우를 오간다 (app-row · tf-body 양쪽 컨테이너 공용).
 import { For, Show } from "solid-js";
@@ -11,6 +11,7 @@ import { BrowserPanelTab } from "./BrowserPanelTab";
 import { ConversationTab } from "./ConversationTab";
 import { GitPanelTab } from "./GitPanelTab";
 import { LogsPanelTab } from "./LogsPanelTab";
+import { MdViewTab } from "./MdViewTab";
 import { PortsPanelTab } from "./PortsPanelTab";
 
 const TABS: { key: PanelTab; label: string }[] = [
@@ -19,6 +20,7 @@ const TABS: { key: PanelTab; label: string }[] = [
   { key: "ports", label: "포트" },
   { key: "logs", label: "로그" },
   { key: "browser", label: "브라우저" },
+  { key: "mdview", label: "MDView" },
 ];
 
 export function SidePanel() {
@@ -67,6 +69,9 @@ export function SidePanel() {
         </Show>
         <Show when={panelTab() === "browser"}>
           <BrowserPanelTab />
+        </Show>
+        <Show when={panelTab() === "mdview"}>
+          <MdViewTab />
         </Show>
       </div>
     </div>
