@@ -864,12 +864,30 @@ export function TerminalPane(props: {
       // 히치가 난다. 대신 예산이 모자랄 때 안 보이는 페인 것부터 뺏는다 (pickEvictions).
       e.mounted = true;
       e.touched = ++attachSeq;
-      ensureWebgl(props.sessionId, e);
+      // 렌더러는 세션 부팅을 막을 자격이 없다 — 여기서 던지면 아래 initSession에 영영
+      // 도달하지 못해 PTY 없는 빈 페인이 된다. WebGL이 안 되면 DOM 렌더러로 돌면 그만이다
+      try {
+        ensureWebgl(props.sessionId, e);
+      } catch {
+        /* 예산 회수·컨텍스트 생성 실패 — DOM 렌더러로 남는다 */
+      }
       const wasAtBottom = atBottom(e.term); // 재부착도 읽던 자리를 지킨다 (B46)
       syncSize();
       if (!e.initialized) {
         e.initialized = true;
-        void initSession(e, props);
+        // 실패를 삼키면 그 페인은 영구히 빈 검은 화면이 된다 — initialized가 이미 서 있어
+        // 리마운트해도 두 번 다시 시도하지 않기 때문이다. 표식을 되돌려 다음 마운트에 맡기고,
+        // 이유는 화면에 적는다 (조용한 실패가 "터미널이 죽었다"로 보이던 자리)
+        void initSession(e, props).catch((err) => {
+          e.initialized = false;
+          e.unsubs?.forEach((u) => u());
+          e.unsubs = undefined;
+          try {
+            e.term.writeln(`\r\n\x1b[31m세션 시작 실패 — ${err}\x1b[0m`);
+          } catch {
+            /* 터미널이 이미 폐기됨 */
+          }
+        });
       }
       // 재부착 후 전체 리페인트 — 캔버스/행 렌더가 detach 중 비워질 수 있다
       try {
