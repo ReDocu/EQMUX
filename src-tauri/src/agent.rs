@@ -634,8 +634,9 @@ fn recap_line(text: &str) -> Option<String> {
 
 /// 트랜스크립트 꼬리에서 마지막 에이전트 턴의 한 줄. 읽기는 transcript::read가 이미
 /// 하는 일이다 (2MB 꼬리 창 + 깨진 줄 건너뛰기) — 두 번째 파서를 두지 않는다.
-fn recap_from_transcript(cwd: &str, uuid: &str) -> Option<String> {
-    let data = crate::transcript::read(&transcript_path(cwd, uuid), 0).ok()?;
+fn recap_from_transcript(path: &std::path::Path) -> Option<String> {
+    // limit은 "마지막 N턴만 남김"이다 — 0을 넘기면 턴이 통째로 drain되어 요약이 영영 안 나온다
+    let data = crate::transcript::read(path, usize::MAX).ok()?;
     data.turns
         .iter()
         .rev()
@@ -657,7 +658,7 @@ pub fn record_recap(app: &AppHandle, session: &str) {
     }) else {
         return;
     };
-    let Some(text) = recap_from_transcript(&cwd, &uuid) else { return };
+    let Some(text) = recap_from_transcript(&transcript_path(&cwd, &uuid)) else { return };
     let Some((ws, _)) = crate::session_origin(app, session) else { return };
     let store: tauri::State<crate::StoreState> = app.state();
     let _ = store.0.sender().send(crate::store::StoreMsg::Recap {
@@ -1175,7 +1176,7 @@ fn scan(app: &AppHandle) {
 mod tests {
     use super::{
         adopted_alive, apply_effect, apply_registry, current_uuid, hook_effect, keep_on_adopt,
-        read_registry, recap_line, HookEffect, Tracked, RECAP_MAX,
+        read_registry, recap_from_transcript, recap_line, HookEffect, Tracked, RECAP_MAX,
     };
     use std::collections::HashMap;
 
@@ -1518,6 +1519,37 @@ mod tests {
         assert!(recap_line("- 목록만\n* 있다\n").is_none());
         // 빈 recap: 줄은 관례로 치지 않는다 — 폴백이 받아야 한다
         assert_eq!(recap_line("recap:\n실제 문장은 여기다.").as_deref(), Some("실제 문장은 여기다."));
+    }
+
+    /// 읽기 경로 (M35) — recap_line 검사만으로는 여기가 비는 것을 못 잡는다.
+    /// transcript::read의 limit은 "마지막 N턴만 남김"이라 0을 넘기면 턴이 통째로 사라졌다.
+    #[test]
+    fn recap_from_transcript_picks_the_last_agent_turn() {
+        let dir = std::env::temp_dir().join(format!("eqmux-recapio-{}", crate::workspace::now_ms()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("u1.jsonl");
+        std::fs::write(
+            &path,
+            concat!(
+                r#"{"type":"user","message":{"role":"user","content":"고쳐줘"}}"#,
+                "
+",
+                r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"먼저 구조를 봅니다."}]}}"#,
+                "
+",
+                r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"브라우저 패널에 CLI 조종을 붙였습니다."}]}}"#,
+                "
+",
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            recap_from_transcript(&path).as_deref(),
+            Some("브라우저 패널에 CLI 조종을 붙였습니다."),
+            "마지막 에이전트 턴에서 한 문장이 나와야 한다"
+        );
+        assert!(recap_from_transcript(&dir.join("없다.jsonl")).is_none());
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
