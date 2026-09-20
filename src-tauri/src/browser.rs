@@ -26,7 +26,7 @@ fn parse_http(url: &str) -> Result<Url, String> {
 
 /// 열기 — 웹뷰가 없으면 만들고, 있으면 이동·재배치 후 보여준다
 #[tauri::command]
-pub fn browser_open(app: AppHandle, url: String, x: f64, y: f64, w: f64, h: f64) -> Result<(), String> {
+pub async fn browser_open(app: AppHandle, url: String, x: f64, y: f64, w: f64, h: f64) -> Result<(), String> {
     let target = parse_http(&url)?;
     if let Some(wv) = app.get_webview(LABEL) {
         wv.navigate(target).map_err(|e| e.to_string())?;
@@ -53,7 +53,7 @@ pub fn browser_open(app: AppHandle, url: String, x: f64, y: f64, w: f64, h: f64)
 
 /// 재배치 — 패널 크기·위치가 바뀔 때 (ResizeObserver · 창 리사이즈 · 패널 좌우 전환)
 #[tauri::command]
-pub fn browser_bounds(app: AppHandle, x: f64, y: f64, w: f64, h: f64) -> Result<(), String> {
+pub async fn browser_bounds(app: AppHandle, x: f64, y: f64, w: f64, h: f64) -> Result<(), String> {
     let Some(wv) = app.get_webview(LABEL) else { return Ok(()) };
     wv.set_position(LogicalPosition::new(x, y)).map_err(|e| e.to_string())?;
     wv.set_size(LogicalSize::new(w, h)).map_err(|e| e.to_string())
@@ -62,16 +62,21 @@ pub fn browser_bounds(app: AppHandle, x: f64, y: f64, w: f64, h: f64) -> Result<
 /// 표시/숨김 — 자식 웹뷰는 항상 메인 웹뷰 위에 그려지므로, 다른 탭·다이얼로그·전체 화면
 /// 팝업이 뜨는 동안은 숨겨야 한다. 페이지 상태(스크롤·폼)는 유지된다
 #[tauri::command]
-pub fn browser_visible(app: AppHandle, visible: bool) -> Result<(), String> {
+pub async fn browser_visible(app: AppHandle, visible: bool) -> Result<(), String> {
     let Some(wv) = app.get_webview(LABEL) else { return Ok(()) };
     if visible { wv.show() } else { wv.hide() }.map_err(|e| e.to_string())
 }
 
 /// 탐색 — back·forward는 웹뷰 안 history로, reload는 네이티브 리로드로
 #[tauri::command]
-pub fn browser_nav(app: AppHandle, action: String) -> Result<(), String> {
+pub async fn browser_nav(app: AppHandle, action: String) -> Result<(), String> {
+    nav(&app, &action)
+}
+
+/// 탐색 본체 — 커맨드(async)와 CLI(파이프 워커 스레드) 양쪽이 쓴다. 웹뷰를 만들지 않으므로 동기여도 안전
+fn nav(app: &AppHandle, action: &str) -> Result<(), String> {
     let Some(wv) = app.get_webview(LABEL) else { return Ok(()) };
-    match action.as_str() {
+    match action {
         "back" => wv.eval("history.back()").map_err(|e| e.to_string()),
         "forward" => wv.eval("history.forward()").map_err(|e| e.to_string()),
         "reload" => wv.reload().map_err(|e| e.to_string()),
@@ -81,7 +86,7 @@ pub fn browser_nav(app: AppHandle, action: String) -> Result<(), String> {
 
 /// 닫기 — 웹뷰를 파괴한다 (✕ 버튼). 다음 열기는 새로 만든다
 #[tauri::command]
-pub fn browser_close(app: AppHandle) -> Result<(), String> {
+pub async fn browser_close(app: AppHandle) -> Result<(), String> {
     let Some(wv) = app.get_webview(LABEL) else { return Ok(()) };
     wv.close().map_err(|e| e.to_string())
 }
@@ -250,7 +255,7 @@ pub fn cli(app: &AppHandle, action: &str, args: &[String]) -> Result<String, Str
         }
         "back" | "forward" | "reload" => {
             eval_text(app, MARK)?; // 패널이 없으면 여기서 NO_PANEL로 끊긴다
-            browser_nav(app.clone(), action.to_string())?;
+            nav(app, action)?;
             settle(app)?
         }
         "snapshot" => eval_text(app, SNAPSHOT)?,
@@ -303,6 +308,20 @@ pub fn cli(app: &AppHandle, action: &str, args: &[String]) -> Result<String, Str
 
 #[cfg(test)]
 mod tests {
+
+    /// 웹뷰를 만들거나 만지는 커맨드는 반드시 async여야 한다 — 동기 커맨드는 WebView2의
+    /// 이벤트 핸들러 안(UI 스레드)에서 돌고, 거기서 add_child가 중첩 메시지 루프로 생성
+    /// 완료를 기다리면 WebView2 재진입 금지 때문에 영영 돌아오지 않는다(0.4.0 전 터미널 먹통).
+    /// 컴파일 타임 가드: 누가 `async`를 떼면 여기서 빌드가 깨진다.
+    #[allow(dead_code)]
+    fn browser_commands_are_async(app: AppHandle) {
+        fn must_be_future<F: std::future::Future>(_: F) {}
+        must_be_future(browser_open(app.clone(), String::new(), 0.0, 0.0, 0.0, 0.0));
+        must_be_future(browser_bounds(app.clone(), 0.0, 0.0, 0.0, 0.0));
+        must_be_future(browser_visible(app.clone(), true));
+        must_be_future(browser_nav(app.clone(), String::new()));
+        must_be_future(browser_close(app));
+    }
     use super::*;
 
     /// PowerShell이 따옴표 없는 `@e3`를 삼켜도 참조가 성립해야 한다 —

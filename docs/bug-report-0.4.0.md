@@ -158,3 +158,29 @@ let data = crate::transcript::read(&transcript_path(cwd, uuid), 0).ok()?;
 **한계:** 이 세션에서는 GUI 자동화 수단(Chrome 확장 · wmux CLI)을 쓸 수 없어
 터미널 10개 이상을 띄운 재현은 하지 못했다. 위 실측은 전부 사용자의 실제
 로그와 DB, 그리고 앱을 띄운 상태의 IPC 측정에 근거한다.
+
+---
+
+## 6. 확정 (2026-09-21) — 원인은 동기 커맨드 안의 자식 웹뷰 생성
+
+같은 증상이 재현됐다(00:58 마지막 하트비트 → 00:59:29 자식 웹뷰 renderer 생성 →
+`eqmux browser open` 3회 → 이후 하트비트 없음, Rust는 `window moved` 계속 기록).
+
+- `browser.rs`의 `browser_open`이 **동기** `#[tauri::command]`였다. wry는 IPC 요청을
+  WebView2 `WebResourceRequested` 콜백 안(UI 스레드)에서 그대로 실행하고, 거기서
+  `WebviewBuilder::new` + `add_child`가 컨트롤러 생성 완료를 `wait_with_pump`(중첩
+  메시지 루프)로 기다린다. WebView2는 재진입을 막아 바깥 콜백이 끝나기 전엔 완료
+  콜백을 주지 않는다 → 영원히 펌프. Tauri 문서 그대로: "On Windows, this function
+  deadlocks when used in a synchronous command … use async commands".
+- 중첩 펌프 안에서 창 메시지는 처리되므로 "응답 없음"이 아니고 `window moved`도 찍히지만,
+  tao 이벤트 핸들러가 잡혀 있어 emit·eval·invoke 응답이 전부 버퍼에만 쌓인다 → 전 터미널
+  입출력·새 세션(검은 화면)·종료(`shutdown_flush` invoke) 모두 멈춘다.
+- 4장의 후보 1(리사이즈 진동)·2(렌더러 크래시)는 아니었다. renderer CPU ≈ 0, 크래시 덤프 없음.
+
+**수정:** 웹뷰를 만지는 커맨드 5개를 `async fn`으로. CLI(`cli()`)가 쓰던 `browser_nav`는
+동기 본체 `nav()`로 분리. 컴파일 타임 가드(`browser_commands_are_async`) 추가 — `async`를
+떼면 빌드가 깨진다.
+
+**검증(실기, UIA 자동화):** 수정 빌드에서 브라우저 패널 생성 3회(닫기→재생성 포함) 후
+매번 터미널 에코 정상, `BROWSER-OPEN` 진단 기록 정상, 종료 버튼 → flush → 1초 내 종료,
+`running.flag` 삭제, 세션 exit 기록 flush 확인.
