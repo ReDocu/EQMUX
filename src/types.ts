@@ -6,6 +6,11 @@ import { humanTyping } from "./backend/pty";
 /** PRD D §4.2.1 — 에이전트 어휘 6종을 그대로 채택 (G2) */
 export type AgentStatus = "starting" | "busy" | "waiting" | "shell" | "idle" | "dead";
 
+/** 관리 기동이 되는 CLI (M37) — Rust agent.rs의 CLI_CLAUDE·CLI_CODEX와 같은 문자열 */
+export type AgentCliId = "claude" | "codex";
+export const AGENT_CLI_LABEL: Record<AgentCliId, string> = { claude: "Claude Code", codex: "Codex" };
+export const cliOf = (s: { cli?: AgentCliId } | undefined): AgentCliId => s?.cli ?? "claude";
+
 /** 역할 파일 frontmatter의 permissions (D5) */
 export interface Permissions {
   write: boolean;
@@ -127,6 +132,9 @@ export interface Session {
   /** 감지된 에이전트 CLI (셸 우선 모델) — Job 프로세스 트리 실측 표시 이름 (Claude/Codex 등).
    *  관측 전용: 사용자가 터미널에 직접 띄운 것을 이름만 식별한다. 미검출이면 undefined */
   agent?: string;
+  /** 관리 기동 엔진 (M37) — 세션 추가 때 고른 CLI. 없으면 claude. `agent`(실측 표시)와 다르다:
+   *  이것은 "무엇으로 띄울 것인가"라는 편성이고 team.json에 영속된다 */
+  cli?: AgentCliId;
   lastOutput: string;
   /** 마지막 한 줄 요약 (M35) — Stop 훅이 트랜스크립트에서 뽑아 SQLite에 남긴다.
    *  앱을 껐다 켜도 남는 유일한 "무엇을 하고 있었는가" — 라이브 필드(activity)와 다르다 */
@@ -157,6 +165,7 @@ export interface TeamSlotHydrate {
   name?: string | null; // 세션 표시 이름 (P5) — 페르소나 이름과 분리 가능
   worktree?: boolean;
   permissions?: Permissions | null; // 슬롯 권한 오버라이드 (FR-E-34) — 없으면 직무 기본값
+  cli?: string | null; // 관리 기동 엔진 (M37) — team.json 원본, 없으면 claude
   agentSessionId: string | null;
   resumable: boolean;
   worktreePath?: string | null;
@@ -273,6 +282,26 @@ export function flagsToString(f: RuntimeFlags, sessionId?: string): string {
   if (f.disallowedTools.length) parts.push(`--disallowedTools ${f.disallowedTools.join(" ")}`);
   if (sessionId) parts.push(`--session-id ${sessionId}`);
   return parts.join(" ");
+}
+
+/** Codex 판 (M37) — Rust agent.rs의 codex_permission_args·codex_git_rules와 같은 번역.
+ *  write:false(manual) → 읽기 전용 샌드박스, 그 외 → 워크스페이스 쓰기. 승인은 항상 on-request.
+ *  git 금지는 Codex에 도구 금지 플래그가 없어 지시로만 실리므로 그렇게 밝힌다 — 플래그처럼
+ *  보이게 두면 "막혀 있다"고 믿게 된다. 세션 id는 Codex가 정하므로 재개 앵커로만 보인다. */
+export function codexFlagsToString(f: RuntimeFlags, sessionId?: string): string {
+  const parts = [
+    `--sandbox ${f.permissionMode === "manual" ? "read-only" : "workspace-write"}`,
+    "--ask-for-approval on-request",
+  ];
+  const git = f.disallowedTools.filter((d) => d.startsWith("Bash(git "));
+  if (git.length) parts.push(`(지시로만: ${git.join(" ")})`);
+  if (sessionId) parts.push(`resume ${sessionId}`);
+  return parts.join(" ");
+}
+
+/** 엔진별 실행 플래그 문자열 — 세션 상세의 "실제/예상 실행 플래그"와 스폰 기록(B39)이 같이 쓴다 */
+export function agentFlagsToString(cli: AgentCliId | undefined, f: RuntimeFlags, sessionId?: string): string {
+  return cli === "codex" ? codexFlagsToString(f, sessionId) : flagsToString(f, sessionId);
 }
 
 /** FR-G-07 — 주의 필요 순 정렬 가중치 */

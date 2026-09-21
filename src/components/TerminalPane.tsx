@@ -41,7 +41,7 @@ import { t, tf } from "../i18n";
 import { selectedSession } from "../state";
 import { ContextMenu } from "./ui";
 import type { MenuGroup } from "./ui";
-import type { Permissions } from "../types";
+import type { AgentCliId, Permissions } from "../types";
 
 /** 터미널 색 — styles.css의 --eq-term-* 토큰이 원본이다 (설정 · 색 팔레트가 이 토큰을 고른다).
  *  여기에 hex를 두면 팔레트와 어긋나므로 두지 않는다. 터미널은 어느 테마에서도 다크로 남는다. */
@@ -257,13 +257,14 @@ export async function launchAgentInSession(
   cwd: string,
   name: string,
   permissions: Permissions,
+  cli: AgentCliId = "claude",
 ): Promise<void> {
   if (!isTauri()) return;
   const e = REGISTRY.get(id);
   await killAndWait(id); // 셸이 살아 있으면 Rust가 재부착만 한다 — 반드시 먼저 끝낸다
   const size = sessionTermSize(id);
   try {
-    await spawnAgent(id, wsId, cwd, name, permissions, size.cols, size.rows);
+    await spawnAgent(id, wsId, cwd, name, permissions, size.cols, size.rows, cli);
   } finally {
     doneRespawning(id);
   }

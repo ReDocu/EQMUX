@@ -8,8 +8,8 @@ import { isTauri } from "./pty";
 import { saveRoleFile } from "./roles";
 import { settings } from "./settings";
 import { beepWaiting } from "./sound";
-import type { AgentStatus, Permissions } from "../types";
-import { flagsToString, translatePermissions } from "../types";
+import type { AgentCliId, AgentStatus, Permissions } from "../types";
+import { agentFlagsToString, translatePermissions } from "../types";
 
 export interface AgentStateEvt {
   session: string;
@@ -114,7 +114,9 @@ export async function applyAgentSnapshot(): Promise<void> {
 }
 
 /** 에이전트 기동 (FR-D-01·02·40) — UUID는 Rust가 발급하고 반환한다.
- *  스폰 전에 역할 파일을 합성해 (FR-E-31) 주입(FR-D-05)이 항상 성립하게 한다. */
+ *  스폰 전에 역할 파일을 합성해 (FR-E-31) 주입(FR-D-05)이 항상 성립하게 한다.
+ *  cli는 관리 기동 엔진 (M37) — 없으면 claude. 권한 플래그는 Claude 모양 하나로 보내고 Rust가
+ *  엔진별로 번역한다 (권한의 원천과 번역표는 하나여야 한다). */
 export async function spawnAgent(
   sessionId: string,
   wsId: string,
@@ -123,6 +125,7 @@ export async function spawnAgent(
   permissions: Permissions,
   cols: number,
   rows: number,
+  cli: AgentCliId = "claude",
 ): Promise<string> {
   await ensureAgentListeners();
   await saveRoleFile(sessionId);
@@ -136,10 +139,12 @@ export async function spawnAgent(
     disallowedTools: f.disallowedTools,
     cols,
     rows,
+    cli,
   });
   // 실제로 넘긴 플래그를 그대로 기억한다 (B39) — 권한 파일이 나중에 바뀌어도 돌고 있는
   // 프로세스의 플래그는 이 값이다. 다시 계산하면 '실제'가 아니라 '현재 설정'이 된다.
-  backend.noteSpawnFlags(sessionId, flagsToString(f, uuid));
+  // Codex의 uuid는 자리표시라 여기 싣지 않는다 — 진짜 id는 SessionStart 훅이 agent-state로 알려준다
+  backend.noteSpawnFlags(sessionId, agentFlagsToString(cli, f, cli === "codex" ? undefined : uuid));
   return uuid;
 }
 
@@ -152,6 +157,7 @@ export async function resumeAgent(
   permissions: Permissions,
   cols: number,
   rows: number,
+  cli: AgentCliId = "claude",
 ): Promise<string> {
   await saveRoleFile(sessionId); // 복원 세션도 최신 편성으로 합성한 뒤 재개한다
   const f = translatePermissions(permissions);
@@ -164,17 +170,19 @@ export async function resumeAgent(
     disallowedTools: f.disallowedTools,
     cols,
     rows,
+    cli,
   });
-  backend.noteSpawnFlags(sessionId, flagsToString(f, uuid));
+  backend.noteSpawnFlags(sessionId, agentFlagsToString(cli, f, uuid));
   return uuid;
 }
 
-/** 권한 변경 재시작 (E11′ · FR-D-26) — 재개 기반, 대화 유지 */
+/** 권한 변경 재시작 (E11′ · FR-D-26) — 재개 기반, 대화 유지. 엔진은 Rust의 추적 맵이 안다 */
 export async function restartAgent(
   sessionId: string,
   permissions: Permissions,
   cols: number,
   rows: number,
+  cli: AgentCliId = "claude",
 ): Promise<string> {
   await saveRoleFile(sessionId); // 바뀐 permissions가 frontmatter에 실려야 한다 (FR-E-46)
   const f = translatePermissions(permissions);
@@ -185,6 +193,6 @@ export async function restartAgent(
     cols,
     rows,
   });
-  backend.noteSpawnFlags(sessionId, flagsToString(f, uuid));
+  backend.noteSpawnFlags(sessionId, agentFlagsToString(cli, f, uuid));
   return uuid;
 }

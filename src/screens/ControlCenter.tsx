@@ -52,8 +52,8 @@ import {
 import { t, tf } from "../i18n";
 import { SessionDetailPanel } from "./SessionDetailPanel";
 import { TranscriptPane } from "./TranscriptPane";
-import type { Session, Workspace } from "../types";
-import { effectivePermissions, sessionDisplayName } from "../types";
+import type { AgentCliId, Session, Workspace } from "../types";
+import { AGENT_CLI_LABEL, cliOf, effectivePermissions, sessionDisplayName } from "../types";
 
 /** 셸에 에이전트 명령을 쳐 넣는다 — claude 말고는 EQMUX가 관리하는 스폰 경로가 없다
  *  (역할 주입·훅·재개는 agent.rs의 ClaudeCodeAdapter 전용). 사람이 터미널에 직접 치는 것과
@@ -354,6 +354,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
   const [addPersona, setAddPersona] = createSignal("");
   const [addJob, setAddJob] = createSignal("");
   const [addWorktree, setAddWorktree] = createSignal(false); // 격리 옵트인 (FR-E-62 · E1′)
+  const [addCli, setAddCli] = createSignal<AgentCliId>("claude"); // 관리 기동 엔진 (M37)
   const [addErr, setAddErr] = createSignal<string | undefined>(undefined);
   const availablePersonas = () => {
     const used = new Set(sessions().map((x) => x.personaId));
@@ -378,20 +379,25 @@ export function ControlCenter(props: { workspace: Workspace }) {
     if (created) whenSessionReady(created.id, (id) => runCliIn(id, cmd));
     setAddOpen(false);
   };
-  // 설정 화면의 명부와 같은 소스 — 관리 경로가 있는 claude는 위 역할 카드가 이미 맡는다
+  // 설정 화면의 명부와 같은 소스 — 관리 경로가 있는 claude·codex는 위 역할 카드가 이미 맡는다
   const shellClis = () => agentClis().filter((a) => a.installed && !a.managed);
-  const claudeMissing = () => agentClisReady() && !agentClis().some((a) => a.managed && a.installed);
+  // 관리 엔진 선택지 (M37) — 명부의 managed 항목. 실측 전에는 둘 다 내놓아 자리가 흔들리지 않게 한다
+  const managedClis = (): AgentCliId[] => {
+    const known = agentClis().filter((a) => a.managed).map((a) => a.cmd as AgentCliId);
+    return known.length > 0 ? known : ["claude", "codex"];
+  };
+  const addCliMissing = () => agentClisReady() && !agentClis().some((a) => a.cmd === addCli() && a.installed);
   const [shellMenuOpen, setShellMenuOpen] = createSignal(false);
   const shellCmdFor = (s: Session) => SHELLS.find((x) => x.label === s.shell)?.cmd;
   const addRoleSession = async () => {
     if (!addPersona() || !addJob()) return;
     setAddErr(undefined);
-    let opts: { cwd: string; worktree: boolean } | undefined;
+    const opts: { cwd?: string; worktree?: boolean; cli: AgentCliId } = { cli: addCli() };
     // 워크트리 격리 (FR-E-62) — 기본은 repo 공유 (FR-E-60). 실패는 정직하게 표시하고 만들지 않는다
     if (addWorktree() && isTauri()) {
       try {
-        const cwd = await ensureWorktree(props.workspace.path, `${addPersona()}@${props.workspace.id}`);
-        opts = { cwd, worktree: true };
+        opts.cwd = await ensureWorktree(props.workspace.path, `${addPersona()}@${props.workspace.id}`);
+        opts.worktree = true;
       } catch (err) {
         setAddErr(String(err));
         return;
@@ -425,7 +431,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
       }
       const size = sessionTermSize(s.id);
       try {
-        await resumeAgent(s.id, s.workspaceId, s.cwd, persona(s.personaId)?.name ?? s.personaId, p, size.cols, size.rows);
+        await resumeAgent(s.id, s.workspaceId, s.cwd, persona(s.personaId)?.name ?? s.personaId, p, size.cols, size.rows, cliOf(s));
       } catch (err) {
         setResumeErr({ id: s.id, msg: String(err) });
         return;
@@ -535,7 +541,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
     const a = roleAgent(s);
     if (!a) return;
     try {
-      await launchAgentInSession(s.id, s.workspaceId, s.cwd, a.name, a.permissions);
+      await launchAgentInSession(s.id, s.workspaceId, s.cwd, a.name, a.permissions, cliOf(s));
     } catch {
       /* 실패는 페인 출력과 이벤트 피드가 보여준다 (FR-D-08) */
     }
@@ -1305,22 +1311,30 @@ export function ControlCenter(props: { workspace: Workspace }) {
 
             <div class="card add-choice role" onClick={(e) => e.stopPropagation()}>
               <div style={{ width: "100%" }}>
-                <div style={{ "font-weight": 700, "font-size": "12px" }}>⛬ {t("클로드코드 에이전트 열기")}</div>
+                <div style={{ "font-weight": 700, "font-size": "12px" }}>⛬ {t("에이전트 열기")}</div>
                 <div class="muted" style={{ "font-size": "11px", "margin-bottom": "8px" }}>
-                  {t("페르소나·직무를 정해 바로 기동 · 역할·권한 플래그·훅이 붙은 유일한 경로")}
+                  {t("페르소나·직무를 정해 바로 기동 · 역할·권한 플래그·훅이 붙은 유일한 경로 (Claude Code · Codex)")}
                 </div>
-                {/* PATH에 claude가 없으면 기동은 스폰에서 실패한다 — 누르기 전에 말한다.
+                {/* PATH에 그 CLI가 없으면 기동은 스폰에서 실패한다 — 누르기 전에 말한다.
                     카드를 숨기지는 않는다: 역할 세션은 팀 편성의 기본 단위라 자리가 사라지면
                     "왜 없지"가 된다. 설치 상태는 설정 > CLI 에이전트에서 다시 확인할 수 있다. */}
-                <Show when={claudeMissing()}>
+                <Show when={addCliMissing()}>
                   <div class="mono st-dead" style={{ "font-size": "10px", "margin-bottom": "8px" }}>
-                    {t("PATH에 claude가 없습니다 — 설치 후 설정 > CLI 에이전트에서 다시 확인하세요")}
+                    {tf("PATH에 {cmd}가 없습니다 — 설치 후 설정 > CLI 에이전트에서 다시 확인하세요", { cmd: addCli() })}
                   </div>
                 </Show>
                 <Show
                   when={availablePersonas().length > 0}
                   fallback={<div class="muted mono" style={{ "font-size": "11px" }}>{t("남은 페르소나가 없습니다")}</div>}
                 >
+                  {/* 엔진 (M37) — 둘 다 같은 역할·훅·메시지 버스가 붙는다. 차이는 재개 앵커와
+                      권한 번역(Claude: permission-mode · Codex: sandbox+approval)뿐이다 */}
+                  <div class="role-edit-row" style={{ "margin-bottom": "6px" }}>
+                    <span class="mono muted" style={{ "font-size": "11px" }}>{t("엔진")}</span>
+                    <select value={addCli()} onChange={(e) => setAddCli(e.currentTarget.value as AgentCliId)}>
+                      <For each={managedClis()}>{(c) => <option value={c}>{AGENT_CLI_LABEL[c]}</option>}</For>
+                    </select>
+                  </div>
                   <div class="role-edit-row">
                     <select value={addPersona()} onChange={(e) => setAddPersona(e.currentTarget.value)}>
                       <For each={availablePersonas()}>{(p) => <option value={p.id}>{p.name}</option>}</For>

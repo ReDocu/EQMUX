@@ -25,6 +25,10 @@ pub struct TeamSlot {
     /// 슬롯 권한 오버라이드 (FR-E-34, M31) — 직무 기본값을 이 슬롯에서만 덮어쓴다. 없으면 생략
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permissions: Option<crate::roles::RolePermissions>,
+    /// 실행 엔진 (M37) — "claude"(기본) 또는 "codex". 없으면 claude. 슬롯이 고른 CLI가 관리
+    /// 기동 경로(역할 주입·훅·재개 앵커)를 통째로 가르므로, 편성과 함께 파일에 남아 커밋된다.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cli: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -63,7 +67,8 @@ pub fn save(ws_path: &str, slots: &[TeamSlot]) -> Result<(), String> {
             Some(s) => {
                 let iso = if s.worktree { " · 워크트리" } else { "" };
                 let ovr = if s.permissions.is_some() { " · 권한 오버라이드" } else { "" };
-                md.push_str(&format!("| {} | {} | {}{}{} |\n", n, s.persona_name, s.job_name, iso, ovr));
+                let eng = if s.cli.as_deref() == Some("codex") { " · Codex" } else { "" };
+                md.push_str(&format!("| {} | {} | {}{}{}{} |\n", n, s.persona_name, s.job_name, iso, ovr, eng));
             }
             None => md.push_str(&format!("| {} | — | (비어 있음) |\n", n)),
         }

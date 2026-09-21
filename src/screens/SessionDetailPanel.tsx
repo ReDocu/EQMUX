@@ -15,7 +15,7 @@ import { t } from "../i18n";
 import { jumpToSession } from "../state";
 import { Eyebrow, KV, StatusLabel } from "../components/ui";
 import type { Permissions, Session } from "../types";
-import { agentAttached, flagsToString, sessionDisplayName, translatePermissions } from "../types";
+import { AGENT_CLI_LABEL, agentAttached, agentFlagsToString, cliOf, sessionDisplayName, translatePermissions } from "../types";
 
 const PERM_KEYS: (keyof Permissions)[] = ["write", "commit", "push"];
 
@@ -66,7 +66,7 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
   const flags = () => {
     if (s().spawnFlags) return s().spawnFlags!;
     const p = effPerms();
-    return p ? flagsToString(translatePermissions(p), s().agentSessionId) : "—";
+    return p ? agentFlagsToString(cliOf(s()), translatePermissions(p), s().agentSessionId) : "—";
   };
 
   // ── 슬롯 권한 오버라이드 편집 (FR-E-34, M31) — 적용은 재시작(E11′), 파일에도 반영 ──
@@ -186,6 +186,7 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
           p,
           size.cols,
           size.rows,
+          cliOf(s()),
         );
       } catch (err) {
         setActionErr(String(err));
@@ -202,7 +203,7 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
       const p = effPerms();
       const size = sessionTermSize(s().id);
       try {
-        if (p) await restartAgent(s().id, p, size.cols, size.rows);
+        if (p) await restartAgent(s().id, p, size.cols, size.rows, cliOf(s()));
       } catch (err) {
         setActionErr(String(err));
         return;
@@ -329,6 +330,12 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
 
       <div style={{ "margin-top": "10px" }}>
         <Eyebrow>{s().spawnFlags ? t("실제 실행 플래그 (FR-D-41)") : t("예상 실행 플래그 (FR-D-41)")}</Eyebrow>
+        {/* 엔진 (M37) — 플래그의 문법이 엔진에 따라 다르므로 무엇의 플래그인지 먼저 밝힌다 */}
+        <Show when={s().personaId}>
+          <div class="muted mono" style={{ "font-size": "10px", margin: "2px 0 4px" }}>
+            {t("엔진")} · {AGENT_CLI_LABEL[cliOf(s())]}
+          </div>
+        </Show>
         <div class="card inset flags mono">{flags()}</div>
         <Show when={!s().spawnFlags}>
           <div class="muted" style={{ "font-size": "10px", "margin-top": "4px" }}>

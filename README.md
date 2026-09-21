@@ -37,13 +37,13 @@ EQMUX는 터미널 멀티플렉서(MUX)에 에이전트 팀 관제를 얹은 Win
 
 - **관제 대시보드** — 워크스페이스×세션 그리드, 주의 필요 순 정렬, waiting/dead 우선 표시, 상태 전이·서브에이전트·임무 이벤트 피드, OS 알림
 - **터미널 워크스페이스** — ConPTY + xterm.js, 페인 배치 6종 + 분할선 드래그 + 줌, 터미널 내 검색(Ctrl+F), 링크 감지, 클립보드·드래그 앤 드롭
-- **에이전트 런타임** — Claude Code 세션 기동(`--session-id`·권한 플래그), 레지스트리 watch + 훅 기반 상태 감지, 재개(resume)·권한 재시작, degraded 관측 저하 표시
+- **에이전트 런타임** — Claude Code · Codex 세션 관리 기동(역할·권한 플래그·훅·재개가 붙는다), 레지스트리 watch + 훅 기반 상태 감지, 재개(resume)·권한 재시작, degraded 관측 저하 표시
 - **팀·역할·임무** — 편성 프리셋, 직무/페르소나 라이브러리(전역 + 워크스페이스 오버라이드), 역할 파일 frontmatter가 실행 권한을 결정, 세션별 git 워크트리 격리 옵트인
 - **세션 영속성** — SQLite(WAL) 스크롤백 저장, 재시작 시 마지막 500줄 재생(SGR 색 보존) + 재개 제안, FTS 전문 검색, Job Object로 자식 프로세스 트리 정리, 웹뷰 크래시 생존
 - **메시지 버스** — 에이전트 간 강제 타입 메시지(ask / handoff / report / review / escalate), 상태 기반 전달(유휴면 즉시, 작업 중이면 턴 종료 시), 사람도 `@세션`·`@all`로 참여, 대화 원장 전체를 Markdown 파일로 저장
 - **개발 도구 패널** — git(상태·워크트리·체크아웃)·탐색기(파일 CRUD)·포트·로그·diff 뷰어·localhost 브라우저
 - **트랜스크립트 뷰** — Claude Code JSONL 로그를 턴 단위로 열람(참조만), 도구 호출 접기, 스크롤백 폴백
-- **외부 인터페이스** — `eqmux send · report · browser · ping` CLI + 명명 파이프, statusLine 비용 수집
+- **외부 인터페이스** — `eqmux send · report · browser · ping` CLI + 명명 파이프, statusLine 비용 수집. Claude Code와 Codex가 같은 버스로 서로 대화한다
 - **브라우저 조종** — 에이전트가 `eqmux browser open · snapshot · click · type · get-text · eval`로 브라우저 패널을 몬다. 보이지 않는 창이 아니라 **사람이 보고 있는 그 패널**이 움직인다
 - **설정·테마** — 다크/라이트/시스템 테마, 알림 라우팅, 세션 슬롯 수(4·6·8), 재생 줄 수 등 settings.json 실저장
 
@@ -114,7 +114,7 @@ npm run tauri build   # NSIS 인스톨러 산출 (EQMUX_x64-setup.exe)
 │  └─ backend/           # Tauri invoke 래퍼 + MockBackend
 ├─ src-tauri/src/        # Rust 백엔드
 │  ├─ ipc.rs, job.rs     # ConPTY 스폰 · Job Object 수명 관리
-│  ├─ agent.rs           # Claude Code 어댑터 (기동·상태 감지·재개·훅)
+│  ├─ agent.rs           # Claude Code · Codex 어댑터 (기동·상태 감지·재개·훅)
 │  ├─ store.rs           # SQLite 세션 저장소 (스크롤백·이벤트·FTS)
 │  ├─ team.rs, roles.rs, missions.rs   # .eqmux 파일 계약
 │  └─ cli.rs             # eqmux CLI · 명명 파이프

@@ -97,6 +97,7 @@ export const dict: Record<string, string> = {
   "--resume · 같은 UUID · 같은 cwd": "--resume · same UUID · same cwd",
   훅: "Hooks",
   "2차 소스 (PRD I 대기)": "Secondary source (pending PRD I)",
+  "훅 인라인 주입 · resume <id> · 샌드박스 = 권한": "Inline hook injection · resume <id> · sandbox = permissions",
 
   // 권한 정책
   "권한 정책": "Permission policy",

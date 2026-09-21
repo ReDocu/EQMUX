@@ -140,9 +140,6 @@ fn push_blocks(turns: &mut Vec<Turn>, blocks: &[serde_json::Value], role: &str, 
                 });
             }
             "tool_result" => {
-                // 도구 결과 — tool_use_id가 같은 도구 턴에 붙인다 (B65). 도구를 둘 이상 한 번에
-                // 부르면 기록이 use A → use B → res A → res B 순서라, '마지막 미완 tool'로 찾으면
-                // 결과가 서로 뒤바뀐다. id가 없는 옛 형식에서만 역방향 탐색으로 떨어진다.
                 let content = b
                     .get("content")
                     .map(|c| match c {
@@ -150,32 +147,117 @@ fn push_blocks(turns: &mut Vec<Turn>, blocks: &[serde_json::Value], role: &str, 
                         other => serde_json::to_string_pretty(other).unwrap_or_default(),
                     })
                     .unwrap_or_default();
-                let out = truncate(&content, 2000);
-                let want = b.get("tool_use_id").and_then(|i| i.as_str());
-                let hit = match want {
-                    Some(id) => turns.iter_mut().rev().find(|t| t.tool_id.as_deref() == Some(id)),
-                    None => turns.iter_mut().rev().find(|t| {
-                        t.role == "tool" && !t.detail.as_deref().unwrap_or("").contains("\n출력:")
-                    }),
-                };
-                if let Some(t) = hit {
-                    if let Some(d) = t.detail.as_mut() {
-                        d.push_str("\n출력:\n");
-                        d.push_str(&out);
-                    }
-                } else if !out.trim().is_empty() {
-                    turns.push(Turn {
-                        role: "tool".into(),
-                        time: time.into(),
-                        text: "⚑ 도구 결과".into(),
-                        summary: None,
-                        detail: Some(out),
-                        tool_id: None,
-                    });
-                }
+                attach_result(turns, b.get("tool_use_id").and_then(|i| i.as_str()), content, time);
             }
             _ => {}
         }
+    }
+}
+
+/// 도구 결과를 그 도구 턴에 붙인다 — id가 같은 도구 턴에 (B65). 도구를 둘 이상 한 번에 부르면
+/// 기록이 use A → use B → res A → res B 순서라, '마지막 미완 tool'로 찾으면 결과가 서로 뒤바뀐다.
+/// id가 없는 옛 형식에서만 역방향 탐색으로 떨어진다. Claude(tool_use_id)와 Codex(call_id)가 같이 쓴다.
+fn attach_result(turns: &mut Vec<Turn>, want: Option<&str>, content: String, time: &str) {
+    let out = truncate(&content, 2000);
+    let hit = match want {
+        Some(id) => turns.iter_mut().rev().find(|t| t.tool_id.as_deref() == Some(id)),
+        None => turns.iter_mut().rev().find(|t| {
+            t.role == "tool" && !t.detail.as_deref().unwrap_or("").contains("\n출력:")
+        }),
+    };
+    if let Some(t) = hit {
+        if let Some(d) = t.detail.as_mut() {
+            d.push_str("\n출력:\n");
+            d.push_str(&out);
+        }
+    } else if !out.trim().is_empty() {
+        turns.push(Turn {
+            role: "tool".into(),
+            time: time.into(),
+            text: "⚑ 도구 결과".into(),
+            summary: None,
+            detail: Some(out),
+            tool_id: None,
+        });
+    }
+}
+
+/// Codex 롤아웃 한 줄 (M37) — `response_item`의 payload가 대화다. 실측(0.146.0): message(role
+/// user/assistant)는 content[].text, custom_tool_call/function_call은 도구 호출, *_output이 그 결과다.
+/// developer 메시지와 `<…>`로 시작하는 시스템 주입(환경 컨텍스트·플러그인 안내)은 사람이 친 말이
+/// 아니므로 대화 턴이 아니다. reasoning·token_count 같은 나머지는 조용히 무시한다 (부분 파싱, R3).
+fn parse_codex_item(turns: &mut Vec<Turn>, v: &serde_json::Value) -> Result<(), ()> {
+    let p = v.get("payload").ok_or(())?;
+    let time = local_hhmm(v.get("timestamp").and_then(|t| t.as_str()).unwrap_or(""));
+    match p.get("type").and_then(|t| t.as_str()).unwrap_or("") {
+        "message" => {
+            let role = match p.get("role").and_then(|r| r.as_str()) {
+                Some("user") => "user",
+                Some("assistant") => "agent",
+                _ => return Ok(()), // developer — 시스템 주입
+            };
+            let Some(blocks) = p.get("content").and_then(|c| c.as_array()) else {
+                return Err(()); // content 부재 — 아는 형태가 아니다
+            };
+            for b in blocks {
+                let Some(text) = b.get("text").and_then(|t| t.as_str()) else { continue };
+                let trimmed = text.trim();
+                if trimmed.is_empty() || (role == "user" && trimmed.starts_with('<')) {
+                    continue; // <environment_context> 등 — 사람이 친 말이 아니다
+                }
+                turns.push(Turn {
+                    role: role.into(),
+                    time: time.clone(),
+                    text: truncate(trimmed, 4000),
+                    summary: None,
+                    detail: None,
+                    tool_id: None,
+                });
+            }
+            Ok(())
+        }
+        "function_call" | "custom_tool_call" => {
+            let name = p.get("name").and_then(|n| n.as_str()).unwrap_or("도구");
+            // function_call은 arguments(JSON 문자열), custom_tool_call은 input(자유 텍스트)
+            let raw = p.get("arguments").or_else(|| p.get("input"));
+            let input = match raw {
+                Some(serde_json::Value::String(s)) => s.clone(),
+                Some(other) => serde_json::to_string_pretty(other).unwrap_or_default(),
+                None => String::new(),
+            };
+            let summary = match raw {
+                Some(serde_json::Value::String(s)) => serde_json::from_str::<serde_json::Value>(s)
+                    .ok()
+                    .and_then(|j| tool_summary(&j))
+                    .or_else(|| Some(short_text(s))),
+                Some(other) => tool_summary(other),
+                None => None,
+            };
+            turns.push(Turn {
+                role: "tool".into(),
+                time,
+                text: format!("⚙ {name}"),
+                summary: summary.filter(|s| !s.is_empty()),
+                detail: Some(truncate(&format!("입력:\n{input}"), 2000)),
+                tool_id: p.get("call_id").and_then(|i| i.as_str()).map(str::to_string),
+            });
+            Ok(())
+        }
+        "function_call_output" | "custom_tool_call_output" => {
+            let out = match p.get("output") {
+                Some(serde_json::Value::String(s)) => s.clone(),
+                Some(serde_json::Value::Array(items)) => items
+                    .iter()
+                    .filter_map(|i| i.get("text").and_then(|t| t.as_str()))
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                Some(other) => serde_json::to_string_pretty(other).unwrap_or_default(),
+                None => String::new(),
+            };
+            attach_result(turns, p.get("call_id").and_then(|i| i.as_str()), out, &time);
+            Ok(())
+        }
+        _ => Ok(()), // reasoning 등 — 대화 턴이 아니다
     }
 }
 
@@ -184,8 +266,11 @@ fn push_blocks(turns: &mut Vec<Turn>, blocks: &[serde_json::Value], role: &str, 
 fn parse_line(turns: &mut Vec<Turn>, line: &str) -> Result<(), ()> {
     let v: serde_json::Value = serde_json::from_str(line).map_err(|_| ())?;
     let kind = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
+    if kind == "response_item" {
+        return parse_codex_item(turns, &v); // Codex 롤아웃 (M37) — 같은 파일 창·같은 턴 모델
+    }
     if kind != "user" && kind != "assistant" {
-        return Ok(()); // summary·system 등 — 대화 턴이 아니다
+        return Ok(()); // summary·system·session_meta·event_msg 등 — 대화 턴이 아니다
     }
     let time = local_hhmm(v.get("timestamp").and_then(|t| t.as_str()).unwrap_or(""));
     let role = if kind == "user" { "user" } else { "agent" };
@@ -307,6 +392,38 @@ mod tests {
         assert!(tools[0].text.contains("Read") && a.contains("A파일 내용"), "Read에 A 결과: {a}");
         assert!(tools[1].text.contains("Bash") && b.contains("B브랜치 상태"), "Bash에 B 결과: {b}");
         assert!(!a.contains("B브랜치") && !b.contains("A파일"), "결과가 교차되면 안 된다");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Codex 롤아웃 (M37) — 실측 0.146.0의 줄 모양. developer 메시지와 `<…>` 시스템 주입은
+    /// 대화가 아니고, custom_tool_call의 결과는 call_id로 그 도구 턴에 붙는다.
+    #[test]
+    fn parses_codex_rollout_items() {
+        let dir = std::env::temp_dir().join(format!("eqmux-tsc-{}", crate::workspace::now_ms()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("rollout-2026-09-21T12-38-23-abc.jsonl");
+        let mut f = File::create(&path).unwrap();
+        writeln!(f, r#"{{"timestamp":"2026-09-21T03:38:23.000Z","type":"session_meta","payload":{{"session_id":"abc","cwd":"C:\\ws"}}}}"#).unwrap();
+        writeln!(f, r#"{{"timestamp":"2026-09-21T03:38:23.100Z","type":"response_item","payload":{{"type":"message","role":"developer","content":[{{"type":"input_text","text":"<permissions instructions> …"}}]}}}}"#).unwrap();
+        writeln!(f, r#"{{"timestamp":"2026-09-21T03:38:23.200Z","type":"response_item","payload":{{"type":"message","role":"user","content":[{{"type":"input_text","text":"<environment_context>\n<cwd>C:\\ws</cwd>"}}]}}}}"#).unwrap();
+        writeln!(f, r#"{{"timestamp":"2026-09-21T03:38:24.000Z","type":"response_item","payload":{{"type":"message","role":"user","content":[{{"type":"input_text","text":"[EQ·ask] 카이: 범위 알려줘"}}]}}}}"#).unwrap();
+        writeln!(f, r#"{{"timestamp":"2026-09-21T03:38:24.100Z","type":"event_msg","payload":{{"type":"user_message","message":"[EQ·ask] 카이: 범위 알려줘"}}}}"#).unwrap();
+        writeln!(f, r#"{{"timestamp":"2026-09-21T03:38:25.000Z","type":"response_item","payload":{{"type":"reasoning","summary":[],"encrypted_content":"gAAA"}}}}"#).unwrap();
+        writeln!(f, r#"{{"timestamp":"2026-09-21T03:38:26.000Z","type":"response_item","payload":{{"type":"function_call","name":"shell_command","call_id":"call_1","arguments":"{{\"command\":\"git status\"}}"}}}}"#).unwrap();
+        writeln!(f, r#"{{"timestamp":"2026-09-21T03:38:27.000Z","type":"response_item","payload":{{"type":"function_call_output","call_id":"call_1","output":[{{"type":"input_text","text":"On branch main"}}]}}}}"#).unwrap();
+        writeln!(f, r#"{{"timestamp":"2026-09-21T03:38:30.000Z","type":"response_item","payload":{{"type":"message","role":"assistant","content":[{{"type":"output_text","text":"범위는 인증 모듈까지다."}}]}}}}"#).unwrap();
+
+        let data = read(&path, 200).unwrap();
+        assert_eq!(data.skipped, 0, "아는 형태뿐이다 — 건너뛴 줄이 없어야 한다");
+        let roles: Vec<&str> = data.turns.iter().map(|t| t.role.as_str()).collect();
+        assert_eq!(roles, vec!["user", "tool", "agent"]); // developer·환경 주입·event_msg·reasoning은 빠진다
+        assert_eq!(data.turns[0].text, "[EQ·ask] 카이: 범위 알려줘");
+        let tool = &data.turns[1];
+        assert!(tool.text.contains("shell_command"));
+        assert_eq!(tool.summary.as_deref(), Some("git status")); // arguments JSON의 command
+        let d = tool.detail.as_deref().unwrap();
+        assert!(d.contains("입력:") && d.contains("출력:") && d.contains("On branch main"), "{d}");
+        assert_eq!(data.turns[2].text, "범위는 인증 모듈까지다.");
         std::fs::remove_dir_all(&dir).ok();
     }
 

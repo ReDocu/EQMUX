@@ -53,6 +53,126 @@ pub struct Tracked {
     /// 질의가 진행 중이라고 보아 busy를 쓰므로, 2초 재스캔이 waiting을 도로 내려버린다.
     /// 그 동안만 재스캔의 상태 갱신을 막는 표식. 답이 들어오면(PostToolUse) 바로 풀린다.
     pub asking: bool,
+    /// 실행 엔진 (M37) — "codex"면 CodexAdapter 경로(훅만이 상태 소스, 레지스트리 없음).
+    /// 빈 값·"claude"는 Claude Code. Default가 빈 문자열이라 옛 코드 경로는 그대로 Claude다.
+    pub cli: String,
+    /// Codex 롤아웃(트랜스크립트) 경로 — SessionStart 훅 payload의 transcript_path.
+    /// Claude는 cwd+uuid로 경로를 계산하지만, Codex는 세션 id도 파일 위치도 스스로 정하므로
+    /// 훅이 알려준 값을 들고 있어야 재개 가능 판정(resumable_of)이 성립한다.
+    pub transcript: Option<String>,
+}
+
+// ── 실행 엔진 (M37) — 관리 기동이 되는 CLI는 둘: Claude Code(기본)와 Codex ──
+//
+// 메시지 버스(eqmux send → 파이프 → 원장 → PTY 주입)는 처음부터 CLI를 가리지 않았다. 갈렸던
+// 것은 관리 기동 경로 — 역할 주입·훅·상태·재개 앵커 — 뿐이라, Codex 지식도 Claude 지식과
+// 같은 원칙으로 이 모듈에만 둔다 (FR-D-60). 실측 기준 Codex CLI 0.146.0 (Windows):
+//   · 훅은 hooks.json과 같은 스키마를 `-c hooks.<Event>=[...]` 인라인 오버라이드로 받는다.
+//     stdin JSON에 session_id·transcript_path·cwd·hook_event_name이 오고, Stop에는
+//     last_assistant_message가 실린다. SessionStart 출력의 hookSpecificOutput.additionalContext는
+//     Claude와 똑같이 컨텍스트로 들어간다 — `eqmux _hook`이 그대로 통한다.
+//   · --session-id가 없다. 스레드 id는 Codex가 정하고 SessionStart 훅이 알려준다 (adopt_codex_session).
+//   · --append-system-prompt의 자리는 `-c developer_instructions='…'`다.
+//   · 도구 서브프로세스 환경은 shell_environment_policy가 거른다 (KEY·SECRET·TOKEN 포함 변수 제외가
+//     기본) — EQMUX_TOKEN을 `shell_environment_policy.set`으로 명시 재주입해야 `eqmux send`가 선다.
+
+pub const CLI_CLAUDE: &str = "claude";
+pub const CLI_CODEX: &str = "codex";
+
+pub fn is_codex(cli: &str) -> bool {
+    cli == CLI_CODEX
+}
+
+/// 프런트가 보낸 엔진 이름 → 정본. 모르는 값·없음은 Claude — 옛 team.json(cli 필드 없음)이 그대로 산다
+pub fn normalize_cli(cli: Option<&str>) -> String {
+    match cli {
+        Some(c) if c == CLI_CODEX => CLI_CODEX.into(),
+        _ => CLI_CLAUDE.into(),
+    }
+}
+
+/// 경로가 있고 비어 있지 않은 파일인가 — 재개 가능 판정의 공통 실측 (추정하지 않는다, FR-D-20)
+pub fn path_nonempty(p: Option<&str>) -> bool {
+    p.filter(|p| !p.is_empty())
+        .and_then(|p| fs::metadata(p).ok())
+        .map(|m| m.len() > 0)
+        .unwrap_or(false)
+}
+
+/// 재개 가능 — 엔진별 트랜스크립트 실측. Claude는 cwd+uuid 규칙, Codex는 훅이 알려준 롤아웃 경로.
+pub fn resumable_of(t: &Tracked, uuid: &str) -> bool {
+    if is_codex(&t.cli) {
+        return path_nonempty(t.transcript.as_deref());
+    }
+    resumable(&t.cwd, uuid)
+}
+
+/// Codex에 거는 훅 이벤트 — Claude의 hook-settings.json과 같은 집합에 PermissionRequest가 더 있다
+/// (승인 요청은 Claude의 Notification에 해당하고, Codex에는 그 이름의 이벤트가 없다).
+pub const CODEX_HOOK_EVENTS: [&str; 8] = [
+    "SessionStart",
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PostToolUse",
+    "Stop",
+    "SubagentStart",
+    "SubagentStop",
+    "PermissionRequest",
+];
+
+/// Codex 훅 주입 — hooks.json을 쓰지 않는다. ~/.codex는 사용자의 것이고(S6 · FR-E-70과 같은 원칙)
+/// repo의 .codex/도 마찬가지라, 프로세스 한 번에만 사는 `-c` 인라인 오버라이드로 얹는다.
+/// 값은 TOML 인라인 배열이고 문자열은 작은따옴표(리터럴)만 쓴다 — cmd.exe 폴백 경로에서 큰따옴표가
+/// 깨지지 않게. `--dangerously-bypass-hook-trust`: Codex는 새 훅마다 사람의 /hooks 승인을 요구하는데,
+/// 이 훅은 저장소가 아니라 앱이 스스로 쓴 명령(eqmux _hook)이라 심사 대상이 아니다. 없으면 첫 세션의
+/// 훅이 조용히 안 돌아 상태가 영영 starting에 머문다 — "도착은 했는데 턴이 안 도는" 그 자리다.
+pub fn codex_hook_args() -> Vec<String> {
+    let mut v: Vec<String> = vec![
+        "--enable".into(),
+        "hooks".into(),
+        "--dangerously-bypass-hook-trust".into(),
+    ];
+    for e in CODEX_HOOK_EVENTS {
+        v.push("-c".into());
+        v.push(format!(
+            "hooks.{e}=[{{hooks=[{{type='command',command='eqmux _hook {e}',timeout=5}}]}}]"
+        ));
+    }
+    v
+}
+
+/// 권한 → Codex 플래그 (§4.5.1의 Codex 판). 프런트는 Claude 모양(permission_mode·disallowedTools)으로
+/// 보내고 여기서 번역한다 — 권한의 원천(역할 파일 frontmatter, D5)과 번역표(translatePermissions)는
+/// 하나여야 하기 때문. write:false(manual) → 읽기 전용 샌드박스, 그 외 → 워크스페이스 쓰기.
+/// 승인은 항상 on-request — bypass(--dangerously-bypass-approvals-and-sandbox)는 어떤 경로로도 만들지
+/// 않는다 (Claude의 bypassPermissions와 같은 금지).
+pub fn codex_permission_args(permission_mode: &str) -> Vec<String> {
+    let sandbox = if permission_mode == "manual" { "read-only" } else { "workspace-write" };
+    vec![
+        "--sandbox".into(),
+        sandbox.into(),
+        "--ask-for-approval".into(),
+        "on-request".into(),
+    ]
+}
+
+/// disallowedTools의 git 금지 → 지시문. Codex에는 도구 금지 플래그가 없어 개발자 지시로만 전한다 —
+/// 플래그가 아니라 규범이므로 세션 상세의 실행 플래그 표시도 이것을 "지시로만"이라고 밝힌다.
+pub fn codex_git_rules(disallowed: &[String]) -> Option<&'static str> {
+    let commit = disallowed.iter().any(|d| d.contains("git commit"));
+    let push = disallowed.iter().any(|d| d.contains("git push"));
+    match (commit, push) {
+        (true, _) => Some("git commit과 git push는 금지다 — 변경은 작업 트리에 남기고 보고한다."),
+        (false, true) => Some("git push는 금지다 — 커밋까지만 하고 보고한다."),
+        _ => None,
+    }
+}
+
+/// `-c key='…'`에 실을 한 줄 — TOML 리터럴 문자열은 작은따옴표도 줄바꿈도 담을 수 없다.
+/// 파싱에 실패하면 Codex가 원문을 통째로 문자열로 쓰므로 깨져도 세션은 뜨지만, 따옴표째 들어간
+/// 지시는 읽기 어렵다 — 여기서 미리 걷는다.
+pub fn toml_literal_line(s: &str) -> String {
+    s.replace("\r\n", " ").replace(['\r', '\n'], " ").replace('\'', "’")
 }
 
 static NEXT_EVT_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -208,8 +328,11 @@ pub fn resumable(cwd: &str, uuid: &str) -> bool {
 }
 
 /// 기동 커맨드 빌더 후보 (§4.1.1) — exe 직접 실행, 실패 시 cmd 경유(npm .cmd 설치 대비).
+/// exe는 엔진 이름(claude · codex)이고 인자는 호출부가 엔진별로 짠다. 환경변수는 두 엔진이
+/// 같다 — `eqmux` CLI·훅이 보는 것은 세션 신원(EQMUX_SESSION·TOKEN)과 역할 파일뿐이라서.
 /// bypassPermissions는 어떤 경로로도 만들지 않는다.
-pub fn claude_builders(
+pub fn agent_builders(
+    exe: &str,
     args: &[String],
     cwd: &str,
     app_session: &str,
@@ -227,6 +350,8 @@ pub fn claude_builders(
         // 추측 가능하므로, 스폰마다 새로 발급한 논스가 실제 신원이다
         b.env("EQMUX_TOKEN", token);
         b.env("EQMUX_TERMINAL", "eqmux");
+        // 어느 엔진 안에서 도는지 (M37) — 훅·CLI가 엔진별 분기를 해야 할 때의 근거
+        b.env("EQMUX_AGENT", exe);
         // `eqmux` CLI(PRD I)가 PATH에서 잡히도록 앱 실행 파일 폴더를 앞에 붙인다 —
         // 훅 커맨드·에이전트의 send/report가 절대 경로 없이 성립한다
         if let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.to_path_buf())) {
@@ -246,14 +371,14 @@ pub fn claude_builders(
             b.env("EQMUX_TEAM_FILE", tf);
         }
     };
-    let mut direct = CommandBuilder::new("claude");
+    let mut direct = CommandBuilder::new(exe);
     for a in args {
         direct.arg(a);
     }
     apply(&mut direct);
     let mut via_cmd = CommandBuilder::new("cmd.exe");
     via_cmd.arg("/c");
-    via_cmd.arg("claude");
+    via_cmd.arg(exe);
     for a in args {
         via_cmd.arg(a);
     }
@@ -416,6 +541,9 @@ pub fn hook_status(event: &str) -> Option<&'static str> {
 /// 바꾸면 세 곳이 같이 움직여야 한다 (common.ts 사전 · waiting_title).
 pub const WAIT_QUESTION: &str = "질문 선택 대기 — 이 페인에서 답해야 진행됩니다";
 pub const WAIT_PLAN: &str = "계획 승인 대기 — 이 페인에서 답해야 진행됩니다";
+/// Codex의 PermissionRequest (M37) — Claude의 Notification(permission prompt)과 같은 자리.
+/// registry_waiting_for가 쓰는 문자열과 같아 사전·알림 제목이 그대로 통한다.
+pub const WAIT_PERMISSION: &str = "권한 승인 대기";
 
 /// 사람이 골라야 끝나는 도구 — 도구가 "실행 중"인 내내 화면에는 선택 프롬프트가 떠 있고,
 /// 진행은 그 페인에 들어온 키 입력에서만 재개된다. 승인 프롬프트와 달리 Notification 훅이
@@ -485,6 +613,9 @@ pub fn hook_effect(event: &str, payload: &serde_json::Value) -> HookEffect {
         "PostToolUse" => HookEffect::Activity(None),
         "SubagentStart" => HookEffect::SubagentDelta(1),
         "SubagentStop" => HookEffect::SubagentDelta(-1),
+        // Codex 승인 프롬프트 (M37) — 사람이 이 페인에서 답해야 풀린다. 답이 들어오면 그 도구의
+        // PreToolUse(허용) 또는 다음 이벤트가 Activity로 와서 busy로 되돌린다 (unstick).
+        "PermissionRequest" => HookEffect::Ask(WAIT_PERMISSION),
         e => match hook_status(e) {
             Some(s) => HookEffect::Status(s),
             None => HookEffect::Ignore,
@@ -646,19 +777,31 @@ fn recap_from_transcript(path: &std::path::Path) -> Option<String> {
 
 /// Stop 훅에서 부른다 — 턴이 끝난 그 순간이 "마지막에 한 작업"이 확정되는 자리다.
 /// 실패는 조용하다: 요약이 없다고 상태 기계가 멈출 이유가 없다.
-pub fn record_recap(app: &AppHandle, session: &str) {
-    let rt: tauri::State<AgentRt> = app.state();
-    let Some((cwd, uuid)) = ({
-        let map = match rt.by_uuid.lock() {
-            Ok(m) => m,
-            Err(_) => return,
-        };
-        current_uuid(&map, session)
-            .and_then(|u| map.get(&u).map(|t| (t.cwd.clone(), u)))
-    }) else {
-        return;
+/// Codex는 Stop payload에 마지막 응답(last_assistant_message)이 실려 온다 — 트랜스크립트를 열지
+/// 않고 그것을 쓴다. Claude는 payload에 그 필드가 없으므로 종전대로 트랜스크립트 꼬리에서 뽑는다.
+pub fn record_recap(app: &AppHandle, session: &str, payload: &serde_json::Value) {
+    let from_payload = payload
+        .get("last_assistant_message")
+        .and_then(|v| v.as_str())
+        .and_then(recap_line);
+    let text = match from_payload {
+        Some(t) => t,
+        None => {
+            let rt: tauri::State<AgentRt> = app.state();
+            let Some((cwd, uuid)) = ({
+                let map = match rt.by_uuid.lock() {
+                    Ok(m) => m,
+                    Err(_) => return,
+                };
+                current_uuid(&map, session)
+                    .and_then(|u| map.get(&u).map(|t| (t.cwd.clone(), u)))
+            }) else {
+                return;
+            };
+            let Some(text) = recap_from_transcript(&transcript_path(&cwd, &uuid)) else { return };
+            text
+        }
     };
-    let Some(text) = recap_from_transcript(&transcript_path(&cwd, &uuid)) else { return };
     let Some((ws, _)) = crate::session_origin(app, session) else { return };
     let store: tauri::State<crate::StoreState> = app.state();
     let _ = store.0.sender().send(crate::store::StoreMsg::Recap {
@@ -673,11 +816,76 @@ pub fn record_recap(app: &AppHandle, session: &str) {
     );
 }
 
+/// Codex 세션 id 채택 (M37) — Codex에는 --session-id가 없어 스폰 때 앱이 발급한 uuid는 자리표시일
+/// 뿐이다. SessionStart 훅 payload의 session_id(스레드 id)와 transcript_path(롤아웃)가 진짜 앵커라,
+/// 여기서 추적을 그 id로 옮기고 agent_session 매핑(FR-D-24)을 갱신한다. 재개(`codex resume <id>`)는
+/// 같은 id로 다시 오므로 키는 그대로고 경로만 새로 받는다. Claude는 payload의 id가 발급 uuid와
+/// 같고 cli도 다르므로 여기서 아무것도 하지 않는다.
+fn adopt_codex_session(app: &AppHandle, session: &str, payload: &serde_json::Value) {
+    let Some(sid) = payload
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    else {
+        return;
+    };
+    let transcript = payload
+        .get("transcript_path")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let rt: tauri::State<AgentRt> = app.state();
+    let mut out = None;
+    if let Ok(mut map) = rt.by_uuid.lock() {
+        let Some(cur) = current_uuid(&map, session) else { return };
+        if !map.get(&cur).is_some_and(|t| is_codex(&t.cli)) {
+            return;
+        }
+        let Some(mut t) = map.remove(&cur) else { return };
+        if transcript.is_some() {
+            t.transcript = transcript.clone();
+        }
+        t.seq = next_seq();
+        let evt = AgentStateEvt {
+            session: session.to_string(),
+            agent_session: sid.to_string(),
+            status: t.last_status.clone(),
+            waiting_for: t.last_waiting.clone(),
+            activity: t.activity.clone(),
+            subagents: t.subagents,
+            cost_usd: t.cost_usd,
+            resumable: resumable_of(&t, sid),
+            version: None,
+            exit_code: None,
+            degraded: t.degraded,
+            seq: t.seq,
+            since_ms: Some(t.status_ms),
+        };
+        out = Some((t.ws.clone(), t.transcript.clone(), evt));
+        map.insert(sid.to_string(), t);
+    }
+    let Some((ws, log_path, evt)) = out else { return };
+    let store: tauri::State<crate::StoreState> = app.state();
+    let _ = store.0.sender().send(crate::store::StoreMsg::AgentSession {
+        ws,
+        id: session.to_string(),
+        agent_session_id: sid.to_string(),
+        log_path: log_path.unwrap_or_default(),
+        resumable: evt.resumable,
+    });
+    // 앵커가 바뀌었을 뿐 상태 전이가 아니다 — 피드·알림 없이 방송만 (activity와 같은 규칙)
+    let _ = app.emit("agent-state", evt);
+}
+
 pub fn apply_hook(app: &AppHandle, session: &str, event: &str, payload: &serde_json::Value) {
+    // Codex의 진짜 세션 id는 여기서 처음 알게 된다 (M37) — 상태 반영보다 먼저 앵커를 옮긴다
+    if event == "SessionStart" {
+        adopt_codex_session(app, session, payload);
+    }
     // 턴이 끝나는 자리 — 여기서만 "마지막에 한 작업"이 확정된다 (M35).
     // 상태 반영보다 먼저 한다: effect가 Ignore여도 요약은 남아야 한다
     if event == "Stop" {
-        record_recap(app, session);
+        record_recap(app, session, payload);
     }
     let effect = hook_effect(event, payload);
     if matches!(effect, HookEffect::Ignore) {
@@ -700,7 +908,7 @@ pub fn apply_hook(app: &AppHandle, session: &str, event: &str, payload: &serde_j
                         activity: t.activity.clone(),
                         subagents: t.subagents,
                         cost_usd: t.cost_usd,
-                        resumable: resumable(&t.cwd, &uuid),
+                        resumable: resumable_of(t, &uuid),
                         version: None,
                         exit_code: None,
                         degraded: t.degraded,
@@ -753,7 +961,7 @@ pub fn apply_statusline(app: &AppHandle, session: &str, payload: &serde_json::Va
                 activity: t.activity.clone(),
                 subagents: t.subagents,
                 cost_usd: t.cost_usd,
-                resumable: resumable(&t.cwd, &uuid),
+                resumable: resumable_of(t, &uuid),
                 version: None,
                 exit_code: None,
                 degraded: t.degraded,
@@ -787,7 +995,7 @@ pub fn on_pty_exit(app: &AppHandle, id: &str, code: Option<u32>, gen: u64) {
                     activity: None,
                     subagents: 0,
                     cost_usd: t.cost_usd, // 종료 후에도 마지막 비용은 남긴다
-                    resumable: resumable(&t.cwd, uuid),
+                    resumable: resumable_of(t, uuid),
                     version: None,
                     exit_code: code.map(i64::from),
                     degraded: t.degraded,
@@ -969,6 +1177,9 @@ fn scan(app: &AppHandle) {
             if t.last_status == "dead" || t.degraded != registry_ok {
                 continue; // 죽었거나 이미 원하는 값 — 전환 없음
             }
+            if is_codex(&t.cli) {
+                continue; // Codex는 레지스트리가 애초에 없다 (M37) — 훅만이 상태 소스이고 저하가 아니다
+            }
             t.degraded = !registry_ok;
             t.seq = next_seq();
             flips.push(AgentStateEvt {
@@ -979,7 +1190,7 @@ fn scan(app: &AppHandle) {
                 activity: t.activity.clone(),
                 subagents: t.subagents,
                 cost_usd: t.cost_usd,
-                resumable: resumable(&t.cwd, uuid),
+                resumable: resumable_of(t, uuid),
                 version: None,
                 exit_code: None,
                 degraded: t.degraded,
@@ -1123,7 +1334,7 @@ fn scan(app: &AppHandle) {
                     activity: None,
                     subagents: 0,
                     cost_usd: t.cost_usd,
-                    resumable: resumable(&t.cwd, uuid),
+                    resumable: resumable_of(t, uuid),
                     version: None,
                     exit_code: None,
                     degraded: false,
@@ -1157,7 +1368,7 @@ fn scan(app: &AppHandle) {
                     activity: t.activity.clone(),
                     subagents: t.subagents,
                     cost_usd: t.cost_usd,
-                    resumable: resumable(&t.cwd, &uuid),
+                    resumable: resumable_of(t, &uuid),
                     version: rec.version.clone(),
                     exit_code: None,
                     degraded: t.degraded,
@@ -1618,5 +1829,79 @@ mod tests {
         assert_eq!(super::waiting_title(None, false), "승인 대기"); // 모르면 종전대로
         // 표시 언어가 영어면 토스트도 영어다 (B66) — 앱 밖으로 나가는 유일한 신호다
         assert_eq!(super::waiting_title(Some(super::WAIT_QUESTION), true), "question");
+    }
+
+    /// Codex 훅 인자 (M37) — 이벤트마다 `-c hooks.<E>=[…]` 한 쌍, 명령은 eqmux _hook <E>.
+    /// 값에 큰따옴표가 있으면 cmd.exe 폴백 경로에서 깨진다 — 리터럴(작은따옴표)만 써야 한다.
+    #[test]
+    fn codex_hook_args_cover_every_event_without_double_quotes() {
+        let args = super::codex_hook_args();
+        assert!(args.iter().any(|a| a == "--dangerously-bypass-hook-trust")); // 앱이 쓴 훅은 심사 대상이 아니다
+        assert_eq!(args.iter().filter(|a| *a == "-c").count(), super::CODEX_HOOK_EVENTS.len());
+        for e in super::CODEX_HOOK_EVENTS {
+            let want = format!("hooks.{e}=[{{hooks=[{{type='command',command='eqmux _hook {e}',timeout=5}}]}}]");
+            assert!(args.contains(&want), "{e} 훅 인자가 빠졌다");
+        }
+        assert!(args.iter().all(|a| !a.contains('"')));
+        // Stop이 없으면 idle 전이가 없어 인박스(M3)가 영영 배출되지 않는다 — 집합에서 빠지면 안 된다
+        assert!(super::CODEX_HOOK_EVENTS.contains(&"Stop") && super::CODEX_HOOK_EVENTS.contains(&"PermissionRequest"));
+    }
+
+    /// 권한 → Codex 플래그 (M37). bypass는 어떤 입력에도 나오지 않는다.
+    #[test]
+    fn codex_permission_translation_never_bypasses() {
+        assert_eq!(
+            super::codex_permission_args("manual"),
+            ["--sandbox", "read-only", "--ask-for-approval", "on-request"]
+        );
+        assert_eq!(
+            super::codex_permission_args("acceptEdits"),
+            ["--sandbox", "workspace-write", "--ask-for-approval", "on-request"]
+        );
+        for mode in ["manual", "acceptEdits", "bypassPermissions", ""] {
+            assert!(super::codex_permission_args(mode).iter().all(|a| !a.contains("dangerously")));
+        }
+        // git 금지는 지시로만 — commit 금지가 push 금지를 포함한다
+        let both = vec!["Bash(git commit *)".to_string(), "Bash(git push *)".to_string()];
+        assert!(super::codex_git_rules(&both).unwrap().contains("git commit"));
+        let push = vec!["Bash(git push *)".to_string()];
+        let r = super::codex_git_rules(&push).unwrap();
+        assert!(r.contains("git push") && !r.contains("git commit"));
+        assert_eq!(super::codex_git_rules(&[]), None);
+        // TOML 리터럴 한 줄 — 줄바꿈과 작은따옴표는 살아남을 수 없다
+        let line = super::toml_literal_line("a\r\nb 'c'");
+        assert!(!line.contains('\n') && !line.contains('\''));
+        assert!(line.starts_with("a b"));
+    }
+
+    /// Codex의 승인 요청은 Claude의 Notification 자리 — waiting으로 올리고 답이 오면 풀린다
+    #[test]
+    fn permission_request_is_a_waiting_prompt() {
+        assert!(matches!(
+            super::hook_effect("PermissionRequest", &serde_json::json!({ "tool_name": "Bash" })),
+            HookEffect::Ask(r) if r == super::WAIT_PERMISSION
+        ));
+        // 모르는 엔진 이름은 Claude — 옛 team.json(cli 없음)이 그대로 산다
+        assert_eq!(super::normalize_cli(None), "claude");
+        assert_eq!(super::normalize_cli(Some("codex")), "codex");
+        assert_eq!(super::normalize_cli(Some("gemini")), "claude");
+    }
+
+    /// 재개 가능 판정은 엔진별 실측이다 (M37) — Codex는 훅이 알려준 롤아웃 경로가 있어야 한다
+    #[test]
+    fn resumable_of_reads_codex_rollout_path() {
+        let dir = std::env::temp_dir().join(format!("eqmux-codex-{}", crate::workspace::now_ms()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let rollout = dir.join("rollout.jsonl");
+        let mut t = super::Tracked { cli: "codex".into(), cwd: dir.to_string_lossy().into_owned(), ..Default::default() };
+        assert!(!super::resumable_of(&t, "any")); // 경로를 아직 모른다
+        t.transcript = Some(rollout.to_string_lossy().into_owned());
+        assert!(!super::resumable_of(&t, "any")); // 파일이 없다
+        std::fs::write(&rollout, "{}\n").unwrap();
+        assert!(super::resumable_of(&t, "any"));
+        // Claude 추적은 종전 규칙(cwd+uuid) — 롤아웃 경로가 있어도 보지 않는다
+        t.cli = String::new();
+        assert!(!super::resumable_of(&t, "no-such-uuid"));
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

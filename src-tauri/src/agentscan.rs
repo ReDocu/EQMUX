@@ -177,7 +177,7 @@ pub struct AgentCli {
     pub cmd: &'static str,
     pub name: &'static str,
     pub installed: bool,
-    /// EQMUX가 관리하는 스폰 경로가 있는가 — 역할 주입·훅·재개(agent.rs의 ClaudeCodeAdapter).
+    /// EQMUX가 관리하는 스폰 경로가 있는가 — 역할 주입·훅·재개 (agent.rs의 Claude·Codex 어댑터, M37).
     /// 나머지는 셸에 명령을 치는 것과 같아서 관제에는 "실행 중"으로만 보인다.
     pub managed: bool,
 }
@@ -191,7 +191,7 @@ pub fn roster() -> Vec<AgentCli> {
             cmd,
             name,
             installed: on_path(cmd),
-            managed: *cmd == "claude",
+            managed: *cmd == crate::agent::CLI_CLAUDE || *cmd == crate::agent::CLI_CODEX,
         })
         .collect()
 }

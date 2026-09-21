@@ -118,8 +118,14 @@ export const dict: Record<string, string> = {
   "슬롯 사용 중": "slots in use",
   "역할 없이 즉시 시작 · 언제든 역할 부여 가능": "Starts instantly without a role · assign one anytime",
   "클로드코드 에이전트 열기": "Open Claude Code agent",
+  "에이전트 열기": "Open agent",
+  엔진: "Engine",
   "페르소나·직무를 정해 바로 기동 · 역할·권한 플래그·훅이 붙은 유일한 경로":
     "Pick a persona and job and launch right away · the only path that carries the role, permission flags and hooks",
+  "페르소나·직무를 정해 바로 기동 · 역할·권한 플래그·훅이 붙은 유일한 경로 (Claude Code · Codex)":
+    "Pick a persona and job and launch right away · the only path that carries the role, permission flags and hooks (Claude Code · Codex)",
+  "PATH에 {cmd}가 없습니다 — 설치 후 설정 > CLI 에이전트에서 다시 확인하세요":
+    "{cmd} is not on PATH — install it, then re-check under Settings > CLI agents",
   "{name} 열기": "Open {name}",
   "셸에서 {cmd} 실행 · 역할·훅·재개는 붙지 않고 관제에는 실행 중으로만 보입니다":
     "Runs {cmd} in a shell · no role, hooks or resume attach; control center only shows it running",
@@ -142,8 +148,8 @@ export const dict: Record<string, string> = {
     "Measured against PATH — only installed CLIs can be opened from Add session. Same roster as detection, so anything you can open also shows up in the control center.",
   "확인 중…": "Checking…",
   "관리 실행": "Managed launch",
-  "역할·권한 플래그·훅·재개가 붙습니다. 세션 추가의 [클로드코드 에이전트 열기]가 이 경로입니다.":
-    "Carries the role, permission flags, hooks and resume. [Open Claude Code agent] in Add session uses this path.",
+  "역할·권한 플래그·훅·재개가 붙습니다. 세션 추가의 [에이전트 열기]가 이 경로입니다.":
+    "Carries the role, permission flags, hooks and resume. [Open agent] in Add session uses this path.",
   "셸 실행": "Shell launch",
   "셸에 명령을 치는 것과 같습니다 — 역할·훅·재개는 붙지 않고 관제에는 실행 중으로만 보입니다.":
     "Same as typing the command in a shell — no role, hooks or resume attach; the control center only shows it running.",

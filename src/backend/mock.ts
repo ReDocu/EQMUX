@@ -11,6 +11,7 @@ import { HARD_MAX_SLOTS, maxSlots } from "./settings";
  *  화면(대시보드 "열기")이 상한을 미리 알아야 조용한 no-op이 되지 않는다 */
 export const MAX_OPEN_WORKSPACES = 10;
 import { agentAttached } from "../types";
+import type { AgentCliId } from "../types";
 import type {
   AgentStateApply,
   ConversationMessage,
@@ -64,7 +65,12 @@ export interface Backend {
   addTerminal(wsId: string, shell?: string, cwd?: string): Session | undefined;
   /** 슬롯에 역할 세션 추가 — 스폰 시점에 권한 플래그가 결정되므로 재시작이 필요 없다.
    *  만들어진 세션을 돌려준다 — 부르는 쪽이 셸이 뜬 뒤의 행동(에이전트 기동)을 걸 수 있게 */
-  addRoleSession(wsId: string, personaId: string, jobId: string, opts?: { cwd?: string; worktree?: boolean }): Session | undefined;
+  addRoleSession(
+    wsId: string,
+    personaId: string,
+    jobId: string,
+    opts?: { cwd?: string; worktree?: boolean; cli?: AgentCliId },
+  ): Session | undefined;
   /** 슬롯에서 터미널 제거 — 세션을 삭제하고 임무 배정도 해제한다 */
   removeTerminal(id: string): void;
   /** 셸 세션 cwd 변경 (브랜치 부여) — PTY 재스폰과 짝으로만 부른다.
@@ -779,7 +785,12 @@ export class MockBackend implements Backend {
     this.broadcast();
   }
 
-  addRoleSession(wsId: string, personaId: string, jobId: string, opts?: { cwd?: string; worktree?: boolean }): Session | undefined {
+  addRoleSession(
+    wsId: string,
+    personaId: string,
+    jobId: string,
+    opts?: { cwd?: string; worktree?: boolean; cli?: AgentCliId },
+  ): Session | undefined {
     const ws = WORKSPACES.find((x) => x.id === wsId);
     if (!ws) return undefined;
     const slot = freeSlot(wsId);
@@ -792,6 +803,7 @@ export class MockBackend implements Backend {
       status: "shell", // 셸 우선 모델 — 역할 세션도 셸로 시작한다
       cwd: opts?.cwd ?? ws.path,
       worktree: opts?.worktree ?? false,
+      cli: opts?.cli === "codex" ? "codex" : undefined, // claude는 비워 둔다 — team.json에 생략 (M37)
       sinceMs: 0,
       sinceTs: Date.now(),
       lastOutput: "셸로 시작 — 에이전트는 터미널에서 직접 실행",
@@ -800,7 +812,8 @@ export class MockBackend implements Backend {
     const pName = PERSONAS.find((x) => x.id === personaId)?.name ?? personaId;
     const jName = JOBS.find((x) => x.id === jobId)?.name ?? jobId;
     const iso = opts?.worktree ? " · 워크트리" : "";
-    this.logEvent("app", `역할 세션 추가 · ${pName} · ${jName} · SLOT ${slot}${iso}`, undefined, wsId);
+    const eng = opts?.cli === "codex" ? " · Codex" : "";
+    this.logEvent("app", `역할 세션 추가 · ${pName} · ${jName} · SLOT ${slot}${iso}${eng}`, undefined, wsId);
     this.broadcast();
     return created;
   }
@@ -828,6 +841,7 @@ export class MockBackend implements Backend {
           status: "shell",
           name: sl.name ?? undefined, // 분리된 세션 이름 (P5) — team.json이 원본
           permOverride: sl.permissions ?? undefined, // 슬롯 권한 오버라이드 (FR-E-34)
+          cli: sl.cli === "codex" ? "codex" : undefined, // 관리 기동 엔진 (M37) — team.json이 원본
           cwd: sl.worktreePath ?? ws.path,
           // team.json의 격리 플래그는 그대로 보존한다 (B40) — 경로 실재 여부로 다시 계산하면
           // 워크트리가 없는 머신(.eqmux/worktrees는 gitignore 대상)에서 워크스페이스를 열기만

@@ -38,13 +38,13 @@ Auxiliary panes (editor, diff, browser) do not consume session slots.
 
 - **Control dashboard** — workspace × session grid, sorted by what needs attention, waiting/dead surfaced first, event feed for state transitions · subagents · missions, OS notifications
 - **Terminal workspace** — ConPTY + xterm.js, 6 pane layouts + draggable splitters + zoom, in-terminal search (Ctrl+F), link detection, clipboard and drag-and-drop
-- **Agent runtime** — launches Claude Code sessions (`--session-id`, permission flags), state detection via registry watch + hooks, resume and permission restart, degraded-observability indicator
+- **Agent runtime** — managed launch of Claude Code and Codex sessions (role, permission flags, hooks and resume attached), state detection via registry watch + hooks, resume and permission restart, degraded-observability indicator
 - **Teams · roles · missions** — casting presets, job/persona library (global + per-workspace override), role-file frontmatter decides execution permissions, opt-in git worktree isolation per session
 - **Session persistence** — SQLite (WAL) scrollback storage, replays the last 500 lines on restart (SGR colors preserved) with a resume suggestion, FTS full-text search, child process tree cleanup via Job Objects, survives webview crashes
 - **Message bus** — typed inter-agent messages (ask / handoff / report / review / escalate), state-aware delivery (immediate when idle, at end of turn when busy), humans join with `@session` and `@all`, save the whole ledger to a Markdown file
 - **Dev tool panels** — git (status · worktrees · checkout), explorer (file CRUD), ports, logs, diff viewer, localhost browser
 - **Transcript view** — read Claude Code JSONL logs turn by turn (reference only), collapsible tool calls, scrollback fallback
-- **External interface** — `eqmux send · report · browser · ping` CLI over a named pipe, statusLine cost collection
+- **External interface** — `eqmux send · report · browser · ping` CLI over a named pipe, statusLine cost collection. Claude Code and Codex agents talk to each other over the same bus
 - **Browser control** — agents drive the browser panel with `eqmux browser open · snapshot · click · type · get-text · eval`. Not a hidden window — **the panel the human is watching** is the one that moves
 - **Settings · themes** — dark/light/system themes, notification routing, session slot count (4 · 6 · 8), replay line count, all persisted to settings.json
 
@@ -117,7 +117,7 @@ To check only the frontend, run `npm run build` (tsc --noEmit + vite build).
 │  └─ backend/           # Tauri invoke wrappers + MockBackend
 ├─ src-tauri/src/        # Rust backend
 │  ├─ ipc.rs, job.rs     # ConPTY spawn · Job Object lifetime management
-│  ├─ agent.rs           # Claude Code adapter (launch · state detection · resume · hooks)
+│  ├─ agent.rs           # Claude Code · Codex adapters (launch · state detection · resume · hooks)
 │  ├─ store.rs           # SQLite session store (scrollback · events · FTS)
 │  ├─ team.rs, roles.rs, missions.rs   # .eqmux file contract
 │  └─ cli.rs             # eqmux CLI · named pipe
