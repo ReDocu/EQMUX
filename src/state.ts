@@ -87,6 +87,8 @@ export function scopeWorkspace(): Workspace | undefined {
 
 /** 사이드 패널 (M1 — 대화는 패널 탭이며 메인 화면이 아니다) */
 export const [panelOpen, setPanelOpen] = createSignal(false);
+/** 관제 화면 왼쪽 레일(슬롯 · 로컬 폴더 · 워크트리) 펼침 — 접으면 번호 띠만 남는다. layout.json에 남는다 */
+export const [railOpen, setRailOpen] = createSignal(true);
 export const [panelTab, setPanelTab] = createSignal<PanelTab>("conversation");
 /** 사이드 패널 위치 — 패널 탭 줄의 전환 버튼이 토글하고 layout.json에 영속된다 */
 export const [panelSide, setPanelSide] = createSignal<"left" | "right">("right");

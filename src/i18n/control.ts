@@ -112,6 +112,8 @@ export const dict: Record<string, string> = {
     "Open a default terminal in this worktree — assign roles from session details",
   "실측 대기 — git 저장소가 아니면 비어 있습니다": "Awaiting live data — empty unless this is a git repository",
   "워크트리 없음": "No worktrees",
+  "레일 접기": "Collapse rail",
+  "레일 펼치기": "Expand rail",
   "닫기 (ESC)": "Close (ESC)",
 
   // ── 세션 추가·제거 다이얼로그 ──

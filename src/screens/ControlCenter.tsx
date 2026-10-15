@@ -21,6 +21,8 @@ import {
   terminalFull,
   tick,
   toggleExplorer,
+  railOpen,
+  setRailOpen,
 } from "../state";
 import { Chip, ConfirmDialog, ContextMenu, Eyebrow, FieldHint, Identity, notify, Segmented, StatusLabel, StopConfirm } from "../components/ui";
 import { jobMeta } from "../jobs";
@@ -1234,11 +1236,44 @@ export function ControlCenter(props: { workspace: Workspace }) {
         )}
       </Show>
 
-      <div class="screen-body cc-body">
+      <div class="screen-body cc-body" classList={{ "rail-closed": !railOpen() }}>
         {/* 좌: 세션 리스트 레일 — 아바타 전용 56px 레일의 후신. 가로형 리스트 버튼으로
             이름·직무를 직접 보여준다. 선택은 테두리, 상태는 점, LEAD는 slot 1 관례 */}
+        <Show
+          when={railOpen()}
+          fallback={
+            /* 접힌 레일 — 펼치기 버튼과 세션 번호 띠. 번호를 눌러 페인을 고르는 일은 접어도 된다 */
+            <div class="cc-rail cc-rail-mini">
+              <button class="rail-toggle" title={t("레일 펼치기")} aria-label={t("레일 펼치기")} onClick={() => setRailOpen(true)}>
+                ›
+              </button>
+              <For each={railItems().filter((it): it is Session => typeof it !== "number")}>
+                {(s) => (
+                  <button
+                    class="rail-mini mono"
+                    classList={{ sel: selected()?.id === s.id }}
+                    title={`${paneNo(s)} ${sessionName(s, persona(s.personaId))} · ${s.status}`}
+                    onClick={() => {
+                      setSelectedSession(s.id);
+                      backend.markSeen(s.id);
+                      setCenterTab("terminal");
+                    }}
+                  >
+                    <span class={attnChips(s)[0] ? `rail-attn ${attnChips(s)[0]!.tone}` : `sdot ${s.status}`} />
+                    {paneNo(s)}
+                  </button>
+                )}
+              </For>
+            </div>
+          }
+        >
         <div class="cc-rail">
-          <div class="rail-head mono">SLOTS</div>
+          <div class="rail-head mono">
+            SLOTS
+            <button class="rail-toggle" title={t("레일 접기")} aria-label={t("레일 접기")} onClick={() => setRailOpen(false)}>
+              ‹
+            </button>
+          </div>
           <For each={railItems()}>
             {(it) =>
               typeof it === "number" ? (
@@ -1437,6 +1472,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
             </Show>
           </div>
         </div>
+        </Show>
 
         {/* 중: 터미널 2×2 그리드 / 트랜스크립트 — 탭·도구는 상단 바에 병합됐다 (시안 §04) */}
         <div class="cc-center">

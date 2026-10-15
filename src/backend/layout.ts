@@ -14,6 +14,7 @@ import {
   PANE_LAYOUTS,
   paneLayouts,
   panelOpen,
+  railOpen,
   panelSide,
   panelTab,
   paneRatios,
@@ -21,6 +22,7 @@ import {
   setDefaultShell,
   setPaneLayouts,
   setPanelOpen,
+  setRailOpen,
   setPanelSide,
   setPanelTab,
   setPaneRatios,
@@ -43,6 +45,7 @@ interface LayoutData {
   panelSide?: string; // 사이드 패널 위치 — "left" | "right"
   terminalNames?: Record<string, string>; // 기본 터미널 이름 (0.5) — 세션 id → 이름. 기기별
   panelOpen?: boolean; // 사이드 패널 열림 (0.5 서버 탭 상태 저장)
+  railOpen?: boolean; // 관제 왼쪽 레일 펼침 — 없으면 펼침
   panelTab?: string; // 사이드 패널 하위 탭 — 그룹은 이 키에서 풀린다
   serverCommands?: Record<string, string>; // 워크스페이스 id → 마지막 서버 명령. 다시 칠 때는 사람이 누른다
 }
@@ -126,6 +129,7 @@ export async function restoreLayout(): Promise<void> {
   if (data.panelSide === "left" || data.panelSide === "right") setPanelSide(data.panelSide);
   if (PANEL_TABS.includes(data.panelTab as PanelTab)) setPanelTab(data.panelTab as PanelTab);
   if (data.panelOpen === true) setPanelOpen(true);
+  if (data.railOpen === false) setRailOpen(false);
   if (data.serverCommands && typeof data.serverCommands === "object") {
     setServerCommands(
       Object.fromEntries(Object.entries(data.serverCommands).filter(([, v]) => typeof v === "string" && v.trim())),
@@ -165,6 +169,7 @@ function doSaveLayout(): void {
     panelSide: panelSide(),
     terminalNames: backend.savedTerminalNames(),
     panelOpen: panelOpen(),
+    railOpen: railOpen(),
     panelTab: panelTab(),
     serverCommands: serverCommands(),
   };
@@ -199,6 +204,7 @@ export function startLayoutSync(): void {
       selectedSession();
       panelSide(); // 패널 위치 전환
       panelOpen(); // 패널 열림·하위 탭 (0.5)
+      railOpen(); // 관제 왼쪽 레일 펼침
       panelTab();
       serverCommands(); // 마지막 서버 명령 (0.5)
       view();
