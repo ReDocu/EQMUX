@@ -510,15 +510,19 @@ fn delivery(app: &AppHandle, ws: &str, session: &str, entry: Option<&DirEntry>) 
     let waiting = || crate::messages::count_to_since(&store.0.root(), ws, session, since).unwrap_or(1);
     let role = entry.is_none_or(|e| !e.persona.is_empty()); // 디렉터리 없음(폴백) = team.json 역할 세션
     let manual = entry.is_some_and(|e| !e.agent.is_empty());
-    delivery_text(&status, role, manual, waiting)
+    let auto_manual = crate::setting_str(app, "manualDelivery").as_deref() == Some("auto");
+    delivery_text(&status, role, manual, auto_manual, waiting)
 }
 
 /// conversation.ts deliver()와 같은 갈래 — 어긋나면 CLI는 "전달함"인데 메시지는 인박스에 잔다
-fn delivery_text(status: &str, role: bool, manual: bool, waiting: impl FnOnce() -> i64) -> String {
+fn delivery_text(status: &str, role: bool, manual: bool, auto_manual: bool, waiting: impl FnOnce() -> i64) -> String {
     match status {
         // 기본 터미널에서 손으로 띄운 에이전트 — 레지스트리가 채택하면 idle·busy로도 보인다.
         // 역할 없는 페인의 에이전트는 상태와 상관없이 손으로 띄운 것이다 (BR-02)
-        _ if manual && !role => "대기 — 손으로 띄운 에이전트 · 사람이 넣기를 누르면 전달".into(),
+        // 설정 manualDelivery=auto면 idle일 때만 관리 세션처럼 바로 넣는다 (아래 "idle" 갈래)
+        _ if manual && !role && !(auto_manual && status == "idle") => {
+            "대기 — 손으로 띄운 에이전트 · 사람이 넣기를 누르면 전달".into()
+        }
         "idle" => "전달함".into(),
         // 꺼진 세션도 프런트 인박스에 남아 재개 때 받는다 — 실패는 영영 안 닿는 경우(이름 없음·닫힘·받기 끔)만
         "dead" => "대기 — 상대 세션 꺼짐 · 켜지면 전달".into(),
@@ -667,15 +671,17 @@ mod tests {
 
     #[test]
     fn delivery_text_by_status() {
-        assert_eq!(delivery_text("idle", true, false, || 0), "전달함");
-        assert_eq!(delivery_text("shell", false, false, || 0), "전달함"); // 기본 터미널 — 화면 에코
-        assert!(delivery_text("shell", true, false, || 0).starts_with("대기 — 에이전트가 아직")); // 인박스
-        assert!(delivery_text("shell", false, true, || 0).starts_with("대기 — 손으로")); // BR-02 쌓기
-        assert!(delivery_text("idle", false, true, || 0).starts_with("대기 — 손으로")); // 채택돼 idle이어도
-        assert!(delivery_text("starting", true, false, || 0).starts_with("대기 — "));
-        assert_eq!(delivery_text("busy", true, false, || 2), "대기 — 상대 작업 중 (대기 2건) · 턴이 끝나면 전달");
-        assert_eq!(delivery_text("waiting", true, false, || 0), "대기 — 상대 작업 중 (대기 1건) · 턴이 끝나면 전달");
-        assert_eq!(delivery_text("dead", true, false, || 0), "대기 — 상대 세션 꺼짐 · 켜지면 전달");
+        assert_eq!(delivery_text("idle", true, false, false, || 0), "전달함");
+        assert_eq!(delivery_text("shell", false, false, false, || 0), "전달함"); // 기본 터미널 — 화면 에코
+        assert!(delivery_text("shell", true, false, false, || 0).starts_with("대기 — 에이전트가 아직")); // 인박스
+        assert!(delivery_text("shell", false, true, false, || 0).starts_with("대기 — 손으로")); // BR-02 쌓기
+        assert!(delivery_text("idle", false, true, false, || 0).starts_with("대기 — 손으로")); // 채택돼 idle이어도
+        assert_eq!(delivery_text("idle", false, true, true, || 0), "전달함"); // 자동 넣기 설정 + idle
+        assert!(delivery_text("waiting", false, true, true, || 0).starts_with("대기 — 손으로")); // 자동이어도 승인 대기는 쌓는다
+        assert!(delivery_text("starting", true, false, false, || 0).starts_with("대기 — "));
+        assert_eq!(delivery_text("busy", true, false, false, || 2), "대기 — 상대 작업 중 (대기 2건) · 턴이 끝나면 전달");
+        assert_eq!(delivery_text("waiting", true, false, false, || 0), "대기 — 상대 작업 중 (대기 1건) · 턴이 끝나면 전달");
+        assert_eq!(delivery_text("dead", true, false, false, || 0), "대기 — 상대 세션 꺼짐 · 켜지면 전달");
     }
 
     #[test]

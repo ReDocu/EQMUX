@@ -36,6 +36,10 @@ export interface AppSettings {
    *  full=모델·비용 · nocost=모델만 · off=줄 없음. 어느 값이든 채널 자체는 계속 돌아
    *  세션 비용 수집(apply_statusline)은 끊기지 않는다 */
   statusLine: "full" | "nocost" | "off";
+  /** 손으로 띄운 에이전트에 온 메시지 (BR-02 후속) — park=쌓아 두고 사람이 넣기(기본) ·
+   *  auto=레지스트리가 idle로 본 때만 자동으로 넣는다. 상태를 모르거나 승인 대기면 auto여도 쌓는다.
+   *  Rust ipc의 전달 결과 응답도 이 키를 읽는다 */
+  manualDelivery: "park" | "auto";
 }
 
 /** 상태 줄 옵션 — 설정 화면·검증·Rust 주입이 공유한다 */
@@ -64,6 +68,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   maxSlots: 4, // 세션 슬롯 상한 — 기본 4, 옵션으로 6·8
   language: "ko", // UI 언어 — 기본 한국어
   statusLine: "full", // 현행 유지 — 모델·비용 한 줄
+  manualDelivery: "park", // 승인 창을 모르는 페인에는 사람이 넣는다 (BR-02)
 };
 
 const [settings, setSettings] = createSignal<AppSettings>(DEFAULT_SETTINGS);
@@ -93,6 +98,7 @@ function sanitize(raw: unknown): AppSettings {
     termRenderer: v.termRenderer === "dom" ? "dom" : "webgl",
     maxSlots: (SLOT_OPTIONS as readonly number[]).includes(v.maxSlots as number) ? (v.maxSlots as number) : 4,
     language: v.language === "en" ? "en" : "ko",
+    manualDelivery: v.manualDelivery === "auto" ? "auto" : "park",
     statusLine: (STATUSLINE_MODES as readonly string[]).includes(v.statusLine as string)
       ? (v.statusLine as AppSettings["statusLine"])
       : "full",

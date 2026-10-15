@@ -1,6 +1,7 @@
 // 패널 그룹 사전 — 대화·로그·포트·브라우저 패널 + 분할선 + 대화 브리지 오류 문구.
 // 공용 용어(세션·저장·미확인·기본 터미널 등)는 common.ts가 정본이라 여기 중복하지 않는다.
 export const dict: Record<string, string> = {
+  "{name} · 메시지 {n}건": "{name} · {n} message(s)",
   // ── 대화 탭 0.5 (W5) ──
   "모든 프로젝트": "All projects",
   "사람이 쓰는 메시지는 800자 상한에서 뺍니다": "Messages you write are exempt from the 800-character limit",

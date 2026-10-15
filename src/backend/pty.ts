@@ -136,7 +136,17 @@ export function setUserInputHook(cb: (id: string, data: string) => void): void {
 export function noteUserInput(id: string, data: string): void {
   inputHook?.(id, data);
   if (data === "\r" || data === "\n" || data === "\x03" || data === "\x1b") typingSince.delete(id);
-  else if (data) typingSince.set(id, Date.now());
+  else if (typedText(data)) typingSince.set(id, Date.now());
+}
+
+/** 사람이 친 글자인가 — xterm onData에는 터미널이 스스로 내는 응답도 섞인다. TUI가 포커스 보고(?1004)를
+ *  켜 두면 페인을 누를 때마다 `ESC[I`·`ESC[O`가, 커서 위치 질의에는 `ESC[12;3R`가 온다. 이것을 입력으로
+ *  치면 60초 동안 주입이 막히고, 유휴 세션은 다음 전이가 없어 메시지가 영영 대기에 남았다(실기 QA).
+ *  ESC로 시작하는 시퀀스는 글자가 아니다 — 단 괄호 붙여넣기(ESC[200~)는 사람이 붙여 넣은 글이다 */
+export function typedText(data: string): boolean {
+  if (!data) return false;
+  if (data.startsWith("\x1b[200~")) return true;
+  return !data.startsWith("\x1b");
 }
 
 /** 그 페인에 사람이 치다 만 입력이 남아 있는가 (B20) */

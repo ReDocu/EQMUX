@@ -3943,6 +3943,7 @@ button.eq-chip-tx,
   background: var(--eq-red);
 }
 .bell-dot.report,
+.bell-dot.message,
 .bell-dot.turn {
   background: var(--eq-blue);
 }
@@ -3978,6 +3979,7 @@ button.eq-chip-tx,
   color: var(--eq-red);
 }
 .bell-title.report,
+.bell-title.message,
 .bell-title.turn {
   color: var(--eq-blue);
 }

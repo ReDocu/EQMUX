@@ -135,6 +135,11 @@ export const dict: Record<string, string> = {
   // ── 0.5 — 세그먼트·드롭다운 · 완료 알림 · 낡은 문구 · 단축키 ──
   "바뀔 때마다 저장": "Saved on every change",
   "완료 OS 알림": "Completion OS notifications",
+  "손으로 띄운 에이전트 메시지": "Messages to hand-launched agents",
+  "기본 터미널에서 직접 실행한 claude·codex에 온 메시지 · 자동이어도 idle일 때만 넣고, 승인 대기·상태 모름이면 쌓아 벨에 남긴다":
+    "Messages to claude/codex you started yourself in a default terminal · even on auto they go in only when idle; while awaiting approval or with unknown state they queue and stay in the bell",
+  "쌓아 두기 (기본)": "Queue (default)",
+  "idle이면 자동으로 넣기": "Auto-insert when idle",
   "완료 보고만 (기본)": "Completion reports only (default)",
   "턴 끝날 때마다": "Every finished turn",
   끔: "Off",

@@ -6,10 +6,15 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { createSignal } from "solid-js";
-import { t } from "../i18n";
+import { t, tf } from "../i18n";
 import { backend } from "./mock";
 import { echoPty, humanTyping, isTauri, writePty } from "./pty";
 import { canInject, effectiveTitle, sessionName } from "../types";
+import { settings } from "./settings";
+import { notifyLocal } from "./attention";
+
+/** 손으로 띄운 에이전트에 자동으로 넣는가 (설정 manualDelivery) */
+const autoManual = () => settings().manualDelivery === "auto";
 import type { ConversationMessage } from "../types";
 
 /** 에이전트 발신 본문 상한 (결정 8) — Rust MAX_BODY_CHARS와 같은 값. 사람이 대화 탭에서
@@ -514,10 +519,24 @@ function gather(sessionId: string, m: ConversationMessage): void {
     inbox.set(sessionId, [...(inbox.get(sessionId) ?? []), ...msgs]);
     setInboxTick((t) => t + 1);
     scheduleInboxSave();
+    // 유휴인데 사람이 치는 중이라 못 넣었다 — 유휴 세션에는 다음 전이가 오지 않으니 직접 다시 본다
+    if (s.status === "idle") retryWhenFree(sessionId);
     // 모으는 사이 바빠졌다 — 먼저 붙인 `전달됨`을 `대기 중`으로 되돌린다. 배출 때 다시 전달됨이 된다
     const mine = msgs.filter((m) => m.from === "나");
     if (mine.length) setDeliveries((d) => ({ ...d, ...Object.fromEntries(mine.map((m) => [m.id, "queued" as const])) }));
   }, GATHER_MS);
+}
+
+/** 사람이 치던 줄이 끝나면 대기분을 흘린다 — 유휴 세션은 idle 전이가 다시 오지 않아 직접 확인한다.
+ *  치는 표식은 60초면 풀리므로 그 안에 끝난다. 그 사이 바빠지면 기존 idle 전이 경로가 맡는다 */
+const RETRY_MS = 3000;
+function retryWhenFree(sessionId: string, left = 25): void {
+  setTimeout(() => {
+    const s = backend.listSessions().find((x) => x.id === sessionId);
+    if (!s || s.status !== "idle" || !inbox.get(sessionId)?.length || left <= 0) return;
+    if (humanTyping(sessionId)) retryWhenFree(sessionId, left - 1);
+    else flushInboxOnState(sessionId, "idle");
+  }, RETRY_MS);
 }
 
 function deliver(wsId: string, m: ConversationMessage): void {
@@ -540,9 +559,20 @@ function deliver(wsId: string, m: ConversationMessage): void {
     if (s.status === "dead") {
       park(s.id); // 프로세스가 없다 — 재개하면 idle 전이에서 흘러간다 (B50)
     } else if (unmanagedAgent(s)) {
-      // 사람이 페인에 직접 띄운 에이전트 — 쌓기만 한다 (BR-02). 화면 에코도 하지 않는다:
+      // 사람이 페인에 직접 띄운 에이전트 — 기본은 쌓기만 한다 (BR-02). 화면 에코도 하지 않는다:
       // TUI는 우리가 끼워 넣은 줄을 모르므로 이후 차등 재그리기가 전부 어긋난다.
-      park(s.id);
+      // 설정이 auto면 레지스트리가 idle로 본 때만 관리 세션처럼 넣는다 — 승인 대기·상태 모름은 쌓는다
+      if (autoManual() && canInject(s)) inject(s.id);
+      else {
+        park(s.id);
+        notifyLocal({
+          session: s.id,
+          workspace: s.workspaceId,
+          kind: "message",
+          title: tf("{name} · 메시지 {n}건", { name: nameOf(s.id), n: pendingCount(s.id) }),
+          body: `${senderLabel(m.from, wsId)}: ${m.body.replace(/\s+/g, " ").slice(0, 80)}`,
+        });
+      }
     } else if (!s.personaId) {
       echoPty(s.id, fmtEcho(m, senderLabel(m.from, wsId))); // 기본 터미널 — 표시 전용 (P-2)
       reached = true;
@@ -555,6 +585,7 @@ function deliver(wsId: string, m: ConversationMessage): void {
       inject(s.id); // 유휴 = 프롬프트가 비어 있다 → 즉시 (M3)
     } else {
       park(s.id);
+      if (s.status === "idle") retryWhenFree(s.id); // 유휴인데 사람이 치는 중 — 끝나면 넣는다
     }
   }
   if (m.from === "나" && (queued || reached)) {
@@ -567,6 +598,9 @@ export function flushInboxOnState(sessionId: string, status: string | undefined)
   if (status !== "idle") return;
   const q = inbox.get(sessionId);
   if (!q?.length) return;
+  // 손으로 띄운 에이전트도 채택되면 idle 전이가 온다 — 쌓아 두기 설정이면 사람이 넣을 때까지 둔다
+  const s = backend.listSessions().find((x) => x.id === sessionId);
+  if (s && unmanagedAgent(s) && !autoManual()) return;
   inbox.delete(sessionId);
   setInboxTick((t) => t + 1);
   saveInboxNow(); // 전달 완료 — 캐시의 대기분도 바로 비운다

@@ -73,7 +73,7 @@ export interface NotifyItem {
   id: string;
   session: string;
   workspace: string;
-  kind: "waiting" | "dead" | "report" | "turn";
+  kind: "waiting" | "dead" | "report" | "turn" | "message";
   title: string;
   body: string;
   ts: number;
@@ -97,6 +97,12 @@ export { notifyItems };
 
 let feedStarted = false;
 /** 앱 셸이 1회 켠다 (App.tsx) */
+/** 앱 안에서 생긴 알림 — 손으로 띄운 에이전트에 메시지가 쌓였을 때(conversation.ts). Rust를 거치지 않는다 */
+export function notifyLocal(it: Omit<NotifyItem, "count" | "id" | "ts" | "os">): void {
+  const ts = Date.now();
+  setNotifyItems((l) => pushNotify(l, { ...it, id: `${it.session}-${ts}`, ts, os: false }));
+}
+
 export function startNotifyFeed(): void {
   if (feedStarted || !isTauri()) return;
   feedStarted = true;

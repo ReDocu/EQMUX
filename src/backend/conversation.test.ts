@@ -2,6 +2,7 @@
 // 한 줄로 접는가"만 본다: 단건/묶음 접두 · 개행 평탄화 · 상한에서 덩어리 갈리기.
 import { describe, expect, test } from "vitest";
 import { batches, fmt, fmtEcho, goneName, unmanagedAgent } from "./conversation";
+import { typedText } from "./pty";
 import type { ConversationMessage } from "../types";
 
 const msg = (from: string, body: string, type: ConversationMessage["type"] = "ask"): ConversationMessage => ({
@@ -116,5 +117,19 @@ describe("goneName", () => {
   test("둘 다 없으면 id 그대로 — 나·@all도 원문으로 남는다", () => {
     expect(goneName("shell2@ws-1", new Map(), personas)).toBe("shell2@ws-1");
     expect(goneName("나", new Map(), personas)).toBe("나");
+  });
+});
+
+// 사람이 친 글자 판정 (실기 QA) — 터미널이 스스로 내는 응답을 입력으로 치면 주입이 60초씩 막히고
+// 유휴 세션의 메시지가 대기에 남는다
+describe("typedText", () => {
+  test("포커스 보고·커서 위치 응답·방향키는 글자가 아니다", () => {
+    for (const d of ["\x1b[I", "\x1b[O", "\x1b[12;3R", "\x1b[?62;c", "\x1b[A"]) expect(typedText(d)).toBe(false);
+  });
+
+  test("글자와 괄호 붙여넣기는 사람이 친 것", () => {
+    expect(typedText("a")).toBe(true);
+    expect(typedText("안녕")).toBe(true);
+    expect(typedText("\x1b[200~붙여넣은 글\x1b[201~")).toBe(true);
   });
 });

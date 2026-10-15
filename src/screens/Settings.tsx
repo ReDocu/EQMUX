@@ -62,6 +62,7 @@ function pick<T>(options: T[], value: T): number {
 const START_VIEWS: AppSettings["startView"][] = ["control", "last"];
 const NOTI: AppSettings["notifications"][] = ["waiting-dead", "waiting", "off"];
 const DONE_NOTI: AppSettings["doneNotifications"][] = ["report", "all", "off"];
+const MANUAL_DELIVERY: AppSettings["manualDelivery"][] = ["park", "auto"];
 const REPLAY = [500, 1000, 2000];
 const SLOTS = [...SLOT_OPTIONS]; // 4 · 6 · 8
 const THEMES: AppSettings["theme"][] = ["dark", "light", "system"];
@@ -186,6 +187,14 @@ const SECTIONS: Section[] = [
         labels: ["완료 보고만 (기본)", "턴 끝날 때마다", "끔"],
         current: () => pick(DONE_NOTI, settings().doneNotifications),
         apply: (i) => updateSettings({ doneNotifications: DONE_NOTI[i] }),
+      },
+      {
+        // 손으로 띄운 claude·codex — 앱이 띄우지 않아 승인 창을 직접 모른다. 자동이어도 idle일 때만 넣는다
+        k: "손으로 띄운 에이전트 메시지",
+        d: "기본 터미널에서 직접 실행한 claude·codex에 온 메시지 · 자동이어도 idle일 때만 넣고, 승인 대기·상태 모름이면 쌓아 벨에 남긴다",
+        labels: ["쌓아 두기 (기본)", "idle이면 자동으로 넣기"],
+        current: () => pick(MANUAL_DELIVERY, settings().manualDelivery),
+        apply: (i) => updateSettings({ manualDelivery: MANUAL_DELIVERY[i] }),
       },
       {
         // 실제 동작 — waiting 진입 때 앱이 직접 소리를 낸다(창이 포커스면 내지 않는다). "예약"이 아니다
