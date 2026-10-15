@@ -1,8 +1,8 @@
 // 페인 배치 (srpYm) — 6종 배치 선택 모달. 선택 즉시 미리보기, 적용 시 터미널 그리드에 반영.
-import { createSignal, For, Show } from "solid-js";
+import { createSignal, For, onCleanup, Show } from "solid-js";
 import { backend } from "../backend/mock";
 import { t, tf } from "../i18n";
-import { PANE_LAYOUTS, paneLayout, setLayoutPickerOpen, setPaneLayout, view } from "../state";
+import { PANE_LAYOUTS, paneLayout, pushLayer, setLayoutPickerOpen, setPaneLayout, view } from "../state";
 import type { PaneLayout as PaneLayoutKey } from "../state";
 import { Icon } from "../components/icons";
 
@@ -29,6 +29,9 @@ export function LayoutPicker() {
     return wsId ? all.filter((s) => s.workspaceId === wsId).length : all.length;
   };
 
+  let box: HTMLDivElement | undefined;
+  onCleanup(pushLayer(() => setLayoutPickerOpen(false), () => box)); // ESC 닫기 (B73) · 모달 (B72·U37)
+
   const apply = () => {
     setPaneLayout(pending());
     setLayoutPickerOpen(false);
@@ -36,7 +39,7 @@ export function LayoutPicker() {
 
   return (
     <div class="overlay" onClick={() => setLayoutPickerOpen(false)}>
-      <div class="dialog lp-dialog" onClick={(e) => e.stopPropagation()}>
+      <div ref={box} class="dialog lp-dialog" role="dialog" aria-modal="true" aria-label={t("페인 배치")} onClick={(e) => e.stopPropagation()}>
         <div class="lp-head">
           <div>
             <div class="lp-title">{t("페인 배치")}</div>

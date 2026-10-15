@@ -85,19 +85,32 @@ export async function refreshConversation(wsId: string): Promise<void> {
   await restoreInbox(wsId); // 인박스 영속 (F) — 재시작 전 대기분을 되살린다
 }
 
+/** 옛 페이지를 지금 스트림 앞에 붙인다 (B99) — 이미 있는 id는 건너뛴다 */
+export const prependOlder = (older: ConversationMessage[], now: ConversationMessage[]): ConversationMessage[] => {
+  const ids = new Set(now.map((m) => m.id));
+  return [...older.filter((m) => !ids.has(m.id)), ...now];
+};
+
+const [olderBusy, setOlderBusy] = createSignal<Record<string, boolean>>({});
+/** 이전 페이지 로딩 중 — 버튼 연타를 막는다 (B99) */
+export const loadingOlder = (wsId: string): boolean => !!olderBusy()[wsId];
+
 /** 이전 페이지 (BR-15) — 화면에 있는 가장 오래된 행 앞의 PAGE건을 원장에서 더 불러온다.
- *  hydrate는 그 워크스페이스 스트림을 통째로 바꾸므로, 지금 스트림 앞에 붙여 다시 넘긴다 */
+ *  hydrate는 그 워크스페이스 스트림을 통째로 바꾸므로, 응답이 온 뒤의 스트림 앞에 붙여 다시 넘긴다.
+ *  기다리기 전 스냅샷에 붙이면 그 사이 도착한 메시지가 화면에서 빠졌다 (B99) */
 export async function loadOlder(wsId: string): Promise<void> {
-  if (!isTauri()) return;
-  const mine = backend.listMessages().filter((m) => m.workspaceId === wsId);
-  const oldest = Math.min(...mine.map((m) => m.rowId ?? Infinity));
+  if (!isTauri() || loadingOlder(wsId)) return;
+  const of = () => backend.listMessages().filter((m) => m.workspaceId === wsId);
+  const oldest = Math.min(...of().map((m) => m.rowId ?? Infinity));
   if (!Number.isFinite(oldest)) return;
+  setOlderBusy((b) => ({ ...b, [wsId]: true }));
   const rows = await invoke<MsgRow[]>("msg_list", { workspace: wsId, beforeId: oldest, limit: PAGE }).catch(
     () => undefined,
   );
+  setOlderBusy((b) => ({ ...b, [wsId]: false }));
   if (!rows) return;
   setOlderLeft((m) => ({ ...m, [wsId]: rows.length >= PAGE }));
-  backend.hydrateMessages(wsId, [...rows.map((r) => toMsg(wsId, r)), ...mine]);
+  backend.hydrateMessages(wsId, prependOlder(rows.map((r) => toMsg(wsId, r)), of()));
 }
 
 export function ensureConversation(wsId: string): void {
@@ -395,13 +408,25 @@ export function batches(msgs: ConversationMessage[]): ConversationMessage[][] {
 
 function injectMessages(sessionId: string, msgs: ConversationMessage[]): void {
   if (msgs.length === 0) return;
+  // 페르소나는 큐에 넣을 때가 아니라 실제로 쓸 때 읽는다 — 앞 덩어리를 기다리는 동안
+  // 재캐스팅될 수 있고, 그때는 새 인물의 이름이 맞다
+  enqueueInject(sessionId, () => {
+    const ws = backend.listSessions().find((s) => s.id === sessionId)?.workspaceId;
+    return fmt(msgs, personaTail(sessionId), (m) => senderLabel(m.from, ws));
+  });
+}
+
+/** 안내 한 줄 주입 (B94) — 임무 브리프·역할 갱신도 대화와 같은 큐·같은 2단계 제출을 탄다.
+ *  `…\r`을 한 번에 쓰면 TUI가 붙여넣기로 묶어 입력란에 남고 제출되지 않았다 */
+export function injectLine(sessionId: string, line: string): void {
+  enqueueInject(sessionId, () => line);
+}
+
+function enqueueInject(sessionId: string, text: () => string): void {
   const prev = injectQueue.get(sessionId) ?? Promise.resolve();
   const next = prev
     .then(async () => {
-      // 페르소나는 큐에 넣을 때가 아니라 실제로 쓸 때 읽는다 — 앞 덩어리를 기다리는 동안
-      // 재캐스팅될 수 있고, 그때는 새 인물의 이름이 맞다
-      const ws = backend.listSessions().find((s) => s.id === sessionId)?.workspaceId;
-      writePty(sessionId, fmt(msgs, personaTail(sessionId), (m) => senderLabel(m.from, ws)));
+      writePty(sessionId, text());
       await sleep(SUBMIT_DELAY_MS);
       writePty(sessionId, "\r"); // 제출 — 여기서 비로소 수신자의 턴이 돈다
       await sleep(TURN_GAP_MS);
@@ -452,6 +477,16 @@ export const unmanagedAgent = (s: { status: string; agent?: string; personaId?: 
 // 역할 없는 기본 터미널의 에이전트는 상태와 상관없이 손으로 띄운 것이다 — 레지스트리가 그 pid를
 // 채택하면 상태가 idle·busy로 바뀌어, status만 보던 예전 판정은 그때 다시 에코로 새었다 (실기 QA)
 
+/** 인박스에 쌓인 사유 (U50) — 셋은 기다려도 저절로 가지 않아 사람이 할 일이 있다.
+ *  반환값은 i18n 키. 저장하지 않고 지금 세션 상태에서 읽는다 (상태가 바뀌면 사유도 바뀐다) */
+export function pendingReason(s: { status: string; agent?: string; personaId?: string } | undefined): string {
+  if (!s || s.status === "dead") return "종료됨 · 재개해야 전달";
+  if (unmanagedAgent(s)) return "손으로 띄운 에이전트 · 넣기 필요";
+  if (s.status === "shell") return "에이전트 미기동 · 띄우면 전달";
+  if (s.status === "waiting") return "응답 대기 · 답한 뒤 전달";
+  return "작업 중 · 턴 끝나면 전달";
+}
+
 /** 손으로 띄운 에이전트에 쌓인 메시지 수 — 페인 헤더 칩 (반응형) */
 export function pendingCount(sessionId: string): number {
   inboxTick();
@@ -464,16 +499,39 @@ export function pendingFor(sessionId: string): ConversationMessage[] {
   return [...(inbox.get(sessionId) ?? [])];
 }
 
-/** 사람이 `넣기`를 눌렀다 — 그때만 넣는다. 쳐 둔 줄이 있으면 덮지 않고 그대로 둔다 */
-export function injectPending(sessionId: string): boolean {
+/** 고른 것(only, 없으면 전부)과 남길 것으로 가른다 — 넣기·버리기 팝오버의 체크 (U51) */
+export function splitPending(q: ConversationMessage[], only?: ReadonlySet<string>): [ConversationMessage[], ConversationMessage[]] {
+  return only ? [q.filter((m) => only.has(m.id)), q.filter((m) => !only.has(m.id))] : [q, []];
+}
+
+function setPending(sessionId: string, keep: ConversationMessage[]): void {
+  if (keep.length) inbox.set(sessionId, keep);
+  else inbox.delete(sessionId);
+  setInboxTick((t) => t + 1);
+  saveInboxNow(); // 디바운스 없이 캐시에서 비운다
+}
+
+/** 사람이 `넣기`를 눌렀다 — 그때만 넣는다. 쳐 둔 줄이 있으면 덮지 않고 그대로 둔다.
+ *  only = 팝오버에서 체크한 것만 (U51) */
+export function injectPending(sessionId: string, only?: ReadonlySet<string>): boolean {
   const q = inbox.get(sessionId);
   if (!q?.length || humanTyping(sessionId)) return false;
-  inbox.delete(sessionId);
-  setInboxTick((t) => t + 1);
-  saveInboxNow(); // 넣은 대기분 — 디바운스 없이 캐시에서 비운다
-  markDelivered(q);
-  for (const b of batches(q)) injectMessages(sessionId, b);
+  const [take, keep] = splitPending(q, only);
+  if (!take.length) return false;
+  setPending(sessionId, keep);
+  markDelivered(take);
+  for (const b of batches(take)) injectMessages(sessionId, b);
   return true;
+}
+
+/** 넣지 않고 치운다 (U51) — 원문은 대화 원장에 그대로 남는다. 내 메시지의 `대기 중` 표시는 내린다 */
+export function discardPending(sessionId: string, only?: ReadonlySet<string>): void {
+  const q = inbox.get(sessionId);
+  if (!q?.length) return;
+  const [drop, keep] = splitPending(q, only);
+  setPending(sessionId, keep);
+  const gone = new Set(drop.map((m) => m.id));
+  setDeliveries((d) => Object.fromEntries(Object.entries(d).filter(([id]) => !gone.has(id))));
 }
 
 // ── 사람이 보낸 메시지의 전달 상태 — `eqmux send`가 에이전트에게 돌려주는 것과 같은 판정 ──
@@ -484,14 +542,49 @@ const [deliveries, setDeliveries] = createSignal<Record<string, Delivery>>({});
 /** 대화 탭이 "나"의 메시지 옆에 붙이는 `전달됨` · `대기 중` (반응형). 앱을 다시 켜면 비운다 */
 export const deliveryOf = (msgId: string): Delivery | undefined => deliveries()[msgId];
 
+/** 배출된 "나"의 메시지 중 어느 인박스에도 더는 없는 것 (B89) — @all은 수신자마다 인박스에 들어가므로
+ *  한 명에게 흘렀다고 전달됨이 아니다. 호출부는 배출한 세션의 인박스를 먼저 지운다 */
+export function deliveredIds(msgs: ConversationMessage[], boxes: ReadonlyMap<string, ConversationMessage[]>): string[] {
+  const parked = new Set([...boxes.values()].flat().map((m) => m.id));
+  return msgs.filter((m) => m.from === "나" && !parked.has(m.id)).map((m) => m.id);
+}
+
 function markDelivered(msgs: ConversationMessage[]): void {
-  const mine = msgs.filter((m) => m.from === "나");
-  if (mine.length === 0) return;
+  const ids = deliveredIds(msgs, inbox);
+  if (ids.length === 0) return;
   setDeliveries((d) => {
     const n = { ...d };
-    for (const m of mine) n[m.id] = "delivered";
+    for (const id of ids) n[id] = "delivered";
     return n;
   });
+}
+
+/** 기본 터미널의 대기분이 고아가 됐다 (B90) — 손으로 띄운 에이전트가 내려가면 넣기 칩이 사라지고
+ *  셸 상태라 idle 전이도 오지 않는다. 기본 터미널 규칙(P-2)대로 화면에 에코하고 비운다.
+ *  역할 세션의 셸 대기분은 기동 직후 흘러가야 하므로 두고, dead는 재개를 기다린다 */
+export const orphanedInbox = (s: { personaId?: string; agent?: string; status: string }): boolean =>
+  !s.personaId && !s.agent && s.status !== "dead";
+
+// 에이전트를 본 적 있는 세션만 — 부팅 직후에는 감지가 아직 안 돌아 agent가 비어 있다.
+// ponytail: 전이만 본다. 앱이 꺼진 사이 에이전트가 내려간 대기분은 남는다 (넣기 칩의 버리기가 오면 그쪽으로)
+const agentSeen = new Set<string>();
+
+function releaseOrphans(): void {
+  let changed = false;
+  for (const s of backend.listSessions()) if (s.agent) agentSeen.add(s.id);
+  for (const [id, q] of [...inbox]) {
+    const s = backend.listSessions().find((x) => x.id === id);
+    if (!s || !q.length || !agentSeen.has(id) || !orphanedInbox(s)) continue;
+    agentSeen.delete(id);
+    inbox.delete(id);
+    for (const m of q) echoPty(id, fmtEcho(m, senderLabel(m.from, s.workspaceId)));
+    markDelivered(q);
+    changed = true;
+  }
+  if (changed) {
+    setInboxTick((t) => t + 1);
+    saveInboxNow();
+  }
 }
 
 /** 유휴 주입 묶기 (토큰 #3) — 유휴 세션은 메시지마다 바로 한 턴을 돌았다. 잠깐 모았다가 한 줄로
@@ -533,7 +626,7 @@ const RETRY_MS = 3000;
 function retryWhenFree(sessionId: string, left = 25): void {
   setTimeout(() => {
     const s = backend.listSessions().find((x) => x.id === sessionId);
-    if (!s || s.status !== "idle" || !inbox.get(sessionId)?.length || left <= 0) return;
+    if (!s || s.status !== "idle" || (!inbox.get(sessionId)?.length && !briefs.has(sessionId)) || left <= 0) return;
     if (humanTyping(sessionId)) retryWhenFree(sessionId, left - 1);
     else flushInboxOnState(sessionId, "idle");
   }, RETRY_MS);
@@ -593,14 +686,39 @@ function deliver(wsId: string, m: ConversationMessage): void {
   }
 }
 
+/** 임무 배정 브리프 대기 (B93) — 지금 넣을 수 없는 세션(작업 중·승인 대기·셸·종료)의 한 줄을
+ *  다음 idle 전이(턴 끝·기동·재개)에 넣는다. 세션마다 마지막 한 줄만 — 다시 배정하면 덮는다.
+ *  ponytail: 앱 메모리에만 둔다. 재시작하면 줄은 사라지지만 임무 자체는 역할 파일의 임무 블록에 있다 */
+const briefs = new Map<string, string>();
+
+export function queueBrief(sessionId: string, line: string): void {
+  briefs.set(sessionId, line);
+  // 유휴인데 사람이 치는 중이라 못 넣었다 — idle 전이가 다시 오지 않으니 직접 다시 본다
+  if (backend.listSessions().find((x) => x.id === sessionId)?.status === "idle") retryWhenFree(sessionId);
+}
+
+/** 배정이 풀렸다 — 아직 못 넣은 브리프는 버린다 */
+export function cancelBrief(sessionId: string): void {
+  briefs.delete(sessionId);
+}
+
+/** 넣기를 기다리는 브리프 (테스트·표시용) */
+export const pendingBrief = (sessionId: string): string | undefined => briefs.get(sessionId);
+
 /** agent-state 훅 — idle 전이가 곧 "턴 종료" 신호다 (M3). agent.ts 리스너가 부른다. */
 export function flushInboxOnState(sessionId: string, status: string | undefined): void {
   if (status !== "idle") return;
+  const brief = briefs.get(sessionId);
   const q = inbox.get(sessionId);
-  if (!q?.length) return;
+  if (!q?.length && brief === undefined) return;
   // 손으로 띄운 에이전트도 채택되면 idle 전이가 온다 — 쌓아 두기 설정이면 사람이 넣을 때까지 둔다
   const s = backend.listSessions().find((x) => x.id === sessionId);
   if (s && unmanagedAgent(s) && !autoManual()) return;
+  if (brief !== undefined) {
+    briefs.delete(sessionId);
+    injectLine(sessionId, brief); // 같은 주입 큐 — 아래 대화 묶음과 겹치지 않는다
+  }
+  if (!q?.length) return;
   inbox.delete(sessionId);
   setInboxTick((t) => t + 1);
   saveInboxNow(); // 전달 완료 — 캐시의 대기분도 바로 비운다
@@ -622,6 +740,7 @@ export function startMessageBus(): Promise<void> {
       backend.appendMessage(m);
       deliver(workspace, m);
     }).then(() => {});
+    backend.subscribe(releaseOrphans); // 에이전트 감지(applyAgents)가 agent를 지우면 방송이 온다
   }
   return busReady;
 }

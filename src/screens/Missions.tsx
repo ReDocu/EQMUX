@@ -4,6 +4,7 @@ import { createSignal, For, onMount, Show } from "solid-js";
 import { backend } from "../backend/mock";
 import {
   createMission,
+  missionDoneReport,
   refreshMissions,
   setDefaultMission,
   setMissionStatus,
@@ -14,7 +15,7 @@ import { isTauri, revealPath } from "../backend/pty";
 import { checkoutBranch } from "../backend/workspaces";
 import { t, tf } from "../i18n";
 import { setView, tick } from "../state";
-import { Chip, Eyebrow, Identity, notify, Segmented } from "../components/ui";
+import { Chip, ConfirmDialog, Eyebrow, Identity, notify, Segmented } from "../components/ui";
 import { effectiveTitle, paneNo, sessionName } from "../types";
 import type { Mission, MissionStatus } from "../types";
 
@@ -55,13 +56,21 @@ export function Missions(props: { wsId: string }) {
   const persona = (id: string) => backend.listPersonas().find((p) => p.id === id);
   // 배정된 세션의 마지막 완료 보고(report --done) — 원장에서 찾는다. 페인을 열어 미확인이 지워져도
   // 임무 카드의 `검토 중으로`는 사람이 누를 때까지 남는다
-  const doneReport = (assigned: string[]) => {
+  // 배정 뒤에 온 보고만 — 이전 임무의 보고가 새 임무에 뜨지 않게 (B92)
+  const doneReport = (mission: Mission) => {
     tick();
-    const m = backend
-      .listMessages()
-      .filter((x) => x.done && x.workspaceId === props.wsId && assigned.includes(x.from))
-      .at(-1);
+    const m = missionDoneReport(backend.listMessages(), mission);
     return m ? { name: nameOf(m.from), text: m.body } : undefined;
+  };
+  // 배정은 이동이다 (U55) — 다른 임무에 있던 세션이면 옮기기 전에 묻는다
+  const otherMission = (sid: string) => missions().find((x) => x.id !== sel()?.id && x.assigned.includes(sid));
+  const [move, setMove] = createSignal<{ sid: string; from: string; to: Mission } | undefined>(undefined);
+  const assign = (sid: string) => {
+    const to = sel();
+    if (!to) return;
+    const from = !to.assigned.includes(sid) ? otherMission(sid) : undefined;
+    if (from) setMove({ sid, from: from.name, to });
+    else void toggleAssign(props.wsId, to.id, sid);
   };
 
   const [name, setName] = createSignal("");
@@ -129,7 +138,7 @@ export function Missions(props: { wsId: string }) {
                 </span>
                 <span class="ma-item-meta">
                   {assigneeNames(m)}
-                  <Show when={m.status === "in-progress" && doneReport(m.assigned)}> · {t("완료 보고")}</Show>
+                  <Show when={m.status === "in-progress" && doneReport(m)}> · {t("완료 보고")}</Show>
                 </span>
               </button>
             )}
@@ -246,7 +255,7 @@ export function Missions(props: { wsId: string }) {
                 </Show>
                 {/* 완료 보고 (작업 완료 신호) — 배정된 세션이 report --done을 보냈다. 상태는 사람이
                     눌러야 in-review가 된다. 앱이 스스로 임무 상태를 바꾸지 않는다 */}
-                <Show when={m().status === "in-progress" && doneReport(m().assigned)}>
+                <Show when={m().status === "in-progress" && doneReport(m())}>
                   {(d) => (
                     <div class="card inset mission-done">
                       <span class="badge blue">✓</span>
@@ -264,7 +273,7 @@ export function Missions(props: { wsId: string }) {
                   >
                     {t("탐색기에서 열기")}
                   </button>
-                  <Show when={m().status === "in-progress" && doneReport(m().assigned)}>
+                  <Show when={m().status === "in-progress" && doneReport(m())}>
                     <button class="btn primary" onClick={() => void setMissionStatus(props.wsId, m().id, "in-review")}>
                       {t("검토 중으로")}
                     </button>
@@ -278,7 +287,7 @@ export function Missions(props: { wsId: string }) {
         <div class="ma-assign">
           <div class="ma-assign-t">{t("세션 배정")}</div>
           <div class="ma-hint muted">
-            {t("배정하면 역할 파일을 갱신하고 [EQ] 임무 배정 한 줄을 보냅니다. idle이면 바로, 작업 중이면 턴이 끝날 때.")}
+            {t("배정하면 역할 파일을 갱신하고 [EQ] 임무 배정 한 줄을 보냅니다. idle이면 바로, 작업 중이면 턴이 끝날 때. 세션의 임무는 하나라 배정하면 이전 임무에서 빠집니다.")}
           </div>
           <Show when={sel() && !creating()}>
             <For each={sessions()}>
@@ -286,9 +295,12 @@ export function Missions(props: { wsId: string }) {
                 const on = () => !!sel()?.assigned.includes(s.id);
                 const p = () => persona(s.personaId);
                 return (
-                  <button class="ma-assignee" classList={{ on: on() }} onClick={() => void toggleAssign(props.wsId, sel()!.id, s.id)}>
+                  <button class="ma-assignee" classList={{ on: on() }} onClick={() => assign(s.id)}>
                     <Identity slot={s.slot} no={paneNo(s)} name={sessionName(s, p())} title={effectiveTitle(s, p())} />
                     <span class="ma-assignee-r">
+                      <Show when={otherMission(s.id)}>
+                        {(o) => <span class="muted ma-assignee-cur">{tf("현재: {name}", { name: o().name })}</span>}
+                      </Show>
                       <span class={`exit-state mono ${ST_CLASS[s.status] ?? "muted"}`}>{s.status.toUpperCase()}</span>
                       <span class="ma-toggle">{on() ? "✓" : ""}</span>
                     </span>
@@ -304,6 +316,25 @@ export function Missions(props: { wsId: string }) {
             <span class="ma-hint muted">{t("세션 없음 — 캐스팅을 먼저 하세요")}</span>
           </Show>
         </div>
+        <Show when={move()}>
+          {(mv) => (
+            <ConfirmDialog
+              title={t("임무를 옮길까요?")}
+              body={tf("{session}은(는) '{from}'에서 빠지고 '{to}'에 배정됩니다. 세션의 임무는 하나입니다.", {
+                session: nameOf(mv().sid),
+                from: mv().from,
+                to: mv().to.name,
+              })}
+              confirmLabel={t("옮기기")}
+              onConfirm={() => {
+                const { sid, to } = mv();
+                setMove(undefined);
+                void toggleAssign(props.wsId, to.id, sid);
+              }}
+              onCancel={() => setMove(undefined)}
+            />
+          )}
+        </Show>
       </div>
     </div>
   );

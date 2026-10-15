@@ -119,4 +119,24 @@ export const dict: Record<string, string> = {
   // ── 분할선 (PaneDividers) ──
   "드래그 — 페인 폭 조정 · 더블클릭 — 초기화": "Drag — adjust pane width · double-click — reset",
   "드래그 — 페인 높이 조정 · 더블클릭 — 초기화": "Drag — adjust pane height · double-click — reset",
+  // ── 0.5.x QA eqmux-66: 대화 탭 (B99 · U50 · U53 · U54) ──
+  "다른 프로젝트 포함": "Include other projects",
+  "지운 {n}건 다시 보기": "Show {n} cleared",
+  "원장에서 이전 200건 불러오기": "Load 200 older from the ledger",
+  "불러오는 중…": "Loading…",
+  "인박스 대기": "Waiting in inbox",
+  "이 페인으로 이동": "Go to this pane",
+  "종료됨 · 재개해야 전달": "stopped · delivered after resume",
+  "손으로 띄운 에이전트 · 넣기 필요": "hand-started agent · needs Insert",
+  "에이전트 미기동 · 띄우면 전달": "agent not started · delivered on launch",
+  "응답 대기 · 답한 뒤 전달": "waiting for you · delivered after you answer",
+  "작업 중 · 턴 끝나면 전달": "busy · delivered at turn end",
+  "대기 중": "Queued",
+  "받을 사람 인박스에 남아 있습니다 — 사유는 위 인박스 대기 줄에": "Still in a recipient's inbox — see the reason in the inbox line above",
+  복사됨: "Copied",
+  "복사하지 못했습니다": "Couldn't copy",
+  // 넣기 팝오버 (U51 · U52) — 관제 화면 칩
+  "승인 대기이거나 상태를 몰라 쌓아 두었습니다 — idle이 되면 넣습니다": "Held because it's awaiting approval or its state is unknown — inserted once idle",
+  "넣지 않고 치웁니다 — 원문은 대화 기록에 남습니다": "Clears without inserting — the original stays in the conversation log",
+  "{n}건 버리기": "Discard {n}",
 };

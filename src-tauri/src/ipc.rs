@@ -154,6 +154,8 @@ fn verify_session(app: &AppHandle, session: &str, req: &serde_json::Value) -> Re
 fn handle(app: &AppHandle, line: &str) -> Result<serde_json::Value, String> {
     let req: serde_json::Value = serde_json::from_str(line).map_err(|_| "BAD_JSON".to_string())?;
     let cmd = req["cmd"].as_str().ok_or("BAD_CMD")?;
+    // 결과 문구의 언어 — 앱 표시 언어를 따른다 (U59). 오류 코드는 CLI가 같은 설정으로 번역한다
+    let en = crate::setting_str(app, "language").as_deref() == Some("en");
     match cmd {
         "ping" => Ok(json!({"ok": true, "app": "eqmux", "version": env!("CARGO_PKG_VERSION")})),
         "send" => {
@@ -168,9 +170,9 @@ fn handle(app: &AppHandle, line: &str) -> Result<serde_json::Value, String> {
             if let Some(f) = req["file"].as_str() {
                 extra.file = Some(crate::messages::attach_file(&cwd, f)?);
             }
-            let attached = extra.file.as_ref().map(|f| format!(" · 첨부 {} ({})", rel_path(&cwd, &f.path), fmt_size(f.size)));
+            let attached = extra.file.as_ref().map(|f| format!(" · {} {} ({})", if en { "attached" } else { "첨부" }, rel_path(&cwd, &f.path), fmt_size(f.size)));
             let target = resolve_target(app, &ws, &cwd, to_raw)?;
-            let mut resp = send_to(app, &ws, session, target, kind, body, extra)?;
+            let mut resp = send_to(app, &ws, session, target, kind, body, extra, en)?;
             if let (Some(a), Some(d)) = (attached, resp["delivery"].as_str().map(str::to_string)) {
                 resp["delivery"] = json!(format!("{d}{a}"));
             }
@@ -183,41 +185,59 @@ fn handle(app: &AppHandle, line: &str) -> Result<serde_json::Value, String> {
             let body = req["body"].as_str().ok_or("EMPTY")?;
             let done = req["done"].as_bool().unwrap_or(false);
             let (ws, _) = crate::session_origin(app, session).ok_or("UNKNOWN_SESSION")?;
-            // 회신 대상은 이번 보고를 적기 전에 찾는다 — 적고 나면 열린 handoff가 닫힌다
+            // 열린 ask·handoff는 이번 보고를 적기 전에 찾는다 — --done을 적고 나면 닫힌다.
+            // --done이면 회신 대상, 아니면 결과 줄의 안내 (P25)
             let store: State<crate::StoreState> = app.state();
-            let requesters = if done {
-                crate::messages::open_requesters(&store.0.root(), &ws, session).unwrap_or_default()
-            } else {
-                Vec::new()
-            };
+            let requesters = crate::messages::open_requesters(&store.0.root(), &ws, session).unwrap_or_default();
+            let extra = crate::messages::Extra { done, ..Default::default() };
+            let mut resp = publish(app, &ws, session, "나", "report", body, &extra)?;
+            // 피드 기록은 원장에 들어간 뒤에 — 거절된 보고(800자·상한)가 피드에 남지 않게 (B105)
             let _ = store.0.sender().send(crate::store::StoreMsg::Event {
                 ws: ws.clone(),
                 id: Some(session.to_string()),
                 kind: "report".into(),
                 message: body.chars().take(200).collect(),
             });
-            let extra = crate::messages::Extra { done, ..Default::default() };
-            let mut resp = publish(app, &ws, session, "나", "report", body, &extra)?;
-            // 완료 보고는 일을 맡긴 팀원에게도 한 건씩 (작업 완료 신호) — 닫힌 프로젝트 팀원은 건너뛴다
             let dir = directory();
-            let mut sent = vec!["나".to_string()];
-            for r in &requesters {
-                let target = dir.iter().find(|e| e.session == r.sender).cloned();
-                if target.is_some() || r.sender.ends_with(&format!("@{ws}")) {
-                    let who = target.as_ref().map(|e| e.name.clone()).unwrap_or_else(|| r.sender.split('@').next().unwrap_or(&r.sender).to_string());
-                    let who = match &target {
-                        Some(e) if e.workspace != ws => format!("{who}@{}", e.project),
-                        _ => who,
-                    };
-                    if send_to(app, &ws, session, Target::One(r.sender.clone(), target), "report", body, extra.clone()).is_ok() {
-                        sent.push(format!("{who} (열린 {} {})", r.kind, hhmm(r.ts)));
+            let label = |r: &crate::messages::Requester| {
+                let target = dir.iter().find(|e| e.session == r.sender);
+                let who = target.map(|e| e.name.clone()).unwrap_or_else(|| r.sender.split('@').next().unwrap_or(&r.sender).to_string());
+                match target {
+                    Some(e) if e.workspace != ws => format!("{who}@{}", e.project),
+                    _ => who,
+                }
+            };
+            // 받는 쪽은 사람이다 — '나'라고 쓰면 에이전트는 자기 자신에게 간 줄 안다 (U59 · P25)
+            let mut sent = vec![if en { "human (Conversation tab)" } else { "사람 (대화 탭)" }.to_string()];
+            let mut missed = Vec::new();
+            if done {
+                // 완료 보고는 일을 맡긴·물어본 팀원에게도 한 건씩 (작업 완료 신호)
+                for r in &requesters {
+                    let target = dir.iter().find(|e| e.session == r.sender).cloned();
+                    if target.is_none() && !r.sender.ends_with(&format!("@{ws}")) {
+                        missed.push(if en { format!("skipped: {} (closed)", label(r)) } else { format!("건너뜀: {}(닫힘)", label(r)) });
+                        continue;
+                    }
+                    match send_to(app, &ws, session, Target::One(r.sender.clone(), target), "report", body, extra.clone(), en) {
+                        Ok(_) if en => sent.push(format!("{} (open {} {})", label(r), r.kind, hhmm(r.ts))),
+                        Ok(_) => sent.push(format!("{} (열린 {} {})", label(r), r.kind, hhmm(r.ts))),
+                        Err(e) => {
+                            let why = match (e.as_str(), en) {
+                                ("RATE_LIMIT", false) => "상한",
+                                ("RATE_LIMIT", true) => "rate limit",
+                                (code, _) => code,
+                            };
+                            missed.push(if en { format!("reply failed: {} ({why})", label(r)) } else { format!("회신 실패: {}({why})", label(r)) });
+                        }
                     }
                 }
-            }
-            if done {
                 crate::agent::notify_report(app, session, body);
             }
-            resp["result"] = json!(format!("보고함 → {}", sent.join(" · ")));
+            resp["result"] = json!(report_result(&sent, &missed, done, &requesters.iter().map(label).collect::<Vec<_>>(), en));
+            // 회신이 하나라도 못 갔으면 CLI가 exit 1로 끝낸다 — 보고한 쪽이 조용히 넘어가지 않게 (B105)
+            if !missed.is_empty() {
+                resp["partial"] = json!(true);
+            }
             Ok(resp)
         }
         "who" => {
@@ -240,7 +260,7 @@ fn handle(app: &AppHandle, line: &str) -> Result<serde_json::Value, String> {
                     e
                 })
                 .collect();
-            Ok(json!({"ok": true, "result": who_text(&dir, &ws, session)}))
+            Ok(json!({"ok": true, "result": who_text(&dir, &ws, session, en)}))
         }
         "hook" => {
             // 훅 2차 상태 소스 (D3 · FR-D-30 계열) — 모르는 이벤트는 조용히 무시
@@ -271,6 +291,23 @@ fn handle(app: &AppHandle, line: &str) -> Result<serde_json::Value, String> {
         }
         _ => Err("BAD_CMD".into()),
     }
+}
+
+/// report 결과 줄 — 누가 받았는지 · 못 간 회신 (B105) · --done 없이 열린 요청이 남았으면 그 안내 (P25:
+/// ask를 받은 에이전트가 report로 답하고는 질문자에게 갔는지 몰라 사람에게 되물었다)
+fn report_result(sent: &[String], missed: &[String], done: bool, open: &[String], en: bool) -> String {
+    let mut out = format!("{} → {}", if en { "Reported" } else { "보고함" }, sent.join(" · "));
+    if !missed.is_empty() {
+        out.push_str(&format!(" · {}", missed.join(" · ")));
+    } else if !done && !open.is_empty() {
+        let open = open.join(", ");
+        out.push_str(&if en {
+            format!(" · open requests: {open} — if this answers them, add --done so it reaches them too")
+        } else {
+            format!(" · 열린 요청: {open} — 그 답이면 --done을 붙여야 그쪽에도 간다")
+        });
+    }
+    out
 }
 
 /// 원장 적재 + message-new 방송 — msg_send 커맨드(사람 발신)와 같은 경로
@@ -362,12 +399,16 @@ fn name_matches(e: &DirEntry, n: &str) -> bool {
 }
 
 /// 복사해서 어디서든 그대로 쓸 수 있는 주소 — 열린 프로젝트 전체에서 이름이 하나뿐이면 `@이름`,
-/// 겹치면 `@이름@프로젝트` (시안 T36ZZ `eqmux who`)
+/// 겹치면 `@이름@프로젝트` (시안 T36ZZ `eqmux who`). 겹침은 resolve_in과 같은 규칙(이름·페르소나·
+/// id 앞부분)으로 센다 — 이름만 세면 남의 프로젝트 '노엘'이 @노엘로 나오고, 보내면 내 프로젝트의
+/// 페르소나 노엘이 받았다 (B103). 프로젝트 안에서도 겹치면 세션 id가 유일한 주소다.
 fn address(dir: &[DirEntry], e: &DirEntry) -> String {
-    if dir.iter().filter(|x| x.name == e.name).count() <= 1 {
+    if dir.iter().filter(|x| name_matches(x, &e.name)).count() <= 1 {
         format!("@{}", e.name)
-    } else {
+    } else if dir.iter().filter(|x| x.project == e.project && name_matches(x, &e.name)).count() <= 1 {
         format!("@{}@{}", e.name, e.project)
+    } else {
+        format!("@{}", e.session)
     }
 }
 
@@ -438,13 +479,14 @@ fn send_to(
     kind: &str,
     body: &str,
     extra: crate::messages::Extra,
+    en: bool,
 ) -> Result<serde_json::Value, String> {
     let dir = directory();
     let mine = dir.iter().find(|e| e.workspace == ws).map(|e| e.project.clone()).unwrap_or_else(|| ws.to_string());
     let (to, entry) = match target {
         Target::All => {
             let mut resp = publish(app, ws, from, "@all", kind, body, &extra)?;
-            resp["delivery"] = json!(format!("보냄 → 팀 전체 ({mine})"));
+            resp["delivery"] = json!(if en { format!("Sent → whole team ({mine})") } else { format!("보냄 → 팀 전체 ({mine})") });
             return Ok(resp);
         }
         Target::One(to, entry) => (to, entry),
@@ -463,12 +505,12 @@ fn send_to(
         let _ = app.emit_to("main", "message-new", json!({ "workspace": target_ws, "message": row }));
         resp
     };
-    let mut d = delivery(app, &target_ws, &to, entry.as_ref());
-    if d == "전달함" {
+    let mut d = delivery(app, &target_ws, &to, entry.as_ref(), en);
+    if d == delivered(en) {
         // 시안 T36ZZ — `전달함 → 린 (EQMUX)`: 누구에게, 어느 프로젝트로
         let name = entry.as_ref().map(|e| e.name.clone()).unwrap_or_else(|| to.split('@').next().unwrap_or(&to).to_string());
         let project = entry.as_ref().map(|e| e.project.clone()).unwrap_or(mine);
-        d = format!("전달함 → {name} ({project})");
+        d = format!("{d} → {name} ({project})");
     }
     resp["delivery"] = json!(d);
     Ok(resp)
@@ -501,7 +543,7 @@ fn hhmm(ts: i64) -> String {
 /// 상태는 agent.rs 실측이 우선, 맨 셸 세션은 디렉터리 상태. 사람이 그 페인에 치는 중이라
 /// 프런트가 미루는 경우는 여기서 모른다 — 메시지는 어쨌든 인박스에 남는다.
 #[cfg_attr(not(windows), allow(dead_code))]
-fn delivery(app: &AppHandle, ws: &str, session: &str, entry: Option<&DirEntry>) -> String {
+fn delivery(app: &AppHandle, ws: &str, session: &str, entry: Option<&DirEntry>, en: bool) -> String {
     let (status, since) = match crate::find_tracked(app, session) {
         Some((_, t)) => (t.last_status, t.status_ms),
         None => (entry.map(|e| e.status.clone()).unwrap_or_default(), crate::workspace::now_ms()),
@@ -511,26 +553,35 @@ fn delivery(app: &AppHandle, ws: &str, session: &str, entry: Option<&DirEntry>) 
     let role = entry.is_none_or(|e| !e.persona.is_empty()); // 디렉터리 없음(폴백) = team.json 역할 세션
     let manual = entry.is_some_and(|e| !e.agent.is_empty());
     let auto_manual = crate::setting_str(app, "manualDelivery").as_deref() == Some("auto");
-    delivery_text(&status, role, manual, auto_manual, waiting)
+    delivery_text(en, &status, role, manual, auto_manual, waiting)
+}
+
+fn delivered(en: bool) -> &'static str {
+    if en {
+        "Delivered"
+    } else {
+        "전달함"
+    }
 }
 
 /// conversation.ts deliver()와 같은 갈래 — 어긋나면 CLI는 "전달함"인데 메시지는 인박스에 잔다
-fn delivery_text(status: &str, role: bool, manual: bool, auto_manual: bool, waiting: impl FnOnce() -> i64) -> String {
+fn delivery_text(en: bool, status: &str, role: bool, manual: bool, auto_manual: bool, waiting: impl FnOnce() -> i64) -> String {
+    let t = |ko: &str, eng: &str| String::from(if en { eng } else { ko });
+    let hand = || t("대기 — 손으로 띄운 에이전트 · 사람이 넣기를 누르면 전달", "Queued — agent started by hand · delivered when a person presses Insert");
     match status {
         // 기본 터미널에서 손으로 띄운 에이전트 — 레지스트리가 채택하면 idle·busy로도 보인다.
         // 역할 없는 페인의 에이전트는 상태와 상관없이 손으로 띄운 것이다 (BR-02)
         // 설정 manualDelivery=auto면 idle일 때만 관리 세션처럼 바로 넣는다 (아래 "idle" 갈래)
-        _ if manual && !role && !(auto_manual && status == "idle") => {
-            "대기 — 손으로 띄운 에이전트 · 사람이 넣기를 누르면 전달".into()
-        }
-        "idle" => "전달함".into(),
+        _ if manual && !role && !(auto_manual && status == "idle") => hand(),
+        "idle" => delivered(en).into(),
         // 꺼진 세션도 프런트 인박스에 남아 재개 때 받는다 — 실패는 영영 안 닿는 경우(이름 없음·닫힘·받기 끔)만
-        "dead" => "대기 — 상대 세션 꺼짐 · 켜지면 전달".into(),
+        "dead" => t("대기 — 상대 세션 꺼짐 · 켜지면 전달", "Queued — recipient session is off · delivered when it starts"),
         // 사람이 페인에 직접 띄운 에이전트 — 자동으로 넣지 않는다 (BR-02)
-        "shell" | "" if manual => "대기 — 손으로 띄운 에이전트 · 사람이 넣기를 누르면 전달".into(),
-        "shell" | "" if role => "대기 — 에이전트가 아직 안 떴음 · 뜨면 전달".into(),
-        "shell" | "" => "전달함".into(), // 기본 터미널 — 화면에 바로 찍힌다
-        "starting" => "대기 — 에이전트 기동 중 · 뜨면 전달".into(),
+        "shell" | "" if manual => hand(),
+        "shell" | "" if role => t("대기 — 에이전트가 아직 안 떴음 · 뜨면 전달", "Queued — agent not started yet · delivered when it starts"),
+        "shell" | "" => delivered(en).into(), // 기본 터미널 — 화면에 바로 찍힌다
+        "starting" => t("대기 — 에이전트 기동 중 · 뜨면 전달", "Queued — agent starting · delivered when it is up"),
+        _ if en => format!("Queued — recipient is busy ({} waiting) · delivered when the turn ends", waiting().max(1)),
         _ => format!("대기 — 상대 작업 중 (대기 {}건) · 턴이 끝나면 전달", waiting().max(1)),
     }
 }
@@ -550,18 +601,18 @@ fn pad(s: &str, w: usize) -> String {
 }
 
 /// eqmux who (시안 T36ZZ) — 내 프로젝트 먼저, 그다음 프로젝트 이름순 · 슬롯순. 줄 끝 주소는 그대로 --to에 쓴다
-fn who_text(dir: &[DirEntry], my_ws: &str, me: &str) -> String {
+fn who_text(dir: &[DirEntry], my_ws: &str, me: &str, en: bool) -> String {
     let mut rows: Vec<&DirEntry> = dir.iter().collect();
     rows.sort_by_key(|e| (e.workspace != my_ws, e.project.clone(), e.slot.unwrap_or(u32::MAX), e.name.clone()));
     if rows.is_empty() {
-        return "열린 세션이 없습니다".into();
+        return if en { "No open sessions" } else { "열린 세션이 없습니다" }.into();
     }
-    let line = |no: &str, name: &str, project: &str, job: &str, status: &str, addr: &str| {
-        format!(" {} {} {} {} {} {addr}", pad(no, 3), pad(name, 15), pad(project, 10), pad(job, 25), pad(status, 9))
-            .trim_end()
-            .to_string()
+    let head = if en {
+        ["#", "Name", "Project", "Job (title)", "Status", "Address"]
+    } else {
+        ["#", "이름", "프로젝트", "직무 (직함)", "상태", "주소"]
     };
-    let mut out = vec![line("#", "이름", "프로젝트", "직무 (직함)", "상태", "주소")];
+    let mut cells = vec![head.map(String::from)];
     for e in rows {
         let no = e.slot.map(|n| format!("{n:02}")).unwrap_or_else(|| "--".into());
         let mut name = e.name.clone();
@@ -569,7 +620,7 @@ fn who_text(dir: &[DirEntry], my_ws: &str, me: &str) -> String {
             name = format!("{name} ({})", e.persona);
         }
         if e.session == me {
-            name.push_str(" (나)");
+            name.push_str(if en { " (me)" } else { " (나)" });
         }
         let job = match (e.job.as_str(), e.title.as_deref().filter(|t| !t.is_empty())) {
             ("", None) => "—".to_string(),
@@ -577,10 +628,37 @@ fn who_text(dir: &[DirEntry], my_ws: &str, me: &str) -> String {
             (j, None) => j.to_string(),
             (j, Some(t)) => format!("{j} ({t})"),
         };
-        let status = if e.status.is_empty() { "-" } else { &e.status };
-        out.push(line(&no, &name, &e.project, &job, status, &address(dir, e)));
+        // 상태도 표의 다른 칸처럼 한국어로 (U59) — 모르는 값은 원문
+        let status = match (e.status.as_str(), en) {
+            ("", _) => "-",
+            ("waiting", true) => "awaiting approval",
+            ("dead", true) => "off",
+            (s, true) => s, // busy·idle·starting·shell은 영어 원문이 곧 표시어다
+            ("busy", _) => "작업 중",
+            ("idle", _) => "대기",
+            ("waiting", _) => "승인 대기",
+            ("starting", _) => "기동 중",
+            ("shell", _) => "셸",
+            ("dead", _) => "꺼짐",
+            (s, _) => s,
+        };
+        cells.push([no, name, e.project.clone(), job, status.into(), address(dir, e)]);
     }
-    out.join("\n")
+    // 칸 너비는 시안 폭을 바닥으로 두고 실제 내용에 맞춰 넓힌다 — 이름은 24자까지라 고정폭이면 표가 밀렸다 (U59)
+    let mut widths = [3, 15, 10, 25, 9];
+    for row in &cells {
+        for (w, c) in widths.iter_mut().zip(row) {
+            *w = (*w).max(cols(c) + 1);
+        }
+    }
+    cells
+        .iter()
+        .map(|r| {
+            let lead: String = r[..5].iter().zip(widths).map(|(c, w)| format!(" {}", pad(c, w))).collect();
+            format!("{lead} {}", r[5]).trim_end().to_string()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// "@이름" → 세션 id (M4) — 세션 id 그대로 / 슬롯 표시 이름 / 페르소나 id / 페르소나 이름 순서.
@@ -671,17 +749,17 @@ mod tests {
 
     #[test]
     fn delivery_text_by_status() {
-        assert_eq!(delivery_text("idle", true, false, false, || 0), "전달함");
-        assert_eq!(delivery_text("shell", false, false, false, || 0), "전달함"); // 기본 터미널 — 화면 에코
-        assert!(delivery_text("shell", true, false, false, || 0).starts_with("대기 — 에이전트가 아직")); // 인박스
-        assert!(delivery_text("shell", false, true, false, || 0).starts_with("대기 — 손으로")); // BR-02 쌓기
-        assert!(delivery_text("idle", false, true, false, || 0).starts_with("대기 — 손으로")); // 채택돼 idle이어도
-        assert_eq!(delivery_text("idle", false, true, true, || 0), "전달함"); // 자동 넣기 설정 + idle
-        assert!(delivery_text("waiting", false, true, true, || 0).starts_with("대기 — 손으로")); // 자동이어도 승인 대기는 쌓는다
-        assert!(delivery_text("starting", true, false, false, || 0).starts_with("대기 — "));
-        assert_eq!(delivery_text("busy", true, false, false, || 2), "대기 — 상대 작업 중 (대기 2건) · 턴이 끝나면 전달");
-        assert_eq!(delivery_text("waiting", true, false, false, || 0), "대기 — 상대 작업 중 (대기 1건) · 턴이 끝나면 전달");
-        assert_eq!(delivery_text("dead", true, false, false, || 0), "대기 — 상대 세션 꺼짐 · 켜지면 전달");
+        assert_eq!(delivery_text(false, "idle", true, false, false, || 0), "전달함");
+        assert_eq!(delivery_text(false, "shell", false, false, false, || 0), "전달함"); // 기본 터미널 — 화면 에코
+        assert!(delivery_text(false, "shell", true, false, false, || 0).starts_with("대기 — 에이전트가 아직")); // 인박스
+        assert!(delivery_text(false, "shell", false, true, false, || 0).starts_with("대기 — 손으로")); // BR-02 쌓기
+        assert!(delivery_text(false, "idle", false, true, false, || 0).starts_with("대기 — 손으로")); // 채택돼 idle이어도
+        assert_eq!(delivery_text(false, "idle", false, true, true, || 0), "전달함"); // 자동 넣기 설정 + idle
+        assert!(delivery_text(false, "waiting", false, true, true, || 0).starts_with("대기 — 손으로")); // 자동이어도 승인 대기는 쌓는다
+        assert!(delivery_text(false, "starting", true, false, false, || 0).starts_with("대기 — "));
+        assert_eq!(delivery_text(false, "busy", true, false, false, || 2), "대기 — 상대 작업 중 (대기 2건) · 턴이 끝나면 전달");
+        assert_eq!(delivery_text(false, "waiting", true, false, false, || 0), "대기 — 상대 작업 중 (대기 1건) · 턴이 끝나면 전달");
+        assert_eq!(delivery_text(false, "dead", true, false, false, || 0), "대기 — 상대 세션 꺼짐 · 켜지면 전달");
     }
 
     #[test]
@@ -707,12 +785,59 @@ mod tests {
         d[1].job = "개발".into();
         d[1].title = Some("서버 개발자".into());
         d[1].status = "idle".into();
-        let t = who_text(&d, "w1", "kai@w1");
+        let t = who_text(&d, "w1", "kai@w1", false);
         let lines: Vec<&str> = t.lines().collect();
         assert_eq!(lines[0], " #   이름            프로젝트   직무 (직함)               상태      주소");
-        assert_eq!(lines[1], " 03  카이 (나)       app        개발 (클라이언트 개발자)  busy      @카이@app");
-        assert_eq!(lines[2], " 04  백엔드 (노엘)   app        개발 (서버 개발자)        idle      @백엔드");
+        assert_eq!(lines[1], " 03  카이 (나)       app        개발 (클라이언트 개발자)  작업 중   @카이@app");
+        assert_eq!(lines[2], " 04  백엔드 (노엘)   app        개발 (서버 개발자)        대기      @백엔드");
         assert!(lines.iter().any(|l| l.ends_with("@B02") && l.contains(" —  "))); // 하나뿐인 이름 · 직무 없음
-        assert_eq!(who_text(&[], "w1", "x"), "열린 세션이 없습니다");
+        assert_eq!(who_text(&[], "w1", "x", false), "열린 세션이 없습니다");
+        // 긴 이름은 칸을 넓힌다 — 뒤 칸이 밀려 표가 깨지지 않는다 (U59)
+        d[2].name = "아주아주긴세션이름이십사자까지".into();
+        let t = who_text(&d, "w1", "kai@w1", false);
+        let at = |l: &str| cols(&l[..l.find("app").unwrap()]);
+        let starts: Vec<usize> = t.lines().skip(1).filter(|l| l.contains(" app")).map(at).collect();
+        assert!(starts.windows(2).all(|w| w[0] == w[1]), "{t}");
+    }
+
+    /// B103 — who가 보여 준 주소를 그대로 보내면 그 줄의 세션이 받아야 한다 (어느 프로젝트에서 보든)
+    #[test]
+    fn who_addresses_resolve_back_to_their_row() {
+        let mut d = dir();
+        d[1].name = "백엔드".into(); // w1: 이름 백엔드 · 페르소나 노엘
+        d[1].persona = "노엘".into();
+        d.push(e("lin@w2", "w2", "app-2", "노엘")); // w2: 이름이 노엘
+        for e in &d {
+            let addr = address(&d, e);
+            for ws in ["w1", "w2", "w3", "w9"] {
+                assert_eq!(sid(resolve_in(&d, ws, &addr)), Some(e.session.clone()), "{addr} from {ws}");
+            }
+        }
+        assert_eq!(address(&d, &d[5]), "@노엘@app-2");
+    }
+
+    /// U59 — 표시 언어 English면 결과 문구·who 표도 영어다 (갈래는 한국어와 같다)
+    #[test]
+    fn english_results() {
+        assert_eq!(delivery_text(true, "idle", true, false, false, || 0), "Delivered");
+        assert_eq!(delivery_text(true, "busy", true, false, false, || 2), "Queued — recipient is busy (2 waiting) · delivered when the turn ends");
+        let mut d = dir();
+        d[0].status = "waiting".into();
+        let t = who_text(&d, "w1", "kai@w1", true);
+        assert!(t.starts_with(" #   Name ") && t.contains("(kai) (me)") && t.contains("awaiting approval"), "{t}");
+        assert_eq!(who_text(&[], "w1", "x", true), "No open sessions");
+        let me = ["human (Conversation tab)".to_string()];
+        assert!(report_result(&me, &[], false, &["Hana".into()], true).ends_with("open requests: Hana — if this answers them, add --done so it reaches them too"));
+    }
+
+    /// P25 · B105 — 받는 쪽은 '사람'으로, 못 간 회신은 적고, --done 없이 열린 요청이 있으면 짚는다
+    #[test]
+    fn report_result_names_recipients_and_gaps() {
+        let me = ["사람 (대화 탭)".to_string()];
+        assert_eq!(report_result(&me, &[], false, &[], false), "보고함 → 사람 (대화 탭)");
+        let open = ["하나".to_string()];
+        assert!(report_result(&me, &[], false, &open, false).ends_with("열린 요청: 하나 — 그 답이면 --done을 붙여야 그쪽에도 간다"));
+        let missed = ["회신 실패: 노엘(상한)".to_string()];
+        assert_eq!(report_result(&me, &missed, true, &open, false), "보고함 → 사람 (대화 탭) · 회신 실패: 노엘(상한)");
     }
 }

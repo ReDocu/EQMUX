@@ -13,6 +13,7 @@ import { backend, DIFF_BRANCH, DIFF_CONTENT, DIFF_FILES, GIT_STATE } from "../ba
 import { isTauri } from "../backend/pty";
 import { t, tf } from "../i18n";
 import { openPanel, scopeWorkspace, setView, tick, view } from "../state";
+import { diffKeyAction } from "./diffKeys";
 
 const FOLD_CONTEXT = 3; // 변경 주변에 남기는 문맥 줄 수 (U10)
 
@@ -302,20 +303,19 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
     if (back) openPanel("git");
   };
 
-  // 키보드 (U10·U11) — n/p 변경 점프 · ↑↓ 파일 이동 · Esc 닫기. 입력 필드에서는 양보한다
+  // 키보드 (U10·U11·U66) — n/p 변경 점프 · Alt+↑↓·[ ] 파일 이동 · Esc 닫기 (diffKeys.ts)
   onMount(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT")) return;
-      if (e.key === "Escape") close();
-      else if (e.key === "n") jumpTo(blockIdx() + 1);
-      else if (e.key === "p") jumpTo(blockIdx() - 1);
-      else if (e.key === "ArrowDown") {
+      const inInput = !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT");
+      const a = diffKeyAction(e, inInput);
+      if (!a) return;
+      if (a === "close") close();
+      else if (a === "next") jumpTo(blockIdx() + 1);
+      else if (a === "prev") jumpTo(blockIdx() - 1);
+      else {
         e.preventDefault();
-        moveFile(1);
-      } else if (e.key === "ArrowUp") {
-        e.preventDefault();
-        moveFile(-1);
+        moveFile(a === "fileNext" ? 1 : -1);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -368,7 +368,7 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
             <div style={{ display: "flex", "justify-content": "space-between", "align-items": "baseline" }}>
               <span style={{ "font-weight": 800 }}>{commit() ? <>diff — <span class="mono">{commit()!.hash}</span></> : t("변경 파일")}</span>
               <span class="mono muted" style={{ "font-size": "10px" }}>
-                {files().length} CHANGES {t(isTauri() ? "· 실측" : "· 목")}
+                {tf("{n}개 파일", { n: files().length })} {t(isTauri() ? "· 실측" : "· 목")}
               </span>
             </div>
             <div class="mono muted gde-sidebar-sub" style={{ "font-size": "10px", "margin-top": "3px" }} title={commit()?.message}>
@@ -380,6 +380,12 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
             placeholder={t("파일 필터…")}
             value={query()}
             onInput={(e) => setQuery(e.currentTarget.value)}
+            onKeyDown={(e) => {
+              // U66 — Esc: 내용이 있으면 비우기, 없으면 칸에서 나가기 (그다음 Esc가 화면을 닫는다)
+              if (e.key !== "Escape") return;
+              if (query()) setQuery("");
+              else e.currentTarget.blur();
+            }}
           />
           {/* 상태 칩 (U12) — 다시 누르면 해제 */}
           <div class="gde-filter-chips">
@@ -419,7 +425,7 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
                       {r.f.status}
                     </span>
                     <span class="mono gde-file-path">{r.name}</span>
-                    <span class="mono muted gde-file-stat">{r.f.stat}</span>
+                    <span class="mono muted gde-file-stat">{t(r.f.stat ?? "")}</span>
                   </button>
                 )
               }
@@ -459,11 +465,13 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
               </div>
               <div class="mono muted" style={{ "font-size": "10px" }}>
                 {commit()
-                  ? tf("COMPARE · 부모 커밋 {base} ↔ {hash} · {stat} · 읽기 전용", { base: baseLabel(), hash: commit()!.hash, stat: stat() })
-                  : tf("COMPARE · {base} ({branch}) ↔ WORKTREE · {stat} · 읽기 전용 — 커밋·편집은 터미널에서", { base: baseLabel(), branch: branch(), stat: stat() })}
+                  ? tf("비교 · 부모 커밋 {base} ↔ {hash} · {stat}", { base: baseLabel(), hash: commit()!.hash, stat: t(stat()) })
+                  : tf("비교 · {base} ({branch}) ↔ 워크트리 · {stat} — 커밋·편집은 터미널에서", { base: baseLabel(), branch: branch(), stat: t(stat()) })}
               </div>
             </div>
             <div class="gde-toolbar-actions">
+              {/* 읽기 전용 표시는 여기 한 곳 (U65) */}
+              <span class="badge" style={{ "align-self": "center" }}>{t("🔒 읽기 전용")}</span>
               {/* 변경 내비게이션 (U10) */}
               <span class="mono muted" style={{ "font-size": "10px", "align-self": "center" }}>
                 {changeBlocks().length
@@ -497,7 +505,7 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
 
           <Show when={diffErr()}>
             <div class="card conn-error mono" style={{ margin: "10px" }}>
-              {diffErr()}
+              {t(diffErr()!)}
             </div>
           </Show>
 
@@ -507,13 +515,12 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
               <div class="gde-pane-head old">
                 <div>
                   <div class="mono gde-pane-title" style={{ "font-weight": 700, "font-size": "11px" }}>
-                    {commit() ? tf("비교 대상 — 부모 커밋 ({base})", { base: baseLabel() }) : tf("비교 대상 — BASE ({base})", { base: baseLabel() })}
+                    {commit() ? tf("비교 대상 — 부모 커밋 ({base})", { base: baseLabel() }) : tf("비교 대상 — 기준 커밋 ({base})", { base: baseLabel() })}
                   </div>
                   <div class="muted" style={{ "font-size": "10px" }}>
                     {t(commit() ? "커밋 직전 내용" : "HEAD 커밋 시점 내용")}
                   </div>
                 </div>
-                <span class="badge">{t("🔒 읽기 전용")}</span>
               </div>
               <div class="gde-codewrap">
                 <div
@@ -532,7 +539,7 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
                       {curLines().length > 0
                         ? commit()
                           ? t("(이 시점에는 파일이 없습니다 — 새 파일)")
-                          : t("BASE 없음 — 새 파일입니다")
+                          : t("비교 대상 없음 — 새 파일입니다")
                         : t("이 파일의 내용을 표시할 수 없습니다")}
                     </div>
                   </Show>
@@ -551,7 +558,6 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
                     {t(commit() ? "커밋된 내용" : "현재 파일 내용")}
                   </div>
                 </div>
-                <span class="badge">{t("🔒 읽기 전용")}</span>
               </div>
               <div class="gde-codewrap">
                 <div
@@ -602,13 +608,15 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
 
           <div class="gde-statusbar mono">
             <div class="gde-status-left">
-              <span class="muted">BASE {baseLabel()} · READ ONLY</span>
+              <span class="muted">{tf("기준 {base}", { base: baseLabel() })}</span>
               {/* 숫자는 위치로 이어진다 (U10) — 클릭 시 첫 변경으로 점프 */}
               <button class="gde-stat-jump mono" title={t("첫 변경으로 이동")} onClick={() => jumpTo(0)}>
-                {commit() ? commit()!.hash : "WORKTREE"} ·{" "}
-                {tf("{a} 추가 · {d} 삭제", {
+                {/* 숫자는 선택한 파일의 것 — 범위를 밝힌다 (U65) */}
+                {commit() ? `${commit()!.hash} · ` : ""}
+                {tf("이 파일 +{a} −{d} · 전체 {n}파일", {
                   a: curLines().filter((l) => l.kind === "add").length,
                   d: baseLines().filter((l) => l.kind === "del").length,
+                  n: files().length,
                 })}
                 <Show when={real()?.truncated}> · {t("3,000줄에서 잘림")}</Show>
               </button>

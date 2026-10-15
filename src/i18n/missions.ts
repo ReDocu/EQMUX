@@ -83,7 +83,12 @@ export const dict: Record<string, string> = {
   "목표 없음": "No goal",
   "파일을 열 수 없습니다": "Cannot open the file",
   "세션 배정": "Assign sessions",
-  "배정하면 역할 파일을 갱신하고 [EQ] 임무 배정 한 줄을 보냅니다. idle이면 바로, 작업 중이면 턴이 끝날 때.":
-    "Assigning updates the role file and sends an [EQ] mission line — right away if idle, at turn end if busy.",
+  "배정하면 역할 파일을 갱신하고 [EQ] 임무 배정 한 줄을 보냅니다. idle이면 바로, 작업 중이면 턴이 끝날 때. 세션의 임무는 하나라 배정하면 이전 임무에서 빠집니다.":
+    "Assigning updates the role file and sends an [EQ] mission line — right away if idle, at turn end if busy. A session has one mission, so assigning moves it out of the previous one.",
   "죽은 세션은 배정해도 재개 전까지 메시지가 쌓입니다": "Dead sessions queue the message until resumed",
+  "현재: {name}": "Now: {name}",
+  "임무를 옮길까요?": "Move the mission?",
+  "{session}은(는) '{from}'에서 빠지고 '{to}'에 배정됩니다. 세션의 임무는 하나입니다.":
+    "{session} leaves '{from}' and is assigned to '{to}'. A session has one mission.",
+  옮기기: "Move",
 };

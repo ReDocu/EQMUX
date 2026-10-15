@@ -3,6 +3,7 @@
 import { createSignal } from "solid-js";
 import { backend } from "./backend/mock";
 import { settings } from "./backend/settings";
+import { stepIndex } from "./components/keynav";
 import type { Workspace } from "./types";
 
 export type View =
@@ -21,9 +22,98 @@ export type View =
 /** 전체 화면 팝업 (M25 확장) — NAV 도구 4종(임무·워크스페이스·역할·설정)이 전부 팝업이다.
  *  신호가 하나라서 동시에 하나만 열린다. 화면 전환(setView)은 열린 팝업을 닫는다. */
 export type OverlayKind = "explorer" | "connect" | "roles" | "settings";
-export const [overlay, setOverlay] = createSignal<OverlayKind | undefined>(undefined);
+const [overlay, setOverlayRaw] = createSignal<OverlayKind | undefined>(undefined);
+export { overlay };
+/** 지금 팝업이 닫히기를 거부하는가 — 임무 탐색기의 미저장 편집. 막을 때 안내는 건 쪽(ScreenOverlay)이 띄운다 */
+let overlayGuard: (() => boolean) | undefined;
+/** 팝업 닫기 거부 조건을 건다 — 돌려준 함수로 푼다(그사이 다른 팝업이 바꿔 걸었으면 그대로 둔다) */
+export function guardOverlay(g: () => boolean): () => void {
+  overlayGuard = g;
+  return () => {
+    if (overlayGuard === g) overlayGuard = undefined;
+  };
+}
+/** 팝업 열기·닫기·바꾸기 — ESC·✕·앱 바 도구·화면 이동이 모두 이 길로 온다(B72). 지금 팝업이
+ *  닫히기를 거부하면(미저장 편집) 그대로 두고 false — 예전엔 ESC만 막고 이동·✕는 편집을 버렸다 */
+export function setOverlay(k: OverlayKind | undefined): boolean {
+  if (overlay() === k) return true;
+  if (overlay() && overlayGuard?.()) return false;
+  setOverlayRaw(k);
+  return true;
+}
 export function toggleOverlay(k: OverlayKind): void {
   setOverlay(overlay() === k ? undefined : k);
+}
+/** 설정 팝업의 카테고리 — 앱 셸 상태라 밖에서 지정해 열 수 있다 (벨 [알림 설정] → "notify", U34) */
+export const [settingsCat, setSettingsCat] = createSignal("general");
+
+/** 화면 위 레이어 스택 (P30) — 전체 화면 팝업·확인창·배치 창·종료 창·메뉴·벨이 열릴 때 쌓고
+ *  닫힐 때 뺀다. ESC는 맨 위 하나만 닫는다. 예전엔 각자 window에 ESC를 걸어서, 팝업 위에 뜬
+ *  확인창·메뉴에서 누른 ESC가 밑의 팝업을 닫았다 (B73). 쓰는 쪽: `onCleanup(pushLayer(close))`
+ *  모달(확인창·종료·배치·복구)은 대화상자 요소를 함께 넘긴다 — Tab이 그 안에서만 돌고(U37),
+ *  떠 있는 동안 단축키·OS 토스트가 뒤에서 화면을 옮기지 않는다(B72) */
+interface Layer {
+  close: () => void;
+  /** 모달의 대화상자 요소 — 마운트 전이라 ref가 비어 있을 수 있어 getter다 */
+  box?: () => HTMLElement | undefined;
+}
+const layers: Layer[] = [];
+export function pushLayer(close: () => void, box?: () => HTMLElement | undefined): () => void {
+  const layer: Layer = { close, box };
+  layers.push(layer);
+  return () => {
+    const i = layers.lastIndexOf(layer);
+    if (i >= 0) layers.splice(i, 1);
+  };
+}
+/** ESC 한 번 — 맨 위 레이어를 닫으라고 했으면 true */
+export function escapeTopLayer(): boolean {
+  const top = layers[layers.length - 1];
+  top?.close();
+  return top !== undefined;
+}
+/** 모달이 떠 있나 — 화면을 옮기는 단축키·OS 토스트가 본다 (B72). 모달 안의 버튼(복구 창 [세션으로 가기] 등)은
+ *  사람이 그 창에서 고른 이동이라 막지 않는다 — 그래서 jumpToSession이 아니라 입구가 본다 */
+export const modalOpen = (): boolean => layers.some((l) => l.box);
+const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+/** 입력칸(xterm 제외) — 그 칸의 ESC(이름 바꾸기 취소 등)가 레이어 닫기보다 먼저다 */
+const editableTarget = (t: EventTarget | null): HTMLElement | undefined => {
+  const el = t as HTMLElement | null;
+  return el?.matches?.("input, textarea, select, [contenteditable]") && !el.closest(".xterm") ? el : undefined;
+};
+if (typeof window !== "undefined") {
+  // 모듈이 처음 실릴 때 건다 = 다른 어떤 keydown 리스너보다 앞이다. 캡처 단계에서 끊어
+  // 아래 깔린 화면(전체 화면 터미널의 ESC·xterm·다른 window 캡처 리스너)이 함께 돌지 않게 한다
+  window.addEventListener(
+    "keydown",
+    (e) => {
+      if (e.key !== "Escape" || layers.length === 0 || editableTarget(e.target)) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      escapeTopLayer();
+    },
+    true,
+  );
+  // Tab 가두기 (U37) — 맨 위가 모달이면 그 대화상자 안에서만 돈다. 메뉴처럼 모달 위에 뜬 것이 맨 위면 손대지 않는다
+  window.addEventListener(
+    "keydown",
+    (e) => {
+      const box = e.key === "Tab" ? layers[layers.length - 1]?.box?.() : undefined;
+      if (!box) return;
+      const items = [...box.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => el.offsetParent !== null);
+      const next = items[stepIndex(items.length, items.indexOf(document.activeElement as HTMLElement), e.shiftKey)];
+      e.preventDefault();
+      next?.focus();
+    },
+    true,
+  );
+  // 입력칸의 ESC는 칸의 처리가 끝난 뒤 칸에서 빠져나오기만 한다 — 다음 ESC가 레이어를 닫는다
+  window.addEventListener("keydown", (e) => {
+    const el = e.key === "Escape" && layers.length > 0 ? editableTarget(e.target) : undefined;
+    if (!el) return;
+    e.stopImmediatePropagation();
+    el.blur();
+  });
 }
 
 /** 임무 탐색기 팝업의 안쪽 전환 (0.3.7) — 탐색기 ↔ 임무를 팝업을 닫지 않고 오간다.
@@ -57,8 +147,9 @@ export function setView(v: View): View {
   // 워크스페이스 문맥을 가진 화면 전부가 기록 대상이다 — 임무 배정·캐스팅·diff에서
   // 대화를 열어도 그 워크스페이스의 스트림이 나와야 한다
   const wsId = v.kind === "workspace" ? v.id : "wsId" in v ? v.wsId : undefined;
+  // 화면 전환 = 팝업 문맥을 떠난다 — 열린 팝업이 새 화면을 가리지 않게. 미저장 편집이 막으면 이동하지 않는다
+  if (!setOverlay(undefined)) return viewSig();
   if (wsId) setLastWorkspaceId(wsId);
-  setOverlay(undefined); // 화면 전환 = 팝업 문맥을 떠난다 — 열린 팝업이 새 화면을 가리지 않게
   // 같은 화면이면 건너뛴다 (최적화 C1) — 새 객체를 넣으면 관제 화면이 통째로 다시 만들어져
   // 터미널 재부착·폴링 재시작·줌 소실이 난다. 값이 같으면 지금 것을 그대로 둔다
   const cur = viewSig();
@@ -210,11 +301,14 @@ backend.subscribe(() => setTick((t) => t + 1));
  *  닫힌 팀의 세션을 가리킬 수 있다. 그대로 화면만 바꾸면 앱 바에 대응 탭이 없어 활성 탭이
  *  없는 자리에 서게 되므로, 데려가기 전에 그 워크스페이스를 먼저 연다 (B18).
  *  사용자가 누른 점프의 일부이므로 자동 실행이 아니다 — 상한·경로 소실은 openWorkspace가 거른다. */
-export function jumpToSession(workspaceId: string, sessionId: string) {
+export function jumpToSession(workspaceId: string, sessionId: string): boolean {
+  // 팝업이 미저장 편집으로 닫히기를 거부하면 데려가지 않는다 — 뒤에서만 이동하고 '본 것'만 찍히지 않게 (B72)
+  if (!setOverlay(undefined)) return false;
   setSelectedSession(sessionId);
   backend.markSeen(sessionId);
   backend.openWorkspace(workspaceId);
   setView({ kind: "workspace", id: workspaceId });
+  return true;
 }
 
 /** 포커스로 잡기 요청 — 줌과 키보드 포커스는 컨트롤 센터의 몫이라(줌은 그 화면의 지역 상태다)
@@ -222,11 +316,20 @@ export function jumpToSession(workspaceId: string, sessionId: string) {
  *  잡을 수 있어야 하므로 값이 아니라 매번 새 객체다. */
 export const [focusRequest, setFocusRequest] = createSignal<{ session: string } | undefined>(undefined);
 
+/** 세션 상세 열기 요청 (U63) — 상세 팝업의 열림은 컨트롤 센터의 지역 상태라, 밖(복구 창)에서는
+ *  요청만 남기고 그 탭이 이펙트로 받는다. focusRequest와 같은 꼴 — 받은 쪽이 비운다 */
+export const [detailRequest, setDetailRequest] = createSignal<{ session: string } | undefined>(undefined);
+export function openSessionDetail(workspaceId: string, sessionId: string): boolean {
+  if (!jumpToSession(workspaceId, sessionId)) return false;
+  setDetailRequest({ session: sessionId });
+  return true;
+}
+
 /** Focus — 사람이 답해야 진행되는 페인(waiting)을 전체 화면으로 끌어와 키보드까지 넘긴다.
  *  대화 패널로는 답할 수 없는 상태이기 때문이다: waiting에는 본문을 주입하지 않고(TUI
  *  다이얼로그의 오답이 된다) 인박스에 쌓아 두므로, 진행은 그 페인에 직접 치는 것뿐이다. */
 export function focusSession(workspaceId: string, sessionId: string) {
-  jumpToSession(workspaceId, sessionId);
+  if (!jumpToSession(workspaceId, sessionId)) return;
   setTerminalFull(true);
   setFocusRequest({ session: sessionId });
 }

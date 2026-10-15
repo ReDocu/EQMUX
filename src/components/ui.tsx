@@ -2,22 +2,24 @@
 import { createEffect, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import type { JSX } from "solid-js";
 import { t, tf } from "../i18n";
+import { pushLayer } from "../state";
+import { segKeyIndex } from "./keynav";
 import type { AgentCliId, AgentStatus, Session } from "../types";
-import { AGENT_CLI_LABEL, fmtSince, nameBesideNo, slotNo } from "../types";
+import { AGENT_CLI_LABEL, agentAttached, fmtSince, nameBesideNo, slotBesideNo, slotNo, statusText } from "../types";
 
 export function statusClass(st: AgentStatus): string {
   return `st-${st}`;
 }
 
 /** 셀/카드용 상태 문구 — waiting·dead는 경과 시간 병기 (FR-G-23) */
-export function StatusLabel(props: { session: Session }) {
+export function StatusLabel(props: { session: Session; hideExit?: boolean /* 본문이 exit를 따로 보일 때 (U49) */ }) {
   const s = () => props.session;
   return (
     <span class={`mono ${statusClass(s().status)}`}>
-      {s().status}
+      {statusText(s().status)}
       <Show when={s().status === "busy" && s().subagents > 0}> · {t("서브")} {s().subagents}</Show>
       <Show when={s().status === "waiting" || s().status === "dead"}> · {fmtSince(s().sinceMs)}</Show>
-      <Show when={s().status === "dead" && s().exitCode !== undefined}> · exit {s().exitCode}</Show>
+      <Show when={!props.hideExit && s().status === "dead" && s().exitCode !== undefined}> · exit {s().exitCode}</Show>
       <Show when={s().degraded}>
         {" "}
         <span
@@ -87,17 +89,11 @@ export function ContextMenu(props: {
     });
   });
   onMount(() => {
-    // 닫기는 컴포넌트 책임 — ESC + 바깥 클릭(메뉴 자신은 mousedown 전파를 끊는다)
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") props.onClose();
-    };
+    // 닫기는 컴포넌트 책임 — ESC(레이어 스택, P30) + 바깥 클릭(메뉴 자신은 mousedown 전파를 끊는다)
+    onCleanup(pushLayer(() => props.onClose()));
     const onDown = () => props.onClose();
-    window.addEventListener("keydown", onKey);
     window.addEventListener("mousedown", onDown);
-    onCleanup(() => {
-      window.removeEventListener("keydown", onKey);
-      window.removeEventListener("mousedown", onDown);
-    });
+    onCleanup(() => window.removeEventListener("mousedown", onDown));
   });
 
   const normal = () => props.groups.map((g) => g.filter((it) => !it.danger)).filter((g) => g.length > 0);
@@ -198,10 +194,12 @@ export function ConfirmDialog(props: {
 }) {
   let cancelBtn!: HTMLButtonElement;
   let okBtn!: HTMLButtonElement;
+  let box!: HTMLDivElement;
   onMount(() => {
     cancelBtn.focus();
+    onCleanup(pushLayer(() => props.onCancel(), () => box)); // ESC = 맨 위 레이어 닫기 (P30) · 모달 (B72·U37)
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" || (e.key === "Enter" && document.activeElement !== okBtn)) {
+      if (e.key === "Enter" && document.activeElement !== okBtn) {
         e.preventDefault();
         e.stopPropagation();
         props.onCancel();
@@ -213,6 +211,7 @@ export function ConfirmDialog(props: {
   return (
     <div class="overlay" onClick={(e) => (e.stopPropagation(), props.onCancel())}>
       <div
+        ref={box}
         class="dialog eq-confirm"
         role="alertdialog"
         aria-modal="true"
@@ -258,8 +257,22 @@ export function Segmented<T extends string>(props: {
   onChange: (v: T) => void;
   label?: string;
 }) {
+  // 라디오 그룹 관례 (U37) — 탭 정지는 고른 항목 하나, 화살표·Home·End로 옮기며 바로 고른다
+  let group!: HTMLDivElement;
+  const onKey = (e: KeyboardEvent) => {
+    const enabled = props.items.filter((x) => !x.disabled);
+    const i = segKeyIndex(e.key, enabled.length, enabled.findIndex((x) => x.value === props.value));
+    if (i === undefined) return;
+    e.preventDefault();
+    const next = enabled[i].value;
+    if (next !== props.value) props.onChange(next);
+    group.querySelectorAll<HTMLButtonElement>(".eq-seg-it")[props.items.findIndex((x) => x.value === next)]?.focus();
+  };
+  // 고른 값이 목록에 없으면 첫 항목이 탭 정지를 맡는다 — 키보드가 그룹에 못 들어가는 일이 없게
+  const tabStop = (it: SegItem<T>) =>
+    props.items.some((x) => x.value === props.value) ? it.value === props.value : it === props.items[0];
   return (
-    <div class="eq-seg" role="radiogroup" aria-label={props.label}>
+    <div ref={group} class="eq-seg" role="radiogroup" aria-label={props.label} onKeyDown={onKey}>
       <For each={props.items}>
         {(it) => (
           <button
@@ -267,6 +280,7 @@ export function Segmented<T extends string>(props: {
             classList={{ on: it.value === props.value }}
             role="radio"
             aria-checked={it.value === props.value}
+            tabIndex={tabStop(it) ? 0 : -1}
             title={it.title}
             disabled={it.disabled}
             onClick={() => it.value !== props.value && props.onChange(it.value)}
@@ -324,6 +338,22 @@ const chipText = (p: { text: string; short?: string }) => (
   </>
 );
 
+/** 번호 칸 글자 (B83) — 피어 끝 조각을 보일 때 슬롯 번호를 작게 함께. 헤더·레일·대시보드가 이것 하나를 쓴다 */
+export function PaneNoText(props: { slot: number; no: string }) {
+  return (
+    <>
+      {props.no}
+      <Show when={slotBesideNo(props.slot, props.no)}>
+        {(n) => (
+          <small class="eq-id-slot" title={`${t("슬롯")} ${n()}`}>
+            {n()}
+          </small>
+        )}
+      </Show>
+    </>
+  );
+}
+
 /** 정체성 — `번호 이름 · 직함 엔진`. 좁으면(compact) 직함을 접고 툴팁에 남긴다.
  *  persona는 세션 이름과 다를 때만 괄호로 붙인다 */
 export function Identity(props: {
@@ -353,19 +383,22 @@ export function Identity(props: {
   return (
     <span class="eq-id" classList={{ compact: props.compact }} title={tip()}>
       <Show when={props.slot !== undefined}>
-        <span class="eq-id-no mono">{noText()}</span>
+        <span class="eq-id-no mono">
+          <PaneNoText slot={props.slot!} no={noText()} />
+        </span>
       </Show>
       <span class="eq-id-nm">
-        {props.slot !== undefined ? nameBesideNo(props.slot, props.name) : props.name}
+        {props.slot !== undefined ? nameBesideNo(noText(), props.name) : props.name}
         <Show when={showPersona()}> ({props.persona})</Show>
       </span>
       <Show when={props.title}>
         <span class="eq-id-ti">· {props.title}</span>
       </Show>
-      {/* 엔진 — Claude ✦ · Codex >_ (시안 sparkles · terminal 아이콘) */}
+      {/* 엔진 — Claude ✦ · Codex CX (U41) */}
       <Show when={props.cli}>
-        <span class="eq-id-cli mono" aria-label={AGENT_CLI_LABEL[props.cli!]}>
-          {props.cli === "codex" ? ">_" : "✦"}
+        <span class="eq-id-cli mono" aria-label={AGENT_CLI_LABEL[props.cli!]} title={AGENT_CLI_LABEL[props.cli!]}>
+          {/* Codex는 >_ 대신 글자 — >_는 셸 선택 버튼의 기호라 '셸'로 읽혔다 (U41) */}
+          {props.cli === "codex" ? "CX" : "✦"}
         </span>
       </Show>
       <Show when={props.job}>
@@ -399,19 +432,24 @@ export function StopConfirm(props: {
 }) {
   // 시안 TzzVT — 제목은 "번호 이름 세션을 중지할까요?", 본문은 무엇이 끝나고 무엇이 남는지, 정보 상자는 사실
   const s = () => props.session;
-  const engine = () => (s().personaId ? AGENT_CLI_LABEL[s().cli ?? "claude"] : (s().agent ?? t("셸")));
+  // 엔진 이름은 지금 붙어 있을 때만 (U46) — 맨 셸 역할 세션에서 끝나는 것은 셸이다
+  const engine = () =>
+    s().personaId && agentAttached(s()) ? AGENT_CLI_LABEL[s().cli ?? "claude"] : (s().agent ?? t("셸"));
   return (
     <ConfirmDialog
       title={tf("{no} {name} 세션을 중지할까요?", { no: slotNo(s().slot), name: props.name })}
       body={tf(
-        s().resumable
-          ? "실행 중인 {engine} 프로세스가 즉시 종료됩니다. 대화 기록과 슬롯은 남고, 이 세션은 재개할 수 있습니다."
-          : "실행 중인 {engine} 프로세스가 즉시 종료됩니다. 대화 기록과 슬롯은 남지만, 이 세션은 재개할 수 없습니다.",
+        // 기본 터미널에는 대화 기록이 없다 (U46) — 남는 것은 스크롤백과 슬롯
+        !s().personaId
+          ? "실행 중인 {engine} 프로세스가 즉시 종료됩니다. 스크롤백과 슬롯은 남고, 재개할 수 없습니다."
+          : s().resumable
+            ? "실행 중인 {engine} 프로세스가 즉시 종료됩니다. 대화 기록과 슬롯은 남고, 이 세션은 재개할 수 있습니다."
+            : "실행 중인 {engine} 프로세스가 즉시 종료됩니다. 대화 기록과 슬롯은 남지만, 이 세션은 재개할 수 없습니다.",
         { engine: engine() },
       )}
       info={[
         `${t("세션")}  ${s().id} · ${t("슬롯")} ${slotNo(s().slot)}`,
-        `${t("상태")}  ${s().status}${s().status === "waiting" && s().waitingFor ? ` · ${t("승인 대기 중")} (${t(s().waitingFor!)})` : ""}`,
+        `${t("상태")}  ${statusText(s().status)}${s().status === "waiting" && s().waitingFor ? ` · ${t("승인 대기 중")} (${t(s().waitingFor!)})` : ""}`,
         ...(props.openHandoff ? [`${t("열린 handoff")}  ${t("있음 — 중지해도 원장에 남는다")}`] : []),
       ]}
       danger

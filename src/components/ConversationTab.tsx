@@ -2,16 +2,18 @@
 // 워크스페이스 = 팀 = 스트림 하나 (M5 평면). 원장은 message 테이블(PRD F)이고
 // 발신은 msg_send, 전달은 conversation.ts의 인박스 + 상태 기반 PTY 주입 (M3).
 // 사람도 같은 스트림의 참여자다 (M4) — "@카이 내용"이면 그 세션, 없으면 @all.
-import { createEffect, createSignal, For, Show } from "solid-js";
+import { createEffect, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import {
   deliveryOf,
   ensureConversation,
   exportConversation,
   hasOlder,
   loadOlder,
+  loadingOlder,
   markConversationRead,
   nameOf as nameOfId,
   pendingInbox,
+  pendingReason,
   projectLabels,
   sendConversation,
   senderLabel,
@@ -120,6 +122,7 @@ export function ConversationTab() {
   const [selType, setSelType] = createSignal<ConversationMessage["type"]>("ask");
   const [filter, setFilter] = createSignal<"전체" | "미확인">("전체");
   const [draft, setDraft] = createSignal("");
+  let draftEl: HTMLInputElement | undefined;
   const [error, setError] = createSignal<string | null>(null);
 
   const shown = () => {
@@ -221,6 +224,8 @@ export function ConversationTab() {
     setMentionIdx(0);
   };
   const onDraftKey = (e: KeyboardEvent) => {
+    // 한글 조합 중 Enter는 조합 확정이다 — 보내기·멘션 선택이 아니다 (B98)
+    if (e.isComposing || e.keyCode === 229) return;
     const list = mentions();
     if (list.length > 0) {
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
@@ -287,15 +292,12 @@ export function ConversationTab() {
               </button>
             )}
           </For>
-          <button
-            class="conv-chip"
-            classList={{ on: allProjects() }}
-            aria-pressed={allProjects()}
-            title={t("끄면 다른 프로젝트와 오간 메시지를 숨깁니다")}
-            onClick={() => setAllProjects(!allProjects())}
-          >
-            {t("모든 프로젝트")}
-          </button>
+          {/* 라디오(전체·미확인)와 독립 토글은 모양을 달리한다 (U54) */}
+          <span class="conv-sep" />
+          <label class="conv-toggle" title={t("끄면 다른 프로젝트와 오간 메시지를 숨깁니다")}>
+            <input type="checkbox" checked={allProjects()} onChange={(e) => setAllProjects(e.currentTarget.checked)} />
+            {t("다른 프로젝트 포함")}
+          </label>
           <span class="conv-head-gap" />
           <button class="btn ghost conv-act" onClick={() => markConversationRead(ws()?.id)}>
             {t("모두 읽음")}
@@ -359,15 +361,26 @@ export function ConversationTab() {
         </div>
       </Show>
       <Show when={waitingInbox().length > 0}>
+        {/* 사유별로 (U50) — 작업 중만 저절로 간다. 나머지는 눌러서 그 페인으로 건너간다 */}
         <div class="card inset" style={{ padding: "6px 10px", "font-size": "11px" }}>
-          <span class="muted">{t("인박스 대기 (턴 종료 시 전달)")}: </span>
+          <span class="muted">{t("인박스 대기")}: </span>
           <For each={waitingInbox()}>
-            {(p, i) => (
-              <span class="mono">
-                {i() > 0 ? " · " : ""}
-                {sessionName(p.sessionId)} {tf("{n}건", { n: p.count })}
-              </span>
-            )}
+            {(p, i) => {
+              const s = () => sessionOf(p.sessionId);
+              return (
+                <span class="mono">
+                  {i() > 0 ? " · " : ""}
+                  <button
+                    class="btn ghost conv-inbox-it"
+                    title={t("이 페인으로 이동")}
+                    onClick={() => s() && jumpToSession(s()!.workspaceId, s()!.id)}
+                  >
+                    {sessionName(p.sessionId)} {tf("{n}건", { n: p.count })}
+                  </button>{" "}
+                  <span class="muted">{t(pendingReason(s()))}</span>
+                </span>
+              );
+            }}
           </For>
         </div>
       </Show>
@@ -375,12 +388,13 @@ export function ConversationTab() {
           (터미널 페인의 "▲ 디스크 기록 보기"와 같은 약속) */}
       <Show when={hiddenCount() > 0}>
         <button class="btn ghost conv-uncleared mono" onClick={unclearScreen}>
-          ▲ {tf("이전 {n}건 숨김 — 다시 보기", { n: hiddenCount() })}
+          ▲ {tf("지운 {n}건 다시 보기", { n: hiddenCount() })}
         </button>
       </Show>
-      <Show when={ws() && hasOlder(ws()!.id)}>
-        <button class="btn ghost conv-uncleared mono" onClick={() => void loadOlder(ws()!.id)}>
-          ▲ {t("이전 200건")}
+      {/* 지운 화면에서는 숨긴다 — 불러온 옛 메시지가 지운 화면에 다시 나타났다 (B99) */}
+      <Show when={ws() && hasOlder(ws()!.id) && hiddenCount() === 0}>
+        <button class="btn ghost conv-uncleared mono" disabled={loadingOlder(ws()!.id)} onClick={() => void loadOlder(ws()!.id)}>
+          ⤒ {t(loadingOlder(ws()!.id) ? "불러오는 중…" : "원장에서 이전 200건 불러오기")}
         </button>
       </Show>
       <div class="conv-stream">
@@ -422,8 +436,12 @@ export function ConversationTab() {
                   </Show>
                   <Show when={m.from === "나" && deliveryOf(m.id)}>
                     {(d) => (
-                      <span class="mono conv-delivery" classList={{ queued: d() === "queued" }}>
-                        {d() === "queued" ? t("대기 중 · 상대 작업 중") : t("전달됨")}
+                      <span
+                        class="mono conv-delivery"
+                        classList={{ queued: d() === "queued" }}
+                        title={d() === "queued" ? t("받을 사람 인박스에 남아 있습니다 — 사유는 위 인박스 대기 줄에") : undefined}
+                      >
+                        {d() === "queued" ? t("대기 중") : t("전달됨")}
                       </span>
                     )}
                   </Show>
@@ -498,6 +516,7 @@ export function ConversationTab() {
             </div>
           </Show>
           <input
+            ref={draftEl}
             placeholder={t(ws() ? "@이름 질문… (@ 없으면 @all)" : "워크스페이스 탭을 먼저 여세요")}
             disabled={!ws()}
             value={draft()}
@@ -535,7 +554,12 @@ export function ConversationTab() {
                   {
                     label: tf("답장 (@{name})", { name: label(peer) }),
                     disabled: !peerSession,
-                    action: () => setDraft(`@${label(peer)} `),
+                    action: () => {
+                      // 답장은 바로 칠 수 있게 (U53) — ask에 답하면 report를 제안한다
+                      setDraft(`@${label(peer)} `);
+                      if (m.type === "ask" && m.from !== "나") setSelType("report");
+                      queueMicrotask(() => draftEl?.focus());
+                    },
                   },
                   {
                     label: t("다른 프로젝트로 전달…"),
@@ -549,7 +573,14 @@ export function ConversationTab() {
                   },
                 ],
                 [
-                  { label: t("본문 복사"), action: () => void navigator.clipboard?.writeText(m.body) },
+                  {
+                    label: t("본문 복사"),
+                    action: () =>
+                      void (navigator.clipboard?.writeText(m.body) ?? Promise.reject()).then(
+                        () => notify(t("복사됨")),
+                        () => notify(t("복사하지 못했습니다")),
+                      ),
+                  },
                   { label: t("첨부 파일 열기"), disabled: !m.file, action: () => void openFile(m) },
                 ],
               ]}
@@ -585,35 +616,43 @@ function ForwardDialog(props: { m: ConversationMessage; from?: string; onClose: 
     if (e) setErr(e);
     else props.onClose();
   };
+  // 모달로 띄우고 Esc로 닫는다 (U53) — 예전에는 탭 맨 아래 composer 밑에 붙었다
+  onMount(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && props.onClose();
+    window.addEventListener("keydown", onKey);
+    onCleanup(() => window.removeEventListener("keydown", onKey));
+  });
   return (
-    <div class="card inset conv-forward">
-      <div class="eyebrow">{t("다른 프로젝트로 전달")}</div>
-      <div style={{ display: "flex", gap: "6px" }}>
-        <select
-          value={wsId()}
-          onChange={(e) => {
-            setWsId(e.currentTarget.value);
-            setTo("@all");
-          }}
-        >
-          <For each={projects()}>{([id, name]) => <option value={id}>{name}</option>}</For>
-        </select>
-        <select value={to()} onChange={(e) => setTo(e.currentTarget.value)}>
-          <option value="@all">@all</option>
-          <For each={targets()}>{(s) => <option value={s.id}>{nameOfId(s.id)}</option>}</For>
-        </select>
-      </div>
-      <div class="muted conv-forward-preview">{body()}</div>
-      <Show when={err()}>
-        <div style={{ color: "var(--eq-red)", "font-size": "11px" }}>{err()}</div>
-      </Show>
-      <div style={{ display: "flex", gap: "6px", "justify-content": "flex-end" }}>
-        <button class="btn ghost" onClick={props.onClose}>
-          {t("취소")}
-        </button>
-        <button class="btn primary" disabled={!wsId()} onClick={() => void send()}>
-          {t("전달")}
-        </button>
+    <div class="overlay" onClick={props.onClose}>
+      <div class="dialog card conv-forward" role="dialog" aria-label={t("다른 프로젝트로 전달")} onClick={(e) => e.stopPropagation()}>
+        <div class="eyebrow">{t("다른 프로젝트로 전달")}</div>
+        <div style={{ display: "flex", gap: "6px" }}>
+          <select
+            value={wsId()}
+            onChange={(e) => {
+              setWsId(e.currentTarget.value);
+              setTo("@all");
+            }}
+          >
+            <For each={projects()}>{([id, name]) => <option value={id}>{name}</option>}</For>
+          </select>
+          <select value={to()} onChange={(e) => setTo(e.currentTarget.value)}>
+            <option value="@all">@all</option>
+            <For each={targets()}>{(s) => <option value={s.id}>{nameOfId(s.id)}</option>}</For>
+          </select>
+        </div>
+        <div class="muted conv-forward-preview">{body()}</div>
+        <Show when={err()}>
+          <div style={{ color: "var(--eq-red)", "font-size": "11px" }}>{err()}</div>
+        </Show>
+        <div style={{ display: "flex", gap: "6px", "justify-content": "flex-end" }}>
+          <button class="btn ghost" onClick={props.onClose}>
+            {t("취소")}
+          </button>
+          <button class="btn primary" disabled={!wsId()} onClick={() => void send()}>
+            {t("전달")}
+          </button>
+        </div>
       </div>
     </div>
   );

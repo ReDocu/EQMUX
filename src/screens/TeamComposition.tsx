@@ -1,15 +1,17 @@
 // 팀 편성 (0.5 시안 C9ljT) — 팀 관계 표(team.md와 같은 열) · 관계 카드 · 프리셋 레일. 파일이 원본 · LEAD 최대 1명.
 // 편성은 바뀔 때마다 team.json·team.md로 자동 저장된다(startTeamSync) — 저장 버튼은 없다 (BR-10).
 // 권한 번역 결과(permission-mode)는 권한 칸 툴팁에 남긴다 (FR-D-40·41).
-import { createResource, For, Show } from "solid-js";
+import { createResource, createSignal, For, Show } from "solid-js";
 import { listPresets } from "../backend/library";
 import type { CastingPreset } from "../backend/library";
 import { backend } from "../backend/mock";
 import { maxSlots } from "../backend/settings";
+import { castingConfirmLines } from "../backend/team";
 import { t, tf } from "../i18n";
 import { setView, tick } from "../state";
 import { Icon } from "../components/icons";
-import { AGENT_CLI_LABEL, cliOf, effectiveTitle, nameBesideNo, paneNo, sessionName, translatePermissions } from "../types";
+import { ConfirmDialog } from "../components/ui";
+import { AGENT_CLI_LABEL, cliOf, effectiveTitle, nameBesideNo, sessionName, slotNo, translatePermissions } from "../types";
 import type { ConversationMessage, Session } from "../types";
 
 // 브라우저 dev 폴백 — Tauri에서는 presets/*.json 실측이 대체한다 (팀 캐스팅과 같은 시드 구성)
@@ -97,8 +99,13 @@ export function TeamComposition(props: { wsId: string }) {
       .filter((j) => known.has(j))
       .slice(0, Math.min(maxSlots(), personas.length))
       .map((jobId, i) => ({ personaId: personas[i].id, jobId }));
-    if (slots.length > 0) backend.applyCasting(props.wsId, slots);
+    if (slots.length === 0) return;
+    // 돌고 있는 세션을 끝내거나 직무를 바꾸면 먼저 묻는다 (P35 · B69와 같은 확인창)
+    const lines = castingConfirmLines(props.wsId, slots);
+    if (lines.length === 0) backend.applyCasting(props.wsId, slots);
+    else setConfirm({ lines, slots });
   };
+  const [confirm, setConfirm] = createSignal<{ lines: string[]; slots: { personaId: string; jobId: string }[] } | undefined>(undefined);
 
   return (
     <div class="screen tcmp">
@@ -123,6 +130,24 @@ export function TeamComposition(props: { wsId: string }) {
         </div>
       </div>
 
+      <Show when={confirm()}>
+        {(c) => (
+          <ConfirmDialog
+            title={t("편성을 적용할까요?")}
+            body={t("적용하면 아래가 바로 일어납니다. 종료된 세션은 되돌릴 수 없습니다.")}
+            info={c().lines}
+            danger
+            confirmLabel={t("적용")}
+            onConfirm={() => {
+              const slots = c().slots;
+              setConfirm(undefined);
+              backend.applyCasting(props.wsId, slots);
+            }}
+            onCancel={() => setConfirm(undefined)}
+          />
+        )}
+      </Show>
+
       <div class="screen-body tcmp-main">
         <div class="card tcmp-board">
           <div class="tcmp-title">{t("팀 관계 표 (team.md 그대로)")}</div>
@@ -139,7 +164,10 @@ export function TeamComposition(props: { wsId: string }) {
               <For each={members()}>
                 {(m) => (
                   <div class="tcmp-row">
-                    <span class="mono">{paneNo(m)}</span>
+                    {/* 슬롯 열은 team.md와 같은 슬롯 번호 (B100) — Claude Code 세션 이름은 툴팁으로 */}
+                    <span class="mono" title={m.peerName}>
+                      {slotNo(m.slot)}
+                    </span>
                     <span title={nameOf(m)}>{nameBesideNo(m.slot, nameOf(m))}</span>
                     <span>{effectiveTitle(m, persona(m.personaId)) ?? "—"}</span>
                     <span>{m.personaId ? (job(m.jobId)?.name ?? m.jobId) : t("기본 터미널")}</span>

@@ -2,6 +2,7 @@
 // 백엔드(Tauri Rust)와 주고받는 계약이므로 여기 외의 곳에서 도메인 형태를 재정의하지 않는다.
 import { t, tf } from "./i18n";
 import { humanTyping } from "./backend/pty";
+import { settings } from "./backend/settings";
 
 /** PRD D §4.2.1 — 에이전트 어휘 6종을 그대로 채택 (G2) */
 export type AgentStatus = "starting" | "busy" | "waiting" | "shell" | "idle" | "dead";
@@ -10,6 +11,15 @@ export type AgentStatus = "starting" | "busy" | "waiting" | "shell" | "idle" | "
 export type AgentCliId = "claude" | "codex";
 export const AGENT_CLI_LABEL: Record<AgentCliId, string> = { claude: "Claude Code", codex: "Codex" };
 export const cliOf = (s: { cli?: AgentCliId } | undefined): AgentCliId => s?.cli ?? "claude";
+
+/** 감지된 에이전트 표시 이름(Job 트리 실측 `Claude`·`Codex`) → 엔진 id (U42). 모르는 CLI면 undefined */
+export const detectedCli = (agent: string | undefined): AgentCliId | undefined =>
+  /claude/i.test(agent ?? "") ? "claude" : /codex/i.test(agent ?? "") ? "codex" : undefined;
+
+/** 슬롯 엔진이 돌고 있는 엔진과 다른가 (B82) — 그러면 재시작은 대화 유지가 아니라 새 엔진으로
+ *  새로 시작이다. 이 앱이 띄운 기록(spawnCli)이 없으면 모른다 — false */
+export const engineSwitched = (s: { cli?: AgentCliId; spawnCli?: AgentCliId }): boolean =>
+  !!s.spawnCli && s.spawnCli !== cliOf(s);
 
 /** 역할 파일 frontmatter의 permissions (D5) */
 export interface Permissions {
@@ -115,6 +125,8 @@ export interface Session {
   /** 스폰·재개·재시작 때 실제로 넘긴 실행 플래그 (B39) — 권한 파일이 나중에 바뀌어도
    *  돌고 있는 프로세스의 플래그는 이 값이다. 이 앱이 띄우지 않았으면 undefined */
   spawnFlags?: string;
+  /** spawnFlags를 낸 엔진 (B82) — 슬롯 엔진(cli)을 바꿔도 돌고 있는 프로세스는 이 엔진이다 */
+  spawnCli?: AgentCliId;
   restored?: boolean; // team.json에서 복원됨 — 에이전트 자동 실행 없음, 재개 칩만 (S3)
   revived?: boolean; // 웹뷰 재시작 복구 (FR-C-06) — PTY가 살아 있어 재부착만 한다 (restored와 배타)
   worktree?: boolean; // 세션 격리 (FR-E-62 · E1′ 옵트인) — cwd가 .eqmux/worktrees/<세션>이다
@@ -151,6 +163,8 @@ export interface Session {
   doneText?: string; // report --done 본문 한 줄 — 칩 툴팁
   /** 턴은 끝났는데 맡은 handoff에 보고가 아직 없다 — 할 일 신호라 보기만 해서는 안 지워진다 */
   reportPending?: boolean;
+  /** reportPending인데 진척 report(--done 없이)는 보냈다 (U31) — '보고 전'이 아니라 '보고함 · 완료 표시 없음' */
+  reportProgress?: boolean;
 }
 
 /** agent-state 이벤트·스냅숏의 반영 페이로드 (PRD D §7.1) — 인터페이스·구현·수신부가 공유한다 */
@@ -234,20 +248,30 @@ export const cleanTitle = (v: string): string => v.replace(/[\r\n]+/g, " ").slic
 /** 세션 번호 — 슬롯을 두 자리로 (헤더·레일 공통) */
 export const slotNo = (slot: number): string => String(slot).padStart(2, "0");
 
+/** 번호 칸 옆 작은 슬롯 번호 (B83) — 번호 칸이 피어 끝 조각(`92`)이면 슬롯 번호(`03`)를 함께 보여
+ *  슬롯 번호가 화면에서 사라지지 않게 한다. 번호 칸이 이미 슬롯 번호면 undefined */
+export const slotBesideNo = (slot: number, no: string): string | undefined =>
+  no !== slotNo(slot) ? slotNo(slot) : undefined;
+
 /** 페인 번호 칸 — Claude Code가 붙인 세션 이름이 있으면 그 끝 조각(`redocu-92` → `92`), 없으면 슬롯 번호.
- *  Claude Code 피어 메시지가 `@redocu-92`로 부르므로 사람이 그 주소를 페인과 맞춰 볼 수 있게 한다 */
+ *  Claude Code 피어 메시지가 `@redocu-92`로 부르므로 사람이 그 주소를 페인과 맞춰 볼 수 있게 한다.
+ *  끝 조각이 다른 슬롯 번호로 읽히면(`-05`인데 슬롯 3) 슬롯 번호를 쓴다 — 두 페인에 같은 번호가 뜬다 (B83).
+ *  8 = HARD_MAX_SLOTS (settings.ts — 여기서 가져오면 순환) */
 export function paneNo(s: { slot: number; peerName?: string }): string {
   const tail = s.peerName?.split("-").pop();
-  return tail && tail !== s.peerName ? tail : slotNo(s.slot);
+  if (!tail || tail === s.peerName) return slotNo(s.slot);
+  const n = /^\d+$/.test(tail) ? Number(tail) : 0;
+  return n >= 1 && n <= 8 && n !== s.slot ? slotNo(s.slot) : tail;
 }
 
-/** 번호 칸 옆에 보일 이름 — 이름 끝 두 자리가 슬롯 번호와 같으면(자동 이름 `EQMUX03`, 직접 쓴 `app-03`)
+/** 번호 칸 옆에 보일 이름 — 이름 끝 두 자리가 번호 칸 글자와 같으면(자동 이름 `EQMUX03`, 직접 쓴 `app-03`)
  *  번호 칸이 이미 그 숫자를 보이므로 뗀다: `03 EQMUX03` → `03 EQMUX`. 표시만 바꾼다 — 저장된 이름과
- *  `@EQMUX03` 호출은 그대로이고, 툴팁에는 전체 이름을 둔다. 끝 숫자가 슬롯과 다르면(이름이 겹쳐
- *  다른 번호를 받은 경우) 그대로 둔다 — 번호 칸은 슬롯이고, 둘이 어긋나면 이름이 그 사실을 말해야 한다 */
-export function nameBesideNo(slot: number, name: string): string {
+ *  `@EQMUX03` 호출은 그대로이고, 툴팁에는 전체 이름을 둔다. 끝 숫자가 번호 칸과 다르면(이름이 겹쳐
+ *  다른 번호를 받은 경우, 번호 칸이 피어 끝 조각인 경우) 그대로 둔다 — 슬롯 번호가 화면에서 사라지지 않게 (B83).
+ *  no: 번호 칸에 실제로 보이는 글자(paneNo) — 숫자면 슬롯 번호 */
+export function nameBesideNo(no: number | string, name: string): string {
   const m = name.match(/^(.*?\D)[-_]?(\d{2})$/u);
-  return m && m[2] === slotNo(slot) ? m[1].replace(/[-_]$/, "") : name;
+  return m && m[2] === (typeof no === "number" ? slotNo(no) : no) ? m[1].replace(/[-_]$/, "") : name;
 }
 
 /** 자동 이름의 프로젝트명 — 워크스페이스 표시 이름에서 글자·숫자·-·_만, 16자까지. 대소문자는 그대로 */
@@ -289,6 +313,29 @@ export function planCastingSlots(
     }
     return undefined;
   });
+}
+
+/** 캐스팅 적용이 일으킬 변화 (B69·B70) — applyCasting과 같은 규칙으로 미리 센다.
+ *  stopped = 목록 밖 역할 세션(PTY 종료) · jobChanged = 남는 세션의 직무 변경(재시작 필요)
+ *  · added = 빈 슬롯에 새로 · dropped = 자리가 없어 빠지는 페르소나. plan은 planCasting 결과 */
+export function castingChanges(
+  current: readonly { id: string; personaId: string; jobId: string }[],
+  wanted: readonly { personaId: string; jobId: string }[],
+  plan: readonly (number | undefined)[],
+  wsId: string,
+) {
+  const ids = wanted.map((w) => `${w.personaId}@${wsId}`);
+  const byId = new Map(current.map((s) => [s.id, s]));
+  const fresh = wanted.filter((_, i) => !byId.has(ids[i]));
+  return {
+    stopped: current.filter((s) => s.personaId && !ids.includes(s.id)).map((s) => s.id),
+    jobChanged: wanted.flatMap((w, i) => {
+      const s = byId.get(ids[i]);
+      return s && s.jobId !== w.jobId ? [{ id: ids[i], from: s.jobId, to: w.jobId }] : [];
+    }),
+    added: fresh.filter((w) => plan[wanted.indexOf(w)] !== undefined).map((w) => w.personaId),
+    dropped: fresh.filter((w) => plan[wanted.indexOf(w)] === undefined).map((w) => w.personaId),
+  };
 }
 
 /** 세션 이름 검증 — 거부 이유(한국어 원문 = i18n 키) 또는 undefined. 빈 값은 '기본으로 돌아가기'라 통과 */
@@ -345,6 +392,22 @@ export interface EventRecord {
   workspaceId?: string;
   kind: "state" | "store" | "agent" | "git" | "mission" | "app";
   message: string;
+}
+
+/** 맡은 일의 보고 상태 (U31) — 원장(시간순)을 끝에서부터 본다. 자기 report --done을 먼저 만나면 닫힘
+ *  (undefined), 받은 handoff·ask(사람 "나"의 ask는 질문이라 제외 — Rust messages::open_requesters와 같은
+ *  판정)를 먼저 만나면 열림: 그 사이에 진척 report가 있었으면 "progress", 없으면 "none" */
+export function handoffReport(msgs: readonly ConversationMessage[], sessionId: string): "none" | "progress" | undefined {
+  let progress = false;
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (m.from === sessionId && m.type === "report") {
+      if (m.done) return undefined;
+      progress = true;
+    }
+    if (m.to === sessionId && (m.type === "handoff" || (m.type === "ask" && m.from !== "나"))) return progress ? "progress" : "none";
+  }
+  return undefined;
 }
 
 export interface ConversationMessage {
@@ -405,6 +468,18 @@ export function codexFlagsToString(f: RuntimeFlags, sessionId?: string): string 
 export function agentFlagsToString(cli: AgentCliId | undefined, f: RuntimeFlags, sessionId?: string): string {
   return cli === "codex" ? codexFlagsToString(f, sessionId) : flagsToString(f, sessionId);
 }
+
+/** 상태 표시 문구 (U29) — 한국어 화면은 한국어, 영어 화면은 원래 표기(busy·waiting… — 모노 대문자).
+ *  사전(t)을 쓰지 않는 이유: '작업 중'·'셸' 같은 원문은 사전에 이미 다른 영어(Working·Shell)로 있다 */
+const STATUS_KO: Record<AgentStatus, string> = {
+  starting: "기동 중",
+  busy: "작업 중",
+  waiting: "응답 대기",
+  shell: "셸",
+  idle: "유휴",
+  dead: "종료됨",
+};
+export const statusText = (st: AgentStatus): string => (settings().language === "en" ? st : STATUS_KO[st]);
 
 /** FR-G-07 — 주의 필요 순 정렬 가중치 */
 export const ATTENTION_ORDER: Record<AgentStatus, number> = {

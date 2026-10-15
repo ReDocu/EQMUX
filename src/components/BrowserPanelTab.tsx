@@ -14,10 +14,11 @@ import {
   browserVisible,
   onBrowserNav,
   rectBounds,
+  openLink,
 } from "../backend/browser";
 import { diagNote, reportBrowserRect } from "../backend/diag";
 import { holdFastPoll, portUrl, sessionPorts } from "../backend/ports";
-import { isTauri, openExternal } from "../backend/pty";
+import { isTauri } from "../backend/pty";
 import { browserRequest, panelSide, setBrowserRequest } from "../state";
 import { t } from "../i18n";
 import { Icon } from "./icons";
@@ -233,7 +234,7 @@ export function BrowserPanelTab() {
           </button>
         </Show>
       </div>
-        <button class="btn" disabled={!addr().trim()} title={t("기본 브라우저로 엽니다")} onClick={() => openExternal(/^https?:\/\//i.test(addr().trim()) ? addr().trim() : `http://${addr().trim()}`)}>
+        <button class="btn" disabled={!addr().trim()} title={t("앱 밖 브라우저로 엽니다")} onClick={() => openLink(/^https?:\/\//i.test(addr().trim()) ? addr().trim() : `http://${addr().trim()}`, true)}>
           <Icon name="external-link" size={12} />
           {t("외부로")}
         </button>

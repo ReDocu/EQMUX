@@ -4,7 +4,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { backend } from "./mock";
 import { isTauri } from "./pty";
-import { t } from "../i18n";
+import { t, tf } from "../i18n";
 import type { Job, Persona } from "../types";
 
 interface LibraryData {
@@ -58,17 +58,35 @@ export async function addPersonaFile(level: "basic" | "mid" | "adv" = "basic"): 
     return undefined;
   }
   const id = `p${Date.now().toString(36)}`;
+  // 이름이 겹치지 않게 번호를 붙인다 (U32 — 목록에 '새 페르소나'가 둘이면 고를 수 없었다)
+  const names = new Set(backend.listPersonas().map((p) => p.name));
+  let name = "새 페르소나";
+  for (let n = 2; names.has(name); n++) name = `새 페르소나 ${n}`;
   await invoke("library_save_persona", {
-    persona: { id, name: "새 페르소나", level, hint: "판단 우선순위 · 강조점 · 금기를 5~10줄로", color: "blue" },
+    persona: { id, name, level, hint: "판단 우선순위 · 강조점 · 금기를 5~10줄로", color: "blue" },
   }).catch(() => {});
   await refreshLibrary();
   return id;
 }
 
-export async function deletePersonaFile(id: string): Promise<void> {
-  if (!isTauri()) return;
-  await invoke("library_delete_persona", { id }).catch(() => {});
+/** 페르소나 삭제 — 실패하면 보여줄 문구, 성공이면 null (B96 · U57: 오류를 삼키지 않는다) */
+export async function deletePersonaFile(id: string): Promise<string | null> {
+  if (!isTauri()) return null;
+  const err = await invoke("library_delete_persona", { id }).then(
+    () => null,
+    (e) => tf("삭제 실패 — {err}", { err: String(e) }),
+  );
   await refreshLibrary();
+  return err;
+}
+
+/** 이름 검증 (B97) — 거부 이유(i18n 키) 또는 undefined. 빈 이름은 세션 이름·@멘션을 지우고,
+ *  같은 이름(대소문자 무시)이면 @이름이 먼저 잡힌 쪽으로만 간다 */
+export function libNameError(name: string, id: string, all: readonly { id: string; name: string }[]): string | undefined {
+  const v = name.trim().toLowerCase();
+  if (!v) return "이름을 입력하세요";
+  if (all.some((x) => x.id !== id && x.name.trim().toLowerCase() === v)) return "이미 쓰는 이름입니다";
+  return undefined;
 }
 
 // ── 고급 캐릭터 시트 (3단계 페르소나) — personas/<id>.character.md, 존재 = 고급 단계.
@@ -106,11 +124,15 @@ export async function saveCharacterFile(id: string, content: string, expectedMti
   return null;
 }
 
-/** 시트 삭제 (중간 이하로 강등) — 멱등 */
-export async function deleteCharacterFile(id: string): Promise<void> {
-  if (!isTauri()) return;
-  await invoke("library_character_delete", { id }).catch(() => {});
+/** 시트 삭제 (중간 이하로 강등) — 멱등. 실패하면 보여줄 문구, 성공이면 null (B96) */
+export async function deleteCharacterFile(id: string): Promise<string | null> {
+  if (!isTauri()) return null;
+  const err = await invoke("library_character_delete", { id }).then(
+    () => null,
+    (e) => tf("삭제 실패 — {err}", { err: String(e) }),
+  );
   await refreshLibrary();
+  return err;
 }
 
 // ── 직무 CRUD (FR-E-28) — 편집·복제·삭제. 복제 = 새 id로 저장, 같은 경로 하나다 ──

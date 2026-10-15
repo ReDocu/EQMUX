@@ -1,13 +1,25 @@
 // 앱 바 (DdrkL) — 관제 고정 탭(맨 왼쪽, G1) + 워크스페이스 탭(B3, 닫기/추가) + 전역 도구.
 // 대화는 전역 도구다 — 앱 바는 터미널 전체 화면에서도 보이므로 어느 모드에서든 접근된다 (M1).
-// 나머지 패널 도구(git·포트·로그·브라우저·임무)는 사이드 패널 탭과 화면 버튼으로만 접근한다.
+// 나머지 패널 도구(git·포트·로그·브라우저)는 [패널] 토글(마지막 탭으로 열기 · Ctrl+Shift+B)과 사이드 패널 탭으로 간다 (U33).
 // 0.5 — "워크스페이스" 도구는 지웠다(탭 줄 "+"와 같은 동작이었다). 벨(알림 센터)과 탭 메뉴를 더했다.
 import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
-import { bellCount, nextUnseen, notifyItems, sessionNeedsLook } from "../backend/attention";
+import {
+  attentionSessions,
+  bellCount,
+  fmtAgo,
+  inboxWaiting,
+  nextUnseen,
+  notifyItems,
+  seenOnly,
+  sessionNeedsLook,
+  unlistedAttention,
+} from "../backend/attention";
 import type { NotifyItem } from "../backend/attention";
 import { remoteWebUrl } from "../backend/git";
 import { backend } from "../backend/mock";
-import { openExternal, revealPath } from "../backend/pty";
+import { unseenPortCount } from "../backend/ports";
+import { revealPath } from "../backend/pty";
+import { openLink } from "../backend/browser";
 import { settings, toggleMuted } from "../backend/settings";
 import { crossProjectOn, setCrossProject } from "../backend/workspaces";
 import {
@@ -16,8 +28,12 @@ import {
   overlay,
   panelOpen,
   panelTab,
+  pushLayer,
   setExitOpen,
+  setFocusRequest,
+  setOverlay,
   setPanelOpen,
+  setSettingsCat,
   setView,
   tick,
   toggleExplorer,
@@ -25,10 +41,11 @@ import {
   view,
 } from "../state";
 import { t, tf } from "../i18n";
-import { ATTENTION_ORDER, fmtSince, nameBesideNo, paneNo, sessionName } from "../types";
-import type { Workspace } from "../types";
+import { ATTENTION_ORDER, nameBesideNo, paneNo, sessionName } from "../types";
+import type { Session, Workspace } from "../types";
 import { Icon } from "./icons";
 import { ContextMenu, notify } from "./ui";
+import { crashReport, setCrashOpen } from "../backend/recovery";
 import type { MenuGroup } from "./ui";
 
 export function AppBar() {
@@ -86,7 +103,7 @@ export function AppBar() {
       [
         { label: t("탐색기에서 열기"), disabled: ws.pathMissing, action: () => void reveal() },
         // 웹 주소로 바꿀 수 없는 원격(로컬 경로·없음)은 숨긴다 — 조건이 영영 맞지 않는 동작이다
-        ...(web ? [{ label: t("원격 저장소 열기"), action: () => openExternal(web) }] : []),
+        ...(web ? [{ label: t("원격 저장소 열기"), action: () => openLink(web) }] : []),
         { label: t("워크스페이스 관리…"), action: () => toggleOverlay("connect") },
       ],
       [
@@ -111,39 +128,71 @@ export function AppBar() {
     const s = itemSession(it);
     return !s || !sessionNeedsLook(s);
   };
+  const sessName = (s: Session) =>
+    `${paneNo(s)} ${nameBesideNo(paneNo(s), sessionName(s, backend.listPersonas().find((p) => p.id === s.personaId)))}`;
   const itemName = (it: NotifyItem) => {
     const s = itemSession(it);
-    if (!s) return it.session;
-    return `${paneNo(s)} ${nameBesideNo(s.slot, sessionName(s, backend.listPersonas().find((p) => p.id === s.personaId)))}`;
+    return s ? sessName(s) : it.session;
   };
   // 지금 보고 있는 워크스페이스가 아니면 어디 것인지 붙인다
-  const itemWsName = (it: NotifyItem) => {
+  const wsLabel = (wsId: string) => {
     const v = view();
     const cur = v.kind === "workspace" ? (v as { id: string }).id : undefined;
-    return it.workspace === cur ? undefined : backend.listWorkspaces().find((w) => w.id === it.workspace)?.name;
+    return wsId === cur ? undefined : backend.listWorkspaces().find((w) => w.id === wsId)?.name;
   };
-  const openItem = (it: NotifyItem) => {
+  // 이동 + 키보드 포커스 — Ctrl+Shift+U·OS 토스트와 같은 끝이다 (B79). 세션에 아무것도 입력하지 않는다
+  const openSession = (wsId: string, sessionId: string) => {
     setBellOpen(false);
-    jumpToSession(it.workspace, it.session); // 이동만 — 세션에 아무것도 입력하지 않는다
+    if (jumpToSession(wsId, sessionId)) setFocusRequest({ session: sessionId });
   };
+  // 숫자에 들었는데 목록(notify-item 기록)에 줄이 없는 세션 — 재시작으로 기록이 비었을 때·목 모드 (U35)
+  const unlisted = () => {
+    tick();
+    return unlistedAttention(attentionSessions(), notifyItems());
+  };
+  // [확인 표시 지우기]가 지울 수 있는 것 — 할 일(waiting·메시지 대기·보고 전)은 남는다 (B75)
+  const clearable = () => {
+    tick();
+    return backend.listSessions().filter((s) => seenOnly(s, inboxWaiting(s))).length;
+  };
+  const clearSeen = () => {
+    backend.markAllSeen();
+    const left = bellCount();
+    if (left > 0) notify(tf("응답이 필요한 {n}건은 남습니다", { n: left }));
+  };
+  // 알림 시각은 팝오버가 열린 동안 30초마다 다시 센다 (U36)
+  const [now, setNow] = createSignal(Date.now());
   let bellEl: HTMLDivElement | undefined;
   onMount(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setBellOpen(false);
     const onDown = (e: MouseEvent) => bellEl && !bellEl.contains(e.target as Node) && setBellOpen(false);
-    window.addEventListener("keydown", onKey);
     window.addEventListener("mousedown", onDown);
-    onCleanup(() => {
-      window.removeEventListener("keydown", onKey);
-      window.removeEventListener("mousedown", onDown);
-    });
+    onCleanup(() => window.removeEventListener("mousedown", onDown));
   });
+  // 벨이 열린 동안만 산다 — ESC는 레이어 스택이 맨 위 하나에 준다 (P30)
+  const bellLayer = () => {
+    onCleanup(pushLayer(() => setBellOpen(false)));
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 30_000);
+    onCleanup(() => clearInterval(timer));
+    return null;
+  };
+  // 실행 방식 마법사(실행 방식·기본 터미널 구성·캐스팅·편성) 중에도 그 워크스페이스 탭을 활성으로 보인다 (U30)
+  const tabWs = () => {
+    const v = view();
+    if (v.kind === "workspace") return v.id;
+    return v.kind === "launch" || v.kind === "terminalSetup" || v.kind === "casting" || v.kind === "composition"
+      ? v.wsId
+      : undefined;
+  };
 
   return (
     <div class="appbar">
       <div class="brand">EQMUX</div>
-      <div class="tabs">
+      <div class="tabs" role="tablist">
         <button
           class="tab"
+          role="tab"
+          aria-selected={view().kind === "control"}
           classList={{ active: view().kind === "control" }}
           onClick={() => setView({ kind: "control" })}
         >
@@ -157,7 +206,9 @@ export function AppBar() {
           {(ws) => (
             <button
               class="tab ws-tab"
-              classList={{ active: view().kind === "workspace" && (view() as { id?: string }).id === ws.id }}
+              role="tab"
+              aria-selected={tabWs() === ws.id}
+              classList={{ active: tabWs() === ws.id }}
               onClick={() => setView({ kind: "workspace", id: ws.id })}
               onContextMenu={(e) => {
                 e.preventDefault();
@@ -175,21 +226,40 @@ export function AppBar() {
                 <span class="unread-dot" />
               </Show>
               {/* 우클릭만 두면 찾기 어렵다 — 마우스를 올리면 `⋯`가 보인다 */}
+              {/* 키보드로도 닿는다 (U37) — 탭 버튼의 Enter(탭 전환)로 새지 않게 키 처리를 끊는다 */}
               <span
                 class="tab-more"
+                role="button"
+                tabIndex={0}
                 title={t("워크스페이스 메뉴")}
+                aria-label={t("워크스페이스 메뉴")}
                 onClick={(e) => {
                   e.stopPropagation();
                   const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
                   setTabMenu({ x: r.left, y: r.bottom + 2, ws });
+                }}
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter" && e.key !== " ") return;
+                  e.preventDefault();
+                  e.stopPropagation();
+                  e.currentTarget.click();
                 }}
               >
                 <Icon name="ellipsis" size={12} />
               </span>
               <span
                 class="tab-close"
+                role="button"
+                tabIndex={0}
                 title={t("워크스페이스 닫기 (세션은 백그라운드 유지)")}
+                aria-label={t("워크스페이스 닫기 (세션은 백그라운드 유지)")}
                 onClick={(e) => {
+                  e.stopPropagation();
+                  closeWs(ws.id);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter" && e.key !== " ") return;
+                  e.preventDefault();
                   e.stopPropagation();
                   closeWs(ws.id);
                 }}
@@ -209,10 +279,25 @@ export function AppBar() {
         </button>
       </div>
       <div class="tools">
+        {/* 패널 토글 (U33) — 마지막으로 본 탭으로 연다. 새 세션 포트 배지는 패널이 닫혀 있어도 여기 남는다 */}
+        <button
+          class="tool"
+          aria-label={t("사이드 패널")}
+          aria-pressed={panelOpen()}
+          classList={{ active: panelOpen() }}
+          title={t("사이드 패널 토글 — 마지막 탭으로 엽니다 · Ctrl+Shift+B")}
+          onClick={() => setPanelOpen(!panelOpen())}
+        >
+          <Icon name="panel-right" size={13} />
+          <span class="tool-label">{t("패널")}</span>
+          <Show when={unseenPortCount() > 0}>
+            <span class="bell-count">{unseenPortCount()}</span>
+          </Show>
+        </button>
         <button
           class="tool"
           aria-label={t("대화")}
-          classList={{ active: panelOpen() }}
+          classList={{ active: panelOpen() && panelTab() === "conversation" }}
           title={t("대화 패널 토글 — 전체 화면에서도 열립니다")}
           onClick={toggleConversation}
         >
@@ -275,6 +360,7 @@ export function AppBar() {
             </Show>
           </button>
           <Show when={bellOpen()}>
+            {bellLayer()}
             <div class="bell-pop">
               <div class="bell-head">
                 <span class="bell-head-title">{tf("알림 · 미확인 {n}", { n: bellUnseen() })}</span>
@@ -282,7 +368,8 @@ export function AppBar() {
                   class="bell-link"
                   onClick={() => {
                     setBellOpen(false);
-                    toggleOverlay("settings");
+                    setSettingsCat("notify"); // 이름대로 알림 탭에서 연다 (U34)
+                    setOverlay("settings");
                   }}
                 >
                   {t("알림 설정")}
@@ -293,23 +380,68 @@ export function AppBar() {
                   <Icon name="arrow-down-to-line" size={12} />
                   {t("다음 미확인으로 · Ctrl+Shift+U")}
                 </button>
-                <button class="btn" disabled={bellUnseen() === 0} onClick={() => backend.markAllSeen()}>
-                  {t("모두 읽음")}
+                <button
+                  class="btn"
+                  disabled={clearable() === 0}
+                  title={t("완료 보고·턴 완료·본 적 없는 종료 표시만 지웁니다 — 응답 대기·메시지 대기·보고 전은 남습니다")}
+                  onClick={clearSeen}
+                >
+                  {t("확인 표시 지우기")}
                 </button>
               </div>
               <div class="bell-list">
-                <For each={notifyItems()} fallback={<div class="muted bell-empty">{t("알림이 없습니다")}</div>}>
+                {/* 직전 비정상 종료 — 복구 창을 닫은 뒤에도 여기서 다시 연다 (U63) */}
+                <Show when={crashReport()}>
+                  {(r) => (
+                    <button class="bell-item" onClick={() => (setBellOpen(false), setCrashOpen(true))}>
+                      <span class="bell-dot" />
+                      <span class="bell-body">
+                        <span class="bell-line">
+                          <b>{tf("직전 비정상 종료 · {n}세션", { n: r().sessions.length })}</b>
+                        </span>
+                      </span>
+                    </button>
+                  )}
+                </Show>
+                <Show when={unlisted().length > 0}>
+                  <div class="muted bell-group">{t("지금 봐야 할 세션")}</div>
+                  <For each={unlisted()}>
+                    {(s) => (
+                      <button class="bell-item" onClick={() => openSession(s.workspaceId, s.id)}>
+                        <span class="bell-dot" />
+                        <span class="bell-body">
+                          <span class="bell-line">
+                            <b class="mono">{sessName(s)}</b>
+                            <Show when={wsLabel(s.workspaceId)}>{(n) => <span class="badge">{n()}</span>}</Show>
+                          </span>
+                        </span>
+                      </button>
+                    )}
+                  </For>
+                </Show>
+                <For
+                  each={notifyItems()}
+                  fallback={
+                    <Show when={unlisted().length === 0 && !crashReport()}>
+                      <div class="muted bell-empty">{t("알림이 없습니다")}</div>
+                    </Show>
+                  }
+                >
                   {(it) => (
-                    <button class="bell-item" classList={{ read: itemRead(it) }} onClick={() => openItem(it)}>
+                    <button
+                      class="bell-item"
+                      classList={{ read: itemRead(it) }}
+                      onClick={() => openSession(it.workspace, it.session)}
+                    >
                       <span class={`bell-dot ${itemRead(it) ? "" : it.kind}`} />
                       <span class="bell-body">
                         <span class="bell-line">
                           <b class="mono">{itemName(it)}</b>
-                          <Show when={itemWsName(it)}>{(n) => <span class="badge">{n()}</span>}</Show>
+                          <Show when={wsLabel(it.workspace)}>{(n) => <span class="badge">{n()}</span>}</Show>
                           <Show when={it.count > 1}>
                             <span class="mono muted">×{it.count}</span>
                           </Show>
-                          <span class="mono muted bell-age">{fmtSince(Date.now() - it.ts)}</span>
+                          <span class="mono muted bell-age">{fmtAgo(now() - it.ts)}</span>
                         </span>
                         <span class={`bell-title ${itemRead(it) ? "" : it.kind}`}>{it.title}</span>
                         <Show when={it.body}>

@@ -24,10 +24,9 @@ export const dict: Record<string, string> = {
   "읽는 중…": "Reading…",
   "⟳ 새로 읽기": "⟳ Refresh",
   "파일을 선택하세요": "Select a file",
-  "COMPARE · 부모 커밋 {base} ↔ {hash} · {stat} · 읽기 전용":
-    "COMPARE · parent commit {base} ↔ {hash} · {stat} · read-only",
-  "COMPARE · {base} ({branch}) ↔ WORKTREE · {stat} · 읽기 전용 — 커밋·편집은 터미널에서":
-    "COMPARE · {base} ({branch}) ↔ WORKTREE · {stat} · read-only — commit/edit in the terminal",
+  "비교 · 부모 커밋 {base} ↔ {hash} · {stat}": "Compare · parent commit {base} ↔ {hash} · {stat}",
+  "비교 · {base} ({branch}) ↔ 워크트리 · {stat} — 커밋·편집은 터미널에서":
+    "Compare · {base} ({branch}) ↔ worktree · {stat} — commit/edit in the terminal",
   "변경 {cur}/{total}": "Change {cur}/{total}",
   "변경 없음": "No changes",
   "이전 변경 (p)": "Previous change (p)",
@@ -39,12 +38,12 @@ export const dict: Record<string, string> = {
   줄바꿈: "Wrap",
   "닫기 (Esc) — 진입한 화면으로 복귀": "Close (Esc) — return to previous screen",
   "비교 대상 — 부모 커밋 ({base})": "Base — parent commit ({base})",
-  "비교 대상 — BASE ({base})": "Base — BASE ({base})",
+  "비교 대상 — 기준 커밋 ({base})": "Base — base commit ({base})",
   "커밋 직전 내용": "Content just before this commit",
   "HEAD 커밋 시점 내용": "Content at the HEAD commit",
   "🔒 읽기 전용": "🔒 Read-only",
   "(이 시점에는 파일이 없습니다 — 새 파일)": "(file does not exist at this point — new file)",
-  "BASE 없음 — 새 파일입니다": "No BASE — this is a new file",
+  "비교 대상 없음 — 새 파일입니다": "No base — this is a new file",
   "이 파일의 내용을 표시할 수 없습니다": "Cannot display this file's contents",
   "현재 — 이 커밋 ({hash})": "Current — this commit ({hash})",
   "현재 — 워크트리": "Current — worktree",
@@ -54,7 +53,15 @@ export const dict: Record<string, string> = {
   "워크트리에 없음 — 삭제된 파일입니다": "Not in the worktree — this file was deleted",
   "변경 {n}로 이동": "Go to change {n}",
   "첫 변경으로 이동": "Go to the first change",
-  "{a} 추가 · {d} 삭제": "{a} added · {d} deleted",
+  "이 파일 +{a} −{d} · 전체 {n}파일": "This file +{a} −{d} · {n} files total",
+  "기준 {base}": "Base {base}",
+  "{n}개 파일": "{n} files",
+  // diff.rs가 돌려주는 오류·통계 문자열 (U65 — English 설정에서도 한국어로 나오던 것)
+  바이너리: "binary",
+  "파일을 읽을 수 없습니다 (바이너리 또는 없음)": "Cannot read the file (binary or missing)",
+  "바이너리 파일 — 텍스트 비교 불가": "Binary file — text comparison unavailable",
+  "워크스페이스 밖 경로": "Path outside the workspace",
+  "잘못된 커밋 해시": "Invalid commit hash",
   "3,000줄에서 잘림": "truncated at 3,000 lines",
   "git diff {a}^ {b} 실측": "git diff {a}^ {b} (live)",
   "git diff -U999999 실측": "git diff -U999999 (live)",
@@ -62,6 +69,7 @@ export const dict: Record<string, string> = {
   실측: "live",
 
   // ── GitPanelTab.tsx ──
+  "변경 {n}건 · diff 보기": "{n} changes · View diff",
   "브라우저 dev — 실제 체크아웃 없음": "Browser dev — no actual checkout",
   "⎇ {branch} 체크아웃 완료 — 공유 세션 전체에 적용됨": "⎇ {branch} checked out — applied to all shared sessions",
   "체크아웃 실패 — {err}": "Checkout failed — {err}",
@@ -136,4 +144,18 @@ export const dict: Record<string, string> = {
   "원격에서 보기 (푸시 안 한 커밋은 없을 수 있음)": "View on remote (unpushed commits may be missing)",
   "슬롯이 가득 찼습니다 ({n}개) — 세션을 하나 닫거나 설정에서 상한을 올리세요":
     "All slots are in use ({n}) — close a session or raise the limit in Settings",
+  // ── 0.5.x QA eqmux-8a: 워크스페이스 연결 · 실행 방식 · 기본 터미널 구성 (같은 영역이라 여기 둔다) ──
+  "선택한 워크스페이스": "Selected workspace",
+  "탭으로 가기": "Go to tab",
+  "첫 세션을 어떻게 시작할까요? 나중에 바꿀 수 있어요 · 두 방식 모두 워크스페이스의 슬롯 {n}개를 써요":
+    "How should the first session start? You can change it later · both use the workspace's {n} slots",
+  "기본 터미널로 시작해요. 역할 팀은 나중에 추가할 수 있고, 두 방식 모두 슬롯 {n}개를 함께 써요.":
+    "Starting with a default terminal. You can add a role team later; both share the {n} slots.",
+  "역할 팀으로 시작해요. 기본 터미널은 나중에 추가할 수 있고, 두 방식 모두 슬롯 {n}개를 함께 써요.":
+    "Starting with a role team. You can add a default terminal later; both share the {n} slots.",
+  "기본 터미널이 이미 열려 있습니다 — 탭으로 갑니다": "A default terminal is already open — going to its tab",
+  "빈 슬롯이 없습니다 ({n}/{n}) — 세션 하나를 닫고 다시 여세요":
+    "No free slot ({n}/{n}) — close a session and open again",
+  "사용 중 · {name}": "In use · {name}",
+  "직전 비정상 종료 · {n}세션": "Last run ended abnormally · {n} sessions",
 };

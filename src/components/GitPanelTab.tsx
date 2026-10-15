@@ -10,7 +10,8 @@ import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from "s
 import { branchList, commitWebUrl, gitOverview, remoteWebUrl, worktreeAdd, worktreeAttach, worktreeGraph, worktreeList } from "../backend/git";
 import type { BranchInfo, GitOverview, GraphRow, WorktreeInfo } from "../backend/git";
 import { GIT_STATE, backend } from "../backend/mock";
-import { clipWriteText, isTauri, openExternal, revealPath } from "../backend/pty";
+import { clipWriteText, isTauri, revealPath } from "../backend/pty";
+import { openLink } from "../backend/browser";
 import { maxSlots } from "../backend/settings";
 import { checkoutBranch } from "../backend/workspaces";
 import { t, tf } from "../i18n";
@@ -299,7 +300,7 @@ export function GitPanelTab() {
         {/* 원격 저장소 (0.5 바로 가기) — 웹 주소로 못 바꾸는 원격(로컬 경로·없음)이면 숨긴다 */}
         <Show when={remoteWebUrl(ws()?.remote)}>
           {(web) => (
-            <button class="btn" title={web()} onClick={() => openExternal(web())}>
+            <button class="btn" title={web()} onClick={() => openLink(web())}>
               <Icon name="external-link" size={12} />
               {t("원격 저장소")}
             </button>
@@ -654,7 +655,7 @@ export function GitPanelTab() {
         </Show>
       </div>
       <button class="gitp-diff-bar" disabled={!ws()} onClick={openDiff}>
-        <span>{tf("변경 {n}건 diff · 에디터로 열기", { n: g().changed })}</span>
+        <span>{tf("변경 {n}건 · diff 보기", { n: g().changed })}</span>
         <Icon name="arrow-right" size={12} />
       </button>
 
@@ -675,7 +676,7 @@ export function GitPanelTab() {
                 // 원격에서 보기 (0.5) — GitHub·GitLab·Bitbucket만. 푸시 안 한 커밋은 404일 수 있다
                 ...((url) =>
                   url
-                    ? [{ label: t("원격에서 보기 (푸시 안 한 커밋은 없을 수 있음)"), action: () => openExternal(url) }]
+                    ? [{ label: t("원격에서 보기 (푸시 안 한 커밋은 없을 수 있음)"), action: () => openLink(url) }]
                     : [])(commitWebUrl(ws()?.remote, m().c.hash)),
               ],
               [

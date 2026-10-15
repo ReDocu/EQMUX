@@ -7,7 +7,8 @@ import { createSignal } from "solid-js";
 import { pendingCount, unmanagedAgent } from "./conversation";
 import { backend } from "./mock";
 import { isTauri } from "./pty";
-import { jumpToSession, setFocusRequest } from "../state";
+import { jumpToSession, modalOpen, setFocusRequest } from "../state";
+import { t, tf } from "../i18n";
 import type { Session } from "../types";
 
 /** 주의 순위 — 작을수록 급하다. 0은 봐야 할 것이 없다.
@@ -35,13 +36,11 @@ export function attentionOrder(sessions: readonly Session[], pending: (s: Sessio
     .map((x) => x.s);
 }
 
-/** 열린 모든 워크스페이스의 봐야 할 세션 — 벨 미확인 수·대시보드가 쓴다 */
+/** 봐야 할 세션 전부 — 벨 미확인 수·`다음 미확인으로`·벨의 '지금 봐야 할 세션'이 같은 집합을 쓴다.
+ *  닫은 워크스페이스(탭만 접기 — 세션은 돈다)도 넣는다. 예전엔 여기만 열린 것으로 걸러서 벨은
+ *  1인데 `다음 미확인으로`는 무반응이었다 (B74). 데려갈 때 jumpToSession이 그 탭을 다시 연다 (B18) */
 export function attentionSessions(): Session[] {
-  const open = new Set(backend.listWorkspaces().filter((w) => w.open).map((w) => w.id));
-  return attentionOrder(
-    backend.listSessions().filter((s) => open.has(s.workspaceId)),
-    inboxWaiting,
-  );
+  return attentionOrder(backend.listSessions(), inboxWaiting);
 }
 
 /** 직전에 데려간 세션 — waiting처럼 보기만 해서는 안 지워지는 신호가 있어, 누를 때마다
@@ -57,10 +56,11 @@ export function pickNext(order: readonly Session[], last: string | undefined): S
 
 /** 다음 미확인으로 (Ctrl+Shift+U · `⛶ 응답 대기` 칩) — 미확인이 없으면 아무것도 하지 않는다 */
 export function nextUnseen(): Session | undefined {
+  if (modalOpen()) return undefined; // 모달 뒤에서만 화면이 바뀌지 않게 (B72) — 단축키는 App이 안내를 띄운다
   const next = pickNext(attentionSessions(), lastJump);
-  if (!next) return undefined;
+  // 미저장 편집이 팝업을 붙들면 데려가지 않는다 — 그때 다음으로 넘기면 보지도 못한 세션을 건너뛴다
+  if (!next || !jumpToSession(next.workspaceId, next.id)) return undefined;
   lastJump = next.id;
-  jumpToSession(next.workspaceId, next.id);
   setFocusRequest({ session: next.id }); // 줌 없이 키보드 포커스만 — 컨트롤 센터가 받는다
   return next;
 }
@@ -110,8 +110,8 @@ export function startNotifyFeed(): void {
   // OS 토스트 클릭 (P2 A2) — Rust가 창을 앞으로 올린 뒤 보낸다. 알림 센터 항목을 누른 것과 같은 길로 간다
   void listen<{ session: string }>("notify-activate", (e) => {
     const s = backend.listSessions().find((x) => x.id === e.payload.session);
-    if (!s) return;
-    jumpToSession(s.workspaceId, s.id);
+    // 모달이 떠 있으면 창만 앞으로 온다 — 모달 뒤에서 화면을 옮기지 않는다 (B72)
+    if (!s || modalOpen() || !jumpToSession(s.workspaceId, s.id)) return;
     setFocusRequest({ session: s.id });
   });
 }
@@ -125,5 +125,28 @@ export function sessionNeedsLook(s: Session): boolean {
 
 /** 벨 미확인 수 — 세션 신호에서 계산한다 (따로 세지 않는다) */
 export function bellCount(): number {
-  return backend.listSessions().filter(sessionNeedsLook).length;
+  return attentionSessions().length;
+}
+
+/** 확인 표시만 남은 세션인가 — 본 적 없는 dead · 완료 보고 · 턴 완료. [확인 표시 지우기](markAllSeen)가
+ *  지울 수 있는 것은 이것뿐이다. waiting·메시지 대기·보고 전은 할 일이라 남는다 (B75) */
+export function seenOnly(s: Session, pending = 0): boolean {
+  const r = attentionRank(s, pending);
+  return r === 2 || r === 5 || r === 6;
+}
+
+/** 벨 목록(notify-item 기록)에 안 읽은 줄이 없는 봐야 할 세션 — 재시작으로 기록이 비었거나
+ *  목 모드처럼 기록이 없을 때도 숫자에 든 세션이 목록에 보이게 한다 (U35). 순수 함수 */
+export function unlistedAttention(order: readonly Session[], items: readonly NotifyItem[]): Session[] {
+  const listed = new Set(items.map((it) => it.session));
+  return order.filter((s) => !listed.has(s.id));
+}
+
+/** 알림이 온 지 얼마나 됐나 — '5분 전'. fmtSince('5분째')는 상태가 계속된 시간이라 뜻이 다르다 (U36) */
+export function fmtAgo(ms: number): string {
+  const m = Math.floor(ms / 60000);
+  if (m < 1) return t("방금");
+  if (m < 60) return tf("{m}분 전", { m });
+  if (m < 1440) return tf("{h}시간 전", { h: Math.floor(m / 60) });
+  return tf("{d}일 전", { d: Math.floor(m / 1440) });
 }

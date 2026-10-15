@@ -3,7 +3,7 @@
 // 고정 정책 항목은 클릭해도 바뀌지 않는 선언으로 남는다. Tauri 밖에서는 저장 없이 화면만 바뀐다.
 // 0.5 — 클릭마다 다음 값으로 넘어가던 버튼을 없앴다: 선택지 3개 이하는 세그먼트, 4개 이상은 드롭다운.
 // 0.5 시안(mT3kL·fvlW8) — 카테고리 탭 줄 + 카드. 행은 "이름·설명 | 컨트롤" 한 줄이다.
-import { createSignal, For, Show } from "solid-js";
+import { For, Show } from "solid-js";
 import {
   DEFAULT_SETTINGS,
   PALETTES,
@@ -15,8 +15,9 @@ import {
 } from "../backend/settings";
 import type { AppSettings } from "../backend/settings";
 import { agentClis, agentClisReady, refreshAgentClis } from "../backend/agentprobe";
-import { isTauri, openExternal } from "../backend/pty";
-import { defaultShell, setDefaultShell, SHELLS } from "../state";
+import { isTauri } from "../backend/pty";
+import { openLink } from "../backend/browser";
+import { defaultShell, setDefaultShell, setSettingsCat, settingsCat, SHELLS } from "../state";
 import { t } from "../i18n";
 import { Segmented } from "../components/ui";
 import { Icon } from "../components/icons";
@@ -63,7 +64,8 @@ const START_VIEWS: AppSettings["startView"][] = ["control", "last"];
 const NOTI: AppSettings["notifications"][] = ["waiting-dead", "waiting", "off"];
 const DONE_NOTI: AppSettings["doneNotifications"][] = ["report", "all", "off"];
 const MANUAL_DELIVERY: AppSettings["manualDelivery"][] = ["park", "auto"];
-const REPLAY = [500, 1000, 2000];
+const WEB_OPEN: AppSettings["webOpen"][] = ["eqmux", "chrome"];
+const REPLAY = [250, 500, 1000]; // 저장 상한(세션당 1,000줄)까지만 — 넘는 선택지는 1,000과 같았다 (B78)
 const SLOTS = [...SLOT_OPTIONS]; // 4 · 6 · 8
 const THEMES: AppSettings["theme"][] = ["dark", "light", "system"];
 const PALS = [...PALETTES]; // 부드러움 · 고대비 · 중성 · 따뜻함
@@ -128,9 +130,16 @@ const SECTIONS: Section[] = [
         apply: (i) => updateSettings({ startView: START_VIEWS[i] }),
       },
       {
+        k: "웹 페이지 열기",
+        d: "누른 링크와 에이전트의 eqmux browser open이 열리는 곳 · Chrome이면 에이전트가 페이지를 조작(snapshot·click)하지 못한다",
+        labels: ["EQMUX 브라우저 (기본)", "Chrome"],
+        current: () => pick(WEB_OPEN, settings().webOpen),
+        apply: (i) => updateSettings({ webOpen: WEB_OPEN[i] }),
+      },
+      {
         k: "스크롤백 재생",
         d: "앱을 다시 켰을 때 페인에 다시 그리는 줄 수",
-        labels: ["500 lines", "1,000 lines", "2,000 lines"],
+        labels: ["250줄", "500줄", "1,000줄"],
         current: () => pick(REPLAY, settings().scrollbackReplay),
         apply: (i) => updateSettings({ scrollbackReplay: REPLAY[i] }),
       },
@@ -177,7 +186,7 @@ const SECTIONS: Section[] = [
       {
         k: "OS 알림",
         d: "사람의 행동이 필요한 상태만 알립니다 · 꺼도 인앱 미확인은 유지됩니다",
-        labels: ["waiting · dead", "waiting만", "꺼짐"],
+        labels: ["응답 대기 · 종료", "응답 대기만", "꺼짐"],
         current: () => pick(NOTI, settings().notifications),
         apply: (i) => updateSettings({ notifications: NOTI[i] }),
       },
@@ -198,7 +207,7 @@ const SECTIONS: Section[] = [
       },
       {
         // 실제 동작 — waiting 진입 때 앱이 직접 소리를 낸다(창이 포커스면 내지 않는다). "예약"이 아니다
-        k: "waiting 알림 소리",
+        k: "응답 대기 알림 소리",
         d: "승인·입력 대기가 되면 소리를 냅니다 · 창이 포커스면 내지 않는다",
         labels: ["꺼짐 (기본)", "켜짐"],
         current: () => (settings().waitingSound ? 1 : 0),
@@ -238,7 +247,7 @@ const SECTIONS: Section[] = [
         label: ".bak",
         tone: "blue",
       },
-      { k: "세션당 상한", label: "1,000 lines" },
+      { k: "세션당 상한", label: "1,000줄" },
       { k: "배치 커밋", label: "100ms / 200행" },
       { k: "캐릭터 시트 상한", d: "SessionStart 훅이 싣는 시트 본문", label: "4,000자" },
       { k: "브라우저 결과 상한", d: "snapshot · get-text 한 번", label: "10,000자" },
@@ -277,9 +286,13 @@ const SECTIONS: Section[] = [
       { k: "Ctrl+Alt+1~8", label: "N번 슬롯 페인에 키보드 포커스" },
       { k: "Ctrl+Shift+L", label: "페인 배치" },
       { k: "Ctrl+Shift+D", label: "관제 토글" },
+      { k: "Ctrl+Shift+B", label: "사이드 패널 토글 (마지막 탭)" },
       { k: "Ctrl+F", label: "터미널 검색" },
       { k: "Ctrl+Shift+C / V", label: "복사 · 붙여넣기" },
-      { k: "Enter · Esc", label: "확인창에서 둘 다 취소" },
+      { k: "Ctrl+C · Ctrl+V", label: "선택이 있으면 복사 · 붙여넣기 (앱)" },
+      { k: "Esc", label: "맨 위 창·팝업·메뉴 하나만 닫기 · 입력칸에서는 칸 빠져나오기" },
+      { k: "Enter", label: "확인창에서 취소 (위험 버튼은 Tab으로 옮겨 Enter)" },
+      { k: "Ctrl+Alt+D", label: "화면이 깨졌을 때 진단 기록에 표시" },
     ],
   },
   {
@@ -325,7 +338,9 @@ export function Settings() {
   const visible = (x: AppSettings) => JSON.stringify({ ...x, muted: [] });
   const isDefault = () => visible(settings()) === visible(DEFAULT_SETTINGS);
   const restoreDefaults = () => updateSettings({ ...DEFAULT_SETTINGS, muted: settings().muted });
-  const [cat, setCat] = createSignal<Cat>("general");
+  // 카테고리는 앱 셸 상태다 — 벨의 [알림 설정]이 알림 탭을 지정해 연다 (U34)
+  const cat = () => settingsCat() as Cat;
+  const setCat = (c: Cat) => setSettingsCat(c);
 
   return (
     <div class="screen">
@@ -429,7 +444,7 @@ export function Settings() {
                   {(it) => (
                     <div class="set-row">
                       <RowCopy k={it.k} />
-                      <button class="btn" onClick={() => openExternal(it.url())} title={t("기본 브라우저로 엽니다")}>
+                      <button class="btn" onClick={() => openLink(it.url(), true)} title={t("앱 밖 브라우저로 엽니다")}>
                         <Icon name="external-link" size={12} />
                         {t(it.label)}
                       </button>

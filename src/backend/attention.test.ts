@@ -4,8 +4,19 @@ vi.mock("./conversation", () => ({
   pendingCount: () => 2,
   unmanagedAgent: (s: { status: string; agent?: string }) => s.status === "shell" && !!s.agent,
 }));
-vi.mock("../state", () => ({ jumpToSession: () => {}, setFocusRequest: () => {} }));
-import { attentionOrder, attentionRank, inboxWaiting, NOTIFY_MAX, pickNext, pushNotify, sessionNeedsLook } from "./attention";
+vi.mock("../state", () => ({ jumpToSession: () => true, modalOpen: () => false, setFocusRequest: () => {} }));
+import {
+  attentionOrder,
+  attentionRank,
+  fmtAgo,
+  inboxWaiting,
+  NOTIFY_MAX,
+  pickNext,
+  pushNotify,
+  seenOnly,
+  sessionNeedsLook,
+  unlistedAttention,
+} from "./attention";
 import type { NotifyItem } from "./attention";
 import type { Session } from "../types";
 
@@ -66,5 +77,28 @@ describe("attention", () => {
     expect(l.map((x) => `${x.session}${x.count}`)).toEqual(["a1", "b1", "a3"]);
     for (let i = 0; i < 80; i++) l = pushNotify(l, it(`s${i}`, i));
     expect(l).toHaveLength(NOTIFY_MAX);
+  });
+
+  test("[확인 표시 지우기]는 확인만 남은 것만 — 할 일은 지울 대상이 아니다 (B75)", () => {
+    expect(seenOnly(s("a", { status: "dead", unseen: true }))).toBe(true);
+    expect(seenOnly(s("a", { unseenDone: "report" }))).toBe(true);
+    expect(seenOnly(s("a", { unseenDone: "turn" }))).toBe(true);
+    expect(seenOnly(s("a", { status: "waiting", unseenDone: "turn" }))).toBe(false);
+    expect(seenOnly(s("a", { reportPending: true }))).toBe(false);
+    expect(seenOnly(s("a", {}), 2)).toBe(false);
+  });
+
+  test("숫자에 들었는데 목록에 줄이 없는 세션만 따로 보인다 (U35)", () => {
+    const order = [s("a", { status: "waiting" }), s("b", { status: "dead", unseen: true })];
+    const item = { id: "1", session: "a", workspace: "w", kind: "waiting", title: "", body: "", ts: 0, os: false, count: 1 } as NotifyItem;
+    expect(unlistedAttention(order, []).map((x) => x.id)).toEqual(["a", "b"]);
+    expect(unlistedAttention(order, [item]).map((x) => x.id)).toEqual(["b"]);
+  });
+
+  test("알림 시각은 '~전' (U36)", () => {
+    expect(fmtAgo(10_000)).toBe("방금");
+    expect(fmtAgo(5 * 60_000)).toBe("5분 전");
+    expect(fmtAgo(3 * 3_600_000)).toBe("3시간 전");
+    expect(fmtAgo(2 * 86_400_000)).toBe("2일 전");
   });
 });

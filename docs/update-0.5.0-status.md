@@ -91,7 +91,7 @@ QA 빌드(`tauri build --debug`, 프런트 내장)를 CDP(WebView2 원격 디버
 
 ## 결정이 필요한 것
 
-1. **에이전트의 `eqmux` 명령 자동 승인** — acceptEdits에서 `eqmux send`·`report`·`browser`마다 사람 승인이 필요해 팀 통신이 승인 창에서 멈춘다. W2가 좁은 허용 목록 초안(send·report·who·browser 읽기 동작만, Claude만)을 만들었다. 기획서가 "자동 승인"을 원칙상 제외로 두어서 적용하지 않았다.
+1. **에이전트의 `eqmux` 명령 자동 승인** — acceptEdits에서 `eqmux send`·`report`·`browser`마다 사람 승인이 필요해 팀 통신이 승인 창에서 멈춘다. **적용함 (2026-10-15 사용자 결정)** — EQMUX가 띄운 Claude의 `--settings`(hook-settings.json)에 Bash·PowerShell 허용 규칙: `send`·`report`·`who`·`browser open/snapshot/get-text/back/forward/reload`. `browser click/type/eval`은 그대로 묻는다. 사용자의 `~/.claude/settings.json`은 건드리지 않는다. Codex는 해당 없음.
 2. **Codex 기동 플래그 `--dangerously-bypass-hook-trust`** — 0.4.2(M37)부터 쓰고 있다. Codex 화면에 경고가 뜬다. 유지할지 정해야 한다.
 
 ## 남은 실기 항목

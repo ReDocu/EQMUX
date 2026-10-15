@@ -777,10 +777,35 @@ pub fn hook_effect(event: &str, payload: &serde_json::Value) -> HookEffect {
         // Codex 승인 프롬프트 (M37) — 사람이 이 페인에서 답해야 풀린다. 답이 들어오면 그 도구의
         // PreToolUse(허용) 또는 다음 이벤트가 Activity로 와서 busy로 되돌린다 (unstick).
         "PermissionRequest" => HookEffect::Ask(WAIT_PERMISSION),
+        "Notification" if is_idle_notice(payload) => HookEffect::Ignore,
         e => match hook_status(e) {
             Some(s) => HookEffect::Status(s),
             None => HookEffect::Ignore,
         },
+    }
+}
+
+/// Claude의 Notification은 두 갈래다 — 사람이 답해야 풀리는 프롬프트(권한·다이얼로그)와,
+/// 턴이 끝나고 ~60초 입력이 없을 때 오는 유휴 안내("Claude is waiting for your input").
+/// 유휴 안내를 waiting으로 올리면 쉬는 에이전트가 승인 대기로 뜨고, 인박스는 "턴이 끝나면
+/// 전달"로 묶이는데 다음 전이가 영영 오지 않는다 (B67). notification_type이 없는 옛 버전은 문구로 본다
+fn is_idle_notice(payload: &serde_json::Value) -> bool {
+    match payload.get("notification_type").and_then(|v| v.as_str()) {
+        Some(kind) => matches!(kind, "idle_prompt" | "auth_success"),
+        None => payload
+            .get("message")
+            .and_then(|m| m.as_str())
+            .is_some_and(|m| m.contains("waiting for your input")),
+    }
+}
+
+/// Notification 원문 → 대기 문맥. 권한 프롬프트는 우리 어휘로 바꾼다 — 원문 그대로면 한국어
+/// 화면 배지에 "Claude needs your permission to use Bash"가 섞인다 (U29). 나머지는 원문 유지
+fn notification_waiting(msg: &str) -> String {
+    if msg.starts_with("Claude needs your permission") {
+        WAIT_PERMISSION.into()
+    } else {
+        msg.into()
     }
 }
 
@@ -809,7 +834,7 @@ fn apply_effect(
     match effect {
         HookEffect::Status(status) => {
             let waiting = (*status == "waiting")
-                .then(|| payload.get("message").and_then(|m| m.as_str()).map(str::to_string))
+                .then(|| payload.get("message").and_then(|m| m.as_str()).map(notification_waiting))
                 .flatten();
             t.asking = false; // 턴 경계(Stop·UserPromptSubmit)를 넘었다 — 프롬프트는 닫혔다
             // 턴 길이 — 시작은 처음 busy가 된 때(레지스트리가 먼저 busy로 올렸어도 여기서 찍는다),
@@ -2033,6 +2058,22 @@ mod tests {
         );
         assert!(recap_from_transcript(&dir.join("없다.jsonl")).is_none());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// B67 — 쉬는 Claude의 유휴 안내는 상태를 바꾸지 않는다. 권한 프롬프트만 waiting
+    #[test]
+    fn idle_notice_does_not_become_waiting() {
+        let idle = serde_json::json!({ "notification_type": "idle_prompt", "message": "Claude is waiting for your input" });
+        assert!(matches!(hook_effect("Notification", &idle), HookEffect::Ignore));
+        let old_idle = serde_json::json!({ "message": "Claude is waiting for your input" }); // notification_type 이전 버전
+        assert!(matches!(hook_effect("Notification", &old_idle), HookEffect::Ignore));
+
+        let perm = serde_json::json!({ "notification_type": "permission_prompt", "message": "Claude needs your permission to use Bash" });
+        let effect = hook_effect("Notification", &perm);
+        assert!(matches!(effect, HookEffect::Status("waiting")));
+        let mut t = tracked("idle");
+        assert_eq!(apply_effect(&mut t, &effect, &perm, 1_000), TRANSITION);
+        assert_eq!(t.last_waiting.as_deref(), Some(super::WAIT_PERMISSION)); // 원문 영어가 배지에 섞이지 않는다 (U29)
     }
 
     #[test]

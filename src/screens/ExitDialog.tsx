@@ -1,14 +1,14 @@
 // 종료 확인 (sYRf5 → 0.5 시안 mMpfq) — 실행 중 에이전트 목록 + 재개 가능 여부. 자동 재개하지 않는다 (FR-C-61 · C10).
 // 종료를 누르면 실제 시퀀스가 돈다 (FR-C-62·63): 입력 차단(이 다이얼로그) → flush → 신호 → 유예 → 종료.
-import { createResource, createSignal, For, onMount, Show } from "solid-js";
+import { createResource, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { backend } from "../backend/mock";
 import { isServerTermId, portEntries, serverTermId } from "../backend/ports";
 import { isTauri, listAlivePty } from "../backend/pty";
 import { performShutdown } from "../backend/shutdown";
 import type { ShutdownPhase } from "../backend/shutdown";
-import { Chip, Identity } from "../components/ui";
+import { Chip, Identity, notify } from "../components/ui";
 import { t, tf } from "../i18n";
-import { setExitOpen } from "../state";
+import { pushLayer, setExitOpen } from "../state";
 import { effectiveTitle, paneNo, sessionName } from "../types";
 
 const PHASE_TEXT: Record<ShutdownPhase, string> = {
@@ -18,6 +18,10 @@ const PHASE_TEXT: Record<ShutdownPhase, string> = {
 };
 
 const STATE_CLASS: Record<string, string> = { busy: "st-busy", waiting: "st-waiting" };
+/** 상태 칸 — 원문(BUSY·SHELL) 대신 번역한 말 */
+const STATE_TEXT: Record<string, string> = { busy: "작업 중", idle: "대기", waiting: "승인 대기", starting: "기동 중", shell: "셸" };
+/** 에이전트로 세는 상태 — 역할 세션이라도 셸만 열린 것은 에이전트가 아니다 */
+const AGENT_UP = new Set(["busy", "idle", "waiting", "starting"]);
 
 export function ExitDialog() {
   const running = () => backend.listSessions().filter((s) => s.status !== "dead");
@@ -26,7 +30,7 @@ export function ExitDialog() {
   const servers = () => (alive() ?? []).filter(isServerTermId).map((id) => id.slice(id.indexOf("@") + 1));
   const persona = (id: string) => backend.listPersonas().find((p) => p.id === id);
   const ws = (id: string) => backend.listWorkspaces().find((w) => w.id === id);
-  const agents = () => running().filter((s) => s.personaId).length;
+  const agents = () => running().filter((s) => AGENT_UP.has(s.status)).length;
   const total = () => running().length + servers().length;
 
   const [phase, setPhase] = createSignal<ShutdownPhase | undefined>(undefined);
@@ -37,16 +41,26 @@ export function ExitDialog() {
       setExitOpen(false); // 브라우저 dev — 실종료 없음
       return;
     }
-    void performShutdown(setPhase); // 앱이 꺼지므로 반환되지 않는 것이 정상
+    // 앱이 꺼지므로 반환되지 않는 것이 정상 — 돌아왔다면 app_exit가 실패한 것이다.
+    // 다이얼로그가 '종료 중…'에 묶여 앱 전체 입력이 막히지 않게 풀어 준다 (B110)
+    void performShutdown(setPhase).then((exited) => {
+      if (exited) return;
+      setPhase(undefined);
+      notify(t("종료하지 못했습니다 — 다시 시도하세요"));
+    });
   };
 
   // 기본 포커스는 취소 (§UX 기반 확인창 규칙) — Enter 한 번으로 앱 전체가 꺼지지 않게
   let cancelBtn!: HTMLButtonElement;
   onMount(() => cancelBtn.focus());
+  // Esc = 취소 (공통 확인창 규칙) — 레이어 스택에 올려 맨 위일 때만 닫는다 (B73: 밑의 팝업이
+  // 대신 닫히지 않게). 종료 시퀀스가 돌기 시작하면 받지 않는다
+  let box: HTMLDivElement | undefined;
+  onCleanup(pushLayer(() => !busy() && setExitOpen(false), () => box)); // 모달 — Tab 가두기·뒤 이동 막기 (U37·B72)
 
   return (
     <div class="overlay" onClick={() => !busy() && setExitOpen(false)}>
-      <div class="dialog exit-dlg" onClick={(e) => e.stopPropagation()}>
+      <div ref={box} class="dialog exit-dlg" role="dialog" aria-modal="true" aria-label={t("EQMUX를 종료할까요?")} onClick={(e) => e.stopPropagation()}>
         <div class="exit-head">
           <div>
             <div class="exit-title">{t("EQMUX를 종료할까요?")}</div>
@@ -68,7 +82,7 @@ export function ExitDialog() {
         <div class="exit-notice">
           <span class="exit-notice-ic">⚠</span>
           <span classList={{ "st-waiting": busy() }}>
-            {busy() ? t(PHASE_TEXT[phase()!]) : t("입력 차단 → 저장소 flush → 정상 종료 신호 → 유예 후 트리 종료 (Job Object)")}
+            {busy() ? t(PHASE_TEXT[phase()!]) : t("입력 차단 → 저장소 flush → 정상 종료 신호 → 유예 후 하위 프로세스까지 정리")}
           </span>
         </div>
         <Show when={total() > 0}>
@@ -78,7 +92,12 @@ export function ExitDialog() {
                 const p = () => persona(s.personaId);
                 return (
                   <div class="exit-row">
-                    <Identity slot={s.slot} no={paneNo(s)} name={sessionName(s, p())} title={effectiveTitle(s, p())} />
+                    <Identity
+                      slot={s.slot}
+                      no={paneNo(s)}
+                      name={`${sessionName(s, p())} · ${ws(s.workspaceId)?.name ?? "—"}`}
+                      title={effectiveTitle(s, p())}
+                    />
                     <span class="exit-row-r">
                       <Show
                         when={s.status === "waiting"}
@@ -91,7 +110,7 @@ export function ExitDialog() {
                       >
                         <Chip tone="amber" text={t("승인 대기 — 종료하면 거부로 끝남")} />
                       </Show>
-                      <span class={`exit-state mono ${STATE_CLASS[s.status] ?? "muted"}`}>{s.status.toUpperCase()}</span>
+                      <span class={`exit-state mono ${STATE_CLASS[s.status] ?? "muted"}`}>{t(STATE_TEXT[s.status] ?? s.status)}</span>
                     </span>
                   </div>
                 );

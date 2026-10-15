@@ -12,8 +12,7 @@ import { startBrowserRequests } from "./backend/browser";
 import { isServerTermId, startPortWatch } from "./backend/ports";
 import { startRecapUpdates } from "./backend/recap";
 import { ensurePtyListeners, isTauri, listAlivePty, setPtyExitHook } from "./backend/pty";
-import { crashRecovery } from "./backend/recovery";
-import type { CrashReport } from "./backend/recovery";
+import { crashOpen, crashReport, loadCrashRecovery, setCrashOpen } from "./backend/recovery";
 import { performShutdown } from "./backend/shutdown";
 import { startTeamSync } from "./backend/team";
 import { startFileWatch } from "./backend/watch";
@@ -22,12 +21,14 @@ import {
   exitOpen,
   explorerTab,
   layoutPickerOpen,
+  modalOpen,
   overlay,
   panelOpen,
   scopeWorkspace,
   setExitOpen,
   setExplorerTab,
   setLayoutPickerOpen,
+  setPanelOpen,
   setView,
   terminalFull,
   view,
@@ -35,6 +36,8 @@ import {
 import type { View } from "./state";
 import { t } from "./i18n";
 import { ScreenOverlay } from "./components/ScreenOverlay";
+import { blocksNavKey } from "./components/keynav";
+import { notify } from "./components/ui";
 import { editorGuard, MissionExplorerTab } from "./components/MissionExplorerTab";
 import { ControlCenter } from "./screens/ControlCenter";
 import { CrashRecovery } from "./screens/CrashRecovery";
@@ -129,12 +132,8 @@ export function App() {
   });
 
   // 비정상 종료 복구 (FR-C-35) — 직전 실행이 크래시였으면 직전 세션 목록을 1회 보여준다
-  const [crash, setCrash] = createSignal<CrashReport | undefined>(undefined);
-  onMount(() =>
-    void crashRecovery().then((r) => {
-      if (r?.dirty && r.sessions.length > 0) setCrash(r);
-    }),
-  );
+  // 보고는 recovery.ts가 들고 있다 — 닫아도 알림 센터에서 다시 연다 (U63)
+  onMount(() => void loadCrashRecovery());
 
   // 창 닫기 = 앱 완전 종료 (FR-C-60) — 실행 중 세션이 있으면 확인 다이얼로그 (FR-C-61),
   // 없으면 flush 시퀀스만 돌고 조용히 종료된다.
@@ -153,12 +152,32 @@ export function App() {
     );
   });
 
-  // 페인 배치 단축키 (srpYm 푸터 명세) — CTRL + SHIFT + L
+  // 모달(종료·배치·복구·확인창)이 떠 있는 동안은 화면을 옮기는 단축키를 막는다 (B72) — 캡처 단계라
+  // 아래 단축키 리스너들보다 먼저 받는다. 무반응으로 보이지 않게 이유를 한 줄 띄운다
   onMount(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "l") {
+      if (!blocksNavKey(e, modalOpen(), layoutPickerOpen())) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      notify(t("열린 창을 먼저 닫으세요"));
+    };
+    window.addEventListener("keydown", onKey, true);
+    onCleanup(() => window.removeEventListener("keydown", onKey, true));
+  });
+
+  // 페인 배치 단축키 (srpYm 푸터 명세) — CTRL + SHIFT + L. 배치는 워크스페이스별이라 워크스페이스
+  // 탭에서만 연다 — 관제에서 고른 배치는 아무 워크스페이스에도 적용되지 않았다 (B76)
+  // 사이드 패널 토글 (U33) — CTRL + SHIFT + B, 마지막으로 본 탭으로 연다
+  onMount(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.ctrlKey || !e.shiftKey || e.altKey) return;
+      const k = e.key.toLowerCase();
+      if (k === "l" && view().kind === "workspace") {
         e.preventDefault();
         setLayoutPickerOpen((o) => !o);
+      } else if (k === "b") {
+        e.preventDefault();
+        setPanelOpen((o) => !o);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -276,7 +295,7 @@ export function App() {
         </ScreenOverlay>
       </Show>
       <Show when={overlay() === "connect"}>
-        <ScreenOverlay title={t("워크스페이스 연결")} icon="⌂">
+        <ScreenOverlay title={t("워크스페이스 열기 · 관리")} icon="⌂">
           <WorkspaceConnection />
         </ScreenOverlay>
       </Show>
@@ -293,8 +312,8 @@ export function App() {
       <Show when={exitOpen()}>
         <ExitDialog />
       </Show>
-      <Show when={crash()}>
-        {(r) => <CrashRecovery report={r()} onClose={() => setCrash(undefined)} />}
+      <Show when={crashOpen() && crashReport()}>
+        {(r) => <CrashRecovery report={r()} onClose={() => setCrashOpen(false)} />}
       </Show>
       <Show when={layoutPickerOpen()}>
         <LayoutPicker />

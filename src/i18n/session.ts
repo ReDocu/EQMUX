@@ -30,7 +30,7 @@ export const dict: Record<string, string> = {
   "🔇 음소거 중 — 해제": "🔇 Muted — unmute",
   "🔇 워크스페이스 음소거 중": "🔇 Workspace muted",
   "🔔 켜짐 — 음소거": "🔔 On — mute",
-  실행: "Execution",
+  "실행 정보": "Execution", // 세션 상세 묶음 — 사이드 패널의 '실행'(Run)과 원문을 가른다 (B80)
   "세션 이름": "Session name",
   "실제 실행 플래그": "Actual runtime flags",
   "예상 실행 플래그": "Expected runtime flags",
@@ -101,8 +101,8 @@ export const dict: Record<string, string> = {
   "직전 실행이 정상 종료되지 않았습니다": "The previous run did not shut down cleanly",
   "종료 시퀀스를 거치지 못한 채 끝났습니다. 그때 실행 중이던 세션과 마지막 활동 시각입니다.":
     "It ended without completing the shutdown sequence. These are the sessions running at the time and their last activity.",
-  "자동으로 재실행하지 않습니다 — 워크스페이스 탭에서 페인의 [▶ 에이전트 기동]으로 다시 시작하거나, 세션 상세에서 이전 대화를 재개하세요.":
-    "Nothing is re-run automatically — open the workspace tab and start again with [▶ Start agent] on the pane, or resume the previous conversation from the session detail.",
+  "자동으로 재실행하지 않습니다 — 역할 세션은 페인 위 상태 줄의 [▶ 기동]으로, 이전 대화는 세션 상세의 [▶ 이전 대화 재개]로 다시 시작합니다. 기본 터미널은 셸이 다시 열립니다.":
+    "Nothing is re-run automatically — start a role session again with [▶ Start] on the status line above its pane, or continue the previous conversation with [▶ Resume previous conversation] in the session detail. Default terminals reopen as a shell.",
 
   // ── 터미널 페인 (TerminalPane) ──
   "터미널 검색": "Search terminal",
@@ -158,4 +158,19 @@ export const dict: Record<string, string> = {
   "권한·엔진 변경 감지 · 다음 기동 때 적용됩니다": "Permission or engine change detected · applies at next start",
   "권한·엔진 변경 감지 · 재시작 필요": "Permission or engine change detected · restart needed",
   "새로 시작": "Start fresh",
+  // ── 0.5.x QA eqmux-08 ──
+  "슬롯 엔진 {cli} — 재시작 때 적용": "slot engine {cli} — applies on restart",
+  "엔진 사이에는 대화를 이을 수 없습니다 — 새 엔진으로 새 대화를 시작합니다": "A conversation can't carry over between engines — starts a new conversation on the new engine",
+  "새 엔진으로 새로 시작": "Start fresh on new engine",
+
+  // ── 0.5.x QA eqmux-8a · 종료·복구 (B109 · B110 · U63 · U64) ──
+  "셸만 복원": "shell only",
+  "세션으로 가기": "Go to session",
+  "알 수 없는 워크스페이스": "Unknown workspace",
+  "종료하지 못했습니다 — 다시 시도하세요": "Couldn't quit — try again",
+  "입력 차단 → 저장소 flush → 정상 종료 신호 → 유예 후 하위 프로세스까지 정리":
+    "Block input → flush store → graceful shutdown signal → grace period, then clean up child processes too",
+  "작업 중": "Working",
+  대기: "Idle",
+  "기동 중": "Starting",
 };

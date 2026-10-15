@@ -15,7 +15,7 @@ import { t, tf } from "../i18n";
 import { jumpToSession } from "../state";
 import { Eyebrow, FieldHint, Identity, KV, StatusLabel, StopConfirm } from "../components/ui";
 import type { AgentCliId, Permissions, Session } from "../types";
-import { AGENT_CLI_LABEL, agentAttached, agentFlagsToString, cleanTitle, cliOf, effectiveTitle, paneNo, SESSION_NAME_MAX, sessionName, TITLE_MAX, translatePermissions } from "../types";
+import { AGENT_CLI_LABEL, agentAttached, agentFlagsToString, cleanTitle, cliOf, effectiveTitle, engineSwitched, paneNo, SESSION_NAME_MAX, sessionName, statusText, TITLE_MAX, translatePermissions } from "../types";
 
 const PERM_KEYS: (keyof Permissions)[] = ["write", "commit", "push"];
 
@@ -168,17 +168,21 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
   const nameErr = () => backend.sessionNameError(s().workspaceId, nameDraft(), s().id);
   const applyName = () => {
     if (nameErr()) return;
+    const before = live()?.name;
     backend.renameSession(s().id, nameDraft());
     setNameDraft(s().name ?? "");
-    if (s().personaId) nudgeTeamReload([s().workspaceId]); // 팀 관계 표의 이름이 바뀐다
+    // 실제로 바뀐 때만 — 같은 값 Enter에도 팀 전원이 한 턴씩 돌았다 (B91)
+    if (s().personaId && live()?.name !== before) nudgeTeamReload([s().workspaceId]); // 팀 관계 표의 이름이 바뀐다
   };
   // 직함 덮어쓰기 (0.5) — 비우면 페르소나 직함. 재시작 없이 역할 파일만 다시 만들고 한 줄 안내
   const [titleDraft, setTitleDraft] = createSignal(s().title ?? "");
   createEffect(on(() => s().id, () => setTitleDraft(s().title ?? "")));
+  const live = () => backend.listSessions().find((x) => x.id === s().id);
   const applyTitle = (v: string) => {
+    const before = live()?.title;
     backend.setSessionTitle(s().id, v);
     setTitleDraft(v.trim());
-    nudgeTeamReload([s().workspaceId]); // 팀원 표도 바뀌므로 그 워크스페이스 전원
+    if (live()?.title !== before) nudgeTeamReload([s().workspaceId]); // 팀원 표도 바뀌므로 그 워크스페이스 전원 (B91: 바뀐 때만)
   };
 
   // 음소거 (FR-G-35) — OS 알림·사운드만 막는다. 인앱 미확인 점은 유지 (FR-G-37)
@@ -197,7 +201,7 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
           s().id,
           s().workspaceId,
           s().cwd,
-          persona()?.name ?? s().personaId,
+          sessionName(s(), persona()), // 관제·대시보드 재개와 같은 이름 (B87) — claude --name에 실린다
           p,
           size.cols,
           size.rows,
@@ -214,6 +218,7 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
   // 권한 변경 재시작 (E11′ · FR-D-26) — 재개 기반, 대화 유지
   const doRestart = async () => {
     setActionErr(undefined);
+    const fresh = engineSwitched(s()); // restartAgent가 spawnCli를 새 엔진으로 덮기 전에 읽는다 (B82)
     if (isTauri() && s().personaId) {
       const p = effPerms();
       const size = sessionTermSize(s().id);
@@ -224,7 +229,7 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
         return;
       }
     }
-    backend.restartSession(s().id);
+    backend.restartSession(s().id, fresh);
   };
 
   return (
@@ -272,7 +277,7 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
       <details class="acc" open>
         <summary>{t("개요")}</summary>
         <div class="card inset" style={{ padding: "4px 10px" }}>
-          <KV k={t("상태")} v={s().status} vClass={s().status === "waiting" ? "st-waiting" : ""} />
+          <KV k={t("상태")} v={statusText(s().status)} vClass={s().status === "waiting" ? "st-waiting" : ""} />
           {/* 낮은 신뢰 (FR-G-27) — 정확한 척하지 않는다 */}
           <Show when={s().degraded}>
             <KV k={t("관측")} v={t("저하 — 레지스트리 접근 불가 · 훅 + 프로세스 생존으로 유지")} vClass="st-waiting" />
@@ -329,7 +334,7 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
       </details>
 
       <details class="acc" open>
-        <summary>{t("실행")}</summary>
+        <summary>{t("실행 정보")}</summary>
         <div class="acc-body">
 
       {/* 세션 이름 분리 (P5 · FR-E-36) — 같은 페르소나를 여러 워크스페이스에 캐스팅할 때 구분한다 */}
@@ -398,7 +403,11 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
         {/* 엔진 (M37) — 플래그의 문법이 엔진에 따라 다르므로 무엇의 플래그인지 먼저 밝힌다 */}
         <Show when={s().personaId}>
           <div class="muted mono" style={{ "font-size": "10px", margin: "2px 0 4px" }}>
-            {t("엔진")} · {AGENT_CLI_LABEL[cliOf(s())]}
+            {/* 플래그를 낸 엔진 (B82) — 슬롯 엔진을 바꿔도 재시작 전까지 도는 것은 이쪽이다 */}
+            {t("엔진")} · {AGENT_CLI_LABEL[s().spawnCli ?? cliOf(s())]}
+            <Show when={engineSwitched(s())}>
+              {" "}· {tf("슬롯 엔진 {cli} — 재시작 때 적용", { cli: AGENT_CLI_LABEL[cliOf(s())] })}
+            </Show>
           </div>
         </Show>
         <div class="card inset flags mono">{flags()}</div>
@@ -469,12 +478,17 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
             <span class="mono st-waiting" style={{ "font-weight": 700 }}>
               {t("권한·엔진 변경 감지 · 재시작 필요")}
             </span>
+            {/* 엔진이 바뀌었으면 대화를 이을 수 없다 (B82) — 버튼이 그 사실을 말한다 */}
             <button
               class="btn"
-              title={t("재개 기반 재시작 — 대화를 잃지 않는다")}
+              title={
+                engineSwitched(s())
+                  ? t("엔진 사이에는 대화를 이을 수 없습니다 — 새 엔진으로 새 대화를 시작합니다")
+                  : t("재개 기반 재시작 — 대화를 잃지 않는다")
+              }
               onClick={() => void doRestart()}
             >
-              {t("대화 유지 재시작")}
+              {engineSwitched(s()) ? t("새 엔진으로 새로 시작") : t("대화 유지 재시작")}
             </button>
           </div>
         </Show>

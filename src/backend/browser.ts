@@ -4,8 +4,17 @@
 // 나머지(재배치·표시·탐색·닫기)는 베스트 에포트 — 실패해도 패널이 깨질 일이 없다.
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { isTauri } from "./pty";
+import { isTauri, openExternal } from "./pty";
+import { settings } from "./settings";
 import { openInBrowserPanel } from "../state";
+
+/** 사람이 누른 웹 링크 (터미널·포트·git 원격…) — 설정 webOpen을 따른다.
+ *  external=true는 "외부로"처럼 앱 밖을 명시한 버튼 — 그때도 chrome 설정이면 Chrome으로 간다 */
+export function openLink(url: string, external = false): void {
+  const mode = settings().webOpen;
+  if (!external && mode === "eqmux" && /^https?:\/\//i.test(url)) openInBrowserPanel(url);
+  else openExternal(url, mode === "chrome");
+}
 
 export interface BrowserBounds {
   x: number;

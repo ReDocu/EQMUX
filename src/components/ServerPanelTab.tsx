@@ -6,6 +6,7 @@ import { createEffect, createMemo, createResource, onCleanup, Show } from "solid
 import {
   clearServerExit,
   isNewPort,
+  portEntries,
   serverCommands,
   serverExit,
   serverExited,
@@ -56,6 +57,8 @@ function ServerTerm(props: { wsId: string }) {
   });
   onCleanup(() => setPanelNote(""));
   const cmd = () => serverCommands()[props.wsId];
+  // 이 서버 셸이 연 포트 — 돌고 있으면 [실행]을 끈다. 돌고 있는 서버 위에 명령 줄이 하나 더 들어가지 않게 (B77)
+  const running = () => portEntries().filter((e) => e.session === id).map((e) => `:${e.port}`);
   const reveal = async () => {
     if (!(await revealPath(path))) notify(t("폴더를 열 수 없습니다 — 경로가 없어졌습니다"));
   };
@@ -65,24 +68,34 @@ function ServerTerm(props: { wsId: string }) {
       {/* 명령 줄 (시안) — 마지막 서버 명령 · 실행/다시 실행 · 탐색기. 자동으로 치지 않는다 (1-7) */}
       <div class="srvp-cmd">
         <div class="srvp-cmd-box mono" classList={{ empty: !cmd() }} title={cmd() ?? undefined}>
-          {cmd() ?? t("마지막 명령 없음 — 이 셸에서 실행한 명령을 기억합니다")}
+          {cmd() ?? t("마지막 서버 명령 없음 — 이 셸에서 포트를 연 명령을 기억합니다")}
         </div>
         <Show
           when={serverExited(id)}
           fallback={
-            <button
-              class="btn primary"
-              disabled={!cmd()}
-              title={t("셸에 마지막 서버 명령을 입력합니다 — 이미 서버가 돌고 있으면 누르지 마세요")}
-              onClick={() => writePty(id, `${cmd()}\r`)}
+            <Show
+              when={running().length === 0}
+              fallback={
+                <button class="btn" disabled title={t("이 셸의 서버가 포트를 열고 있습니다 — 멈춘 뒤 다시 실행할 수 있습니다")}>
+                  {tf("돌고 있음 · 포트 {ports}", { ports: running().join(" ") })}
+                </button>
+              }
             >
-              <Icon name="play" size={12} />
-              {t("실행")}
-            </button>
+              <button
+                class="btn primary"
+                disabled={!cmd()}
+                title={t("셸에 마지막 서버 명령을 입력합니다")}
+                onClick={() => writePty(id, `${cmd()}\r`)}
+              >
+                <Icon name="play" size={12} />
+                {t("실행")}
+              </button>
+            </Show>
           }
         >
+          {/* 셸만 다시 연다 — 서버 명령은 [실행]으로 사람이 친다 (자동 실행 금지, U39) */}
           <button class="btn primary" onClick={() => void reopen()}>
-            {t("↻ 다시 실행")}
+            {t("↻ 셸 다시 열기")}
           </button>
         </Show>
         <button class="btn" disabled={!path} onClick={() => void reveal()}>

@@ -9,7 +9,7 @@ import { saveRoleFile } from "./roles";
 import { settings } from "./settings";
 import { beepWaiting } from "./sound";
 import type { AgentCliId, AgentStatus, Permissions, Session } from "../types";
-import { agentFlagsToString, cliOf, sessionName, translatePermissions } from "../types";
+import { agentFlagsToString, cliOf, engineSwitched, sessionName, translatePermissions } from "../types";
 
 export interface AgentStateEvt {
   session: string;
@@ -149,7 +149,7 @@ export async function spawnAgent(
   // 실제로 넘긴 플래그를 그대로 기억한다 (B39) — 권한 파일이 나중에 바뀌어도 돌고 있는
   // 프로세스의 플래그는 이 값이다. 다시 계산하면 '실제'가 아니라 '현재 설정'이 된다.
   // Codex의 uuid는 자리표시라 여기 싣지 않는다 — 진짜 id는 SessionStart 훅이 agent-state로 알려준다
-  backend.noteSpawnFlags(sessionId, agentFlagsToString(cli, f, cli === "codex" ? undefined : uuid));
+  backend.noteSpawnFlags(sessionId, agentFlagsToString(cli, f, cli === "codex" ? undefined : uuid), cli);
   return uuid;
 }
 
@@ -196,11 +196,12 @@ export async function resumeAgent(
     rows,
     cli,
   });
-  backend.noteSpawnFlags(sessionId, agentFlagsToString(cli, f, uuid));
+  backend.noteSpawnFlags(sessionId, agentFlagsToString(cli, f, uuid), cli);
   return uuid;
 }
 
-/** 권한 변경 재시작 (E11′ · FR-D-26) — 재개 기반, 대화 유지. 엔진은 Rust의 추적 맵이 안다 */
+/** 권한 변경 재시작 (E11′ · FR-D-26) — 재개 기반, 대화 유지. 슬롯 엔진(cli)을 함께 보낸다 (B82):
+ *  돌던 엔진과 다르면 Rust가 새 엔진으로 새로 시작한다(엔진 사이에 대화 이월 없음) */
 export async function restartAgent(
   sessionId: string,
   permissions: Permissions,
@@ -216,7 +217,10 @@ export async function restartAgent(
     disallowedTools: f.disallowedTools,
     cols,
     rows,
+    cli,
   });
-  backend.noteSpawnFlags(sessionId, agentFlagsToString(cli, f, uuid));
+  // Codex로 새로 뜬 uuid는 자리표시다 — spawnAgent와 같은 규칙 (B82)
+  const fresh = engineSwitched({ ...backend.listSessions().find((x) => x.id === sessionId), cli });
+  backend.noteSpawnFlags(sessionId, agentFlagsToString(cli, f, cli === "codex" && fresh ? undefined : uuid), cli);
   return uuid;
 }

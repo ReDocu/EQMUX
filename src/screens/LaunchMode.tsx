@@ -40,7 +40,7 @@ export function LaunchMode(props: { wsId: string }) {
         copy: t("셸만 연다. 에이전트는 필요할 때 사람이 직접 띄운다. 자동 이름은 프로젝트명XX(EQMUX01…)이고, 만들 때 직접 정할 수도 있다."),
         features: [
           t("세션 이름 · 번호가 헤더와 레일에 붙는다"),
-          t("손으로 띄운 claude에는 메시지를 자동 주입하지 않는다 (넣기 칩)"),
+          t("손으로 띄운 claude에는 기본으로 메시지를 쌓아 둔다 (넣기 칩) · 설정에서 idle 자동 넣기로 변경"),
           t("역할 팀은 나중에 팀 캐스팅으로 추가"),
         ],
         route: t("다음 → 기본 터미널 구성 (셸 · 브랜치 · 이름)"),
@@ -69,14 +69,12 @@ export function LaunchMode(props: { wsId: string }) {
             {t("실행 방식 선택")} · {ws()?.name}
           </h1>
           <div class="sub mono">
-            {tf("첫 세션을 어떻게 시작할까요? 나중에 바꿀 수 있다 · 두 방식 모두 워크스페이스의 슬롯 {n}개를 쓴다", {
+            {tf("첫 세션을 어떻게 시작할까요? 나중에 바꿀 수 있어요 · 두 방식 모두 워크스페이스의 슬롯 {n}개를 써요", {
               n: maxSlots(),
             })}
           </div>
         </div>
-        <button class="btn primary" onClick={next}>
-          {t("→ 계속")}
-        </button>
+        {/* [계속]은 아래 막대 하나 — 머리와 바닥에 같은 버튼이 둘 있었다 (U30) */}
       </div>
 
       <div class="screen-body launch-body">
@@ -93,10 +91,16 @@ export function LaunchMode(props: { wsId: string }) {
           </For>
         </div>
 
-        <div class="launch-choices">
+        <div class="launch-choices" role="radiogroup" aria-label={t("실행 방식")}>
           <For each={choices()}>
             {(c) => (
-              <button class="card launch-choice" classList={{ selected: mode() === c.id }} onClick={() => setMode(c.id)}>
+              <button
+                class="card launch-choice"
+                role="radio"
+                aria-checked={mode() === c.id}
+                classList={{ selected: mode() === c.id }}
+                onClick={() => setMode(c.id)}
+              >
                 <div class="launch-choice-head">
                   <span class="launch-choice-icon mono">{c.icon}</span>
                   <span class="launch-choice-title">{c.title}</span>
@@ -135,8 +139,8 @@ export function LaunchMode(props: { wsId: string }) {
             <span class="muted">
               {tf(
                 mode() === "terminal"
-                  ? "기본 터미널로 시작합니다. 역할 팀은 나중에 추가할 수 있고, 두 방식 모두 슬롯 한도 {n}을 함께 쓴다."
-                  : "역할 팀으로 시작합니다. 기본 터미널은 나중에 추가할 수 있고, 두 방식 모두 슬롯 한도 {n}을 함께 쓴다.",
+                  ? "기본 터미널로 시작해요. 역할 팀은 나중에 추가할 수 있고, 두 방식 모두 슬롯 {n}개를 함께 써요."
+                  : "역할 팀으로 시작해요. 기본 터미널은 나중에 추가할 수 있고, 두 방식 모두 슬롯 {n}개를 함께 써요.",
                 { n: maxSlots() },
               )}
             </span>

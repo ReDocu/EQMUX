@@ -1,7 +1,7 @@
 // 주입 본문 단위 테스트 — 전달 경로(PTY·인박스)는 통합의 몫이고, 여기서는 "여러 건을 어떻게
 // 한 줄로 접는가"만 본다: 단건/묶음 접두 · 개행 평탄화 · 상한에서 덩어리 갈리기.
 import { describe, expect, test } from "vitest";
-import { batches, fmt, fmtEcho, goneName, unmanagedAgent } from "./conversation";
+import { batches, cancelBrief, deliveredIds, flushInboxOnState, fmt, fmtEcho, goneName, orphanedInbox, pendingBrief, queueBrief, pendingReason, prependOlder, splitPending, unmanagedAgent } from "./conversation";
 import { typedText } from "./pty";
 import type { ConversationMessage } from "../types";
 
@@ -131,5 +131,66 @@ describe("typedText", () => {
     expect(typedText("a")).toBe(true);
     expect(typedText("안녕")).toBe(true);
     expect(typedText("\x1b[200~붙여넣은 글\x1b[201~")).toBe(true);
+  });
+});
+
+// 0.5.x QA eqmux-66
+describe("deliveredIds (B89)", () => {
+  test("@all이 한 수신자에게만 흘렀으면 다른 인박스에 남은 동안 전달됨이 아니다", () => {
+    const m = { ...msg("나", "모두 확인"), id: "m1" };
+    const other = { ...msg("코더", "x"), id: "m2" };
+    expect(deliveredIds([m, other], new Map([["b@w", [m]]]))).toEqual([]);
+    expect(deliveredIds([m, other], new Map())).toEqual(["m1"]); // 내 메시지만, 다 빠졌을 때
+  });
+});
+
+describe("orphanedInbox (B90)", () => {
+  test("에이전트가 내려간 기본 터미널만 고아 — 역할 세션·dead는 기다린다", () => {
+    expect(orphanedInbox({ status: "shell" })).toBe(true);
+    expect(orphanedInbox({ status: "shell", agent: "claude" })).toBe(false);
+    expect(orphanedInbox({ status: "shell", personaId: "kai" })).toBe(false);
+    expect(orphanedInbox({ status: "dead" })).toBe(false);
+  });
+});
+
+describe("prependOlder (B99)", () => {
+  test("옛 페이지는 응답 뒤 스트림 앞에 붙고 겹치는 id는 한 번만", () => {
+    const a = { ...msg("나", "a"), id: "1" };
+    const b = { ...msg("나", "b"), id: "2" };
+    const c = { ...msg("나", "c"), id: "3" }; // 기다리는 사이 도착
+    expect(prependOlder([a, b], [b, c]).map((m) => m.id)).toEqual(["1", "2", "3"]);
+  });
+});
+
+describe("pendingReason (U50)", () => {
+  test("사유별로 갈린다", () => {
+    expect(pendingReason({ status: "dead", personaId: "kai" })).toBe("종료됨 · 재개해야 전달");
+    expect(pendingReason({ status: "shell", agent: "claude" })).toBe("손으로 띄운 에이전트 · 넣기 필요");
+    expect(pendingReason({ status: "shell", personaId: "kai" })).toBe("에이전트 미기동 · 띄우면 전달");
+    expect(pendingReason({ status: "waiting", personaId: "kai" })).toBe("응답 대기 · 답한 뒤 전달");
+    expect(pendingReason({ status: "busy", personaId: "kai" })).toBe("작업 중 · 턴 끝나면 전달");
+  });
+});
+
+describe("splitPending (U51)", () => {
+  test("체크한 것만 넣고/버리고 나머지는 남긴다 — 없으면 전부", () => {
+    const a = { ...msg("나", "a"), id: "a" };
+    const b = { ...msg("나", "b"), id: "b" };
+    expect(splitPending([a, b], new Set(["b"]))).toEqual([[b], [a]]);
+    expect(splitPending([a, b])).toEqual([[a, b], []]);
+  });
+});
+
+describe("queueBrief (B93)", () => {
+  test("작업 중이면 턴 끝(idle 전이)에 넣는다 — 그 전에는 남고, 다시 배정하면 덮고, 해제하면 버린다", () => {
+    queueBrief("x@w", "[EQ] 임무 배정: A");
+    queueBrief("x@w", "[EQ] 임무 배정: B");
+    flushInboxOnState("x@w", "busy");
+    expect(pendingBrief("x@w")).toBe("[EQ] 임무 배정: B");
+    flushInboxOnState("x@w", "idle");
+    expect(pendingBrief("x@w")).toBeUndefined();
+    queueBrief("y@w", "[EQ] 임무 배정: C");
+    cancelBrief("y@w");
+    expect(pendingBrief("y@w")).toBeUndefined();
   });
 });

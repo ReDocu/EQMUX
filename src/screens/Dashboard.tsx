@@ -10,13 +10,13 @@ import { isTauri, killPty, revealPath } from "../backend/pty";
 import { maxSlots, settings } from "../backend/settings";
 import { t, tf } from "../i18n";
 import { focusSession, jumpToSession, openPanel, setOverlay, setView, tick } from "../state";
-import { Chip, ContextMenu, Identity, notify, StopConfirm } from "../components/ui";
+import { Chip, ContextMenu, Identity, notify, PaneNoText, StopConfirm } from "../components/ui";
 import type { ChipTone } from "../components/ui";
 import { canStartFresh, resumeAgent, startFresh } from "../backend/agent";
 import { attentionRank, inboxWaiting } from "../backend/attention";
 import { sessionTermSize } from "../components/TerminalPane";
 import type { Session } from "../types";
-import { ATTENTION_ORDER, cliOf, effectiveTitle, fmtSince, nameBesideNo, paneNo, sessionDisplayName, sessionName } from "../types";
+import { AGENT_CLI_LABEL, ATTENTION_ORDER, cliOf, detectedCli, effectiveTitle, fmtSince, nameBesideNo, paneNo, sessionDisplayName, sessionName, statusText } from "../types";
 
 /** 빈 슬롯 고스트의 열 span — 셀 그리드는 4열 고정이라 마지막 줄의 남은 칸만 채운다 */
 /** 지표 타일 제목 — 영어 사전 값이 문장 중간용 소문자여도("resumable") 타일은 첫 글자를 대문자로 */
@@ -61,8 +61,19 @@ export function Dashboard() {
   const events = () =>
     isTauri() ? realFeed() : backend.listEvents().map((e) => ({ ...e, sessionId: e.sessionId }));
 
-  const count = (st: string) => sessions().filter((s) => s.status === st).length;
-  const subagents = () => sessions().reduce((n, s) => n + s.subagents, 0);
+  // 지표·기다리는 목록·모두 확인은 열린 워크스페이스만 센다 (B86) — 지표만 닫힌 것까지 세면
+  // '행동 필요 2'인데 바로 옆 목록은 1건이었다. 닫힌 워크스페이스는 자기 카드 칩이 말한다
+  const openSessions = () => {
+    const open = new Set(openWs().map((w) => w.id));
+    return sessions().filter((s) => open.has(s.workspaceId));
+  };
+  // 감지된 에이전트 라벨 — 엔진 라벨(Claude Code·Codex)로 통일, 모르는 CLI는 감지 이름 그대로 (U42)
+  const agentLabel = (agent: string | undefined) => {
+    const c = detectedCli(agent);
+    return c ? AGENT_CLI_LABEL[c] : (agent ?? "");
+  };
+  const count = (st: string) => openSessions().filter((s) => s.status === st).length;
+  const subagents = () => openSessions().reduce((n, s) => n + s.subagents, 0);
   // 재개 가능 — 관제의 재개 버튼·충돌 복구 목록과 같은 판정: 죽었거나 복원 대기인데 재개할 대화가 있다
   const canResume = (s: Session) => s.resumable && (s.status === "dead" || !!s.restored);
   const personaOf = (s: Session) => backend.listPersonas().find((p) => p.id === s.personaId);
@@ -71,7 +82,7 @@ export function Dashboard() {
   const doneChip = (s: Session): { tone: ChipTone; text: string; title?: string } | undefined => {
     const n = pendingOf(s);
     if (n > 0) return { tone: "blue", text: tf("메시지 {n}건", { n }) };
-    if (s.reportPending) return { tone: "blue", text: t("✓ 턴 끝남 · 보고 전") };
+    if (s.reportPending) return { tone: "blue", text: s.reportProgress ? t("✓ 보고함 · 완료 표시 없음") : t("✓ 턴 끝남 · 보고 전") };
     if (s.unseenDone === "report") return { tone: "blue", text: t("✓ 완료 보고"), title: s.doneText };
     if (s.unseenDone === "turn") return { tone: "blue", text: t("✓ 턴 끝남"), title: s.lastRecap };
     return undefined;
@@ -101,7 +112,7 @@ export function Dashboard() {
     const s = sessions().find((x) => x.id === sessionId);
     return s ? personaName(s) : sessionId.split("@")[0];
   };
-  const unseenCount = () => sessions().filter((s) => s.unseen).length;
+  const unseenCount = () => openSessions().filter((s) => s.unseen).length;
 
   // 워크스페이스 카드 칩 (시안) — 행동(waiting·dead) · 확인(메시지·보고 전·완료·턴) 수
   const wsAct = (wsId: string) => sessions().filter((s) => s.workspaceId === wsId && (s.status === "waiting" || s.status === "dead")).length;
@@ -116,9 +127,8 @@ export function Dashboard() {
   };
   // 기다리는 에이전트 — 열린 모든 워크스페이스의 waiting과 dead, 기다린 순
   const waitRows = () => {
-    const open = new Set(openWs().map((w) => w.id));
-    return sessions()
-      .filter((s) => open.has(s.workspaceId) && (s.status === "waiting" || s.status === "dead"))
+    return openSessions()
+      .filter((s) => s.status === "waiting" || s.status === "dead")
       .sort((a, b) => (a.status === b.status ? b.sinceMs - a.sinceMs : a.status === "waiting" ? -1 : 1));
   };
   // 주의 필요 순 정렬 (FR-G-07 · 0.5 §주의 신호) — waiting > dead > 확인 신호(메시지·보고 전·완료·턴) >
@@ -176,11 +186,11 @@ export function Dashboard() {
         <For
           each={[
             { k: "워크스페이스", v: openWs().length, c: "blue" },
-            { k: "전체 세션", v: sessions().length, c: "" },
-            { k: "실행", v: sessions().length - count("dead"), c: "green", tip: subagents() > 0 ? `${t("서브")} ${subagents()}` : undefined },
+            { k: "전체 세션", v: openSessions().length, c: "" },
+            { k: "실행 중", v: openSessions().length - count("dead"), c: "green", tip: subagents() > 0 ? `${t("서브")} ${subagents()}` : undefined },
             { k: "행동 필요", v: count("waiting") + count("dead"), c: "amber" },
-            { k: "확인 필요", v: sessions().filter((s) => (attentionRank(s, pendingOf(s)) || 0) >= 3).length, c: "blue" },
-            { k: "재개 가능", v: sessions().filter(canResume).length, c: "purple" },
+            { k: "확인 필요", v: openSessions().filter((s) => (attentionRank(s, pendingOf(s)) || 0) >= 3).length, c: "blue" },
+            { k: "재개 가능", v: openSessions().filter(canResume).length, c: "purple" },
           ]}
         >
           {(m) => (
@@ -255,7 +265,7 @@ export function Dashboard() {
                           <Show when={s.unseen}>
                             <span class="unread-dot" title={t("미확인 — 열람하면 해제")} />
                           </Show>
-                          <span class={`cell-state mono st-${s.status}`}>{s.status}</span>
+                          <span class={`cell-state mono st-${s.status}`}>{statusText(s.status)}</span>
                         </div>
                         {/* 직함 한 줄 (0.5) — 이름 아래. 기본 터미널은 그렇다고 적는다 */}
                         <div class="cell-title muted">
@@ -268,10 +278,24 @@ export function Dashboard() {
                           >
                             {(c) => <Chip tone={c().tone} text={c().text} title={c().title} />}
                           </Show>
-                          {/* 감지된 에이전트 (셸 우선 모델) — Job 트리 실측. 없으면 표시하지 않는다 */}
-                          <Show when={s.agent}>
-                            <span class="badge blue" style={{ "margin-left": "auto" }} title={t("터미널에서 실행 중인 에이전트 CLI — 프로세스 트리 실측")}>
-                              {s.agent}
+                          {/* 감지된 에이전트 (셸 우선 모델) — Job 트리 실측. 없으면 표시하지 않는다.
+                              역할 세션은 슬롯 엔진 아이콘이 이미 있으므로 같으면 숨기고, 다르면 어긋남을 경고 톤으로 (U42) */}
+                          <Show when={s.agent && !(s.personaId && detectedCli(s.agent) === cliOf(s))}>
+                            <span
+                              class={`badge ${s.personaId ? "amber" : "blue"}`}
+                              style={{ "margin-left": "auto" }}
+                              title={
+                                s.personaId
+                                  ? t("슬롯 엔진과 다른 에이전트가 실행 중입니다 — 손으로 띄워 역할·훅이 붙지 않았을 수 있습니다")
+                                  : t("터미널에서 실행 중인 에이전트 CLI — 프로세스 트리 실측")
+                              }
+                            >
+                              {s.personaId
+                                ? tf("슬롯 {slot} · 실행 중 {run}", {
+                                    slot: AGENT_CLI_LABEL[cliOf(s)],
+                                    run: agentLabel(s.agent),
+                                  })
+                                : agentLabel(s.agent)}
                             </span>
                           </Show>
                         </div>
@@ -367,10 +391,14 @@ export function Dashboard() {
         {/* 주의 & 이벤트 (FR-G-40~42) */}
         <div class="dash-side">
           <div class="dash-side-head">
-            <div class="dash-side-t">{t("기다리는 에이전트 · 모든 워크스페이스")}</div>
+            <div class="dash-side-t">{t("기다리는 에이전트 · 열린 워크스페이스")}</div>
             <span class="mono st-waiting dash-side-n">{waitRows().length}</span>
             <Show when={unseenCount() > 0}>
-              <button class="btn ghost" title={t("모든 세션의 미확인 해제")} onClick={() => backend.markAllSeen()}>
+              <button
+                class="btn ghost"
+                title={t("열린 워크스페이스 세션의 미확인 해제")}
+                onClick={() => backend.markAllSeen(openWs().map((w) => w.id))}
+              >
                 {t("모두 확인")} ({unseenCount()})
               </button>
             </Show>
@@ -386,7 +414,7 @@ export function Dashboard() {
               >
                 <div class="wait-row-top">
                   <span class="mono wait-row-nm">
-                    {paneNo(w)} {nameBesideNo(w.slot, personaName(w))} · {workspaces().find((x) => x.id === w.workspaceId)?.name ?? ""}
+                    <PaneNoText slot={w.slot} no={paneNo(w)} /> {nameBesideNo(paneNo(w), personaName(w))} · {workspaces().find((x) => x.id === w.workspaceId)?.name ?? ""}
                   </span>
                   <span class="mono muted wait-row-t">{fmtSince(w.sinceMs)}</span>
                 </div>

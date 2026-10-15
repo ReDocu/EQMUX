@@ -6,6 +6,7 @@ import { createSignal, For, onMount, Show } from "solid-js";
 import { listPresets } from "../backend/library";
 import type { CastingPreset } from "../backend/library";
 import { autoAssignDefault } from "../backend/missions";
+import { castingConfirmLines } from "../backend/team";
 import { backend } from "../backend/mock";
 import { isTauri } from "../backend/pty";
 import { maxSlots } from "../backend/settings";
@@ -13,7 +14,7 @@ import { t, tf } from "../i18n";
 import { jobMeta } from "../jobs";
 import type { JobBadgeColor } from "../jobs";
 import { setView, tick } from "../state";
-import { ContextMenu, Identity } from "../components/ui";
+import { ConfirmDialog, ContextMenu, Identity } from "../components/ui";
 import type { MenuGroup } from "../components/ui";
 import { personaTagline, projectStem, slotNo } from "../types";
 import type { Permissions } from "../types";
@@ -60,9 +61,22 @@ export function TeamCasting(props: { wsId: string }) {
     return out;
   };
 
+  // 지금 편성 (B69) — 역할 세션이 있으면 그 직무·페르소나로 연다. 프리셋 기본값으로 열면
+  // 그대로 적용만 해도 돌고 있는 세션의 직무가 바뀌고 목록 밖 세션이 종료됐다
+  const currentSlots = (): Slot[] =>
+    backend
+      .listSessions()
+      .filter((s) => s.workspaceId === props.wsId && s.personaId)
+      .sort((a, b) => a.slot - b.slot)
+      .map((s) => {
+        const b = badgeFor(s.jobId);
+        return { badge: b.badge, badgeColor: b.color, personaId: s.personaId, jobId: s.jobId };
+      });
+  const initial0 = currentSlots();
   const [presets, setPresets] = createSignal<CastingPreset[]>(FALLBACK_PRESETS);
-  const [preset, setPreset] = createSignal(FALLBACK_PRESETS[0].id);
-  const [slots, setSlots] = createSignal<Slot[]>(slotsFromPreset(FALLBACK_PRESETS[0]));
+  // "" = 지금 편성에서 시작 (어느 프리셋도 아님)
+  const [preset, setPreset] = createSignal(initial0.length > 0 ? "" : FALLBACK_PRESETS[0].id);
+  const [slots, setSlots] = createSignal<Slot[]>(initial0.length > 0 ? initial0 : slotsFromPreset(FALLBACK_PRESETS[0]));
   const [saved, setSaved] = createSignal(false);
   // 슬롯 번호 계획 — applyCasting과 같은 계산 (tick: 세션 목록이 바뀌면 다시)
   const plan = () => {
@@ -76,6 +90,7 @@ export function TeamCasting(props: { wsId: string }) {
     void listPresets().then((list) => {
       if (list.length === 0) return;
       setPresets(list);
+      if (preset() === "") return; // 지금 편성으로 열렸다 — 프리셋이 덮지 않는다
       setPreset(list[0].id);
       setSlots(slotsFromPreset(list[0]));
     });
@@ -87,8 +102,10 @@ export function TeamCasting(props: { wsId: string }) {
     setSaved(false);
   };
 
-  // 현재 프리셋이 채우는 슬롯 수 — 그 밖(추가된 슬롯)만 개별 제거를 허용한다
+  // 현재 프리셋이 채우는 슬롯 수 — 그 밖(추가된 슬롯)만 개별 제거를 허용한다.
+  // 지금 편성에서 시작했으면 어느 슬롯이든 뺄 수 있다 (적용 전 확인창이 종료를 알린다)
   const presetLen = () => {
+    if (preset() === "") return 0;
     const p = presets().find((x) => x.id === preset());
     return p ? Math.min(p.jobs.length, maxSlots()) : slots().length;
   };
@@ -120,9 +137,13 @@ export function TeamCasting(props: { wsId: string }) {
         .filter((sess) => sess.workspaceId !== props.wsId && sess.personaId)
         .map((sess) => [sess.personaId, backend.listWorkspaces().find((w) => w.id === sess.workspaceId)?.name ?? "?"]),
     );
+    // 같은 이름이 둘 이상이면 직함(없으면 id 끝)을 붙여 가른다 (U32)
+    const all = backend.listPersonas();
+    const label = (p: (typeof all)[number]) =>
+      all.filter((x) => x.name === p.name).length > 1 ? `${p.name} · ${p.title?.trim() || p.id.slice(-6)}` : p.name;
     return [
-      backend.listPersonas().map((p) => ({
-        label: activeWs.has(p.id) ? tf("{name} — {ws} 활동 중", { name: p.name, ws: activeWs.get(p.id)! }) : p.name,
+      all.map((p) => ({
+        label: activeWs.has(p.id) ? tf("{name} — {ws} 활동 중", { name: label(p), ws: activeWs.get(p.id)! }) : label(p),
         checked: slots()[i].personaId === p.id,
         disabled: usedElsewhere.has(p.id),
         action: () => {
@@ -135,10 +156,13 @@ export function TeamCasting(props: { wsId: string }) {
 
   // 슬롯별 직무 변경 (P1) — 툴팁이 약속하던 "추가 후 변경". 배지도 함께 바뀐다
   const [jobMenu, setJobMenu] = createSignal<{ x: number; y: number; slot: number } | undefined>(undefined);
+  // 리드는 1명 (B101) — 다른 슬롯이 리드면 리드 항목은 비활성 (페르소나 메뉴와 같은 방식)
+  const leadElsewhere = (i: number) => slots().some((sl, k) => k !== i && sl.jobId === "lead");
   const jobGroups = (i: number): MenuGroup[] => [
     backend.listJobs().map((j) => ({
-      label: j.name,
+      label: j.id === "lead" && leadElsewhere(i) ? `${j.name} — ${t("리드는 1명")}` : j.name,
       checked: slots()[i].jobId === j.id,
+      disabled: j.id === "lead" && leadElsewhere(i),
       action: () => {
         const b = badgeFor(j.id);
         setSlots(slots().map((sl, k) => (k === i ? { ...sl, jobId: j.id, badge: b.badge, badgeColor: b.color } : sl)));
@@ -159,12 +183,24 @@ export function TeamCasting(props: { wsId: string }) {
     apply();
     setSaved(true);
   };
+  // 파괴적 적용 확인 (B69 · P35) — 세션 종료·직무 변경·자리 없음이 있으면 먼저 묻는다. 기본 포커스는 취소
+  const [confirm, setConfirm] = createSignal<{ lines: string[]; then: () => void } | undefined>(undefined);
+  const guarded = (then: () => void) => {
+    const lines = castingConfirmLines(props.wsId, slots());
+    if (lines.length === 0) then();
+    else setConfirm({ lines, then });
+  };
+  const choose = () => {
+    apply();
+    setView({ kind: "composition", wsId: props.wsId });
+  };
 
   // 남는 세션이면 지금 번호 그대로, 새 페르소나면 빈 슬롯 (0.5 시안 cjWtF 슬롯 머리 문구)
   const slotNote = (i: number, personaId: string) => {
     const n = plan()[i];
     const kept = backend.listSessions().find((s) => s.workspaceId === props.wsId && s.personaId === personaId);
     if (kept && n !== undefined && kept.slot === n) return tf("유지 · {n} 그대로", { n: slotNo(n) });
+    if (n === undefined) return t("자리 없음 — 적용하면 빠집니다"); // B70
     return t("새 슬롯");
   };
   // 캐스팅 밖 슬롯 — 기본 터미널이 차지했거나 비어 있다
@@ -202,15 +238,12 @@ export function TeamCasting(props: { wsId: string }) {
           </div>
         </div>
         <div class="cast-head-actions">
-          <button class="cast-save mono" classList={{ saved: saved() }} title={t(".eqmux/team.json과 team.md에 저장")} onClick={save}>
+          <button class="cast-save mono" classList={{ saved: saved() }} title={t(".eqmux/team.json과 team.md에 저장")} onClick={() => guarded(save)}>
             {t(saved() ? "저장됨 ✓ · .eqmux/team.json · team.md" : "편성 저장 · .eqmux/team.json · team.md")}
           </button>
           <button
             class="btn primary"
-            onClick={() => {
-              apply();
-              setView({ kind: "composition", wsId: props.wsId });
-            }}
+            onClick={() => guarded(choose)}
           >
             {t("편성 선택 →")}
           </button>
@@ -218,6 +251,20 @@ export function TeamCasting(props: { wsId: string }) {
       </div>
       <div class="screen-body cast-body">
         <div class="cast-presets">
+          <Show when={initial0.length > 0}>
+            <button
+              class="btn"
+              classList={{ primary: preset() === "" }}
+              title={t("지금 돌고 있는 편성으로 되돌린다")}
+              onClick={() => {
+                setPreset("");
+                setSlots(currentSlots());
+                setSaved(false);
+              }}
+            >
+              {t("지금 편성")}
+            </button>
+          </Show>
           <For each={presets()}>
             {(p) => (
               <button class="btn" classList={{ primary: preset() === p.id }} onClick={() => pickPreset(p)}>
@@ -231,7 +278,7 @@ export function TeamCasting(props: { wsId: string }) {
             {(slot, i) => {
               const pp = () => persona(slot.personaId);
               return (
-                <div class="cast-slot">
+                <div class="cast-slot" classList={{ "no-room": plan()[i()] === undefined }}>
                   <div class="cast-slot-head mono">
                     {/* 적용될 실제 슬롯 번호 — 남는 세션은 지금 번호, 새 페르소나는 들어갈 빈 슬롯 (0.5) */}
                     <span class="cast-slot-no">SLOT {plan()[i()] ? slotNo(plan()[i()]!) : "—"}</span>
@@ -273,7 +320,7 @@ export function TeamCasting(props: { wsId: string }) {
                     {/* 추가된 슬롯(프리셋 구성 밖)만 제거 가능 — 프리셋 슬롯은 프리셋 전환으로 되돌린다 */}
                     <Show when={i() >= presetLen()}>
                       <button class="btn ghost" title={t("이 슬롯 제거")} onClick={() => removeSlot(i())}>
-                        {t("제거…")}
+                        {t("제거")}
                       </button>
                     </Show>
                   </div>
@@ -329,10 +376,28 @@ export function TeamCasting(props: { wsId: string }) {
           )}
         </Show>
 
+        <Show when={confirm()}>
+          {(c) => (
+            <ConfirmDialog
+              title={t("편성을 적용할까요?")}
+              body={t("적용하면 아래가 바로 일어납니다. 종료된 세션은 되돌릴 수 없습니다.")}
+              info={c().lines}
+              danger
+              confirmLabel={t("적용")}
+              onConfirm={() => {
+                const go = c().then;
+                setConfirm(undefined);
+                go();
+              }}
+              onCancel={() => setConfirm(undefined)}
+            />
+          )}
+        </Show>
+
         <div class="cast-info">
           <span class="launch-info">ⓘ</span>
           <span>
-            {t("편성은 저장하거나 편성 선택으로 넘어갈 때 .eqmux/team.json과 team.md에 적힌다. 직함 칸은 슬롯 덮어쓰기이고 비우면 페르소나 직함을 쓴다. roles/는 합성 후 gitignore · 사용자의 CLAUDE.md는 수정하지 않음.")}
+            {t("편성은 저장하거나 편성 선택으로 넘어갈 때 .eqmux/team.json과 team.md에 적힌다. 직함은 페르소나 직함을 쓰고, 슬롯만 바꾸려면 세션 상세에서 덮어쓴다. roles/는 합성 후 gitignore · 사용자의 CLAUDE.md는 수정하지 않음.")}
           </span>
         </div>
       </div>

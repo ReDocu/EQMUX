@@ -11,7 +11,7 @@ import { HARD_MAX_SLOTS, maxSlots } from "./settings";
 /** 동시에 열어 둘 수 있는 워크스페이스 수 (B9) — 등록은 무제한이고 오픈만 제한된다.
  *  화면(대시보드 "열기")이 상한을 미리 알아야 조용한 no-op이 되지 않는다 */
 export const MAX_OPEN_WORKSPACES = 10;
-import { agentAttached, pickAutoName, planCastingSlots, projectStem, sessionName, sessionNameError } from "../types";
+import { AGENT_CLI_LABEL, agentAttached, cliOf, handoffReport, pickAutoName, planCastingSlots, projectStem, sessionName, sessionNameError } from "../types";
 import type { AgentCliId } from "../types";
 import type {
   AgentStateApply,
@@ -51,14 +51,14 @@ export interface Backend {
   /** 미확인 해제 (FR-G-44) — 그 세션의 페인을 보거나 상세를 열면 해제된다 */
   markSeen(sessionId: string): void;
   /** 모두 확인 (FR-G-47) */
-  markAllSeen(): void;
+  markAllSeen(wsIds?: string[]): void;
   /** 턴 완료 칩만 내린다 (0.5) — 창이 포커스인 채 그 페인이 3초 보였을 때 */
   markDoneSeen(sessionId: string): void;
   /** 이 세션이 받은 handoff·ask 가운데 그 뒤로 report --done을 보내지 않은 것이 있는가 */
   openHandoff(sessionId: string): boolean;
   resumeSession(id: string): void;
   stopSession(id: string): void;
-  restartSession(id: string): void;
+  restartSession(id: string, fresh?: boolean): void;
   applyCasting(wsId: string, slots: { personaId: string; jobId: string }[]): void;
   /** 캐스팅이 각 페르소나를 넣을 슬롯 (0.5) — 남는 세션은 지금 슬롯, 새 것은 빈 슬롯. 없으면 undefined */
   planCasting(wsId: string, personaIds: string[]): (number | undefined)[];
@@ -136,7 +136,7 @@ export interface Backend {
   /** 등록 해제 (FR-E-09) — 목록에서만 지운다 */
   removeWorkspace(id: string): void;
   /** 스폰 때 실제로 넘긴 실행 플래그를 기록한다 (B39) */
-  noteSpawnFlags(sessionId: string, flags: string): void;
+  noteSpawnFlags(sessionId: string, flags: string, cli: AgentCliId): void;
   savePersona(p: Persona): void;
   addPersona(): void;
   saveJob(j: Job): void;
@@ -634,7 +634,12 @@ export class MockBackend implements Backend {
         sess.unseenDone = "report";
         sess.doneText = m.body.split("\n")[0];
         sess.reportPending = false;
+        sess.reportProgress = false;
       }
+    } else if (m.type === "report") {
+      // 진척 보고 (U31) — 보고 전 칩을 '보고함 · 완료 표시 없음'으로 바꾼다
+      const sess = SESSIONS.find((x) => x.id === m.from);
+      if (sess?.reportPending) sess.reportProgress = true;
     }
     this.broadcast();
   }
@@ -648,9 +653,11 @@ export class MockBackend implements Backend {
     this.broadcast();
   }
 
-  markAllSeen() {
+  /** wsIds가 있으면 그 워크스페이스들만 (B86 — 대시보드는 열린 것만 세고 그만큼만 지운다) */
+  markAllSeen(wsIds?: string[]) {
     let changed = false;
     for (const sess of SESSIONS) {
+      if (wsIds && !wsIds.includes(sess.workspaceId)) continue;
       if (sess.unseen || sess.unseenDone) {
         sess.unseen = false;
         sess.unseenDone = undefined;
@@ -668,14 +675,8 @@ export class MockBackend implements Backend {
   }
 
   openHandoff(sessionId: string): boolean {
-    // 원장은 시간순이다 — 끝에서부터 보다가 자기 완료 보고를 먼저 만나면 닫힌 것, 받은 handoff·ask를 먼저 만나면 열린 것
-    for (let i = MESSAGES.length - 1; i >= 0; i--) {
-      const m = MESSAGES[i];
-      if (m.from === sessionId && m.type === "report" && m.done) return false;
-      // 사람("나")의 ask는 질문이지 맡긴 일이 아니다 — Rust messages::open_requesters와 같은 판정
-      if (m.to === sessionId && (m.type === "handoff" || (m.type === "ask" && m.from !== "나"))) return true;
-    }
-    return false;
+    // 판정은 handoffReport 하나다 (U31) — 진척 보고 여부까지 같은 한 번의 원장 훑기에서 나온다
+    return handoffReport(MESSAGES, sessionId) !== undefined;
   }
 
   resumeSession(id: string) {
@@ -724,15 +725,16 @@ export class MockBackend implements Backend {
     this.broadcast();
   }
 
-  restartSession(id: string) {
+  restartSession(id: string, fresh = false) {
     const sess = SESSIONS.find((x) => x.id === id);
     if (!sess) return;
     sess.restartNeeded = false;
     sess.status = "busy";
     sess.sinceMs = 0;
     sess.sinceTs = Date.now();
-    sess.lastOutput = "재시작됨 · 대화 유지";
-    this.logEvent("state", "재개 기반 재시작 · 권한 반영", id);
+    // 엔진이 바뀐 재시작은 대화를 잇지 못한다 (B82) — 화면이 '대화 유지'라고 말하면 거짓이다
+    sess.lastOutput = fresh ? "재시작됨 · 새 엔진으로 새 대화" : "재시작됨 · 대화 유지";
+    this.logEvent("state", fresh ? `엔진 변경 재시작 · ${AGENT_CLI_LABEL[cliOf(sess)]}로 새로 시작` : "재개 기반 재시작 · 권한 반영", id);
     this.broadcast();
   }
 
@@ -1131,6 +1133,7 @@ export class MockBackend implements Backend {
       if (evt.status === "busy") {
         if (sess.unseenDone === "turn") sess.unseenDone = undefined;
         sess.reportPending = false;
+        sess.reportProgress = false;
       }
       if (evt.status !== "dead") sess.restartNeeded = sess.restartNeeded && evt.status === "starting";
       sess.lastOutput =
@@ -1146,7 +1149,9 @@ export class MockBackend implements Backend {
     // 턴 완료 (C1) — Rust가 30초+ 턴의 Stop에만 싣는다. 완료 보고가 떠 있으면 더 강한 쪽을 둔다
     if (evt.completed) {
       if (sess.unseenDone !== "report") sess.unseenDone = "turn";
-      sess.reportPending = this.openHandoff(sess.id);
+      const r = handoffReport(MESSAGES, sess.id);
+      sess.reportPending = r !== undefined;
+      sess.reportProgress = r === "progress";
     }
     // busy 중에는 카드 한 줄에 현재 도구를 부연한다 (FR-D-15) — 전이 없는 activity 갱신도 반영
     if (sess.status === "busy") {
@@ -1181,10 +1186,11 @@ export class MockBackend implements Backend {
     this.broadcast();
   }
 
-  noteSpawnFlags(sessionId: string, flags: string) {
+  noteSpawnFlags(sessionId: string, flags: string, cli: AgentCliId) {
     const sess = SESSIONS.find((x) => x.id === sessionId);
-    if (!sess || sess.spawnFlags === flags) return;
+    if (!sess || (sess.spawnFlags === flags && sess.spawnCli === cli)) return;
     sess.spawnFlags = flags;
+    sess.spawnCli = cli;
     this.broadcast();
   }
 
@@ -1251,7 +1257,14 @@ export class MockBackend implements Backend {
     if (!m) return;
     const i = m.assigned.indexOf(sessionId);
     if (i >= 0) m.assigned.splice(i, 1);
-    else m.assigned.push(sessionId);
+    else {
+      // 배정은 이동이다 (U55) — 역할 파일의 임무 블록은 하나라 실모드도 이전 임무에서 빠진다
+      for (const o of MISSIONS) {
+        const j = o !== m && o.workspaceId === m.workspaceId ? o.assigned.indexOf(sessionId) : -1;
+        if (j >= 0) o.assigned.splice(j, 1);
+      }
+      m.assigned.push(sessionId);
+    }
     const sess = SESSIONS.find((x) => x.id === sessionId);
     if (sess) sess.missionId = i >= 0 ? undefined : missionId;
     this.logEvent("mission", `임무 배정 변경 · ${m.name}`, sessionId);

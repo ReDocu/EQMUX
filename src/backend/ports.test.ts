@@ -4,6 +4,7 @@
 import { describe, expect, test } from "vitest";
 import {
   feedLine,
+  promoteServerCommands,
   foldPortRows,
   isExposed,
   isNewPort,
@@ -194,5 +195,17 @@ describe("서버 탭 마지막 명령 (feedLine)", () => {
   });
   test("빈 Enter는 기록하지 않는다", () => {
     expect(feedLine(empty, "   \r").commit).toBeUndefined();
+  });
+});
+
+describe("서버 명령 확정 (B77)", () => {
+  test("포트를 새로 연 워크스페이스의 직전 줄만 — 이미 열려 있었거나 포트가 없으면 올리지 않는다", () => {
+    const cands = new Map([
+      ["a", "npm run dev"],
+      ["b", "cls"],
+      ["c", "rs"],
+    ]);
+    expect(promoteServerCommands(new Set(["c"]), new Set(["a", "c"]), cands)).toEqual({ a: "npm run dev" });
+    expect(promoteServerCommands(new Set(), new Set(), cands)).toEqual({});
   });
 });

@@ -10,6 +10,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import { UnicodeGraphemesAddon } from "@xterm/addon-unicode-graphemes";
 import { WebLinksAddon } from "@xterm/addon-web-links";
+import { openLink } from "../backend/browser";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { pickEvictions } from "./webglBudget";
 import { noteWebglContextLoss, provideTerminalStats } from "../backend/diag";
@@ -25,7 +26,6 @@ import {
   killPty,
   onPtyExit,
   onPtyOutput,
-  openExternal,
   resizePty,
   revealPath,
   noteUserInput,
@@ -596,7 +596,7 @@ function createEntry(): TermEntry {
   const search = new SearchAddon();
   term.loadAddon(search);
   // 링크 감지 (PRD A, M30) — URL 클릭은 기본 브라우저로 보낸다 (브라우저 패널은 localhost 전용)
-  term.loadAddon(new WebLinksAddon((_ev, uri) => openExternal(uri)));
+  term.loadAddon(new WebLinksAddon((_ev, uri) => openLink(uri)));
   const entry: TermEntry = {
     term,
     fit,
@@ -678,7 +678,10 @@ async function initSession(
     entry.unsubs = [
       onPtyOutput(props.sessionId, (data) => term.write(data)),
       onPtyExit(props.sessionId, (code) => {
-        term.write(`\r\n\x1b[31m프로세스 종료 · exit ${code ?? "?"}\x1b[0m\r\n`);
+        // 기동·브랜치 부여가 셸을 일부러 끝낸 것이면 실패처럼 보이는 빨간 줄을 찍지 않는다 (B68) —
+        // 같은 페인에 곧 새 프로세스가 뜬다
+        if (isRespawning(props.sessionId)) return;
+        term.write(`\r\n\x1b[31m${t("프로세스 종료")} · exit ${code ?? "?"}\x1b[0m\r\n`);
       }),
     ];
     term.onData((data) => {

@@ -2,7 +2,8 @@
 // 번역이어야 한다. 화면(세션 상세 "실제/예상 실행 플래그")이 이 문자열을 그대로 보여주므로,
 // 여기가 틀리면 사람은 막혀 있지 않은 것을 막혀 있다고 믿는다.
 import { describe, expect, test } from "vitest";
-import { agentFlagsToString, codexFlagsToString, flagsToString, nameBesideNo, paneNo, translatePermissions } from "./types";
+import { agentFlagsToString, codexFlagsToString, detectedCli, engineSwitched, flagsToString, handoffReport, nameBesideNo, paneNo, slotBesideNo, statusText, translatePermissions } from "./types";
+import type { ConversationMessage } from "./types";
 
 describe("codexFlagsToString", () => {
   test("write:false는 읽기 전용 샌드박스, 승인은 언제나 on-request — bypass는 없다", () => {
@@ -107,5 +108,78 @@ describe("paneNo", () => {
   test("이름이 없거나 구분자가 없으면 슬롯 번호", () => {
     expect(paneNo({ slot: 3 })).toBe("03");
     expect(paneNo({ slot: 4, peerName: "kai" })).toBe("04");
+  });
+
+  test("끝 조각이 다른 슬롯 번호로 읽히면 슬롯 번호 (B83)", () => {
+    expect(paneNo({ slot: 3, peerName: "redocu-05" })).toBe("03");
+    expect(paneNo({ slot: 5, peerName: "redocu-05" })).toBe("05");
+  });
+});
+
+// 번호 칸이 피어 끝 조각이면 이름의 슬롯 번호를 떼지 않는다 — 03이 화면에서 사라졌다 (B83)
+describe("nameBesideNo · 번호 칸 글자 기준", () => {
+  test("번호 칸 글자와 같을 때만 뗀다", () => {
+    expect(nameBesideNo("92", "EQMUX03")).toBe("EQMUX03");
+    expect(nameBesideNo("03", "EQMUX03")).toBe("EQMUX");
+  });
+});
+
+// 엔진이 바뀐 재시작 (B82) — 참이면 재시작은 '대화 유지'가 아니라 새 엔진으로 새로 시작이다
+describe("engineSwitched", () => {
+  test("띄운 엔진과 슬롯 엔진이 다를 때만 참", () => {
+    expect(engineSwitched({ spawnCli: "claude", cli: "codex" })).toBe(true);
+    expect(engineSwitched({ spawnCli: "codex" })).toBe(true); // cli 없음 = claude
+    expect(engineSwitched({ spawnCli: "codex", cli: "codex" })).toBe(false);
+    expect(engineSwitched({ cli: "codex" })).toBe(false); // 이 앱이 띄운 기록이 없으면 모른다
+  });
+});
+
+// 맡은 일의 보고 상태 (U31) — 진척 report를 보냈으면 '보고 전'이 아니다
+describe("handoffReport", () => {
+  const m = (from: string, to: string, type: ConversationMessage["type"], done?: boolean): ConversationMessage => ({
+    id: Math.random().toString(),
+    time: "",
+    from,
+    to,
+    type,
+    body: "",
+    unread: false,
+    done,
+  });
+  test("handoff만 있으면 none, 그 뒤 진척 report면 progress, report --done이면 닫힘", () => {
+    const h = m("a", "b", "handoff");
+    expect(handoffReport([h], "b")).toBe("none");
+    expect(handoffReport([h, m("b", "a", "report")], "b")).toBe("progress");
+    expect(handoffReport([h, m("b", "a", "report"), m("b", "a", "report", true)], "b")).toBeUndefined();
+  });
+  test("handoff보다 앞선 report는 세지 않고, 사람의 ask는 맡긴 일이 아니다", () => {
+    expect(handoffReport([m("b", "a", "report"), m("a", "b", "handoff")], "b")).toBe("none");
+    expect(handoffReport([m("나", "b", "ask")], "b")).toBeUndefined();
+  });
+});
+
+// 감지된 에이전트 이름 → 엔진 (U42) — 같으면 대시보드가 배지를 숨기고, 다르면 어긋남을 보인다
+describe("detectedCli", () => {
+  test("Claude·Codex 표시 이름을 엔진 id로, 모르는 CLI는 undefined", () => {
+    expect(detectedCli("Claude")).toBe("claude");
+    expect(detectedCli("Codex")).toBe("codex");
+    expect(detectedCli("aider")).toBeUndefined();
+    expect(detectedCli(undefined)).toBeUndefined();
+  });
+});
+
+// 번호 칸 옆 작은 슬롯 번호 (B83 2차) — 피어 끝 조각일 때만
+describe("slotBesideNo", () => {
+  test("번호 칸이 슬롯 번호가 아니면 슬롯 번호를 함께", () => {
+    expect(slotBesideNo(3, "92")).toBe("03");
+    expect(slotBesideNo(3, "03")).toBeUndefined();
+  });
+});
+
+// 상태 표시 (U29) — 한국어 화면(기본)은 한국어
+describe("statusText", () => {
+  test("한국어 기본 설정에서 상태를 한국어로", () => {
+    expect(statusText("waiting")).toBe("응답 대기");
+    expect(statusText("idle")).toBe("유휴");
   });
 });

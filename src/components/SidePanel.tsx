@@ -4,6 +4,7 @@
 // 임무(탐색기)는 M25에서 전체 화면 팝업으로 승격 — 앱 바의 임무 버튼이 연다.
 // 위치 전환 — 플렉스 order로 좌/우를 오간다 (app-row · tf-body 양쪽 컨테이너 공용).
 import { createEffect, createSignal, For, Show } from "solid-js";
+import { priorLayout } from "../backend/layout";
 import { unseenPortCount } from "../backend/ports";
 import { panelNote, panelSide, panelTab, setPanelOpen, setPanelSide, setPanelTab } from "../state";
 import type { PanelTab } from "../state";
@@ -30,7 +31,7 @@ const groupOf = (tab: PanelTab) => GROUPS.find((g) => g.tabs.some((x) => x.key =
 /** 그룹마다 마지막으로 본 하위 탭 — 그룹 탭을 다시 누르면 거기로 간다. 앱 수명 동안만 */
 const lastSub = new Map<string, PanelTab>();
 
-// "탭이 묶였습니다" 안내 — 0.5로 처음 켰을 때 한 번만. 저장소가 막혀 있으면 매번 떠도 해가 없다
+// "탭이 묶였습니다" 안내 — 0.5 이전부터 쓰던 사람이 처음 켰을 때 한 번만. 저장소가 막혀 있으면 매번 떠도 해가 없다
 const NOTICE_KEY = "eq-panel-groups-notice";
 const [notice, setNotice] = createSignal(
   (() => {
@@ -53,6 +54,8 @@ const dismissNotice = () => {
 export function SidePanel() {
   const active = () => groupOf(panelTab());
   createEffect(() => lastSub.set(groupOf(panelTab()).key, panelTab()));
+  // 새 사용자(이전 layout.json 없음)는 묶이기 전 탭을 본 적이 없다 — 안내 없이 본 것으로 적어 둔다 (U40)
+  createEffect(() => priorLayout() === false && notice() && dismissNotice());
   return (
     <div class="side-panel" classList={{ left: panelSide() === "left" }} style={{ order: panelSide() === "left" ? "-1" : "1" }}>
       <div class="panel-tabs">
@@ -86,7 +89,7 @@ export function SidePanel() {
           </button>
         </div>
       </div>
-      <Show when={notice()}>
+      <Show when={notice() && priorLayout()}>
         <div class="panel-notice">
           <span>{t("탭이 묶였습니다 — 대화 [대화 | 로그] · 코드 [git | 문서] · 실행 [서버 | 포트] · 브라우저")}</span>
           <button class="btn ghost" onClick={dismissNotice}>

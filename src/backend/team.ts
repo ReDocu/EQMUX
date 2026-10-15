@@ -3,7 +3,8 @@
 // 로드: 워크스페이스 목록 갱신 시 슬롯을 복원한다 — 에이전트는 자동 실행하지 않는다 (C5 · FR-D-22).
 import { invoke } from "@tauri-apps/api/core";
 import { notify } from "../components/ui";
-import { tf } from "../i18n";
+import { t, tf } from "../i18n";
+import { castingChanges, sessionName } from "../types";
 import { applyAgentSnapshot } from "./agent";
 import { backend, libraryRev } from "./mock";
 import { isServerTermId } from "./ports";
@@ -155,6 +156,27 @@ export async function restoreTeams(): Promise<void> {
   }
   // 생존 세션의 에이전트 상태 초기값 (FR-C-06) — 스트림은 다음 변화부터만 온다
   await applyAgentSnapshot();
+}
+
+/** 캐스팅 확인창 줄 (B69 · P35) — 세션 종료·직무 변경·자리 없음이 없으면 빈 배열 = 확인 없이 적용.
+ *  팀 캐스팅 [편성 선택 →]·[편성 저장]과 팀 편성 [기본 편성 채우기]가 같이 쓴다 */
+export function castingConfirmLines(wsId: string, wanted: readonly { personaId: string; jobId: string }[]): string[] {
+  const sessions = backend.listSessions().filter((s) => s.workspaceId === wsId);
+  const c = castingChanges(sessions, wanted, backend.planCasting(wsId, wanted.map((w) => w.personaId)), wsId);
+  if (c.stopped.length + c.jobChanged.length + c.dropped.length === 0) return [];
+  const persona = (id: string) => backend.listPersonas().find((p) => p.id === id);
+  const job = (id: string) => backend.listJobs().find((j) => j.id === id)?.name ?? id;
+  const sess = (id: string) => {
+    const s = sessions.find((x) => x.id === id);
+    return s ? sessionName(s, persona(s.personaId)) : id;
+  };
+  return [
+    ...c.stopped.map((id) => tf("{name} 종료 — 세션과 PTY가 끝납니다", { name: sess(id) })),
+    ...c.jobChanged.map((j) => tf("{name} 직무 {from} → {to} — 재시작해야 반영됩니다", { name: sess(j.id), from: job(j.from), to: job(j.to) })),
+    ...c.added.map((p) => tf("{name} 새로 — 빈 슬롯에 셸로", { name: persona(p)?.name ?? p })),
+    ...c.dropped.map((p) => tf("{name} 자리 없음 — 빠집니다", { name: persona(p)?.name ?? p })),
+    ...(c.dropped.length ? [t("자리를 늘리려면 설정에서 슬롯 수를 올리거나 기본 터미널을 닫으세요")] : []),
+  ];
 }
 
 /** 페르소나 직함이 바뀌었다 — 슬롯 직렬화는 그대로라 디바운스 저장이 건너뛴다. team.md의 직함 열은

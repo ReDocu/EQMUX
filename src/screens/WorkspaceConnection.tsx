@@ -1,9 +1,10 @@
 // 워크스페이스 연결 (mmBPm · PRD E §4.1) — 레인 01의 시작. git repo 1개 = 팀 1개 = 탭 1개 (W0).
 // Tauri: 실제 폴더 선택 → git 검증 → workspaces.json 등록. 브라우저: 목 폴백.
-import { createSignal, For, Show } from "solid-js";
+import { createSignal, For, onCleanup, Show } from "solid-js";
 import { backend, MAX_OPEN_WORKSPACES } from "../backend/mock";
 import { remoteWebUrl } from "../backend/git";
-import { isTauri, openExternal, revealPath } from "../backend/pty";
+import { isTauri, revealPath } from "../backend/pty";
+import { openLink } from "../backend/browser";
 import {
   cloneRepo,
   gitInit,
@@ -14,18 +15,25 @@ import {
   touchWorkspace,
   unregisterWorkspace,
 } from "../backend/workspaces";
-import { setView, tick } from "../state";
+import { pushLayer, setView, tick } from "../state";
 import { t, tf } from "../i18n";
-import { KV, notify } from "../components/ui";
+import { ConfirmDialog, KV, notify } from "../components/ui";
 import { Icon } from "../components/icons";
 import type { Workspace } from "../types";
+import { openView } from "./launchRules";
+
+/** 안쪽 창을 레이어 스택에 올린다 — Esc가 관리 화면 전체가 아니라 이 창만 닫는다 (B108).
+ *  box를 주면 모달이다 — Tab이 창 안에서 돌고 단축키 이동이 막힌다 (B72 · U37) */
+function Layer(props: { close: () => void; box?: () => HTMLElement | undefined }) {
+  onCleanup(pushLayer(() => props.close(), props.box));
+  return null;
+}
 
 export function WorkspaceConnection() {
   const workspaces = () => {
     tick();
     return backend.listWorkspaces();
   };
-  const [selectedId, setSelectedId] = createSignal(workspaces()[0]?.id);
   const selected = () => workspaces().find((w) => w.id === selectedId());
   const openCount = () => workspaces().filter((w) => w.open).length;
   // 동시 오픈 상한 (BR-11) — 넘으면 openWorkspace가 조용히 아무것도 안 한다. 미리 흐리게 두고 이유를 보인다
@@ -38,6 +46,8 @@ export function WorkspaceConnection() {
       { label: t("열려 있지 않음"), items: workspaces().filter((w) => !w.open) },
       { label: t("열림"), items: workspaces().filter((w) => w.open) },
     ].filter((g) => g.items.length > 0);
+  // 첫 선택은 화면 맨 위 행 — 레지스트리 첫 항목은 아래 '열림' 그룹일 수 있다 (U62)
+  const [selectedId, setSelectedId] = createSignal(groups()[0]?.items[0]?.id);
   const sessionsOf = (id: string) => backend.listSessions().filter((s) => s.workspaceId === id);
   // 행의 보조 글 — 브랜치 · 세션 수. 경로가 없으면 그 사실(branchNote)이 먼저다
   const rowNote = (ws: Workspace) => {
@@ -58,6 +68,7 @@ export function WorkspaceConnection() {
   const [cloneOpen, setCloneOpen] = createSignal(false);
   const [cloneUrl, setCloneUrl] = createSignal("");
   const [cloneBusy, setCloneBusy] = createSignal(false);
+  let cloneBox: HTMLDivElement | undefined;
 
   const connectLocal = async () => {
     setError(undefined);
@@ -155,10 +166,13 @@ export function WorkspaceConnection() {
     if (selectedId() === id) setSelectedId(workspaces()[0]?.id);
   };
 
+  // 목록 행과 상세의 [열기]는 같은 일을 한다 (U60) — 열고 그 워크스페이스로 간다. 세션이 없으면
+  // 첫 세션 마법사, 있으면 탭으로 (B107: 이미 세션이 있는 워크스페이스를 '첫 세션' 마법사로 들이지 않는다)
   const open = (id: string) => {
+    if (!workspaces().find((w) => w.id === id)?.open && openFull()) return notify(fullReason());
     backend.openWorkspace(id);
     touchWorkspace(id);
-    setView({ kind: "launch", wsId: id });
+    setView(openView(id, sessionsOf(id).length));
   };
 
   return (
@@ -184,7 +198,7 @@ export function WorkspaceConnection() {
           <Show when={error()}>
             <div class="card conn-error mono">{error()}</div>
           </Show>
-          <div class="conn-registry">
+          <div class="conn-registry" role="list">
             <For each={groups()}>
               {(g) => (
                 <>
@@ -193,8 +207,11 @@ export function WorkspaceConnection() {
                   </div>
                   <For each={g.items}>
                     {(ws) => (
-                      <button
+                      // 행은 목록 항목이고, 안의 동작(선택·탐색기·원격·열기)은 각자 버튼이다 (U61) —
+                      // 버튼 안에 대화형 요소를 넣으면 Tab으로 닿지 않고 스크린리더는 행 전체를 한 버튼으로 읽는다
+                      <div
                         class="ws-row"
+                        role="listitem"
                         classList={{ selected: selectedId() === ws.id, missing: ws.pathMissing }}
                         onClick={() => setSelectedId(ws.id)}
                       >
@@ -203,7 +220,9 @@ export function WorkspaceConnection() {
                         </span>
                         <span class="ws-row-copy">
                           <span class="ws-row-top">
-                            <span class="ws-row-name">{ws.name}</span>
+                            <button class="ws-row-name" aria-pressed={selectedId() === ws.id}>
+                              {ws.name}
+                            </button>
                             <span class="mono muted ws-row-note" classList={{ "st-dead": ws.pathMissing }}>
                               {rowNote(ws)}
                             </span>
@@ -212,17 +231,19 @@ export function WorkspaceConnection() {
                             <span class="ws-row-text" title={ws.path}>
                               {ws.path}
                             </span>
-                            <span
+                            <button
                               class="ws-row-link"
                               classList={{ off: ws.pathMissing }}
+                              disabled={ws.pathMissing}
                               title={t(ws.pathMissing ? "경로를 찾을 수 없음" : "탐색기에서 열기")}
+                              aria-label={t(ws.pathMissing ? "경로를 찾을 수 없음" : "탐색기에서 열기")}
                               onClick={(e) => {
                                 e.stopPropagation();
-                                if (!ws.pathMissing) void reveal(ws.path);
+                                void reveal(ws.path);
                               }}
                             >
                               <Icon name="folder-open" size={11} />
-                            </span>
+                            </button>
                           </span>
                           <Show when={ws.remote}>
                             <Show
@@ -230,17 +251,17 @@ export function WorkspaceConnection() {
                               fallback={<span class="ws-row-line mono muted">{remoteText(ws.remote)}</span>}
                             >
                               {(web) => (
-                                <span
+                                <button
                                   class="ws-row-line mono ws-row-remote"
                                   title={web()}
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    openExternal(web());
+                                    openLink(web());
                                   }}
                                 >
                                   <span class="ws-row-text">{remoteText(ws.remote)}</span>
                                   <Icon name="external-link" size={10} />
-                                </span>
+                                </button>
                               )}
                             </Show>
                           </Show>
@@ -249,7 +270,7 @@ export function WorkspaceConnection() {
                           <Show
                             when={!ws.pathMissing}
                             fallback={
-                              <span
+                              <button
                                 class="btn"
                                 onClick={(e) => {
                                   e.stopPropagation();
@@ -257,29 +278,26 @@ export function WorkspaceConnection() {
                                 }}
                               >
                                 {t("경로 재지정")}
-                              </span>
+                              </button>
                             }
                           >
-                            <Show
-                              when={!ws.open}
-                              fallback={<span class="mono ws-row-open">{t("열림")}</span>}
-                            >
-                              <span
+                            <Show when={!ws.open} fallback={<span class="mono ws-row-open">{t("열림")}</span>}>
+                              <button
                                 class="btn primary"
                                 style={{ opacity: openFull() ? 0.45 : undefined }}
                                 title={openFull() ? fullReason() : undefined}
+                                aria-disabled={openFull()}
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  if (openFull()) notify(fullReason());
-                                  else backend.openWorkspace(ws.id);
+                                  open(ws.id);
                                 }}
                               >
                                 {t("열기")}
-                              </span>
+                              </button>
                             </Show>
                           </Show>
                         </span>
-                      </button>
+                      </div>
                     )}
                   </For>
                 </>
@@ -295,7 +313,7 @@ export function WorkspaceConnection() {
           <Show when={selected()} fallback={<div class="muted">{t("저장소를 선택하세요")}</div>}>
             {(ws) => (
               <>
-                <div class="eyebrow conn-detail-eyebrow">SELECTED WORKSPACE</div>
+                <div class="eyebrow conn-detail-eyebrow">{t("선택한 워크스페이스")}</div>
                 <div class="conn-detail-name">{ws().name}</div>
                 <div class="conn-detail-kv">
                   <KV k={t("경로")} v={ws().path} />
@@ -309,7 +327,7 @@ export function WorkspaceConnection() {
                             class="conn-remote-link"
                             href={web()}
                             title={web()}
-                            onClick={(e) => (e.preventDefault(), openExternal(web()))}
+                            onClick={(e) => (e.preventDefault(), openLink(web()))}
                           >
                             {remoteText(ws().remote)}
                             <Icon name="external-link" size={11} />
@@ -333,7 +351,7 @@ export function WorkspaceConnection() {
                     title={!ws().open && openFull() ? fullReason() : undefined}
                     onClick={() => open(ws().id)}
                   >
-                    {ws().pathMissing ? t("경로 재지정 필요") : t("열기")}
+                    {ws().pathMissing ? t("경로 재지정 필요") : ws().open ? t("탭으로 가기") : t("열기")}
                   </button>
                   <button
                     class="btn"
@@ -358,61 +376,55 @@ export function WorkspaceConnection() {
         </div>
       </div>
 
-      {/* git init 확인 (FR-E-01) */}
+      {/* git init 확인 (FR-E-01) · 등록 해제 확인 (B43) — 공통 확인창이라 포커스·Enter·Esc 규칙이 같다 (U61 · B108) */}
       <Show when={initTarget()}>
-        <div class="overlay" onClick={() => setInitTarget(undefined)}>
-          <div class="dialog" style={{ width: "440px", padding: "16px 18px" }} onClick={(e) => e.stopPropagation()}>
-            <div style={{ "font-weight": 800, "font-size": "14px" }}>{t("git 저장소가 아닙니다")}</div>
-            <div class="mono muted" style={{ "font-size": "11px", margin: "6px 0 10px" }}>
-              {initTarget()}
-            </div>
-            <div class="card inset" style={{ padding: "8px 10px", "font-size": "11px", "line-height": 1.6 }}>
-              {t("이 폴더에서 `git init`을 실행해 저장소로 만든 뒤 등록할까요? 기존 파일은 변경되지 않습니다.")}
-            </div>
-            <div style={{ display: "flex", gap: "8px", "justify-content": "flex-end", "margin-top": "14px" }}>
-              <button class="btn" onClick={() => setInitTarget(undefined)}>
-                {t("취소")}
-              </button>
-              <button class="btn primary" onClick={() => void confirmInit()}>
-                {t("git init 후 등록")}
-              </button>
-            </div>
-          </div>
-        </div>
+        {(path) => (
+          <ConfirmDialog
+            title={t("git 저장소가 아닙니다")}
+            body={t("이 폴더에서 `git init`을 실행해 저장소로 만든 뒤 등록할까요? 기존 파일은 변경되지 않습니다.")}
+            info={[path()]}
+            confirmLabel={t("git init 후 등록")}
+            onConfirm={() => void confirmInit()}
+            onCancel={() => setInitTarget(undefined)}
+          />
+        )}
       </Show>
-
-      {/* 등록 해제 확인 (B43) — 실행 중 세션이 있을 때만 뜬다 */}
       <Show when={unregTarget()}>
-        <div class="overlay" onClick={() => setUnregTarget(undefined)}>
-          <div class="dialog" style={{ width: "440px", padding: "16px 18px" }} onClick={(e) => e.stopPropagation()}>
-            <div style={{ "font-weight": 800, "font-size": "14px" }}>{t("등록을 해제할까요?")}</div>
-            <div class="mono muted" style={{ "font-size": "11px", margin: "6px 0 10px" }}>
-              {workspaces().find((w) => w.id === unregTarget())?.path}
-            </div>
-            <div class="card inset" style={{ padding: "8px 10px", "font-size": "11px", "line-height": 1.6 }}>
-              {tf("실행 중인 세션 {n}개가 지금 종료됩니다 — 재등록해도 돌아오지 않습니다.", {
-                n: String(liveOf(unregTarget()!).length),
-              })}
-              <div class="muted" style={{ "margin-top": "4px" }}>
-                {t("디스크의 저장소와 .eqmux 파일은 그대로 남습니다.")}
-              </div>
-            </div>
-            <div style={{ display: "flex", gap: "8px", "justify-content": "flex-end", "margin-top": "14px" }}>
-              <button class="btn" onClick={() => setUnregTarget(undefined)}>
-                {t("취소")}
-              </button>
-              <button class="btn danger" onClick={() => void unregister(unregTarget()!)}>
-                {t("세션 종료 후 등록 해제")}
-              </button>
-            </div>
-          </div>
-        </div>
+        {(id) => (
+          <ConfirmDialog
+            danger
+            title={t("등록을 해제할까요?")}
+            body={
+              <>
+                {tf("실행 중인 세션 {n}개가 지금 종료됩니다 — 재등록해도 돌아오지 않습니다.", {
+                  n: String(liveOf(id()).length),
+                })}
+                <div class="muted" style={{ "margin-top": "4px" }}>
+                  {t("디스크의 저장소와 .eqmux 파일은 그대로 남습니다.")}
+                </div>
+              </>
+            }
+            info={[workspaces().find((w) => w.id === id())?.path ?? ""]}
+            confirmLabel={t("세션 종료 후 등록 해제")}
+            onConfirm={() => void unregister(id())}
+            onCancel={() => setUnregTarget(undefined)}
+          />
+        )}
       </Show>
 
       {/* 원격 Clone (FR-E-02) */}
       <Show when={cloneOpen()}>
+        <Layer close={() => !cloneBusy() && setCloneOpen(false)} box={() => cloneBox} />
         <div class="overlay" onClick={() => !cloneBusy() && setCloneOpen(false)}>
-          <div class="dialog" style={{ width: "480px", padding: "16px 18px" }} onClick={(e) => e.stopPropagation()}>
+          <div
+            ref={cloneBox}
+            class="dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-label={t("원격에서 Clone")}
+            style={{ width: "480px", padding: "16px 18px" }}
+            onClick={(e) => e.stopPropagation()}
+          >
             <div style={{ "font-weight": 800, "font-size": "14px" }}>{t("원격에서 Clone")}</div>
             <div class="muted" style={{ "font-size": "11px", margin: "4px 0 10px" }}>
               {t("URL 입력 → 부모 폴더 선택 → clone 후 자동 등록")}
@@ -424,9 +436,24 @@ export function WorkspaceConnection() {
               value={cloneUrl()}
               disabled={cloneBusy()}
               onInput={(e) => setCloneUrl(e.currentTarget.value)}
-              onKeyDown={(e) => e.key === "Enter" && void runClone()}
+              ref={(el) => queueMicrotask(() => el.focus())}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void runClone();
+                // 입력칸의 Esc는 레이어 스택이 양보한다 — 이 창만 닫는다 (B108)
+                if (e.key === "Escape" && !cloneBusy()) {
+                  e.stopPropagation();
+                  setCloneOpen(false);
+                }
+              }}
             />
-            <div style={{ display: "flex", gap: "8px", "justify-content": "flex-end", "margin-top": "14px" }}>
+            <div
+              style={{
+                display: "flex",
+                gap: "8px",
+                "justify-content": "flex-end",
+                "margin-top": "14px",
+              }}
+            >
               <button class="btn" disabled={cloneBusy()} onClick={() => setCloneOpen(false)}>
                 {t("취소")}
               </button>

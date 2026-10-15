@@ -12,7 +12,7 @@ export interface AppSettings {
    *  all=턴 끝날 때마다도 · off. 인앱 칩·벨은 이 값과 무관하게 뜬다 */
   doneNotifications: "report" | "all" | "off";
   waitingSound: boolean;
-  scrollbackReplay: number; // 500 | 1000 | 2000
+  scrollbackReplay: number; // 250 | 500 | 1000 — 저장 상한(store.rs 세션당 1,000줄)을 넘지 않는다 (B78)
   /** 음소거 (FR-G-35) — 세션 id 또는 워크스페이스 id. OS 알림·사운드만 막고 인앱 미확인은 유지 (FR-G-37) */
   muted: string[];
   /** 테마 (M29) — 토큰 교체. 터미널 페인은 어느 테마에서든 다크 (TUI·ANSI 가독성) */
@@ -40,6 +40,9 @@ export interface AppSettings {
    *  auto=레지스트리가 idle로 본 때만 자동으로 넣는다. 상태를 모르거나 승인 대기면 auto여도 쌓는다.
    *  Rust ipc의 전달 결과 응답도 이 키를 읽는다 */
   manualDelivery: "park" | "auto";
+  /** 웹 페이지를 여는 곳 — eqmux=앱 안 브라우저 패널(기본) · chrome=Chrome(없으면 기본 브라우저).
+   *  사람이 누르는 링크와 에이전트의 `eqmux browser open`이 함께 따른다. Rust browser.rs도 이 키를 읽는다 */
+  webOpen: "eqmux" | "chrome";
 }
 
 /** 상태 줄 옵션 — 설정 화면·검증·Rust 주입이 공유한다 */
@@ -69,6 +72,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   language: "ko", // UI 언어 — 기본 한국어
   statusLine: "full", // 현행 유지 — 모델·비용 한 줄
   manualDelivery: "park", // 승인 창을 모르는 페인에는 사람이 넣는다 (BR-02)
+  webOpen: "eqmux", // 에이전트의 eqmux browser 조작(snapshot·click)이 되는 쪽
 };
 
 const [settings, setSettings] = createSignal<AppSettings>(DEFAULT_SETTINGS);
@@ -77,7 +81,7 @@ export { settings };
 /** 현재 세션 슬롯 상한 — 그리드·세션 추가·캐스팅이 전부 이 값을 본다 */
 export const maxSlots = (): number => settings().maxSlots;
 
-function sanitize(raw: unknown): AppSettings {
+export function sanitize(raw: unknown): AppSettings {
   const v = (raw ?? {}) as Partial<AppSettings>;
   return {
     startView: v.startView === "last" ? "last" : "control",
@@ -85,9 +89,12 @@ function sanitize(raw: unknown): AppSettings {
       v.notifications === "waiting" || v.notifications === "off" ? v.notifications : "waiting-dead",
     doneNotifications: v.doneNotifications === "all" || v.doneNotifications === "off" ? v.doneNotifications : "report",
     waitingSound: v.waitingSound === true,
-    scrollbackReplay: [500, 1000, 2000].includes(v.scrollbackReplay as number)
+    // 옛 2,000은 상한 1,000과 다시 그리는 줄 수가 같았다 — 같은 뜻인 1,000으로 옮긴다 (B78)
+    scrollbackReplay: [250, 500, 1000].includes(v.scrollbackReplay as number)
       ? (v.scrollbackReplay as number)
-      : 500,
+      : v.scrollbackReplay === 2000
+        ? 1000
+        : 500,
     muted: Array.isArray(v.muted) ? v.muted.filter((x): x is string => typeof x === "string") : [],
     theme: v.theme === "light" || v.theme === "system" ? v.theme : "dark",
     palette: (PALETTES as readonly string[]).includes(v.palette as string)
@@ -99,6 +106,7 @@ function sanitize(raw: unknown): AppSettings {
     maxSlots: (SLOT_OPTIONS as readonly number[]).includes(v.maxSlots as number) ? (v.maxSlots as number) : 4,
     language: v.language === "en" ? "en" : "ko",
     manualDelivery: v.manualDelivery === "auto" ? "auto" : "park",
+    webOpen: v.webOpen === "chrome" ? "chrome" : "eqmux",
     statusLine: (STATUSLINE_MODES as readonly string[]).includes(v.statusLine as string)
       ? (v.statusLine as AppSettings["statusLine"])
       : "full",

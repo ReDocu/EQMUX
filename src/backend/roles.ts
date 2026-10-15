@@ -3,7 +3,8 @@
 // 파일이 원본, 프롬프트는 포인터 (FR-E-40) — 본문 전재는 Rust 주입 경로에도 없다.
 import { invoke } from "@tauri-apps/api/core";
 import { backend } from "./mock";
-import { isTauri, writePty } from "./pty";
+import { injectLine } from "./conversation";
+import { isTauri } from "./pty";
 import { canInject, effectiveTitle, personaLevel, sessionName } from "../types";
 import type { Session } from "../types";
 
@@ -101,7 +102,7 @@ export function nudgeRoleReload(sessionId: string, roleFile: string): void {
   if (!isTauri()) return;
   const s = backend.listSessions().find((x) => x.id === sessionId);
   if (!canInject(s)) return;
-  writePty(sessionId, `[EQMUX] 역할 파일이 갱신되었습니다 — ${roleFile} 를 다시 읽어주세요\r`);
+  injectLine(sessionId, `[EQMUX] 역할 파일이 갱신되었습니다 — ${roleFile} 를 다시 읽어주세요`); // 2단계 제출 (B94)
 }
 
 /** 직함·이름 변경 안내 (0.5) — 역할 파일만 다시 만들고 짧은 한 줄을 보낸다. 재시작 배지는 없다.
@@ -110,7 +111,7 @@ export function nudgeTitleReload(sessionId: string): void {
   if (!isTauri()) return;
   const s = backend.listSessions().find((x) => x.id === sessionId);
   if (!canInject(s)) return;
-  writePty(sessionId, `[EQ] 역할 갱신 — .eqmux/roles/${sessionId}.md 다시 읽기\r`);
+  injectLine(sessionId, `[EQ] 역할 갱신 — .eqmux/roles/${sessionId}.md 다시 읽기`); // 2단계 제출 (B94)
 }
 
 /** 이름·직함 변경 뒤 그 워크스페이스 역할 세션 전원에 '다시 읽기' — 팀 관계 표가 같이 바뀌기 때문이다.

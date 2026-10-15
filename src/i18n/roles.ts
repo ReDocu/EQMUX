@@ -206,13 +206,12 @@ export const dict: Record<string, string> = {
   // ── 0.5 W2 시안 적용 — LaunchMode (xfVq4) ──
   "→ 계속": "→ Continue",
   "← 저장소 연결": "← Connect repository",
-  "첫 세션을 어떻게 시작할까요? 나중에 바꿀 수 있다 · 두 방식 모두 워크스페이스의 슬롯 {n}개를 쓴다":
-    "How should the first session start? You can change it later · both use the workspace's {n} slots",
   "역할 팀": "Role team",
   "셸만 연다. 에이전트는 필요할 때 사람이 직접 띄운다. 자동 이름은 프로젝트명XX(EQMUX01…)이고, 만들 때 직접 정할 수도 있다.":
     "Opens a shell only. You launch an agent yourself when needed. Auto names are ProjectNN (EQMUX01…), or set one when creating.",
   "세션 이름 · 번호가 헤더와 레일에 붙는다": "Session name · number shown in the header and rail",
-  "손으로 띄운 claude에는 메시지를 자동 주입하지 않는다 (넣기 칩)": "Messages are never auto-injected into a hand-launched claude (insert chip)",
+  "손으로 띄운 claude에는 기본으로 메시지를 쌓아 둔다 (넣기 칩) · 설정에서 idle 자동 넣기로 변경":
+    "Messages for a hand-launched claude are held by default (insert chip) · switch to auto-insert when idle in Settings",
   "역할 팀은 나중에 팀 캐스팅으로 추가": "Add a role team later with team casting",
   "다음 → 기본 터미널 구성 (셸 · 브랜치 · 이름)": "Next → default terminal setup (shell · branch · name)",
   "페르소나·직무·직함을 슬롯에 배정해 Claude Code·Codex 세션을 띄운다. 역할 파일과 team.md가 합성되고 메시지 버스가 켜진다.":
@@ -223,10 +222,6 @@ export const dict: Record<string, string> = {
   "다음 → 팀 캐스팅 → 팀 편성 → 관제": "Next → team casting → team composition → control",
   "헤더 예": "Header",
   카이: "Kai",
-  "기본 터미널로 시작합니다. 역할 팀은 나중에 추가할 수 있고, 두 방식 모두 슬롯 한도 {n}을 함께 쓴다.":
-    "Starting with a default terminal. You can add a role team later; both share the slot limit of {n}.",
-  "역할 팀으로 시작합니다. 기본 터미널은 나중에 추가할 수 있고, 두 방식 모두 슬롯 한도 {n}을 함께 쓴다.":
-    "Starting with a role team. You can add default terminals later; both share the slot limit of {n}.",
   // ── 0.5 W2 시안 적용 — TeamCasting (cjWtF) ──
   "페르소나를 {n}개 슬롯에 배정한다 · 다시 적용해도 남은 세션의 슬롯 번호는 그대로, 새 페르소나만 빈 슬롯에 들어간다":
     "Assign personas to {n} slots · re-applying keeps the slot numbers of remaining sessions; only new personas take empty slots",
@@ -237,12 +232,11 @@ export const dict: Record<string, string> = {
   "직함 없음 — 역할 파일에 추가 토큰 0": "No title — adds 0 tokens to the role file",
   "직무 (이 슬롯만)": "Job (this slot only)",
   "페르소나 변경": "Change persona",
-  "제거…": "Remove…",
   "페르소나 배정": "Assign persona",
   "기본 터미널 · {name}": "Default terminal · {name}",
   "빈 슬롯 · 기본 터미널은 관제에서 만든다 (자동 이름 {name})": "Empty slot · create default terminals from Control (auto name {name})",
-  "편성은 저장하거나 편성 선택으로 넘어갈 때 .eqmux/team.json과 team.md에 적힌다. 직함 칸은 슬롯 덮어쓰기이고 비우면 페르소나 직함을 쓴다. roles/는 합성 후 gitignore · 사용자의 CLAUDE.md는 수정하지 않음.":
-    "The team is written to .eqmux/team.json and team.md when you save or move on to composition. The title field overrides per slot; empty uses the persona title. roles/ is gitignored after synthesis · your CLAUDE.md is never modified.",
+  "편성은 저장하거나 편성 선택으로 넘어갈 때 .eqmux/team.json과 team.md에 적힌다. 직함은 페르소나 직함을 쓰고, 슬롯만 바꾸려면 세션 상세에서 덮어쓴다. roles/는 합성 후 gitignore · 사용자의 CLAUDE.md는 수정하지 않음.":
+    "The team is written to .eqmux/team.json and team.md when you save or move on to composition. Titles come from the persona; override one slot in Session details. roles/ is gitignored after synthesis · your CLAUDE.md is never modified.",
   // ── 0.5 W2 시안 적용 — RoleLibrary (dwiBK) ──
   "직무 8종 고정 · 세분화는 직함으로 · 직함은 권한·책임·금지를 바꾸지 않는다":
     "8 fixed jobs · refine with titles · titles never change permissions, duties or prohibitions",
@@ -260,4 +254,26 @@ export const dict: Record<string, string> = {
   "추천 직함 — 직무 '{job}' · 누른 말이 그대로 직함이 된다": "Suggested titles — job '{job}' · the chip text becomes the title as is",
   "저장하면 {name}가 들어간 세션 {n}개의 역할 파일과 팀원 {m}명의 팀 관계 표를 다시 만들고 '[EQ] 역할 갱신 — .eqmux/roles/<세션>.md 다시 읽기' 한 줄을 보낸다. 재시작 배지는 뜨지 않는다.":
     "Saving rebuilds the role files of {n} session(s) with {name} and the team tables of {m} teammate(s), and sends one line '[EQ] 역할 갱신 — .eqmux/roles/<session>.md 다시 읽기'. No restart badge.",
+  // ── 0.5.x QA eqmux-66: 캐스팅 확인창 · 자리 없음 · 리드 1명 (B69 · B70 · B101 · P35) ──
+  "{name} 종료 — 세션과 PTY가 끝납니다": "{name} stops — the session and its PTY end",
+  "{name} 직무 {from} → {to} — 재시작해야 반영됩니다": "{name} job {from} → {to} — takes effect after a restart",
+  "{name} 새로 — 빈 슬롯에 셸로": "{name} new — a shell in an empty slot",
+  "{name} 자리 없음 — 빠집니다": "{name} has no slot — left out",
+  "자리를 늘리려면 설정에서 슬롯 수를 올리거나 기본 터미널을 닫으세요": "To make room, raise the slot count in Settings or close a default terminal",
+  "편성을 적용할까요?": "Apply this lineup?",
+  "적용하면 아래가 바로 일어납니다. 종료된 세션은 되돌릴 수 없습니다.": "Applying does the following right away. Stopped sessions can't be brought back.",
+  "자리 없음 — 적용하면 빠집니다": "No slot — left out when applied",
+  "리드는 1명": "one lead only",
+  "지금 편성": "Current lineup",
+  "지금 돌고 있는 편성으로 되돌린다": "Go back to the lineup running now",
+  // ── 0.5.x QA eqmux-66: 역할 라이브러리 편집 보호 (B95 · B96 · B97 · U57) ──
+  "이름을 입력하세요": "Enter a name",
+  "이미 쓰는 이름입니다": "This name is already in use",
+  "삭제 실패 — {err}": "Delete failed — {err}",
+  "캐릭터 시트를 삭제할까요?": "Delete the character sheet?",
+  "페르소나를 삭제할까요?": "Delete this persona?",
+  "파일을 지웁니다. 앱 안에서는 되돌릴 수 없습니다.": "This deletes the file. It can't be undone in the app.",
+  "저장하지 않은 편집이 있습니다": "You have unsaved edits",
+  "이동하면 고친 내용이 사라집니다. 남기려면 취소하고 [저장]을 누르세요.": "Moving on discards your edits. To keep them, cancel and press [Save].",
+  "버리고 이동": "Discard and move on",
 };

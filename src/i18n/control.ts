@@ -55,7 +55,6 @@ export const dict: Record<string, string> = {
   "새 터미널 셸 선택": "Choose shell for new terminals",
   "새로 추가하는 터미널부터 적용됩니다": "Applies to newly added terminals",
   "그리드로 복귀": "Back to grid",
-  "페인 배치 (srpYm)": "Pane layout (srpYm)",
   "페인 배치": "Pane layout",
   "터미널 전체 화면 — ESC로 종료": "Terminal fullscreen — ESC to exit",
   "임무 · 캐스팅 · 팀 편성": "Missions · casting · team composition",
@@ -74,7 +73,7 @@ export const dict: Record<string, string> = {
     "You can keep {n} workspaces open at once — close one and try again",
   "선택 터미널에 브랜치 부여": "Assign branch to selected terminal",
   "경로 복사": "Copy path",
-  "삭제는 두지 않는다 — git worktree remove": "No delete here — use git worktree remove",
+  "여기서는 삭제하지 않습니다 — git worktree remove로 지우세요": "Not deleted here — remove it with git worktree remove",
   "빈 슬롯에 세션 추가 — 클로드코드 · 코덱스 · 기본 터미널":
     "Add a session to an empty slot — Claude Code · Codex · default terminal",
   // ── 에이전트 기동 ──
@@ -232,7 +231,6 @@ export const dict: Record<string, string> = {
   "에이전트 없음 — 직무 권한을 찾을 수 없어 기동할 수 없습니다. 역할을 다시 지정하세요": "No agent — can't start because the job's permissions weren't found. Reassign the role",
   "에이전트 없음 — PATH에 {cmd}가 없어 기동할 수 없습니다": "No agent — can't start because {cmd} isn't on PATH",
   "에이전트 없음": "No agent",
-  "직무 권한을 찾을 수 없습니다 — 역할을 다시 지정하세요": "Job permissions not found — reassign the role",
 
   // ── 0.5 W3 · 시안 적용 — 관제·확인창·세션 만들기 ──
   "{no} {name} 세션을 중지할까요?": "Stop session {no} {name}?",
@@ -267,5 +265,38 @@ export const dict: Record<string, string> = {
   "행동 필요": "Needs action",
   "확인 필요": "Needs check",
   "행동": "Action",
-  "기다리는 에이전트 · 모든 워크스페이스": "Waiting agents · all workspaces",
+  "실행 중": "Running", // 대시보드 지표 — 사이드 패널의 '실행'(Run)과 원문을 가른다 (B80)
+  // ── 0.5.x QA eqmux-08 ──
+  "기다리는 에이전트 · 열린 워크스페이스": "Waiting agents · open workspaces",
+  "열린 워크스페이스 세션의 미확인 해제": "Clear unseen marks in open workspaces",
+  "슬롯 비우고 새로 만들기…": "Free slot and create new…",
+  "비우고 새로 만들기": "Free and create new",
+  "{no} {name} 슬롯을 비우고 새로 만들까요?": "Free slot {no} {name} and create a new session?",
+  "엔진이 설치되지 않아 기동할 수 없습니다 — 설치 후 다시 감지하세요": "The engine isn't installed, so it can't start — install it, then re-detect",
+  "빈 슬롯이 없습니다 — 슬롯을 비운 뒤 만드세요": "No free slot — free a slot first",
+  "이 워크스페이스에서 볼 페인 — 누를 때마다 차례로 잡습니다. 답은 터미널에 직접 입력합니다. 모든 워크스페이스는 Ctrl+Shift+U":
+    "Panes to check in this workspace — each click takes the next. Answer in the terminal. Ctrl+Shift+U goes across all workspaces",
+  "✓ 보고함 · 완료 표시 없음": "✓ Reported · not marked done",
+  "✓ 완료 표시 없음": "✓ Not marked done",
+  "진척 보고는 받았지만 맡은 handoff·ask에 아직 report --done이 없습니다": "Progress was reported, but the assigned handoff/ask has no report --done yet",
+  "슬롯 엔진과 다른 에이전트가 실행 중입니다 — 손으로 띄워 역할·훅이 붙지 않았을 수 있습니다":
+    "A different agent than the slot engine is running — started by hand, so the role and hooks may not be attached",
+  "슬롯 {slot} · 실행 중 {run}": "Slot {slot} · running {run}",
+  "역할 지정은 세션 상세에서": "Assign a role in session details",
+  "실행 중인 {engine} 프로세스가 즉시 종료됩니다. 스크롤백과 슬롯은 남고, 재개할 수 없습니다.":
+    "The running {engine} process ends immediately. The scrollback and slot stay; it can't be resumed.",
+  미확인: "Unseen",
+  // ── 0.5.x QA eqmux-08 2차 (U29) — 영어 화면은 예전 모노 대문자 표기 그대로 ──
+  "슬롯 목록": "SLOTS",
+  메인: "MAIN",
+  "세션 1개": "1 SESSION",
+  "세션 {n}개": "{n} SESSIONS",
+  "엔진 1종": "1 ENGINE",
+  "엔진 {n}종": "{n} ENGINES",
+  "PTY {n} 실행 중": "PTY {n} ONLINE",
+  "출력 {k}K": "OUTPUT {k}K",
+  "저장 {kb} KB · {n}줄": "WAL {kb} KB · {n} lines",
+  "저장 —": "WAL —",
+  "메모리 {mb} MB": "MEM {mb} MB",
+  "세션 {n}/{max} · 터미널 집중": "{n}/{max} SESSIONS · TERMINAL FOCUS",
 };

@@ -7,6 +7,7 @@ import {
   createCharacterFile,
   deleteCharacterFile,
   deletePersonaFile,
+  libNameError,
   listMergedLibrary,
   readCharacterFile,
   saveCharacterFile,
@@ -21,7 +22,7 @@ import { nudgeRoleReload, nudgeTeamReload, saveRoleFile } from "../backend/roles
 import { resaveTeams } from "../backend/team";
 import { fileChangeTick } from "../backend/watch";
 import { tick } from "../state";
-import { FieldHint, KV } from "../components/ui";
+import { ConfirmDialog, FieldHint, KV } from "../components/ui";
 import { JOB_META, jobMeta, TITLE_SUGGEST } from "../jobs";
 import { cleanTitle, personaLevel, personaProfile, personaTagline, TITLE_MAX } from "../types";
 import type { Job, Persona, PersonaLevel, Workspace } from "../types";
@@ -122,21 +123,27 @@ export function RoleLibrary() {
     setDraftTitle(p.title ?? "");
     setDraftProfiles({ basic: profileOf(p, "basic"), mid: profileOf(p, "mid"), adv: profileOf(p, "adv") });
     setEditLevel(personaLevel(p));
+    setPersonaBase(personaKey());
     setSaved(false);
     setSaveErr(undefined);
     closeSheet();
   };
+  // 편집 여부 (B95 · U57) — 고른/저장한 시점의 draft와 다르면 dirty. '저장됨 ✓'과 이탈 확인이 이 값을 본다
+  const personaKey = () => JSON.stringify([draftName(), draftColor(), draftJob(), draftTitle(), draftProfiles(), editLevel()]);
+  const [personaBase, setPersonaBase] = createSignal("");
+  const personaDirty = () => !!sel() && !selIsWs() && personaKey() !== personaBase();
+  const nameErr = () => (sel() ? libNameError(draftName(), sel()!.id, personas()) : undefined);
 
   const [saveErr, setSaveErr] = createSignal<string | undefined>(undefined);
   const save = async () => {
     const p = sel();
-    if (!p || selIsWs()) return;
+    if (!p || selIsWs() || nameErr()) return;
     const d = draftProfiles();
     const active = d[editLevel()];
     // mtimeMs — 편집을 시작한 시점의 파일 상태 (P-7). 그 사이 밖에서 바뀌면 저장이 거부된다
     const err = await savePersonaFile({
       id: p.id,
-      name: draftName(),
+      name: draftName().trim(),
       level: editLevel(), // 활성 단계 — 어느 프로필이 표시·주입되는지
       basic: d.basic,
       mid: d.mid,
@@ -157,7 +164,10 @@ export function RoleLibrary() {
       nudgeTeamReload(backend.listSessions().filter((x) => x.personaId === p.id).map((x) => x.workspaceId));
     }
     reloadScope();
-    if (!err) setEditMtime(personas().find((x) => x.id === p.id)?.mtimeMs);
+    if (!err) {
+      setEditMtime(personas().find((x) => x.id === p.id)?.mtimeMs);
+      setPersonaBase(personaKey());
+    }
     setSaved(!err);
   };
 
@@ -170,6 +180,8 @@ export function RoleLibrary() {
   const [sheetMtime, setSheetMtime] = createSignal<number | undefined>(undefined);
   const [sheetErr, setSheetErr] = createSignal<string | undefined>(undefined);
   const [sheetSaved, setSheetSaved] = createSignal(false);
+  const [sheetBase, setSheetBase] = createSignal("");
+  const sheetDirty = () => sheetOpen() && sheetText() !== sheetBase();
   const closeSheet = () => {
     setSheetOpen(false);
     setSheetText("");
@@ -181,6 +193,7 @@ export function RoleLibrary() {
     const sheet = await readCharacterFile(id);
     if (!sheet) return;
     setSheetText(sheet.content);
+    setSheetBase(sheet.content);
     setSheetMtime(sheet.mtimeMs);
     setSheetSaved(false);
     setSheetErr(undefined);
@@ -210,6 +223,7 @@ export function RoleLibrary() {
       // 다음 편집을 위한 mtime 재실측 + 살아있는 캐스팅 세션에 "다시 읽어라"
       const fresh = await readCharacterFile(id);
       setSheetMtime(fresh?.mtimeMs);
+      setSheetBase(sheetText());
       nudgeCastSessions(id);
       reloadScope();
     }
@@ -218,9 +232,10 @@ export function RoleLibrary() {
   const demoteSheet = async () => {
     const id = selId();
     if (!id || selIsWs()) return;
-    await deleteCharacterFile(id);
+    const err = await deleteCharacterFile(id);
+    setSaveErr(err ?? undefined); // 실패를 삼키지 않는다 (B96)
     reloadScope();
-    closeSheet();
+    if (!err) closeSheet();
   };
 
   // ── 3단계 생성 플로우 — 고른 단계가 명시 상태로 저장되고, 편집창 선택기로 언제든 바꾼다 ──
@@ -241,10 +256,16 @@ export function RoleLibrary() {
   const remove = async () => {
     const id = selId();
     if (!id || inUse() || selIsWs()) return;
-    await deletePersonaFile(id);
+    const err = await deletePersonaFile(id);
+    setSaveErr(err ?? undefined);
     reloadScope();
-    setSelId(undefined);
+    if (!err) setSelId(undefined);
   };
+  // 파일 삭제 확인 (B96 · U57) — 사람이 쓴 원고라 한 번 더 묻는다. 앱 안에 휴지통이 없다
+  const [askDelete, setAskDelete] = createSignal<"persona" | "sheet" | undefined>(undefined);
+  // 이탈 확인 (U57) — 저장 안 한 편집이 있으면 다른 항목으로 가기 전에 묻는다
+  const [leave, setLeave] = createSignal<(() => void) | undefined>(undefined);
+  const guard = (go: () => void, dirty = personaDirty() || jobDirty() || sheetDirty()) => (dirty ? setLeave(() => go) : go());
 
   // ── 직무 편집 (FR-E-28) — 권한은 곧 실행 플래그의 원천이라 편집 화면에서도 정직하게 보여준다 ──
   const [selJobId, setSelJobId] = createSignal<string | undefined>(undefined);
@@ -261,6 +282,9 @@ export function RoleLibrary() {
   });
 
   const [jobMtime, setJobMtime] = createSignal<number | undefined>(undefined); // B41 — 편집 시작 시점 고정
+  const [jobBase, setJobBase] = createSignal("");
+  const jobDirty = () => !!selJob() && !selJobIsWs() && JSON.stringify(jDraft()) !== jobBase();
+  const jobNameErr = () => (selJob() ? libNameError(jDraft().name, selJob()!.id, jobs()) : undefined);
   const selectJob = (j: SJob) => {
     setSelId(undefined);
     setSelJobId(j.id);
@@ -273,6 +297,7 @@ export function RoleLibrary() {
       responsibility: j.responsibility,
       forbidden: j.forbidden,
     });
+    setJobBase(JSON.stringify(jDraft()));
     setJobSaved(false);
     setJobSaveErr(undefined);
   };
@@ -280,11 +305,11 @@ export function RoleLibrary() {
   const [jobSaveErr, setJobSaveErr] = createSignal<string | undefined>(undefined);
   const saveJob = async () => {
     const j = selJob();
-    if (!j || selJobIsWs()) return;
+    if (!j || selJobIsWs() || jobNameErr()) return;
     const d = jDraft();
     const err = await saveJobFile({
       id: j.id,
-      name: d.name,
+      name: d.name.trim(),
       permissions: { write: d.write, commit: d.commit, push: d.push },
       responsibility: d.responsibility,
       forbidden: d.forbidden,
@@ -292,7 +317,10 @@ export function RoleLibrary() {
     });
     setJobSaveErr(err ?? undefined);
     reloadScope();
-    if (!err) setJobMtime(jobs().find((x) => x.id === j.id)?.mtimeMs);
+    if (!err) {
+      setJobMtime(jobs().find((x) => x.id === j.id)?.mtimeMs);
+      setJobBase(JSON.stringify(jDraft()));
+    }
     setJobSaved(!err);
   };
 
@@ -328,17 +356,17 @@ export function RoleLibrary() {
             }
           >
             <span class="eyebrow">{t("단계")}</span>
-            <button class="btn" title={t("이름 · 색 · 판단 성향")} onClick={() => void addWithLevel("basic")}>
+            <button class="btn" title={t("이름 · 색 · 판단 성향")} onClick={() => guard(() => void addWithLevel("basic"))}>
               {t("기본")}
             </button>
-            <button class="btn" title={t("+ 말투 · 성격 옵션")} onClick={() => void addWithLevel("mid")}>
+            <button class="btn" title={t("+ 말투 · 성격 옵션")} onClick={() => guard(() => void addWithLevel("mid"))}>
               {t("중급")}
             </button>
             <button
               class="btn"
               title={t("+ 캐릭터 시트 (personas/<id>.character.md)")}
               disabled={!isTauri()}
-              onClick={() => void addWithLevel("adv")}
+              onClick={() => guard(() => void addWithLevel("adv"))}
             >
               {t("고급")}
             </button>
@@ -358,7 +386,7 @@ export function RoleLibrary() {
           <div class="rl-list">
             <For each={[...jobs()].sort((a, b) => jobRank(a.id) - jobRank(b.id))}>
               {(j) => (
-                <button class="rl-row rl-job" classList={{ selected: selJobId() === j.id }} title={j.responsibility} onClick={() => selectJob(j)}>
+                <button class="rl-row rl-job" classList={{ selected: selJobId() === j.id }} title={j.responsibility} onClick={() => guard(() => selectJob(j))}>
                   <span class="rl-job-name">{j.name}</span>
                   <Show when={j.source === "ws"}>
                     <span class="badge purple" title={t("워크스페이스 오버라이드 — .eqmux/jobs가 원본")}>
@@ -381,7 +409,7 @@ export function RoleLibrary() {
           <div class="rl-list">
             <For each={personas()}>
               {(p) => (
-                <button class="rl-row rl-persona" classList={{ selected: selId() === p.id }} title={personaTagline(p)} onClick={() => select(p)}>
+                <button class="rl-row rl-persona" classList={{ selected: selId() === p.id }} title={personaTagline(p)} onClick={() => guard(() => select(p))}>
                   <span class={`cast-avatar rl-avatar ${p.color}`}>{initial(p.name)}</span>
                   <span class="rl-persona-copy">
                     <span class="rl-persona-line">
@@ -432,6 +460,9 @@ export function RoleLibrary() {
                     {t("이름")} · <span class="mono">id: {j().id}</span>
                   </label>
                   <input value={jDraft().name} onInput={(e) => setJDraft({ ...jDraft(), name: e.currentTarget.value })} />
+                  <Show when={jobNameErr()}>
+                    <span class="rl-hint st-waiting">{t(jobNameErr()!)}</span>
+                  </Show>
                 </div>
                 <div class="rl-field">
                   <label class="rl-label">{t("기본 권한 — 실행 플래그로 번역됩니다")}</label>
@@ -497,8 +528,8 @@ export function RoleLibrary() {
                   </div>
                 </Show>
                 <div class="rl-actions">
-                  <button class="btn primary" disabled={selJobIsWs()} onClick={() => void saveJob()}>
-                    {t(jobSaved() ? "저장됨 ✓" : "저장")}
+                  <button class="btn primary" disabled={selJobIsWs() || !!jobNameErr()} onClick={() => void saveJob()}>
+                    {t(jobSaved() && !jobDirty() ? "저장됨 ✓" : "저장")}
                   </button>
                 </div>
               </>
@@ -517,7 +548,7 @@ export function RoleLibrary() {
               <Show when={draftTitle().trim()}>
                 <span class="muted rl-name-title">· {draftTitle().trim()}</span>
               </Show>
-              <Show when={saved()}>
+              <Show when={saved() && !personaDirty()}>
                 <span class="rl-saved mono ok">{t("저장됨 ✓")}</span>
               </Show>
             </div>
@@ -614,6 +645,9 @@ export function RoleLibrary() {
             <div class="rl-field">
               <label class="rl-label">{t("이름 (세션 이름과 분리 가능)")}</label>
               <input value={draftName()} onInput={(e) => setDraftName(e.currentTarget.value)} />
+              <Show when={nameErr()}>
+                <span class="rl-hint st-waiting">{t(nameErr()!)}</span>
+              </Show>
             </div>
             <div class="rl-field">
               <label class="rl-label">{t("색 — 직무 팔레트와 정렬 (점 글자 = 직무 앞글자) · UI 표시 전용")}</label>
@@ -707,7 +741,7 @@ export function RoleLibrary() {
                     <Show
                       when={!sheetOpen()}
                       fallback={
-                        <button class="btn" onClick={closeSheet}>
+                        <button class="btn" onClick={() => guard(closeSheet, sheetDirty())}>
                           {t("시트 닫기")}
                         </button>
                       }
@@ -721,7 +755,7 @@ export function RoleLibrary() {
                         {t("시트 편집")}
                       </button>
                     </Show>
-                    <button class="btn danger" disabled={selIsWs()} title={t("시트 파일 삭제 — 단계 설정(고급)은 유지됩니다")} onClick={() => void demoteSheet()}>
+                    <button class="btn danger" disabled={selIsWs()} title={t("시트 파일 삭제 — 단계 설정(고급)은 유지됩니다")} onClick={() => setAskDelete("sheet")}>
                       {t("시트 삭제")}
                     </button>
                   </div>
@@ -766,8 +800,8 @@ export function RoleLibrary() {
               </div>
             </Show>
             <div class="rl-actions">
-              <button class="btn primary" disabled={selIsWs()} onClick={() => void save()}>
-                {t(saved() ? "저장됨 ✓" : "저장")}
+              <button class="btn primary" disabled={selIsWs() || !!nameErr()} onClick={() => void save()}>
+                {t(saved() && !personaDirty() ? "저장됨 ✓" : "저장")}
               </button>
               <button
                 class="btn danger"
@@ -779,7 +813,7 @@ export function RoleLibrary() {
                       ? "캐스팅된 페르소나는 삭제할 수 없습니다"
                       : "personas/<id>.md 파일 삭제",
                 )}
-                onClick={() => void remove()}
+                onClick={() => setAskDelete("persona")}
               >
                 {t("삭제")} {inUse() ? t("(캐스팅 중)") : ""}
               </button>
@@ -787,6 +821,39 @@ export function RoleLibrary() {
           </Show>
         </div>
       </div>
+      <Show when={askDelete()}>
+        {(kind) => (
+          <ConfirmDialog
+            title={t(kind() === "sheet" ? "캐릭터 시트를 삭제할까요?" : "페르소나를 삭제할까요?")}
+            body={t("파일을 지웁니다. 앱 안에서는 되돌릴 수 없습니다.")}
+            info={[kind() === "sheet" ? (sel()?.characterPath ?? "") : `personas/${sel()?.id ?? ""}.md`]}
+            danger
+            confirmLabel={t("삭제")}
+            onConfirm={() => {
+              const k = kind();
+              setAskDelete(undefined);
+              void (k === "sheet" ? demoteSheet() : remove());
+            }}
+            onCancel={() => setAskDelete(undefined)}
+          />
+        )}
+      </Show>
+      <Show when={leave()}>
+        {(go) => (
+          <ConfirmDialog
+            title={t("저장하지 않은 편집이 있습니다")}
+            body={t("이동하면 고친 내용이 사라집니다. 남기려면 취소하고 [저장]을 누르세요.")}
+            danger
+            confirmLabel={t("버리고 이동")}
+            onConfirm={() => {
+              const g = go();
+              setLeave(undefined);
+              g();
+            }}
+            onCancel={() => setLeave(undefined)}
+          />
+        )}
+      </Show>
     </div>
   );
 }

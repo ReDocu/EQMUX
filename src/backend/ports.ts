@@ -107,16 +107,41 @@ const [serverCommands, setServerCommands] = createSignal<Record<string, string>>
 export { serverCommands, setServerCommands };
 
 const lineState = new Map<string, LineState>();
+/** 워크스페이스 id → 서버 셸에서 Enter로 끝난 마지막 줄. 포트가 열리기 전까지는 후보일 뿐이다 (B77) */
+const candidates = new Map<string, string>();
+/** 직전 스냅숏에서 서버 셸이 포트를 열고 있던 워크스페이스 */
+let serverOpenBefore: ReadonlySet<string> = new Set();
 setUserInputHook((id, data) => {
   if (!isServerTermId(id)) return;
   const r = feedLine(lineState.get(id) ?? { buf: "", broken: false }, data);
   lineState.set(id, r.st);
-  if (r.commit) {
-    const wsId = id.slice(id.indexOf("@") + 1);
-    const cmd = r.commit;
-    if (serverCommands()[wsId] !== cmd) setServerCommands((m) => ({ ...m, [wsId]: cmd }));
-  }
+  if (r.commit) candidates.set(id.slice(id.indexOf("@") + 1), r.commit);
 });
+
+/** 서버 명령 확정 (B77) — 서버 셸이 포트를 새로 연 워크스페이스에서만 그 직전 줄(후보)을 서버 명령으로
+ *  올린다. 예전엔 Enter로 끝난 줄을 무엇이든 기억해서, 서버를 멈추고 친 cls·git status가 [실행]에 걸렸다.
+ *  이미 열려 있던 포트는 보지 않는다 — 돌고 있는 서버에 친 줄(nodemon `rs` 등)이 올라가지 않게. 순수 함수 */
+export function promoteServerCommands(
+  before: ReadonlySet<string>,
+  now: ReadonlySet<string>,
+  cands: ReadonlyMap<string, string>,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const ws of now) {
+    const c = cands.get(ws);
+    if (!before.has(ws) && c) out[ws] = c;
+  }
+  return out;
+}
+
+/** 이번 스냅숏 — 서버 셸이 포트를 연 워크스페이스를 보고 후보를 확정한다 */
+function noteServerPorts(rows: readonly PortEntry[]): void {
+  const now = new Set(rows.filter((e) => e.session && isServerTermId(e.session)).map((e) => e.session!.slice(e.session!.indexOf("@") + 1)));
+  const up = promoteServerCommands(serverOpenBefore, now, candidates);
+  serverOpenBefore = now;
+  for (const ws of Object.keys(up)) candidates.delete(ws);
+  if (Object.entries(up).some(([ws, c]) => serverCommands()[ws] !== c)) setServerCommands((m) => ({ ...m, ...up }));
+}
 
 /** 워크스페이스 등록 해제 (BR-04) — 서버 PTY를 죽이고 화면 인스턴스·추적 상태까지 버린다.
  *  구독을 먼저 풀어야 뒤늦은 pty-exit가 "종료됨"을 다시 심지 않는다 */
@@ -126,6 +151,7 @@ export function killServerTerm(wsId: string): void {
   serverWatch.delete(id);
   clearServerExit(id);
   lineState.delete(id);
+  candidates.delete(wsId);
   if (wsId in serverCommands()) {
     const { [wsId]: _gone, ...rest } = serverCommands();
     setServerCommands(rest);
@@ -255,6 +281,7 @@ function apply(snap: PortRow[]): void {
   baselined = true;
   setEntries(folded);
   setLive(true);
+  noteServerPorts(folded);
 }
 
 let timer: ReturnType<typeof setTimeout> | undefined;

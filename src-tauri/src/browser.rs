@@ -102,6 +102,9 @@ pub async fn browser_close(app: AppHandle) -> Result<(), String> {
 // 앱 상태를 바꾸는 데는 쓰지 않는다.
 
 const NO_PANEL: &str = "브라우저 패널이 열려 있지 않습니다 — 먼저 `eqmux browser open <주소>`";
+/// 설정 webOpen=chrome — 열기는 Chrome으로 가고 조작할 패널은 없다. NO_PANEL처럼 "먼저 open"이라고
+/// 하면 에이전트가 open을 되풀이하므로 다른 말을 한다
+const CHROME_MODE: &str = "웹 페이지 열기 설정이 Chrome이라 EQMUX 브라우저 패널이 없습니다 — snapshot·click·type·get-text·eval·back·forward·reload는 사람이 설정 › 일반 › 웹 페이지 열기를 'EQMUX 브라우저'로 바꿔야 됩니다";
 /// 페이지 응답 대기 — 스크립트 한 번의 상한. UI 스레드가 막혀 있으면 여기서 끊는다
 const EVAL_SECS: u64 = 10;
 /// 로딩 안정화 대기 상한 — 넘으면 오류가 아니라 "현재 상태"를 낸다
@@ -114,7 +117,7 @@ const MAX_RESULT: usize = 10_000;
 fn wrap(body: &str) -> String {
     format!(
         "(function(){{const __s=v=>typeof v==='string'?v:(JSON.stringify(v)??String(v));\
-         try{{{body}}}catch(e){{return 'ERR '+e}}}})()"
+         try{{{body}}}catch(e){{return '\\u0001ERR '+e}}}})()"
     )
 }
 
@@ -197,6 +200,28 @@ fn settle(app: &AppHandle) -> Result<String, String> {
 
 /// `@e3` · `e3` · `3` 모두 받는다 — PowerShell이 따옴표 없는 `@e3`를 스플래팅으로 삼켜서
 /// 에이전트에게는 `e3`만 남는 일이 흔하다 (`--to @이름`이 사라지던 것과 같은 원인).
+/// 실패 표식 — 페이지 쪽 JS가 참조 없음·예외를 이 머리로 돌려준다. 결과 문자열로 흘리면 CLI가
+/// exit 0으로 끝나 종료 코드로 판정하는 쪽이 실패를 놓쳤다 (B106). 페이지 글이 우연히 같은
+/// 머리로 시작하지 않게 제어 문자를 앞에 둔다 (JS 쪽은 '\u0001ERR ')
+const FAIL: &str = "\u{1}ERR ";
+
+fn failed(out: String) -> Result<String, String> {
+    match out.strip_prefix(FAIL) {
+        Some(e) => Err(e.to_string()),
+        None => Ok(out),
+    }
+}
+
+/// eval 본문에 return 문이 있는가 — 문장 경계(맨 앞·`;`·줄바꿈·중괄호 뒤)의 `return` 낱말만 센다.
+/// 글자만 찾으면 `includes('returnTo')` 같은 식이 결과 없는 함수 본문이 됐다 (B106)
+fn has_return_stmt(src: &str) -> bool {
+    src.split([';', '\n', '{', '}']).any(|seg| {
+        seg.trim_start()
+            .strip_prefix("return")
+            .is_some_and(|rest| !rest.starts_with(|c: char| c.is_alphanumeric() || c == '_' || c == '$'))
+    })
+}
+
 fn ref_index(arg: Option<&String>) -> Result<usize, String> {
     let raw = arg.map(String::as_str).unwrap_or("").trim();
     let n = raw.trim_start_matches('@').trim_start_matches('e');
@@ -243,7 +268,18 @@ return [location.href,document.title,'',...H,'','조작 가능:',...(L.length?L:
 /// ponytail: 잠그지 않는다. 한 동작씩 직렬화해 봐야 snapshot→click 사이는 여전히 벌어지고,
 /// 사람이 보고 있는 화면이라 충돌은 눈에 띈다. 필요해지면 세션 단위 점유를 더한다.
 pub fn cli(app: &AppHandle, action: &str, args: &[String]) -> Result<String, String> {
+    let chrome = crate::setting_str(app, "webOpen").as_deref() == Some("chrome");
+    if chrome && action != "open" && app.get_webview(LABEL).is_none() {
+        return Err(CHROME_MODE.into());
+    }
     let out = match action {
+        "open" if chrome => {
+            let url = normalize_url(&args.join(" "))?;
+            crate::launch_web(&url, true)?;
+            return Ok(format!(
+                "Chrome으로 열었습니다 — {url}\n이 설정에서는 페이지를 조작할 수 없습니다 (사람의 설정 › 일반 › 웹 페이지 열기)"
+            ));
+        }
         "open" => {
             let url = normalize_url(&args.join(" "))?;
             // 열기는 프런트를 거친다 — 웹뷰 바운드는 패널의 DOM 자리에서만 읽을 수 있고
@@ -266,7 +302,7 @@ pub fn cli(app: &AppHandle, action: &str, args: &[String]) -> Result<String, Str
         "click" => {
             let n = ref_index(args.first())?;
             eval_text(app, &format!(
-                "const el=(window.__eq||[])[{n}];if(!el)return '@e{n} 참조가 없습니다 — snapshot을 다시 찍으세요';\
+                "const el=(window.__eq||[])[{n}];if(!el)return '\\u0001ERR @e{n} 참조가 없습니다 — snapshot을 다시 찍으세요';\
                  el.scrollIntoView({{block:'center'}});el.click();\
                  return 'clicked @e{n} '+(el.innerText||el.value||el.tagName).trim().slice(0,60)"
             ))?
@@ -276,7 +312,7 @@ pub fn cli(app: &AppHandle, action: &str, args: &[String]) -> Result<String, Str
             let text = serde_json::to_string(&args[1..].join(" ")).unwrap_or_else(|_| "\"\"".into());
             // 네이티브 setter로 넣어야 React·Solid 같은 제어 입력이 값을 따라온다
             eval_text(app, &format!(
-                "const el=(window.__eq||[])[{n}];if(!el)return '@e{n} 참조가 없습니다 — snapshot을 다시 찍으세요';\
+                "const el=(window.__eq||[])[{n}];if(!el)return '\\u0001ERR @e{n} 참조가 없습니다 — snapshot을 다시 찍으세요';\
                  el.focus();const v={text};\
                  const d=Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el),'value');\
                  if(d&&d.set)d.set.call(el,v);else if(el.isContentEditable)el.textContent=v;else el.value=v;\
@@ -291,7 +327,7 @@ pub fn cli(app: &AppHandle, action: &str, args: &[String]) -> Result<String, Str
             }
             // return이 있으면 함수 본문으로, 없으면 식으로 본다. eval·new Function은 쓰지
             // 않는다 — 페이지 CSP가 unsafe-eval을 막으면 그쪽이 통째로 죽는다
-            let body = if src.contains("return") { src } else { format!("return __s({src})") };
+            let body = if has_return_stmt(&src) { src } else { format!("return __s({src})") };
             eval_text(app, &body)?
         }
         other => {
@@ -300,6 +336,7 @@ pub fn cli(app: &AppHandle, action: &str, args: &[String]) -> Result<String, Str
             ))
         }
     };
+    let out = failed(out)?;
     Ok(match out.char_indices().nth(MAX_RESULT) {
         Some((i, _)) => format!("{}\n…({MAX_RESULT}자에서 잘랐습니다)", &out[..i]),
         None => out,
@@ -326,6 +363,18 @@ mod tests {
 
     /// PowerShell이 따옴표 없는 `@e3`를 삼켜도 참조가 성립해야 한다 —
     /// 여기가 막히면 에이전트의 click·type이 전부 "참조가 필요합니다"로 떨어진다
+    #[test]
+    fn failures_and_return_statements() {
+        assert_eq!(failed(format!("{FAIL}@e3 참조가 없습니다")).unwrap_err(), "@e3 참조가 없습니다");
+        assert_eq!(failed("ERR 페이지 글".into()).unwrap(), "ERR 페이지 글"); // 페이지가 쓴 글은 그대로
+        assert!(wrap("x").contains(r"'\u0001ERR '")); // JS 쪽 머리가 FAIL과 같은 글자
+        assert!(!has_return_stmt("location.search.includes('returnTo')"));
+        assert!(!has_return_stmt("returnValue"));
+        assert!(has_return_stmt("return document.title"));
+        assert!(has_return_stmt("const a=1; return a"));
+        assert!(has_return_stmt("if(x){return 1}"));
+    }
+
     #[test]
     fn ref_index_accepts_every_spelling() {
         for s in ["@e3", "e3", "3", " @e3 "] {

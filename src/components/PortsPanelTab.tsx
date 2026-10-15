@@ -19,7 +19,8 @@ import {
   systemPorts,
 } from "../backend/ports";
 import type { PortEntry } from "../backend/ports";
-import { clipWriteText, isTauri, openExternal } from "../backend/pty";
+import { clipWriteText, isTauri } from "../backend/pty";
+import { openLink } from "../backend/browser";
 import { openInBrowserPanel, setPanelNote } from "../state";
 import { Icon } from "./icons";
 import { ContextMenu } from "./ui";
@@ -69,7 +70,7 @@ export function PortsPanelTab() {
     const s = backend.listSessions().find((x) => x.id === sessionId);
     if (!s) return sessionId.split("@")[0];
     // 시안 qFwsr — `01 EQMUX01`처럼 번호와 세션 이름
-    return `${paneNo(s)} ${nameBesideNo(s.slot, sessionName(s, backend.listPersonas().find((x) => x.id === s.personaId)))}`;
+    return `${paneNo(s)} ${nameBesideNo(paneNo(s), sessionName(s, backend.listPersonas().find((x) => x.id === s.personaId)))}`;
   };
 
   const toRow = (e: PortEntry): Row => ({
@@ -202,7 +203,7 @@ export function PortsPanelTab() {
                     class="portsp-act"
                     title={t("브라우저로 열기")}
                     aria-label={t("브라우저로 열기")}
-                    onClick={() => openExternal(p.url)}
+                    onClick={() => openLink(p.url)}
                   >
                     <Icon name="external-link" size={13} />
                   </button>
@@ -229,7 +230,7 @@ export function PortsPanelTab() {
             onClose={() => setRowMenu(undefined)}
             groups={[
               [
-                { label: t("브라우저로 열기"), action: () => openExternal(m().p.url) },
+                { label: t("브라우저로 열기"), action: () => openLink(m().p.url) },
                 { label: t("브라우저 패널에서 열기"), action: () => openInBrowserPanel(m().p.url) },
                 { label: t("주소 복사"), action: () => copyAddr(m().p) },
               ],

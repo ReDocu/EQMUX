@@ -509,12 +509,19 @@ fn check_conflict(path: &Path, expected_mtime_ms: Option<i64>) -> Result<(), Str
 
 /// 전역 계층에 저장 (FR-E-28) — 워크스페이스 오버라이드 편집은 파일로 직접 한다
 pub fn save_persona(app_root: &Path, p: &PersonaInfo, expected_mtime_ms: Option<i64>) -> Result<(), String> {
+    // 빈 이름은 세션 이름·@멘션을 지운다 (B97) — 화면도 막지만 파일 원본 쪽에서 한 번 더
+    if p.name.trim().is_empty() {
+        return Err("EMPTY_NAME".into());
+    }
     let path = personas_dir(app_root).join(format!("{}.md", safe_id(&p.id)));
     check_conflict(&path, expected_mtime_ms)?;
     atomic_write(&path, &render_persona(p))
 }
 
 pub fn save_job(app_root: &Path, j: &JobInfo, expected_mtime_ms: Option<i64>) -> Result<(), String> {
+    if j.name.trim().is_empty() {
+        return Err("EMPTY_NAME".into());
+    }
     let path = jobs_dir(app_root).join(format!("{}.md", safe_id(&j.id)));
     check_conflict(&path, expected_mtime_ms)?;
     atomic_write(&path, &render_job(j))
@@ -926,6 +933,21 @@ mod tests {
         // 다시 읽은 mtime으로는 저장된다
         let fresh = list(&root, None).personas.into_iter().find(|p| p.id == "kai").unwrap();
         assert!(save_persona(&root, &edited, Some(fresh.mtime_ms)).is_ok());
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// 빈 이름 저장 거부 (B97) — 파일은 그대로 남는다
+    #[test]
+    fn save_rejects_empty_name() {
+        let root = temp_root("emptyname");
+        seed(&root);
+        let mut kai = list(&root, None).personas.into_iter().find(|p| p.id == "kai").unwrap();
+        kai.name = "  ".into();
+        assert_eq!(save_persona(&root, &kai, None).unwrap_err(), "EMPTY_NAME");
+        assert!(list(&root, None).personas.iter().any(|p| p.id == "kai" && p.name == "카이"));
+        let mut dev = list(&root, None).jobs.into_iter().find(|j| j.id == "dev").unwrap();
+        dev.name = String::new();
+        assert_eq!(save_job(&root, &dev, None).unwrap_err(), "EMPTY_NAME");
         fs::remove_dir_all(&root).ok();
     }
 

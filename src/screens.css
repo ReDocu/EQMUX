@@ -6393,3 +6393,87 @@ button.eq-chip-tx,
   border-color: var(--eq-blue);
   color: var(--eq-text);
 }
+
+/* 0.5.x QA eqmux-66: 캐스팅 자리 없음 카드 (B70) · 긴 메뉴 스크롤 (U32 — 서브메뉴 없는 메뉴만, 서브는 잘리면 안 된다) */
+.cast-slot.no-room {
+  opacity: 0.55;
+  border-style: dashed;
+}
+.cmenu:not(:has(.sub)) {
+  max-height: min(420px, calc(100vh - 16px));
+  overflow-y: auto;
+}
+
+/* 0.5.x QA eqmux-18: 벨 팝오버는 전체 화면 팝업·확인창(z 50) 위, 메뉴(z 60) 아래 (B71) · '지금 봐야 할 세션' 머리 (U35) */
+.bell-pop {
+  z-index: 55;
+}
+.bell-group {
+  padding: 6px 12px 2px;
+  font-family: var(--eq-mono);
+  font-size: 10px;
+}
+
+/* 0.5.x QA eqmux-08: 접힌 레일의 미확인 점 자리 (U43) */
+.rail-mini {
+  position: relative;
+}
+.rail-mini .rail-unread {
+  top: 1px;
+  right: 1px;
+}
+
+/* 0.5.x QA eqmux-66: 대화 탭 필터 토글 (U54) · 인박스 사유 줄 (U50) · 임무 배정 현재 임무 (U55) */
+.conv-sep {
+  width: 1px;
+  height: 14px;
+  background: var(--eq-line);
+  margin: 0 2px;
+}
+.conv-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--eq-muted);
+  cursor: pointer;
+}
+.conv-inbox-it {
+  padding: 0 4px;
+  font-size: 11px;
+}
+.ma-assignee-cur {
+  font-size: 10px;
+}
+/* 0.5.x QA eqmux-66: 넣기 팝오버 행 체크 (U51) */
+label.inbox-pop-row {
+  display: block;
+  cursor: pointer;
+}
+
+/* 0.5.x QA eqmux-8a: 워크스페이스 행 — 바깥은 목록 항목, 안의 동작은 형제 버튼 (U61) · 실행 방식 카드 높이는 내용에 맞춘다 (U30) */
+.ws-row {
+  cursor: pointer;
+}
+.ws-row-name,
+.ws-row-link,
+.ws-row-remote {
+  padding: 0;
+  text-align: left;
+}
+.ws-row-link:disabled {
+  cursor: default;
+}
+.launch-body .launch-choices {
+  flex: 0 0 auto;
+  min-height: 0;
+  align-items: start;
+}
+
+/* 0.5.x QA eqmux-08 2차: 번호 칸 옆 작은 슬롯 번호 (B83) */
+.eq-id-slot {
+  margin-left: 2px;
+  font-size: 0.72em;
+  font-weight: 400;
+  opacity: 0.65;
+}

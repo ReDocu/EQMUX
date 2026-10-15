@@ -3,6 +3,7 @@
 // 목록을 만들 때마다 roles/를 실측 스캔해 배정을 도출한다 (FR-E-59 — 캐시 대조 대신 파일 직독).
 // 손상·스키마 불일치는 부분 파싱으로 견딘다 (FR-E-72) — name이 없으면 파일명, status가 없으면 todo.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -27,6 +28,9 @@ pub struct MissionInfo {
     pub assigned: Vec<String>,
     /// 워크스페이스 기본 임무 (FR-E-56, M33) — frontmatter `default: true`. 워크스페이스당 1개
     pub is_default: bool,
+    /// 배정 시각 (B92) — 세션 id → epoch ms. frontmatter `assigned_at: <세션>=<ms> …`.
+    /// 완료 보고를 배정 뒤 것으로 한정하는 데 쓴다 — 재시작 뒤에도 같은 판정
+    pub assigned_at: HashMap<String, i64>,
 }
 
 fn missions_dir(ws_path: &str) -> PathBuf {
@@ -159,8 +163,55 @@ fn parse_file(path: &Path) -> Option<(String, MissionInfo)> {
             file: format!(".eqmux/missions/{stem}.md"),
             assigned: Vec::new(),
             is_default: roles::fm_value(&fm, "default").map(|v| v == "true").unwrap_or(false),
+            assigned_at: parse_assigned_at(&fm).into_iter().collect(),
         },
     ))
+}
+
+/// `assigned_at: kai@w=1700000000000 hana@w=…` — 깨진 조각은 건너뛴다 (부분 파싱 원칙)
+fn parse_assigned_at(fm: &[String]) -> Vec<(String, i64)> {
+    roles::fm_value(fm, "assigned_at")
+        .map(|v| {
+            v.split_whitespace()
+                .filter_map(|p| {
+                    let (s, t) = p.rsplit_once('=')?;
+                    Some((s.to_string(), t.parse().ok()?))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// 배정 시각 기록 (B92) — 그 세션 항목만 바꾸고 나머지 frontmatter·본문은 보존한다. at=None이면 지운다.
+/// 역할 파일이 아니라 임무 파일에 두는 이유: 워크트리 세션도 repo 루트의 같은 임무 파일을 본다.
+/// updated는 건드리지 않는다 — 배정은 임무 정의의 변경이 아니다
+pub fn mark_assigned(ws_path: &str, id: &str, session: &str, at: Option<i64>) -> Result<(), String> {
+    let path = find_path(ws_path, id).ok_or("임무 파일을 찾을 수 없습니다")?;
+    let text = fs::read_to_string(&path).map_err(|_| "임무 파일을 찾을 수 없습니다".to_string())?;
+    let (mut fm, body) = split_frontmatter(&text);
+    let mut map: Vec<(String, i64)> = parse_assigned_at(&fm).into_iter().filter(|(s, _)| s != session).collect();
+    if let Some(t) = at {
+        map.push((session.to_string(), t));
+    }
+    fm.retain(|l| !l.starts_with("assigned_at:"));
+    if !map.is_empty() {
+        let v: Vec<String> = map.iter().map(|(s, t)| format!("{s}={t}")).collect();
+        fm.push(format!("assigned_at: {}", v.join(" ")));
+    }
+    let mut out = String::from("---\n");
+    for l in &fm {
+        out.push_str(l);
+        out.push('\n');
+    }
+    out.push_str("---\n");
+    out.push_str(&body);
+    atomic_write(&path, &out)
+}
+
+/// 배정 시각 커맨드 (B92) — 프런트가 배정 토글 뒤에 repo 루트 경로로 부른다
+#[tauri::command]
+pub fn mission_mark_assigned(ws_path: String, id: String, session: String, assigned: bool) -> Result<(), String> {
+    mark_assigned(&ws_path, &id, &session, assigned.then(crate::workspace::now_ms))
 }
 
 fn render(m: &MissionInfo) -> String {
@@ -247,6 +298,7 @@ pub fn create(
         file: format!(".eqmux/missions/{id}.md"),
         assigned: Vec::new(),
         is_default: false,
+        assigned_at: HashMap::new(),
     };
     atomic_write(&mission_path(ws_path, &id), &render(&m))?;
     Ok(m)
@@ -430,6 +482,26 @@ mod tests {
 
     /// 기본 임무 (FR-E-56, M33) — 워크스페이스당 1개. 켜면 다른 임무의 default가 걷힌다.
     /// frontmatter만 갱신되고 본문·상태는 보존된다.
+    /// 배정 시각 (B92) — 파일에 남아 재시작 뒤에도 읽히고, 세션별로 바뀌고, 다른 키·본문은 보존된다
+    #[test]
+    fn assigned_at_roundtrip() {
+        let ws = temp_ws("assigned-at");
+        let m = create(&ws, "로그인", "목표", None, vec![]).unwrap();
+        mark_assigned(&ws, &m.id, "kai@w", Some(100)).unwrap();
+        mark_assigned(&ws, &m.id, "hana@w", Some(200)).unwrap();
+        mark_assigned(&ws, &m.id, "kai@w", Some(300)).unwrap(); // 재배정은 갱신
+        set_status(&ws, &m.id, "in-progress").unwrap(); // 다른 쓰기도 보존
+        let got = get(&ws, &m.id).unwrap();
+        assert_eq!(got.assigned_at.get("kai@w"), Some(&300));
+        assert_eq!(got.assigned_at.get("hana@w"), Some(&200));
+        assert_eq!(got.goal, "목표");
+        mark_assigned(&ws, &m.id, "kai@w", None).unwrap(); // 해제 = 항목 삭제
+        mark_assigned(&ws, &m.id, "hana@w", None).unwrap();
+        let text = fs::read_to_string(mission_path(&ws, &m.id)).unwrap();
+        assert!(!text.contains("assigned_at"));
+        fs::remove_dir_all(&ws).ok();
+    }
+
     #[test]
     fn default_mission_is_exclusive_and_preserves_body() {
         let ws = temp_ws("default");

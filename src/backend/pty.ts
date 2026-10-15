@@ -228,13 +228,14 @@ export function openLogDir(): void {
   void invoke("open_log_dir").catch(() => {});
 }
 
-/** 터미널 링크 클릭 → 기본 브라우저 (PRD A 링크 감지, M30). http/https만 Rust가 허용한다. */
-export function openExternal(url: string): void {
+/** 앱 밖 브라우저로 열기 — chrome이면 Chrome, 없거나 false면 기본 브라우저. http/https만 Rust가 허용한다.
+ *  화면의 링크는 이것을 직접 부르지 말고 openLink(browser.ts)를 거친다 — 설정 webOpen을 따른다 */
+export function openExternal(url: string, chrome = false): void {
   if (!isTauri()) {
     window.open(url, "_blank", "noopener");
     return;
   }
-  void invoke("open_external", { url }).catch(() => {});
+  void invoke("open_external", { url, chrome }).catch(() => {});
 }
 
 /** 터미널 경로 더블클릭 → 탐색기에서 열기. 파일이면 그 파일이 선택된 채로, 폴더면 그 폴더가 열린다.

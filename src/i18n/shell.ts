@@ -28,9 +28,9 @@ export const dict: Record<string, string> = {
   "다시 실측": "Re-scan",
   "브라우저로 열기": "Open in browser",
   "포트 {n} · 새 {m}": "Ports {n} · new {m}",
-  "마지막 명령 없음 — 이 셸에서 실행한 명령을 기억합니다": "No last command — commands run in this shell are remembered",
+  "마지막 서버 명령 없음 — 이 셸에서 포트를 연 명령을 기억합니다":
+    "No server command yet — the command that opens a port in this shell is remembered",
   변경: "Changed",
-  "변경 {n}건 diff · 에디터로 열기": "{n} changes · open diff in the editor",
   내보내기: "Export",
   외부로: "External",
 
@@ -81,10 +81,9 @@ export const dict: Record<string, string> = {
   포트: "Ports",
   서버: "Server",
   "종료됨 (exit {code})": "Exited (exit {code})",
-  "↻ 다시 실행": "↻ Run again",
+  "↻ 셸 다시 열기": "↻ Reopen shell",
   "dev 서버도 종료됩니다": "The dev server stops too",
-  "셸에 마지막 서버 명령을 입력합니다 — 이미 서버가 돌고 있으면 누르지 마세요":
-    "Types the last server command into the shell — don't press it while the server is already running",
+  "셸에 마지막 서버 명령을 입력합니다": "Types the last server command into the shell",
 
   // ── TeamComposition (0.5 — 가짜 동작 제거) ──
   "자동 저장됨": "Saved automatically",
@@ -200,4 +199,19 @@ export const dict: Record<string, string> = {
   "임무 배정…": "Assign missions…",
   "팀 편성…": "Team composition…",
   "승인·거부는 터미널 페인에서": "Approve/deny in the terminal pane",
+
+  // 0.5.x QA eqmux-18 — 레이어 · 벨 · 패널 토글 · 서버 탭
+  "저장하지 않은 편집이 있어 팝업을 닫지 않았습니다 — 저장하거나 편집을 취소하세요":
+    "Didn't close — there are unsaved edits. Save or discard them first",
+  "응답이 필요한 {n}건은 남습니다": "{n} needing a response remain",
+  "확인 표시 지우기": "Clear seen marks",
+  "완료 보고·턴 완료·본 적 없는 종료 표시만 지웁니다 — 응답 대기·메시지 대기·보고 전은 남습니다":
+    "Clears only report/turn-done and unseen-exit marks — waiting, queued messages and pending reports stay",
+  "지금 봐야 할 세션": "Sessions to look at now",
+  "사이드 패널": "Side panel",
+  패널: "Panel",
+  "사이드 패널 토글 — 마지막 탭으로 엽니다 · Ctrl+Shift+B": "Toggle side panel — opens the last tab · Ctrl+Shift+B",
+  "이 셸의 서버가 포트를 열고 있습니다 — 멈춘 뒤 다시 실행할 수 있습니다":
+    "This shell's server has a port open — stop it before running again",
+  "돌고 있음 · 포트 {ports}": "Running · port {ports}",
 };

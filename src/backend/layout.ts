@@ -3,7 +3,7 @@
 // (FR-G-02 — 마지막 화면 복원은 설정 옵션으로 남겨둔 부분).
 // 동기화는 복원이 끝난 뒤에만 시작한다 — 부트스트랩 중 빈 상태로 저장본을 덮어쓰지 않기 위해.
 import { invoke } from "@tauri-apps/api/core";
-import { createEffect, createRoot } from "solid-js";
+import { createEffect, createRoot, createSignal } from "solid-js";
 import { backend } from "./mock";
 import { serverCommands, setServerCommands } from "./ports";
 import { isTauri } from "./pty";
@@ -75,6 +75,9 @@ function sanitizeRatio(layout: PaneLayout, raw: unknown): PaneRatio | undefined 
 }
 
 let restored = false;
+/** 이 실행 전에 저장된 layout.json이 있었나 — 읽기 전 undefined. 0.5 이전부터 쓰던 사람만 받는
+ *  변경 안내(사이드 패널 '탭이 묶였습니다')가 새 사용자에게 뜨지 않게 가른다 (U40) */
+export const [priorLayout, setPriorLayout] = createSignal<boolean | undefined>(undefined);
 
 /** 저장본 복원 — refreshWorkspaces가 워크스페이스를 하이드레이트한 뒤에 불린다.
  *  부트스트랩 1회만 실행한다 — 등록·해제가 부르는 재hydrate에서 또 돌면
@@ -87,6 +90,7 @@ export async function restoreLayout(): Promise<void> {
   if (data === undefined) return; // restored·loadOk를 세우지 않는다 (다음 호출에서 재시도)
   restored = true;
   loadOk = true;
+  setPriorLayout(!!data);
   if (!data) return;
   // 배치 복원 — 워크스페이스별 맵 우선 (U7), 구버전 단일 값은 모든 워크스페이스의 초기값으로
   if (data.paneLayoutsByWs && typeof data.paneLayoutsByWs === "object") {
