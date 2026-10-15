@@ -17,9 +17,10 @@ import {
 } from "../backend/browser";
 import { diagNote, reportBrowserRect } from "../backend/diag";
 import { holdFastPoll, portUrl, sessionPorts } from "../backend/ports";
-import { isTauri } from "../backend/pty";
+import { isTauri, openExternal } from "../backend/pty";
 import { browserRequest, panelSide, setBrowserRequest } from "../state";
 import { t } from "../i18n";
+import { Icon } from "./icons";
 
 const LOCAL_RE = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/i;
 
@@ -195,19 +196,56 @@ export function BrowserPanelTab() {
 
   return (
     <div class="browserp">
-      <div class="panel-head-row">
-        <span class="panel-title">{t("브라우저")}</span>
-        <span class="mono muted" style={{ "font-size": "10px" }}>
-          {t("세션 포트 · 웹 미리보기")}
-        </span>
+      {/* 이동 줄 (0.5 시안 w4W5l) — 뒤로 · 앞으로 · 새로고침 · 주소 · 외부로 */}
+      <div class="browserp-nav">
+        <button
+          class="browserp-sq"
+          title={t("뒤로")}
+          aria-label={t("뒤로")}
+          disabled={!showing() || !isTauri()}
+          onClick={() => void browserNav("back")}
+        >
+          <Icon name="arrow-left" size={12} />
+        </button>
+        <button
+          class="browserp-sq"
+          title={t("앞으로")}
+          aria-label={t("앞으로")}
+          disabled={!showing() || !isTauri()}
+          onClick={() => void browserNav("forward")}
+        >
+          <Icon name="arrow-right" size={12} />
+        </button>
+        <button class="browserp-sq" title={t("새로고침")} aria-label={t("새로고침")} disabled={!showing()} onClick={reload}>
+          <Icon name="rotate-cw" size={12} />
+        </button>
+      <div class="card inset browserp-url mono">
+        <input
+          style={{ flex: 1, "min-width": 0, background: "transparent", border: "none", color: "inherit" }}
+          placeholder={t("주소 입력 — Enter로 열기 (127.0.0.1:5173 · https://…)")}
+          value={addr()}
+          onInput={(e) => setAddr(e.currentTarget.value)}
+          onKeyDown={(e) => e.key === "Enter" && open(addr())}
+        />
+        <Show when={showing()}>
+          <button class="browserp-navbtn" title={t("브라우저 닫기")} aria-label={t("브라우저 닫기")} onClick={close}>
+            <Icon name="x" size={12} />
+          </button>
+        </Show>
+      </div>
+        <button class="btn" disabled={!addr().trim()} title={t("기본 브라우저로 엽니다")} onClick={() => openExternal(/^https?:\/\//i.test(addr().trim()) ? addr().trim() : `http://${addr().trim()}`)}>
+          <Icon name="external-link" size={12} />
+          {t("외부로")}
+        </button>
       </div>
 
+      {/* 도구 줄 — 세션 포트 칩. 누르면 이 패널에서 연다 */}
       <Show when={ports().length > 0}>
-        <div style={{ display: "flex", gap: "4px", "flex-wrap": "wrap" }}>
+        <div class="browserp-tools">
           <For each={ports()}>
             {(p) => (
               <button
-                class="badge blue"
+                class="badge blue mono"
                 style={{ cursor: "pointer" }}
                 title={`${p.process} · ${p.session} · ${p.host}`}
                 onClick={() => open(portUrl(p))}
@@ -218,34 +256,6 @@ export function BrowserPanelTab() {
           </For>
         </div>
       </Show>
-
-      <div class="card inset browserp-url mono">
-        <Show when={showing()}>
-          <Show when={isTauri()}>
-            <button class="browserp-navbtn" title={t("뒤로")} onClick={() => void browserNav("back")}>
-              ‹
-            </button>
-            <button class="browserp-navbtn" title={t("앞으로")} onClick={() => void browserNav("forward")}>
-              ›
-            </button>
-          </Show>
-          <button class="browserp-navbtn" title={t("새로고침")} onClick={reload}>
-            ⟳
-          </button>
-        </Show>
-        <input
-          style={{ flex: 1, "min-width": 0, background: "transparent", border: "none", color: "inherit" }}
-          placeholder={t("주소 입력 — Enter로 열기 (127.0.0.1:5173 · https://…)")}
-          value={addr()}
-          onInput={(e) => setAddr(e.currentTarget.value)}
-          onKeyDown={(e) => e.key === "Enter" && open(addr())}
-        />
-        <Show when={showing()}>
-          <button class="browserp-navbtn" title={t("브라우저 닫기")} onClick={close}>
-            ✕
-          </button>
-        </Show>
-      </div>
       <Show when={error()}>
         <div style={{ color: "var(--eq-red, #ef6b73)", "font-size": "11px" }}>{error()}</div>
       </Show>

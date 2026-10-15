@@ -1,4 +1,4 @@
-// 팀 캐스팅 (IvduM) — 직무 + 페르소나를 세션 슬롯(상한: 설정 maxSlots, 기본 4)에 배정.
+// 팀 캐스팅 (IvduM · 0.5 시안 cjWtF) — 직무 + 페르소나를 세션 슬롯(상한: 설정 maxSlots, 기본 4)에 배정.
 // 실행 권한을 배정 시점에 미리 보여준다.
 // 프리셋의 원본은 앱데이터 presets/*.json 실파일이다 (FR-E-26) — 직무 구성만 담고,
 // 페르소나는 라이브러리에서 자동 배정한다 (P1 직무/페르소나 분리).
@@ -13,9 +13,9 @@ import { t, tf } from "../i18n";
 import { jobMeta } from "../jobs";
 import type { JobBadgeColor } from "../jobs";
 import { setView, tick } from "../state";
-import { ContextMenu } from "../components/ui";
+import { ContextMenu, Identity } from "../components/ui";
 import type { MenuGroup } from "../components/ui";
-import { personaTagline, slotNo } from "../types";
+import { personaTagline, projectStem, slotNo } from "../types";
 import type { Permissions } from "../types";
 
 type Slot = { badge: string; badgeColor: JobBadgeColor; personaId: string; jobId: string };
@@ -27,6 +27,9 @@ const FALLBACK_PRESETS: CastingPreset[] = [
   { id: "product", name: "제품기획", jobs: ["lead", "plan", "design", "dev"] },
   { id: "quality", name: "품질", jobs: ["dev", "debug", "qa", "docs"] },
 ];
+
+/** 아바타 글자 — `[강사]실버울프`처럼 기호로 시작하는 이름은 첫 글자·숫자를 쓴다 */
+const initial = (name: string) => name.match(/[\p{L}\p{N}]/u)?.[0] ?? name.slice(0, 1);
 
 function permText(p: Permissions): string {
   const mark = (b: boolean) => (b ? "✓" : "—");
@@ -157,16 +160,64 @@ export function TeamCasting(props: { wsId: string }) {
     setSaved(true);
   };
 
+  // 남는 세션이면 지금 번호 그대로, 새 페르소나면 빈 슬롯 (0.5 시안 cjWtF 슬롯 머리 문구)
+  const slotNote = (i: number, personaId: string) => {
+    const n = plan()[i];
+    const kept = backend.listSessions().find((s) => s.workspaceId === props.wsId && s.personaId === personaId);
+    if (kept && n !== undefined && kept.slot === n) return tf("유지 · {n} 그대로", { n: slotNo(n) });
+    return t("새 슬롯");
+  };
+  // 캐스팅 밖 슬롯 — 기본 터미널이 차지했거나 비어 있다
+  const otherSlots = () => {
+    const used = new Set(plan().filter((n): n is number => n !== undefined));
+    const out: { n: number; text: string }[] = [];
+    for (let n = 1; n <= maxSlots(); n++) {
+      if (used.has(n)) continue;
+      const s = backend.listSessions().find((x) => x.workspaceId === props.wsId && x.slot === n && !x.personaId);
+      out.push({
+        n,
+        text: s
+          ? tf("기본 터미널 · {name}", { name: s.name ?? "" })
+          : tf("빈 슬롯 · 기본 터미널은 관제에서 만든다 (자동 이름 {name})", { name: `${projectStem(ws()?.name ?? "")}${slotNo(n)}` }),
+      });
+    }
+    return out;
+  };
+  const openMenu = (e: MouseEvent, set: (m: { x: number; y: number; slot: number }) => void, slot: number) => {
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    set({ x: r.left, y: r.bottom + 4, slot });
+  };
+
   return (
     <div class="screen">
       <div class="screen-head">
         <div>
-          <h1>{t("팀 캐스팅")} · {ws()?.name}</h1>
-          <div class="sub">
-            {tf("직무 + 페르소나를 최대 {n}개 세션 슬롯에 배정합니다", { n: maxSlots() })} · {t("프리셋 원본:")} <span class="mono">{t("앱데이터 presets/*.json")}</span>
+          <h1>
+            {t("팀 캐스팅")} · {ws()?.name}
+          </h1>
+          <div class="sub mono">
+            {tf("페르소나를 {n}개 슬롯에 배정한다 · 다시 적용해도 남은 세션의 슬롯 번호는 그대로, 새 페르소나만 빈 슬롯에 들어간다", {
+              n: maxSlots(),
+            })}
           </div>
         </div>
-        <div style={{ display: "flex", gap: "6px" }}>
+        <div class="cast-head-actions">
+          <button class="cast-save mono" classList={{ saved: saved() }} title={t(".eqmux/team.json과 team.md에 저장")} onClick={save}>
+            {t(saved() ? "저장됨 ✓ · .eqmux/team.json · team.md" : "편성 저장 · .eqmux/team.json · team.md")}
+          </button>
+          <button
+            class="btn primary"
+            onClick={() => {
+              apply();
+              setView({ kind: "composition", wsId: props.wsId });
+            }}
+          >
+            {t("편성 선택 →")}
+          </button>
+        </div>
+      </div>
+      <div class="screen-body cast-body">
+        <div class="cast-presets">
           <For each={presets()}>
             {(p) => (
               <button class="btn" classList={{ primary: preset() === p.id }} onClick={() => pickPreset(p)}>
@@ -175,87 +226,84 @@ export function TeamCasting(props: { wsId: string }) {
             )}
           </For>
         </div>
-      </div>
-      <div class="screen-body">
         <div class="cast-grid">
           <For each={slots()}>
-            {(slot, i) => (
-              <div class="card cast-slot">
-                <div class="cast-slot-head">
-                  {/* 적용될 실제 슬롯 번호 — 남는 세션은 지금 번호, 새 페르소나는 들어갈 빈 슬롯 (0.5) */}
-                  <span class="eyebrow">SLOT {plan()[i()] ? slotNo(plan()[i()]!) : "—"}</span>
-                  <span style={{ display: "inline-flex", "align-items": "center", gap: "6px" }}>
-                    <span class={`badge ${slot.badgeColor}`}>{slot.badge}</span>
+            {(slot, i) => {
+              const pp = () => persona(slot.personaId);
+              return (
+                <div class="cast-slot">
+                  <div class="cast-slot-head mono">
+                    {/* 적용될 실제 슬롯 번호 — 남는 세션은 지금 번호, 새 페르소나는 들어갈 빈 슬롯 (0.5) */}
+                    <span class="cast-slot-no">SLOT {plan()[i()] ? slotNo(plan()[i()]!) : "—"}</span>
+                    <span class="muted">{slotNote(i(), slot.personaId)}</span>
+                  </div>
+                  <span class={`cast-avatar ${pp()?.color ?? ""}`}>{initial(pp()?.name ?? "")}</span>
+                  <div>
+                    <Identity name={pp()?.name ?? slot.personaId} title={pp()?.title} job={slot.badge} />
+                    {/* 직함 (0.5) — 페르소나 직함. 슬롯 덮어쓰기는 세션 상세에서 */}
+                    <Show when={!pp()?.title}>
+                      <div class="cast-note">{t("직함 없음 — 역할 파일에 추가 토큰 0")}</div>
+                    </Show>
+                  </div>
+                  <div class="cast-field">
+                    <span class="cast-field-label">{t("직무 (이 슬롯만)")}</span>
+                    <button
+                      class="cast-select"
+                      title={t("이 슬롯의 직무를 바꿉니다 — 실행 권한이 따라 바뀝니다")}
+                      onClick={(e) => openMenu(e, setJobMenu, i())}
+                    >
+                      <span class={`badge ${slot.badgeColor}`}>{slot.badge}</span>
+                      <span>{job(slot.jobId)?.name ?? `${slot.jobId} ${t("(라이브러리에 없음)")}`} ▾</span>
+                    </button>
+                  </div>
+                  <div class="cast-note">{pp() ? personaTagline(pp()!) : ""}</div>
+                  <div class="cast-perm mono">
+                    <span class="muted">{t("권한")}</span>
+                    <span>
+                      {(() => {
+                        const j = job(slot.jobId);
+                        return j ? permText(j.permissions) : t("— 직무 파일 없음 · 권한 미정");
+                      })()}
+                    </span>
+                  </div>
+                  <div class="cast-slot-actions">
+                    <button class="btn" title={t("페르소나 목록에서 선택")} onClick={(e) => openMenu(e, setCastMenu, i())}>
+                      {t("페르소나 변경")}
+                    </button>
                     {/* 추가된 슬롯(프리셋 구성 밖)만 제거 가능 — 프리셋 슬롯은 프리셋 전환으로 되돌린다 */}
                     <Show when={i() >= presetLen()}>
-                      <button class="btn ghost" style={{ padding: "0 6px" }} title={t("이 슬롯 제거")} onClick={() => removeSlot(i())}>
-                        ✕
+                      <button class="btn ghost" title={t("이 슬롯 제거")} onClick={() => removeSlot(i())}>
+                        {t("제거…")}
                       </button>
                     </Show>
-                  </span>
-                </div>
-                <div class="cast-persona">
-                  <span class={`persona-dot ${persona(slot.personaId)?.color}`}>
-                    {persona(slot.personaId)?.name.slice(0, 1)}
-                  </span>
-                  <div>
-                    <div style={{ "font-weight": 800, "font-size": "15px" }}>{persona(slot.personaId)?.name}</div>
-                    {/* 직함 (0.5) — 페르소나 직함. 슬롯 덮어쓰기는 세션 상세에서 */}
-                    <div class="muted">
-                      <Show when={persona(slot.personaId)?.title}>
-                        <span style={{ color: "var(--eq-text)" }}>{persona(slot.personaId)!.title}</span> ·{" "}
-                      </Show>
-                      {job(slot.jobId)?.name ?? `${slot.jobId} ${t("(라이브러리에 없음)")}`}
-                    </div>
                   </div>
                 </div>
-                <div class="muted" style={{ "font-size": "11px" }}>
-                  {(() => {
-                    const pp = persona(slot.personaId);
-                    return pp ? personaTagline(pp) : "";
-                  })()}
-                </div>
-                <div class="card inset" style={{ padding: "6px 10px", "margin-top": "auto" }}>
-                  <div class="eyebrow">{t("실행 권한")}</div>
-                  <div class="mono" style={{ "font-size": "11px", "margin-top": "2px" }}>
-                    {(() => {
-                      const j = job(slot.jobId);
-                      return j ? permText(j.permissions) : t("— 직무 파일 없음 · 권한 미정");
-                    })()}
-                  </div>
-                </div>
-                <button
-                  class="btn ghost"
-                  style={{ "align-self": "start" }}
-                  title={t("페르소나 목록에서 선택")}
-                  onClick={(e) => {
-                    const r = e.currentTarget.getBoundingClientRect();
-                    setCastMenu({ x: r.left, y: r.bottom + 4, slot: i() });
-                  }}
-                >
-                  {t("캐스팅 변경 ▾")}
-                </button>
-                <button
-                  class="btn ghost"
-                  style={{ "align-self": "start" }}
-                  title={t("이 슬롯의 직무를 바꿉니다 — 실행 권한이 따라 바뀝니다")}
-                  onClick={(e) => {
-                    const r = e.currentTarget.getBoundingClientRect();
-                    setJobMenu({ x: r.left, y: r.bottom + 4, slot: i() });
-                  }}
-                >
-                  {t("직무 변경 ▾")}
-                </button>
-              </div>
-            )}
+              );
+            }}
           </For>
           {/* 슬롯 추가 — 상한(설정 maxSlots)까지. 남은 페르소나가 없으면 나오지 않는다 */}
           <Show when={slots().length < maxSlots() && backend.listPersonas().length > slots().length}>
-            <button class="card cast-slot cast-slot-add mono" title={t("빈 슬롯 추가 — 직무·페르소나는 추가 후 변경")} onClick={addSlot}>
-              {t("+ 슬롯 추가")} ({slots().length}/{maxSlots()})
+            <button class="cast-slot cast-slot-add" title={t("빈 슬롯 추가 — 직무·페르소나는 추가 후 변경")} onClick={addSlot}>
+              <span class="cast-add-plus">+</span>
+              <span class="cast-add-label">{t("페르소나 배정")}</span>
+              <span class="cast-note mono">
+                {slots().length}/{maxSlots()}
+              </span>
             </button>
           </Show>
         </div>
+        <Show when={otherSlots().length > 0}>
+          <div class="cast-more">
+            <For each={otherSlots()}>
+              {(o) => (
+                <div class="cast-mini">
+                  <span class="mono cast-mini-no">SLOT {slotNo(o.n)}</span>
+                  <span>{o.text}</span>
+                </div>
+              )}
+            </For>
+          </div>
+        </Show>
         {/* 페르소나 선택 팝오버 (U3) */}
         <Show when={castMenu()}>
           {(m) => (
@@ -281,27 +329,11 @@ export function TeamCasting(props: { wsId: string }) {
           )}
         </Show>
 
-        <div class="cast-footer card">
-          <div>
-            <div style={{ "font-weight": 700, "font-size": "12px" }}>{t(".eqmux/team.json과 team.md에 저장")}</div>
-            <div class="muted" style={{ "font-size": "11px" }}>
-              {t("roles/는 합성 후 gitignore · 사용자의 CLAUDE.md는 수정하지 않음")}
-            </div>
-          </div>
-          <div style={{ display: "flex", gap: "8px" }}>
-            <button class="btn" onClick={save}>
-              {t(saved() ? "저장됨 ✓" : "편성 저장")}
-            </button>
-            <button
-              class="btn primary"
-              onClick={() => {
-                apply();
-                setView({ kind: "composition", wsId: props.wsId });
-              }}
-            >
-              {t("편성 선택 →")}
-            </button>
-          </div>
+        <div class="cast-info">
+          <span class="launch-info">ⓘ</span>
+          <span>
+            {t("편성은 저장하거나 편성 선택으로 넘어갈 때 .eqmux/team.json과 team.md에 적힌다. 직함 칸은 슬롯 덮어쓰기이고 비우면 페르소나 직함을 쓴다. roles/는 합성 후 gitignore · 사용자의 CLAUDE.md는 수정하지 않음.")}
+          </span>
         </div>
       </div>
     </div>

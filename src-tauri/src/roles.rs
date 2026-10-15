@@ -101,12 +101,17 @@ fn now_stamp() -> String {
     chrono::Local::now().format("%Y-%m-%d %H:%M").to_string()
 }
 
+/// 역할 파일은 UTF-8 BOM으로 시작한다 (0.5) — Windows PowerShell 5.1의 `Get-Content`는 BOM 없는 UTF-8을
+/// ANSI(cp949)로 읽어 한글이 깨진다. Codex가 역할 파일을 그렇게 읽었다. roles/는 gitignore라 BOM이 diff에
+/// 섞이지 않는다. 읽는 쪽(split_frontmatter · cli.rs role_context)은 BOM을 걷고 파싱한다.
+pub const BOM: char = '\u{feff}';
+
 fn atomic_write(path: &Path, content: &str) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
     let tmp = path.with_extension("md.tmp");
-    fs::write(&tmp, content).map_err(|e| e.to_string())?;
+    fs::write(&tmp, format!("{BOM}{}", content.trim_start_matches(BOM))).map_err(|e| e.to_string())?;
     fs::rename(&tmp, path).map_err(|e| e.to_string())
 }
 
@@ -136,7 +141,7 @@ pub fn ensure_gitignore(ws_path: &str) -> Result<(), String> {
 
 /// 파일 → (frontmatter 줄들, 본문). frontmatter가 없으면 전부 본문 (FR-E-72 부분 파싱).
 pub(crate) fn split_frontmatter(text: &str) -> (Vec<String>, String) {
-    let normalized = text.replace("\r\n", "\n");
+    let normalized = text.trim_start_matches(BOM).replace("\r\n", "\n"); // BOM 파일도 `---`로 시작한다
     if let Some(rest) = normalized.strip_prefix("---\n") {
         if let Some(end) = rest.find("\n---\n") {
             let fm = rest[..end].lines().map(str::to_string).collect();
@@ -446,7 +451,27 @@ mod tests {
     }
 
     fn read_without_stamp(path: &str) -> String {
-        fs::read_to_string(path).unwrap().lines().filter(|l| !l.starts_with("updated:")).map(|l| format!("{l}\n")).collect()
+        let text = fs::read_to_string(path).unwrap();
+        assert!(text.starts_with(BOM), "역할 파일은 UTF-8 BOM으로 시작한다");
+        text.trim_start_matches(BOM).lines().filter(|l| !l.starts_with("updated:")).map(|l| format!("{l}\n")).collect()
+    }
+
+    /// BOM 왕복 — 쓴 파일은 BOM으로 시작하고, frontmatter·임무 배정 스캔은 BOM을 넘어 그대로 읽힌다
+    #[test]
+    fn bom_role_file_round_trips() {
+        let dir = std::env::temp_dir().join(format!("eqmux-roles-bom-{}", crate::workspace::now_ms()));
+        let ws = dir.to_string_lossy().into_owned();
+        let path = save(&ws, &titled_payload()).unwrap();
+        let raw = fs::read(&path).unwrap();
+        assert_eq!(&raw[..3], b"\xEF\xBB\xBF"); // PowerShell 5.1이 UTF-8로 알아본다
+        let (fm, body) = split_frontmatter(&fs::read_to_string(&path).unwrap());
+        assert_eq!(fm_value(&fm, "session").as_deref(), Some("kai@ws1"));
+        assert!(body.starts_with("\n# 카이 — 개발"));
+        let m = MissionBlock { id: "m1".into(), name: "임무".into(), status: "todo".into(), goal: String::new(), outputs: vec![], branch: None };
+        set_mission(&ws, "kai@ws1", Some(&m)).unwrap();
+        assert_eq!(scan_assignments(&ws), vec![("kai@ws1".to_string(), "m1".to_string())]);
+        assert!(fs::read_to_string(&path).unwrap().starts_with(BOM) && !fs::read_to_string(&path).unwrap()[3..].contains(BOM)); // 다시 써도 하나
+        fs::remove_dir_all(&dir).ok();
     }
 
     /// 직함 없음 — 0.4.2 합성과 한 글자도 다르지 않다 (0.5에 더해진 것은 모든 파일 공통의 팀 통신 섹션뿐)

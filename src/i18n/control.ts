@@ -183,6 +183,11 @@ export const dict: Record<string, string> = {
   "트랜스크립트를 인식할 수 없어 스크롤백으로 표시합니다":
     "Transcript not recognized — showing scrollback instead",
   "트랜스크립트 없음 (목)": "No transcript (mock)",
+  // 0.5 시안 Yd4E5 (W1)
+  "사람 → {name}": "Human → {name}",
+  "턴 검색…": "Search turns…",
+  "턴 개요": "Turn outline",
+  "1급 소스 · JSONL": "Primary source · JSONL",
   "{name}의 PTY로 입력 전달 (V3)": "Send input to {name}'s PTY (V3)",
   전송: "Send",
 
@@ -226,4 +231,39 @@ export const dict: Record<string, string> = {
   "에이전트 없음 — PATH에 {cmd}가 없어 기동할 수 없습니다": "No agent — can't start because {cmd} isn't on PATH",
   "에이전트 없음": "No agent",
   "직무 권한을 찾을 수 없습니다 — 역할을 다시 지정하세요": "Job permissions not found — reassign the role",
+
+  // ── 0.5 W3 · 시안 적용 — 관제·확인창·세션 만들기 ──
+  "{no} {name} 세션을 중지할까요?": "Stop session {no} {name}?",
+  "실행 중인 {engine} 프로세스가 즉시 종료됩니다. 대화 기록과 슬롯은 남고, 이 세션은 재개할 수 있습니다.": "The running {engine} process ends immediately. The conversation and slot stay, and this session can be resumed.",
+  "실행 중인 {engine} 프로세스가 즉시 종료됩니다. 대화 기록과 슬롯은 남지만, 이 세션은 재개할 수 없습니다.": "The running {engine} process ends immediately. The conversation and slot stay, but this session can't be resumed.",
+  "{no} {name} 역할 세션을 제거할까요?": "Remove role session {no} {name}?",
+  "{no} {name} 기본 터미널을 제거할까요?": "Remove default terminal {no} {name}?",
+  "셸 프로세스를 끝내고 이 슬롯({no})을 비웁니다. 되돌릴 수 없습니다. 스크롤백은 30일 보존 규칙대로 남습니다.": "Ends the shell process and frees slot {no}. This can't be undone. Scrollback is kept under the 30-day retention rule.",
+  "승인 대기 중": "waiting for approval",
+  "열린 handoff": "Open handoff",
+  "있음 — 중지해도 원장에 남는다": "yes — it stays in the ledger after stopping",
+  "종료됨": "Exited",
+  "메시지 {n}": "{n} msgs",
+  "✓ 보고 전": "✓ No report",
+  "슬롯 비우기…": "Clear slot…",
+  "중지…": "Stop…",
+  "빈 슬롯": "Empty slot",
+  "슬롯 {no}에 세션 만들기": "New session in slot {no}",
+  "세션 종류": "Session type",
+  "비워 두면 {name}": "Empty = {name}",
+  "24자 이내 · 공백·@·줄바꿈 불가 · 만들 때 한 번 정해져 폴더 이름이 바뀌어도 그대로": "Up to 24 characters · no spaces, @ or line breaks · set once at creation, kept even if the folder is renamed",
+  "{name}에 쌓인 메시지 {n}건": "{n} messages queued for {name}",
+  "승인 창이 떠 있으면 먼저 답하세요. 넣기는 본문과 Enter를 그대로 보냅니다.": "If an approval prompt is open, answer it first. Insert types the text and Enter as-is.",
+  "{n}건 넣기": "Insert {n}",
+  "{name}에게 보고 요청": "Ask {name} for a report",
+  "이 메시지가 그 세션에 들어갑니다. 앱이 스스로 보내지 않습니다.": "This message goes into that session. The app never sends it on its own.",
+
+  // ── 0.5 W3 · 시안 적용 — 대시보드 ──
+  "열린 워크스페이스 {m} · 주의 정렬: waiting › dead › 확인 필요 › busy › idle": "Open workspaces {m} · attention order: waiting › dead › needs check › busy › idle",
+  "{n} 세션": "{n} sessions",
+  "전체 세션": "All sessions",
+  "행동 필요": "Needs action",
+  "확인 필요": "Needs check",
+  "행동": "Action",
+  "기다리는 에이전트 · 모든 워크스페이스": "Waiting agents · all workspaces",
 };

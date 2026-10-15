@@ -24,7 +24,6 @@ import {
   effectiveTitle,
   SESSION_NAME_MAX,
   TITLE_MAX,
-  sessionDisplayName,
   sessionName,
   translatePermissions,
 } from "../types";
@@ -243,10 +242,9 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
     <div class="detail">
       {/* 드로어 상단 고정 (U1) — 스크롤해도 누구의 상세인지 남는다 */}
       <div class="detail-top">
-      <Eyebrow>SELECTED SESSION</Eyebrow>
-      <div class="detail-head">
-        <div>
-          <div style={{ "font-size": "15px" }}>
+      <div class="detail-head sd-head">
+        <div style={{ "min-width": 0 }}>
+          <div class="sd-id" title={job()?.name ?? t("셸")}>
             <Identity
               slot={s().slot}
               name={sessionName(s(), persona())}
@@ -254,18 +252,18 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
               title={effectiveTitle(s(), persona())}
               cli={s().personaId ? cliOf(s()) : undefined}
             />
-            <span class="muted"> · {job()?.name ?? t("셸")}</span>
           </div>
           {/* BR-07 — 엔진 이름은 슬롯 엔진에서, 미기동 판정은 세션 상태로. 버전은 있을 때만 */}
-          <div class="mono muted" style={{ "font-size": "11px" }}>
-            <Show when={agentAttached(s())} fallback={t("에이전트 미기동")}>
+          <div class="mono muted sd-agent">
+            <Show when={agentAttached(s())} fallback={`${t("에이전트 미기동")} · ${s().id}`}>
               {s().personaId ? AGENT_CLI_LABEL[cliOf(s())] : (s().agent ?? t("에이전트"))}
-              <Show when={s().agentVersion}> {s().agentVersion}</Show>
-              <Show when={s().agentSessionId}> · session {s().agentSessionId}…</Show>
+              <Show when={s().agentVersion}> {s().agentVersion}</Show> · {t("기동됨")} · {s().id}
             </Show>
           </div>
         </div>
-        <StatusLabel session={s()} />
+        <span class="eq-chip info sd-state">
+          <StatusLabel session={s()} />
+        </span>
       </div>
       </div>
 
@@ -345,21 +343,30 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
         <div class="acc-body">
 
       {/* 세션 이름 분리 (P5 · FR-E-36) — 같은 페르소나를 여러 워크스페이스에 캐스팅할 때 구분한다 */}
-      <div class="card inset" style={{ padding: "6px 10px", "margin-top": "10px", display: "flex", gap: "6px", "align-items": "center" }}>
-        <span class="eyebrow" style={{ "white-space": "nowrap" }}>{t("세션 이름")}</span>
+      <div class="sd-label">{t("세션 이름")}</div>
+      <div class="sd-row">
         <input
-          style={{ flex: 1, "min-width": 0, "font-size": "11px" }}
           placeholder={persona()?.name ?? backend.autoSessionName(s().workspaceId, s().slot, s().id)}
           value={nameDraft()}
           maxLength={SESSION_NAME_MAX}
           onInput={(e) => setNameDraft(e.currentTarget.value.replace(/[\r\n]/g, ""))}
           onKeyDown={(e) => e.key === "Enter" && applyName()}
         />
-        <button class="btn ghost" style={{ padding: "2px 8px", "font-size": "10px" }} disabled={!!nameErr()} onClick={applyName}>
+        <button class="btn" disabled={!!nameErr()} onClick={applyName}>
           {t("적용")}
         </button>
       </div>
-      <FieldHint error={nameErr() && t(nameErr()!)} count={nameDraft().length} max={SESSION_NAME_MAX} />
+      <FieldHint
+        error={nameErr() && t(nameErr()!)}
+        hint={tf(
+          persona()
+            ? "비우면 페르소나 이름({name})으로 돌아간다 · 공백·@·줄바꿈 불가 · claude --name과 @멘션에 쓴다"
+            : "비우면 자동 이름({name})으로 돌아간다 · 공백·@·줄바꿈 불가 · @멘션에 쓴다",
+          { name: persona()?.name ?? backend.autoSessionName(s().workspaceId, s().slot, s().id) },
+        )}
+        count={nameDraft().length}
+        max={SESSION_NAME_MAX}
+      />
       {/* 중복이면 쓸 수 있는 이름 하나를 제안한다 — 만들기 다이얼로그와 같은 규칙 */}
       <Show when={nameErr() === "이 워크스페이스에서 이미 쓰는 이름입니다"}>
         <button
@@ -373,26 +380,27 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
 
       {/* 직함 덮어쓰기 (0.5) — 이 워크스페이스에서만. 자리표시자가 물려받는 값을 보인다 */}
       <Show when={s().personaId}>
-        <div class="card inset" style={{ padding: "6px 10px", "margin-top": "8px", display: "flex", gap: "6px", "align-items": "center" }}>
-          <span class="eyebrow" style={{ "white-space": "nowrap" }}>{t("직함")}</span>
+        <div class="sd-label">{t("직함 (이 워크스페이스만)")}</div>
+        <div class="sd-row">
           <input
-            style={{ flex: 1, "min-width": 0, "font-size": "11px" }}
             placeholder={persona()?.title ? tf("페르소나 직함: {title}", { title: persona()!.title! }) : t("직함 없음")}
             value={titleDraft()}
             maxLength={TITLE_MAX}
             onInput={(e) => setTitleDraft(cleanTitle(e.currentTarget.value))}
             onKeyDown={(e) => e.key === "Enter" && applyTitle(titleDraft())}
           />
-          <button class="btn ghost" style={{ padding: "2px 8px", "font-size": "10px" }} onClick={() => applyTitle(titleDraft())}>
+          <button class="btn" onClick={() => applyTitle(titleDraft())}>
             {t("적용")}
           </button>
-          <Show when={s().title}>
-            <button class="btn ghost" style={{ padding: "2px 8px", "font-size": "10px" }} onClick={() => applyTitle("")}>
-              {t("페르소나 직함으로")}
-            </button>
-          </Show>
+          <button class="btn" disabled={!s().title} onClick={() => applyTitle("")}>
+            {t("페르소나 직함으로")}
+          </button>
         </div>
-        <FieldHint count={titleDraft().length} max={TITLE_MAX} />
+        <FieldHint
+          hint={t("비어 있으면 페르소나 직함을 물려받는다 · 덮어쓰면 team.json 슬롯 title에만 남는다")}
+          count={titleDraft().length}
+          max={TITLE_MAX}
+        />
       </Show>
 
       <div style={{ "margin-top": "10px" }}>
@@ -463,13 +471,13 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
           when={agentAttached(s())}
           fallback={
             <div class="card restart-card">
-              <span class="mono muted">{t("권한 변경 감지 · 다음 기동 때 적용됩니다")}</span>
+              <span class="mono muted">{t("권한·엔진 변경 감지 · 다음 기동 때 적용됩니다")}</span>
             </div>
           }
         >
           <div class="card restart-card">
             <span class="mono st-waiting" style={{ "font-weight": 700 }}>
-              {t("권한 변경 감지 · 재시작 필요")}
+              {t("권한·엔진 변경 감지 · 재시작 필요")}
             </span>
             <button
               class="btn"
@@ -499,7 +507,7 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
                   setPendJob(personaJob(e.currentTarget.value));
                 }}
               >
-                <For each={availablePersonas()}>{(p) => <option value={p.id}>{p.name}</option>}</For>
+                <For each={availablePersonas()}>{(p) => <option value={p.id} selected={p.id === pendPersona()}>{p.name}</option>}</For>
               </select>
               <span
                 class="mono muted"
@@ -522,10 +530,10 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
           <Eyebrow>{t("역할 변경")}</Eyebrow>
           <div class="role-edit-row">
             <select value={pendPersona()} onChange={(e) => setPendPersona(e.currentTarget.value)}>
-              <For each={availablePersonas()}>{(p) => <option value={p.id}>{p.name}</option>}</For>
+              <For each={availablePersonas()}>{(p) => <option value={p.id} selected={p.id === pendPersona()}>{p.name}</option>}</For>
             </select>
             <select value={pendJob()} onChange={(e) => setPendJob(e.currentTarget.value)}>
-              <For each={backend.listJobs()}>{(j) => <option value={j.id}>{j.name}</option>}</For>
+              <For each={backend.listJobs()}>{(j) => <option value={j.id} selected={j.id === pendJob()}>{j.name}</option>}</For>
             </select>
             <button class="btn primary" disabled={!roleChanged()} onClick={applyRole}>
               {t("적용")}
@@ -536,7 +544,13 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
             <div class="role-edit-row" style={{ "margin-top": "6px" }}>
               <span class="mono muted" style={{ "font-size": "11px" }}>{t("엔진")}</span>
               <select value={cliOf(s())} onChange={(e) => backend.setSessionCli(s().id, e.currentTarget.value as AgentCliId)}>
-                <For each={["claude", "codex"] as AgentCliId[]}>{(c) => <option value={c}>{AGENT_CLI_LABEL[c]}</option>}</For>
+                <For each={["claude", "codex"] as AgentCliId[]}>
+                  {(c) => (
+                    <option value={c} selected={c === cliOf(s())}>
+                      {AGENT_CLI_LABEL[c]}
+                    </option>
+                  )}
+                </For>
               </select>
             </div>
           </Show>
@@ -635,7 +649,7 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
               void startFresh(s(), size.cols, size.rows).then((err) => setActionErr(err ? t(err) : undefined));
             }}
           >
-            {t("새로 시작 (요약 이월)")}
+            {t("새로 시작")}
           </button>
         </Show>
         <button
@@ -643,13 +657,14 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
           disabled={s().status === "dead"}
           onClick={() => setStopOpen(true)}
         >
-          {t("중지")}
+          {t("중지…")}
         </button>
       </div>
       <Show when={stopOpen()}>
         <StopConfirm
-          name={sessionDisplayName(s(), persona()?.name ?? t("기본 터미널"))}
-          resumable={s().resumable}
+          session={s()}
+          name={sessionName(s(), persona())}
+          openHandoff={backend.openHandoff(s().id)}
           onConfirm={() => {
             // 실제 PTY 종료 (FR-G-52) — 의도한 종료라 OS 알림은 나지 않는다 (Rust expected_exit)
             if (isTauri()) killPty(s().id);

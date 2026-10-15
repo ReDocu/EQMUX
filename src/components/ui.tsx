@@ -187,6 +187,8 @@ export function notify(msg: string): void {
 export function ConfirmDialog(props: {
   title: string;
   body: JSX.Element;
+  /** 정보 상자 — 대상의 id·상태처럼 확인에 필요한 사실 몇 줄 (시안 Confirm Info) */
+  info?: string[];
   danger?: boolean;
   confirmLabel: string;
   cancelLabel?: string;
@@ -219,6 +221,11 @@ export function ConfirmDialog(props: {
       >
         <div class="eq-confirm-t">{props.title}</div>
         <div class="eq-confirm-b">{props.body}</div>
+        <Show when={props.info?.length}>
+          <div class="eq-confirm-info mono">
+            <For each={props.info}>{(l) => <div>{l}</div>}</For>
+          </div>
+        </Show>
         <div class="eq-confirm-f">
           <button ref={cancelBtn} class="btn" onClick={() => props.onCancel()}>
             {props.cancelLabel ?? t("취소")}
@@ -279,6 +286,7 @@ export type ChipTone = "amber" | "red" | "blue" | "info";
 export function Chip(props: {
   tone?: ChipTone;
   text: string;
+  short?: string; // 좁은 페인(8슬롯)에서 대신 보일 짧은 글자 — 시안 T1sVdJ
   title?: string;
   action?: { label: string; onClick: () => void; title?: string; disabled?: boolean };
   onClick?: () => void; // 칩 글자 자체가 동작일 때 (+N 펼치기 등)
@@ -286,9 +294,9 @@ export function Chip(props: {
   const tone = () => props.tone ?? "info";
   return (
     <span class={`eq-chip ${tone()}`} title={props.title}>
-      <Show when={props.onClick} fallback={<span class="eq-chip-tx">{props.text}</span>}>
+      <Show when={props.onClick} fallback={<span class="eq-chip-tx">{chipText(props)}</span>}>
         <button class="eq-chip-tx" onClick={(e) => (e.stopPropagation(), props.onClick!())}>
-          {props.text}
+          {chipText(props)}
         </button>
       </Show>
       <Show when={props.action}>
@@ -307,6 +315,15 @@ export function Chip(props: {
   );
 }
 
+const chipText = (p: { text: string; short?: string }) => (
+  <>
+    <span class="eq-chip-full">{p.text}</span>
+    <Show when={p.short}>
+      <span class="eq-chip-short">{p.short}</span>
+    </Show>
+  </>
+);
+
 /** 정체성 — `번호 이름 · 직함 엔진`. 좁으면(compact) 직함을 접고 툴팁에 남긴다.
  *  persona는 세션 이름과 다를 때만 괄호로 붙인다 */
 export function Identity(props: {
@@ -315,6 +332,7 @@ export function Identity(props: {
   persona?: string;
   title?: string;
   cli?: AgentCliId;
+  job?: string; // 직무 배지 글자 (LEAD · DEV …) — 있을 때만
   compact?: boolean;
 }) {
   const showPersona = () => !!props.persona && props.persona !== props.name;
@@ -333,17 +351,21 @@ export function Identity(props: {
       <Show when={props.slot !== undefined}>
         <span class="eq-id-no mono">{slotNo(props.slot!)}</span>
       </Show>
-      <span class="eq-id-nm">{props.name}</span>
-      <Show when={showPersona()}>
-        <span class="eq-id-pe">({props.persona})</span>
-      </Show>
+      <span class="eq-id-nm">
+        {props.name}
+        <Show when={showPersona()}> ({props.persona})</Show>
+      </span>
       <Show when={props.title}>
         <span class="eq-id-ti">· {props.title}</span>
       </Show>
-      <Show when={props.cli === "codex"}>
-        <span class="eq-id-cli mono" aria-label={AGENT_CLI_LABEL.codex}>
-          ◇
+      {/* 엔진 — Claude ✦ · Codex >_ (시안 sparkles · terminal 아이콘) */}
+      <Show when={props.cli}>
+        <span class="eq-id-cli mono" aria-label={AGENT_CLI_LABEL[props.cli!]}>
+          {props.cli === "codex" ? ">_" : "✦"}
         </span>
+      </Show>
+      <Show when={props.job}>
+        <span class="eq-id-job mono">{props.job}</span>
       </Show>
     </span>
   );
@@ -364,15 +386,30 @@ export function FieldHint(props: { error?: string; hint?: string; count?: number
 }
 
 /** 세션 중지 확인 (BR-08) — 대시보드·페인 메뉴·세션 상세가 같은 문구를 쓴다 */
-export function StopConfirm(props: { name: string; resumable: boolean; onConfirm: () => void; onCancel: () => void }) {
+export function StopConfirm(props: {
+  session: Session;
+  name: string;
+  openHandoff?: boolean; // 열린 handoff·ask가 있으면 정보 상자에 한 줄
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  // 시안 TzzVT — 제목은 "번호 이름 세션을 중지할까요?", 본문은 무엇이 끝나고 무엇이 남는지, 정보 상자는 사실
+  const s = () => props.session;
+  const engine = () => (s().personaId ? AGENT_CLI_LABEL[s().cli ?? "claude"] : (s().agent ?? t("셸")));
   return (
     <ConfirmDialog
-      title={tf("{name} 중지", { name: props.name })}
-      body={t(
-        props.resumable
-          ? "이 세션의 프로세스를 끝냅니다. 하던 턴은 멈추고, 대화는 나중에 재개로 이어 갈 수 있습니다."
-          : "이 세션의 프로세스를 끝냅니다. 하던 턴은 멈추고, 이 세션은 재개할 수 없어 되돌릴 수 없습니다.",
+      title={tf("{no} {name} 세션을 중지할까요?", { no: slotNo(s().slot), name: props.name })}
+      body={tf(
+        s().resumable
+          ? "실행 중인 {engine} 프로세스가 즉시 종료됩니다. 대화 기록과 슬롯은 남고, 이 세션은 재개할 수 있습니다."
+          : "실행 중인 {engine} 프로세스가 즉시 종료됩니다. 대화 기록과 슬롯은 남지만, 이 세션은 재개할 수 없습니다.",
+        { engine: engine() },
       )}
+      info={[
+        `${t("세션")}  ${s().id} · ${t("슬롯")} ${slotNo(s().slot)}`,
+        `${t("상태")}  ${s().status}${s().status === "waiting" && s().waitingFor ? ` · ${t("승인 대기 중")} (${t(s().waitingFor!)})` : ""}`,
+        ...(props.openHandoff ? [`${t("열린 handoff")}  ${t("있음 — 중지해도 원장에 남는다")}`] : []),
+      ]}
       danger
       confirmLabel={t("중지")}
       onConfirm={props.onConfirm}

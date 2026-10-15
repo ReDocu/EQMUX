@@ -14,19 +14,24 @@ import {
   portAddress,
   portsLive,
   portUrl,
+  refreshPorts,
   sessionPorts,
   systemPorts,
 } from "../backend/ports";
 import type { PortEntry } from "../backend/ports";
-import { clipWriteText, isTauri } from "../backend/pty";
-import { openInBrowserPanel } from "../state";
+import { clipWriteText, isTauri, openExternal } from "../backend/pty";
+import { openInBrowserPanel, setPanelNote } from "../state";
+import { Icon } from "./icons";
+import { ContextMenu } from "./ui";
 import { t, tf } from "../i18n";
+import { sessionName, slotNo } from "../types";
 
 interface Row {
   key: string;
   port: number;
   host: string; // 대표 바인딩 — 열기·복사에 쓰는 쪽
   proc: string;
+  pid?: number;
   session?: string; // 세션 이름 (귀속 시)
   badge: "LISTENING" | "DEBUG";
   isNew: boolean;
@@ -62,8 +67,9 @@ export function PortsPanelTab() {
   const personaName = (sessionId: string) => {
     if (isServerTermId(sessionId)) return t("서버");
     const s = backend.listSessions().find((x) => x.id === sessionId);
-    const p = s && backend.listPersonas().find((x) => x.id === s.personaId);
-    return p?.name ?? sessionId.split("@")[0];
+    if (!s) return sessionId.split("@")[0];
+    // 시안 qFwsr — `01 EQMUX01`처럼 번호와 세션 이름
+    return `${slotNo(s.slot)} ${sessionName(s, backend.listPersonas().find((x) => x.id === s.personaId))}`;
   };
 
   const toRow = (e: PortEntry): Row => ({
@@ -71,6 +77,7 @@ export function PortsPanelTab() {
     port: e.port,
     host: e.host,
     proc: e.process,
+    pid: e.pid,
     session: e.session ? personaName(e.session) : undefined,
     badge: e.port === 9229 ? "DEBUG" : "LISTENING",
     isNew: isNewPort(e),
@@ -122,13 +129,29 @@ export function PortsPanelTab() {
 
   const copyAddr = (p: Row) => void clipWriteText(portAddress(p));
 
+  // 세그먼트 줄 오른쪽 요약 (0.5 시안 qFwsr) — `실측 3 · 새 1`
+  createEffect(() => {
+    const live = isTauri() && portsLive();
+    setPanelNote(
+      tf(live ? "실측 {n} · 새 {m}" : "목 {n} · 새 {m}", {
+        n: rows().session.length,
+        m: rows().session.filter((p) => p.isNew).length,
+      }),
+    );
+  });
+  onCleanup(() => setPanelNote(""));
+
+  // 행 우클릭 메뉴 — 시안 kM4KC. 프로세스 종료는 두지 않는다(관측 전용)
+  const [rowMenu, setRowMenu] = createSignal<{ x: number; y: number; p: Row } | undefined>(undefined);
+
   return (
     <div class="portsp">
-      <div class="panel-head-row">
-        <span class="panel-title">{t("포트")}</span>
-        <span class="mono muted" style={{ "font-size": "10px" }}>
-          {summary().session + summary().system} OPEN {t(isTauri() && portsLive() ? "· 실측" : "· 목")}
-        </span>
+      <div class="portsp-head">
+        <span class="portsp-title">{t("열린 포트 · 이 워크스페이스의 프로세스")}</span>
+        <button class="btn" disabled={!isTauri()} onClick={refreshPorts}>
+          <Icon name="refresh-cw" size={12} />
+          {t("다시 실측")}
+        </button>
       </div>
 
       <input
@@ -138,47 +161,81 @@ export function PortsPanelTab() {
         onInput={(e) => setQuery(e.currentTarget.value)}
       />
 
-      <div class="portsp-section-head">
-        <span class="eyebrow">SESSION PORTS</span>
-        <span class="mono muted" style={{ "font-size": "10px" }}>
-          {filtered().length} OPEN · 5s POLL
-        </span>
-      </div>
-      <For each={filtered()}>
-        {(p) => (
-          <div class="card inset portsp-row" classList={{ fresh: p.isNew }}>
-            <span class="portsp-dot" classList={{ debug: p.badge === "DEBUG" }} />
-            <div class="portsp-copy">
-              <div class="portsp-top">
-                <span class="mono" style={{ "font-weight": 700 }}>
-                  :{p.port}
-                </span>
-                <Show when={p.isNew}>
-                  <span class="badge blue">NEW</span>
-                </Show>
-                <span class="badge" classList={{ green: p.badge === "LISTENING", amber: p.badge === "DEBUG" }}>
-                  {p.badge}
-                </span>
-              </div>
-              <div class="mono muted" style={{ "font-size": "10px" }}>
-                {p.proc} · {p.session} · {p.host}
-              </div>
-            </div>
-            <div class="portsp-actions">
-              <button class="portsp-act" title={t("브라우저 패널에서 열기")} onClick={() => openInBrowserPanel(p.url)}>
-                ↗
-              </button>
-              <button class="portsp-act" title={t("주소 복사")} onClick={() => copyAddr(p)}>
-                ⧉
-              </button>
+      <Show
+        when={filtered().length > 0}
+        fallback={
+          <div class="portsp-empty">
+            <div class="portsp-empty-title">
+              {t(isTauri() && !portsLive() ? "포트를 처음 읽는 중…" : "세션이 연 LISTENING 포트가 없습니다")}
             </div>
           </div>
-        )}
-      </For>
-      <Show when={filtered().length === 0}>
-        <div class="muted" style={{ padding: "8px", "font-size": "11px" }}>
-          {t(isTauri() && !portsLive() ? "포트를 처음 읽는 중…" : "세션이 연 LISTENING 포트가 없습니다")}
+        }
+      >
+        <div class="portsp-list">
+          <For each={filtered()}>
+            {(p) => (
+              <div
+                class="portsp-row"
+                classList={{ fresh: p.isNew }}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setRowMenu({ x: e.clientX, y: e.clientY, p });
+                }}
+              >
+                <span class="portsp-port mono">{p.port}</span>
+                <div class="portsp-copy">
+                  <div class="portsp-who">
+                    {p.session ? `${p.session} · ${p.proc}` : p.proc}
+                  </div>
+                  <div class="portsp-pid mono">
+                    {p.pid !== undefined ? `PID ${p.pid} · ${p.host}` : p.host}
+                  </div>
+                </div>
+                <div class="portsp-actions">
+                  <Show when={p.isNew}>
+                    <span class="badge blue mono">NEW</span>
+                  </Show>
+                  <Show when={p.badge === "DEBUG"}>
+                    <span class="badge amber mono">DEBUG</span>
+                  </Show>
+                  <button
+                    class="portsp-act"
+                    title={t("브라우저로 열기")}
+                    aria-label={t("브라우저로 열기")}
+                    onClick={() => openExternal(p.url)}
+                  >
+                    <Icon name="external-link" size={13} />
+                  </button>
+                  <button
+                    class="portsp-act"
+                    title={t("브라우저 패널에서 열기")}
+                    aria-label={t("브라우저 패널에서 열기")}
+                    onClick={() => openInBrowserPanel(p.url)}
+                  >
+                    <Icon name="globe" size={13} />
+                  </button>
+                </div>
+              </div>
+            )}
+          </For>
         </div>
+      </Show>
+      <Show when={rowMenu()}>
+        {(m) => (
+          <ContextMenu
+            x={m().x}
+            y={m().y}
+            header={`:${m().p.port}`}
+            onClose={() => setRowMenu(undefined)}
+            groups={[
+              [
+                { label: t("브라우저로 열기"), action: () => openExternal(m().p.url) },
+                { label: t("브라우저 패널에서 열기"), action: () => openInBrowserPanel(m().p.url) },
+                { label: t("주소 복사"), action: () => copyAddr(m().p) },
+              ],
+            ]}
+          />
+        )}
       </Show>
 
       <button class="portsp-section-head sys" onClick={() => setSysOpen(!sysOpen())}>

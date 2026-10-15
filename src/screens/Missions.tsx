@@ -1,21 +1,22 @@
-// 임무 배정 (화면 #8) — 임무 목록 · 생성 · 세션 배정. 임무 = 브랜치 + 목표 (E12 — 연결하되 강제 아님).
+// 임무 배정 (화면 #8 · 0.5 시안 jc2Fm) — 임무 목록 · 생성 · 세션 배정. 임무 = 브랜치 + 목표 (E12 — 연결하되 강제 아님).
 // Tauri에서는 .eqmux/missions/*.md 실파일이 원본이다 (FR-E-51) — 화면은 브리지를 통해서만 쓴다.
 import { createSignal, For, onMount, Show } from "solid-js";
 import { backend } from "../backend/mock";
 import {
   createMission,
-  cycleMissionStatus,
   refreshMissions,
   setDefaultMission,
   setMissionStatus,
   toggleAssign,
 } from "../backend/missions";
 import { nameOf } from "../backend/conversation";
-import { isTauri } from "../backend/pty";
+import { isTauri, revealPath } from "../backend/pty";
 import { checkoutBranch } from "../backend/workspaces";
 import { t, tf } from "../i18n";
 import { setView, tick } from "../state";
-import { Eyebrow, PersonaDot } from "../components/ui";
+import { Chip, Eyebrow, Identity, notify, Segmented } from "../components/ui";
+import { effectiveTitle, sessionName } from "../types";
+import type { Mission, MissionStatus } from "../types";
 
 export function Missions(props: { wsId: string }) {
   onMount(() => void refreshMissions(props.wsId));
@@ -79,74 +80,173 @@ export function Missions(props: { wsId: string }) {
     setOutputs("");
   };
 
+  // 0.5 시안 jc2Fm — 목록 | 편집 | 배정 세 칸. 고른 임무 하나를 가운데에 펼친다 (없으면 첫 임무)
+  const [selId, setSelId] = createSignal<string | undefined>(undefined);
+  const [creating, setCreating] = createSignal(false);
+  const sel = () => missions().find((m) => m.id === selId()) ?? missions()[0];
+  const assigneeNames = (m: Mission) =>
+    m.assigned.length === 0 ? t("배정 없음") : m.assigned.map((id) => nameOf(id)).join(", ");
+  const statusTone = (st: MissionStatus) => (st === "in-progress" || st === "in-review" ? "blue" : "info");
+
   return (
     <div class="screen">
       <div class="screen-head">
         <div>
           <h1>{t("임무 배정")} · {ws()?.name}</h1>
-          <div class="sub">{t(".eqmux/missions/*.md 가 원본 · 상태 뱃지 클릭 = 단계 전환 · 세션 클릭 = 배정 토글")}</div>
+          <div class="sub">{t(".eqmux/missions/*.md 가 원본 · 배정하면 역할 파일 임무 블록에 반영 · 세션 클릭 = 배정 토글")}</div>
         </div>
-        <button class="btn" onClick={() => setView({ kind: "workspace", id: props.wsId })}>
-          {t("← 컨트롤 센터")}
-        </button>
+        <div class="ma-head-r">
+          <Chip text={t("자동 저장됨")} />
+          <button class="btn ghost" onClick={() => setView({ kind: "workspace", id: props.wsId })}>
+            {t("← 컨트롤 센터")}
+          </button>
+          <button class="btn primary" onClick={() => setCreating(true)}>
+            {t("+ 새 임무")}
+          </button>
+        </div>
       </div>
-      <div class="screen-body conn-body">
-        <div>
-          <Eyebrow>{t("임무")} · {missions().length}</Eyebrow>
+      <div class="ma-cols">
+        <div class="ma-list">
+          <div class="ma-list-head">
+            <span class="ma-list-t">{t("임무")}</span>
+            <span class="ma-list-n mono">
+              {missions().length} · in-progress {missions().filter((m) => m.status === "in-progress").length}
+            </span>
+          </div>
           <For each={missions()}>
             {(m) => (
-              <div class="card" style={{ padding: "12px", "margin-top": "8px" }}>
-                <div style={{ display: "flex", "align-items": "center", gap: "8px" }}>
-                  <span style={{ "font-weight": 700 }}>{m.name}</span>
-                  <button
-                    class="badge"
-                    classList={{ blue: m.status === "in-progress", purple: m.status === "in-review", green: m.status === "done" }}
-                    style={{ cursor: "pointer" }}
-                    title={t("클릭하면 다음 단계로")}
-                    onClick={() => void cycleMissionStatus(props.wsId, m.id)}
-                  >
-                    {m.status.toUpperCase()}
+              <button
+                class="ma-item"
+                classList={{ on: !creating() && sel()?.id === m.id }}
+                onClick={() => (setSelId(m.id), setCreating(false))}
+              >
+                <span class="ma-item-top">
+                  <span class="ma-item-nm">
+                    {m.isDefault ? "★ " : ""}
+                    {m.name}
+                  </span>
+                  <Chip tone={statusTone(m.status)} text={m.status.toUpperCase()} />
+                </span>
+                <span class="ma-item-meta">
+                  {assigneeNames(m)}
+                  <Show when={m.status === "in-progress" && doneReport(m.assigned)}> · {t("완료 보고")}</Show>
+                </span>
+              </button>
+            )}
+          </For>
+          <Show when={missions().length === 0}>
+            <div class="ma-empty muted">{t("임무가 없습니다 — + 새 임무로 만드세요")}</div>
+          </Show>
+        </div>
+
+        <div class="ma-editor">
+          <Show
+            when={!creating() && sel()}
+            fallback={
+              <>
+                <Eyebrow>{t("새 임무")}</Eyebrow>
+                <input placeholder={t("임무 이름")} value={name()} onInput={(e) => setName(e.currentTarget.value)} />
+                <textarea rows={3} placeholder={t("목표 — 완료 조건을 측정 가능하게")} value={goal()} onInput={(e) => setGoal(e.currentTarget.value)} />
+                <textarea
+                  rows={3}
+                  placeholder={t("산출물 — 한 줄에 하나 (선택)")}
+                  value={outputs()}
+                  onInput={(e) => setOutputs(e.currentTarget.value)}
+                />
+                <input
+                  placeholder={t("브랜치 (선택)")}
+                  class="mono"
+                  value={branch()}
+                  onInput={(e) => setBranch(e.currentTarget.value)}
+                />
+                <div class="ma-actions">
+                  <Show when={missions().length > 0}>
+                    <button class="btn" onClick={() => setCreating(false)}>
+                      {t("취소")}
+                    </button>
+                  </Show>
+                  <button class="btn primary" onClick={() => (create(), setCreating(false))} disabled={!name().trim()}>
+                    {t("임무 생성")}
                   </button>
+                </div>
+                <div class="ma-hint muted">
+                  {t("생성하면 .eqmux/missions/<id>.md 파일이 만들어지고 DB는 캐시로 따라갑니다. 불일치 시 파일이 이깁니다 (불변 규칙 4).")}
+                </div>
+              </>
+            }
+          >
+            {(m) => (
+              <>
+                <div class="ma-scope mono">MISSION · {m().file}</div>
+                <div class="ma-name-row">
+                  <span class="ma-name">{m().name}</span>
                   {/* 기본 임무 (FR-E-56, M33) — 워크스페이스당 1개. 새 역할 세션이 자동 배정받는다 */}
                   <button
                     class="badge"
-                    classList={{ amber: !!m.isDefault }}
+                    classList={{ amber: !!m().isDefault }}
                     style={{ cursor: "pointer" }}
                     title={t(
-                      m.isDefault
+                      m().isDefault
                         ? "기본 임무 해제"
                         : "기본 임무로 지정 — 임무 없는 새 역할 세션이 자동 배정받습니다",
                     )}
-                    onClick={() => void setDefaultMission(props.wsId, m.id, !m.isDefault)}
+                    onClick={() => void setDefaultMission(props.wsId, m().id, !m().isDefault)}
                   >
-                    {m.isDefault ? t("★ 기본") : "☆"}
+                    {m().isDefault ? t("★ 기본") : "☆"}
                   </button>
-                  <span class="mono muted" style={{ "margin-left": "auto", "font-size": "10px" }}>
-                    {m.branch ?? t("브랜치 미연결")}
-                  </span>
-                  <Show when={m.branch}>
-                    <button
-                      class="btn ghost"
-                      classList={{ danger: coConfirm() === m.id }}
-                      style={{ "font-size": "10px", padding: "1px 8px" }}
-                      title={t("공유 repo의 현재 브랜치를 바꿉니다 — 워크트리 세션은 영향 없음")}
-                      onClick={() => void doCheckout(m.id, m.branch!)}
-                    >
-                      {t(coConfirm() === m.id ? "공유 repo 전환 확정?" : "⎇ 체크아웃")}
-                    </button>
+                  <span class="ma-grow" />
+                  <Segmented
+                    label={t("임무 상태")}
+                    items={STATUS_ITEMS.map((v) => ({ value: v, label: v }))}
+                    value={m().status}
+                    onChange={(v) => void setMissionStatus(props.wsId, m().id, v)}
+                  />
+                </div>
+                <div class="ma-field">
+                  <div class="ma-label">{t("목표")}</div>
+                  <div class="ma-box">{m().goal || <span class="muted">{t("목표 없음")}</span>}</div>
+                </div>
+                <div class="ma-field">
+                  <div class="ma-label">{t("브랜치")}</div>
+                  <div class="ma-box ma-branch mono">
+                    <span>{m().branch ?? t("브랜치 미연결")}</span>
+                    <Show when={m().branch}>
+                      <button
+                        class="btn ghost"
+                        classList={{ danger: coConfirm() === m().id }}
+                        title={t("공유 repo의 현재 브랜치를 바꿉니다 — 워크트리 세션은 영향 없음")}
+                        onClick={() => void doCheckout(m().id, m().branch!)}
+                      >
+                        {t(coConfirm() === m().id ? "공유 repo 전환 확정?" : "⎇ 체크아웃")}
+                      </button>
+                    </Show>
+                  </div>
+                  <Show when={coNote()?.id === m().id}>
+                    <div class="ma-hint mono muted">{coNote()!.text}</div>
                   </Show>
                 </div>
-                <Show when={coNote()?.id === m.id}>
-                  <div class="mono muted" style={{ "font-size": "10px", "margin-top": "4px" }}>
-                    {coNote()!.text}
+                <Show when={m().outputs.length > 0}>
+                  {/* 산출물 체크 (C4) — 파일의 `- [x]`를 그대로 보인다. 체크는 파일에서 한다 */}
+                  <div class="ma-field">
+                    <div class="ma-label">
+                      {tf("산출물 · {done}/{total} 체크", {
+                        done: m().outputs.filter((_, i) => m().outputsDone?.[i]).length,
+                        total: m().outputs.length,
+                      })}
+                    </div>
+                    <For each={m().outputs}>
+                      {(o, i) => (
+                        <div class="ma-check" classList={{ done: !!m().outputsDone?.[i()] }}>
+                          <span class="ma-check-ic">{m().outputsDone?.[i()] ? "☑" : "☐"}</span>
+                          {o}
+                        </div>
+                      )}
+                    </For>
                   </div>
                 </Show>
-                <div class="muted" style={{ "font-size": "12px", margin: "6px 0" }}>
-                  {m.goal}
-                </div>
                 {/* 완료 보고 (작업 완료 신호) — 배정된 세션이 report --done을 보냈다. 상태는 사람이
                     눌러야 in-review가 된다. 앱이 스스로 임무 상태를 바꾸지 않는다 */}
-                <Show when={m.status === "in-progress" && doneReport(m.assigned)}>
+                <Show when={m().status === "in-progress" && doneReport(m().assigned)}>
                   {(d) => (
                     <div class="card inset mission-done">
                       <span class="badge blue">✓</span>
@@ -154,75 +254,60 @@ export function Missions(props: { wsId: string }) {
                         {t("완료 보고")} · {d().name}
                         <Show when={d().text}>: {d().text}</Show>
                       </span>
-                      <button class="btn" onClick={() => void setMissionStatus(props.wsId, m.id, "in-review")}>
-                        {t("검토 중으로")}
-                      </button>
                     </div>
                   )}
                 </Show>
-                <Show when={m.outputs.length > 0}>
-                  {/* 산출물 체크 (C4 · 시안 hBVB0) — 파일의 `- [x]`를 그대로 보인다. 체크는 파일에서 한다 */}
-                  <div class="mono muted" style={{ "font-size": "11px", "margin-bottom": "6px" }}>
-                    {tf("산출물 · {done}/{total} 체크", {
-                      done: m.outputs.filter((_, i) => m.outputsDone?.[i]).length,
-                      total: m.outputs.length,
-                    })}{" "}
-                    · {m.outputs.map((o, i) => `${m.outputsDone?.[i] ? "☑" : "☐"} ${o}`).join(" · ")}
-                  </div>
-                </Show>
-                <div style={{ display: "flex", gap: "6px", "flex-wrap": "wrap" }}>
-                  <For each={sessions()}>
-                    {(s) => (
-                      <button
-                        class="btn ghost assign-chip"
-                        classList={{ assigned: m.assigned.includes(s.id) }}
-                        onClick={() => void toggleAssign(props.wsId, m.id, s.id)}
-                      >
-                        <PersonaDot name={persona(s.personaId)?.name ?? "?"} color={persona(s.personaId)?.color ?? "blue"} />
-                        {persona(s.personaId)?.name}
-                        {m.assigned.includes(s.id) ? " ✓" : ""}
-                      </button>
-                    )}
-                  </For>
-                  <Show when={sessions().length === 0}>
-                    <span class="muted" style={{ "font-size": "11px" }}>
-                      {t("세션 없음 — 캐스팅을 먼저 하세요")}
-                    </span>
+                <div class="ma-actions">
+                  <button
+                    class="btn"
+                    onClick={() => void revealPath(m().file, ws()?.path).then((ok) => ok || notify(t("파일을 열 수 없습니다")))}
+                  >
+                    {t("탐색기에서 열기")}
+                  </button>
+                  <Show when={m().status === "in-progress" && doneReport(m().assigned)}>
+                    <button class="btn primary" onClick={() => void setMissionStatus(props.wsId, m().id, "in-review")}>
+                      {t("검토 중으로")}
+                    </button>
                   </Show>
                 </div>
-              </div>
+              </>
             )}
-          </For>
+          </Show>
         </div>
 
-        <div class="conn-detail">
-          <Eyebrow>{t("새 임무")}</Eyebrow>
-          <div style={{ display: "flex", "flex-direction": "column", gap: "8px", "margin-top": "8px" }}>
-            <input placeholder={t("임무 이름")} value={name()} onInput={(e) => setName(e.currentTarget.value)} />
-            <textarea rows={3} placeholder={t("목표 — 완료 조건을 측정 가능하게")} value={goal()} onInput={(e) => setGoal(e.currentTarget.value)} />
-            <textarea
-              rows={3}
-              placeholder={t("산출물 — 한 줄에 하나 (선택)")}
-              value={outputs()}
-              onInput={(e) => setOutputs(e.currentTarget.value)}
-            />
-            <input
-              placeholder={t("브랜치 (선택)")}
-              class="mono"
-              value={branch()}
-              onInput={(e) => setBranch(e.currentTarget.value)}
-            />
-            <button class="btn primary" onClick={create} disabled={!name().trim()}>
-              {t("임무 생성")}
-            </button>
-            <div class="card inset" style={{ padding: "10px" }}>
-              <div class="muted" style={{ "font-size": "11px" }}>
-                {t("생성하면 .eqmux/missions/<id>.md 파일이 만들어지고 DB는 캐시로 따라갑니다. 불일치 시 파일이 이깁니다 (불변 규칙 4).")}
-              </div>
-            </div>
+        <div class="ma-assign">
+          <div class="ma-assign-t">{t("세션 배정")}</div>
+          <div class="ma-hint muted">
+            {t("배정하면 역할 파일을 갱신하고 [EQ] 임무 배정 한 줄을 보냅니다. idle이면 바로, 작업 중이면 턴이 끝날 때.")}
           </div>
+          <Show when={sel() && !creating()}>
+            <For each={sessions()}>
+              {(s) => {
+                const on = () => !!sel()?.assigned.includes(s.id);
+                const p = () => persona(s.personaId);
+                return (
+                  <button class="ma-assignee" classList={{ on: on() }} onClick={() => void toggleAssign(props.wsId, sel()!.id, s.id)}>
+                    <Identity slot={s.slot} name={sessionName(s, p())} title={effectiveTitle(s, p())} />
+                    <span class="ma-assignee-r">
+                      <span class={`exit-state mono ${ST_CLASS[s.status] ?? "muted"}`}>{s.status.toUpperCase()}</span>
+                      <span class="ma-toggle">{on() ? "✓" : ""}</span>
+                    </span>
+                  </button>
+                );
+              }}
+            </For>
+            <Show when={sessions().some((s) => s.status === "dead")}>
+              <div class="ma-hint muted">{t("죽은 세션은 배정해도 재개 전까지 메시지가 쌓입니다")}</div>
+            </Show>
+          </Show>
+          <Show when={sessions().length === 0}>
+            <span class="ma-hint muted">{t("세션 없음 — 캐스팅을 먼저 하세요")}</span>
+          </Show>
         </div>
       </div>
     </div>
   );
 }
+
+const STATUS_ITEMS: MissionStatus[] = ["todo", "in-progress", "in-review", "done"];
+const ST_CLASS: Record<string, string> = { busy: "st-busy", waiting: "st-waiting", dead: "st-dead" };

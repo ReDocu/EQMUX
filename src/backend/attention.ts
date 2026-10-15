@@ -112,7 +112,9 @@ export function startNotifyFeed(): void {
 
 /** 그 세션에 아직 봐야 할 신호가 있나 — 벨 항목의 읽음 판정과 미확인 수가 같은 규칙을 쓴다 */
 export function sessionNeedsLook(s: Session): boolean {
-  return !!(s.unseen || s.unseenDone || s.reportPending || inboxWaiting(s) > 0);
+  // 대시보드와 같은 규칙 — 주의 순위가 있는 세션만. unseen 하나로 세면 waiting·dead가 아닌데
+  // 남은 옛 표식(재시작 복원 등)까지 세어, 벨은 1인데 목록·대시보드는 0인 어긋남이 났다
+  return attentionRank(s, inboxWaiting(s)) > 0;
 }
 
 /** 벨 미확인 수 — 세션 신호에서 계산한다 (따로 세지 않는다) */

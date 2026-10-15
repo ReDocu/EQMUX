@@ -1286,7 +1286,7 @@ pub(crate) fn find_tracked(app: &AppHandle, id: &str) -> Option<(String, agent::
 pub(crate) fn session_job_pids(app: &AppHandle) -> HashMap<String, (Vec<u32>, u64)> {
     session_jobs(app)
         .into_iter()
-        .map(|(id, j, gen)| (id, (j.pids(), gen)))
+        .map(|(id, j, gen)| (id, (j.tree_pids(), gen)))
         .collect()
 }
 
@@ -2072,7 +2072,7 @@ async fn sessions_agents(app: AppHandle) -> Vec<AgentSample> {
     let jobs = session_jobs(&app);
     tauri::async_runtime::spawn_blocking(move || {
         jobs.into_iter()
-            .filter_map(|(id, j, _)| agentscan::detect(&j.pids()).map(|a| AgentSample { id, agent: a.into() }))
+            .filter_map(|(id, j, _)| agentscan::detect(&j.tree_pids()).map(|a| AgentSample { id, agent: a.into() }))
             .collect()
     })
     .await
@@ -2094,7 +2094,7 @@ async fn ports_snapshot(app: AppHandle) -> Vec<ports::PortRow> {
     let jobs = session_jobs(&app);
     tauri::async_runtime::spawn_blocking(move || {
         let session_pids: HashMap<String, Vec<u32>> =
-            jobs.into_iter().map(|(id, j, _)| (id, j.pids())).collect();
+            jobs.into_iter().map(|(id, j, _)| (id, j.tree_pids())).collect();
         ports::snapshot(&session_pids)
     })
         .await

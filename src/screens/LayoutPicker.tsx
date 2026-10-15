@@ -4,6 +4,7 @@ import { backend } from "../backend/mock";
 import { t, tf } from "../i18n";
 import { PANE_LAYOUTS, paneLayout, setLayoutPickerOpen, setPaneLayout, view } from "../state";
 import type { PaneLayout as PaneLayoutKey } from "../state";
+import { Icon } from "../components/icons";
 
 function Preview(props: { mode: PaneLayoutKey }) {
   return (
@@ -38,13 +39,13 @@ export function LayoutPicker() {
       <div class="dialog lp-dialog" onClick={(e) => e.stopPropagation()}>
         <div class="lp-head">
           <div>
-            <div style={{ "font-weight": 800, "font-size": "15px" }}>{t("페인 배치")}</div>
-            <div class="muted" style={{ "font-size": "11px", "margin-top": "2px" }}>
-              {tf("현재 워크스페이스 · {n}개 세션 · 선택 즉시 미리보기", { n: sessionCount() })}
+            <div class="lp-title">{t("페인 배치")}</div>
+            <div class="mono muted lp-sub">
+              {tf("현재 워크스페이스 · {n}개 세션 · 선택 즉시 미리보기", { n: sessionCount() })} · Ctrl+Shift+L
             </div>
           </div>
-          <button class="btn ghost" onClick={() => setLayoutPickerOpen(false)}>
-            ✕
+          <button class="btn ghost" aria-label={t("닫기")} onClick={() => setLayoutPickerOpen(false)}>
+            <Icon name="x" size={15} />
           </button>
         </div>
 
@@ -54,34 +55,28 @@ export function LayoutPicker() {
               <button class="card lp-option" classList={{ selected: pending() === o.key }} onClick={() => setPending(o.key)}>
                 <Preview mode={o.key} />
                 <div class="lp-option-title">
-                  <span style={{ "font-weight": 700, "font-size": "12px" }}>{t(o.name)}</span>
-                  <span class="badge" classList={{ blue: pending() === o.key }}>
-                    {pending() === o.key ? t("선택됨") : `${sessionCount()} PANES`}
-                  </span>
+                  <span>{t(o.name)}</span>
+                  {/* 지금 이 워크스페이스에 적용된 배치 — 고른 것(테두리)과 구별한다 */}
+                  <Show when={paneLayout() === o.key}>
+                    <span class="badge blue mono">{t("현재")}</span>
+                  </Show>
                 </div>
-                <div class="muted" style={{ "font-size": "11px" }}>
-                  {t(o.desc)}
-                </div>
+                <div class="mono muted lp-note">{t(o.desc)}</div>
               </button>
             )}
           </For>
         </div>
 
         <div class="lp-footer">
-          <div>
-            <div class="muted" style={{ "font-size": "11px" }}>
-              {t("적용 후 분할선을 드래그해 비율을 조정할 수 있습니다.")}
-            </div>
-            <div class="mono muted" style={{ "font-size": "10px", "margin-top": "2px" }}>
-              CTRL + SHIFT + L
-            </div>
+          <div class="muted lp-hint">
+            {t("적용 후 분할선을 드래그해 비율을 조정할 수 있습니다 · 슬롯 번호는 배치와 무관하게 그대로입니다")}
           </div>
           <div style={{ display: "flex", gap: "8px" }}>
             <button class="btn" onClick={() => setLayoutPickerOpen(false)}>
               {t("취소")}
             </button>
             <button class="btn primary" onClick={apply}>
-              {t("배치 적용")}
+              {t("적용")}
             </button>
           </div>
         </div>

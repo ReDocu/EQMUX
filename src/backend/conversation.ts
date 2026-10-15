@@ -26,12 +26,19 @@ interface MsgRow {
   read: boolean;
   done?: boolean;
   file?: { path: string; size: number } | null;
+  fromName?: string; // 보낸 때의 세션 이름 (원장) — 세션이 사라진 뒤의 표시용
+  toName?: string;
 }
+
+/** 원장에 남은 보낸 때의 이름 — 세션 id → 이름. 세션이 사라져 nameOf가 풀지 못할 때만 쓴다 */
+const ledgerNames = new Map<string, string>();
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
 function toMsg(wsId: string, r: MsgRow): ConversationMessage {
   const t = new Date(r.ts);
+  if (r.fromName) ledgerNames.set(r.from, r.fromName);
+  if (r.toName) ledgerNames.set(r.to, r.toName);
   return {
     id: `${wsId}:${r.id}`,
     time: `${pad(t.getHours())}:${pad(t.getMinutes())}`,
@@ -249,15 +256,25 @@ export function projectLabels(): Map<string, string> {
 /** 세션 id → 세션 이름. 원장에는 id만 남는다 — 이름을 아는 것은 프런트뿐이다 */
 export function nameOf(sessionId: string): string {
   const s = backend.listSessions().find((x) => x.id === sessionId);
-  if (!s) return sessionId;
+  if (!s) return goneName(sessionId);
   return sessionName(s, backend.listPersonas().find((p) => p.id === s.personaId));
+}
+
+/** 사라진 세션의 이름 — 원장의 보낸 때 이름 → id 앞부분이 페르소나면 그 이름 → id 그대로.
+ *  "나"·"@all"은 어디에도 걸리지 않아 원문으로 남는다 (0.5 이전 행은 원장 이름이 없다) */
+export function goneName(
+  id: string,
+  ledger: ReadonlyMap<string, string> = ledgerNames,
+  personas: readonly { id: string; name: string }[] = backend.listPersonas(),
+): string {
+  return ledger.get(id) ?? personas.find((p) => p.id === id.split("@")[0])?.name ?? id;
 }
 
 /** 받는 쪽에서 보이는 발신자 (BR-14) — 같은 프로젝트면 `카이`, 다른 프로젝트면 `카이@app-b`.
  *  받은 그대로 `eqmux send --to @카이@app-b`로 답할 수 있게 주소 꼴을 맞춘다 */
 export function senderLabel(from: string, toWs: string | undefined): string {
   const s = backend.listSessions().find((x) => x.id === from);
-  if (!s) return from; // "나" · 이미 닫힌 세션
+  if (!s) return goneName(from); // "나" · 이미 닫힌 세션
   const name = nameOf(from);
   if (!toWs || s.workspaceId === toWs) return name;
   return `${name}@${projectLabels().get(s.workspaceId) ?? s.workspaceId}`;
@@ -425,8 +442,10 @@ function recipients(wsId: string, to: string) {
  *  턴 경계도 승인 창도 모른다. 그래서 자동으로 넣지 않는다 (BR-02) — 승인 창이 떠 있으면 본문과
  *  Enter가 그 답이 되어 사람 확인 없이 도구가 실행될 수 있다. 메시지는 쌓아 두고, 페인 헤더의
  *  `메시지 N건 · 넣기` 칩을 사람이 눌렀을 때만 injectPending으로 넣는다. */
-export const unmanagedAgent = (s: { status: string; agent?: string }): boolean =>
-  s.status === "shell" && !!s.agent;
+export const unmanagedAgent = (s: { status: string; agent?: string; personaId?: string }): boolean =>
+  !!s.agent && (s.status === "shell" || !s.personaId);
+// 역할 없는 기본 터미널의 에이전트는 상태와 상관없이 손으로 띄운 것이다 — 레지스트리가 그 pid를
+// 채택하면 상태가 idle·busy로 바뀌어, status만 보던 예전 판정은 그때 다시 에코로 새었다 (실기 QA)
 
 /** 손으로 띄운 에이전트에 쌓인 메시지 수 — 페인 헤더 칩 (반응형) */
 export function pendingCount(sessionId: string): number {

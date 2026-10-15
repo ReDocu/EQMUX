@@ -1,8 +1,24 @@
 // 비정상 종료 복구 안내 (FR-C-35) — 직전 실행이 정상 종료되지 못했을 때 첫 실행에서 1회 표시.
 // 목록만 보여준다 — 재개는 각 워크스페이스 페인의 재개 제안(FR-C-33)에서 사용자가 실행한다 (C5).
 import { For } from "solid-js";
-import type { CrashReport } from "../backend/recovery";
+import { backend } from "../backend/mock";
+import type { CrashReport, CrashSession } from "../backend/recovery";
 import { t, tf } from "../i18n";
+import { tick } from "../state";
+import { sessionName } from "../types";
+
+/** 내부 id(`shell1@eqmux-1e3b93`) 대신 사람이 아는 이름 — 세션이 복원돼 있으면 세션 이름,
+ *  아직이면 id 앞부분의 페르소나 이름, 그것도 없으면 기본 터미널이다 */
+function crashName(c: CrashSession): string {
+  tick(); // 팀 복원이 끝나면 이름이 따라온다
+  const personas = backend.listPersonas();
+  const s = backend.listSessions().find((x) => x.id === c.id);
+  if (s) return sessionName(s, personas.find((p) => p.id === s.personaId));
+  return personas.find((p) => p.id === c.id.split("@")[0])?.name ?? t("기본 터미널");
+}
+
+/** DB 폴더 이름(워크스페이스 id) → 표시 이름 */
+const wsName = (id: string) => backend.listWorkspaces().find((w) => w.id === id)?.name ?? id;
 
 function fmtLastActivity(ms: number | null): string {
   if (!ms) return "—";
@@ -35,10 +51,10 @@ export function CrashRecovery(props: { report: CrashReport; onClose: () => void 
           <For each={props.report.sessions}>
             {(s) => (
               <div class="kv">
-                <span>
-                  <b class="mono">{s.id}</b>{" "}
-                  <span class="muted mono" style={{ "font-size": "11px" }}>
-                    {s.workspace}
+                <span title={s.id}>
+                  <b>{crashName(s)}</b>{" "}
+                  <span class="muted" style={{ "font-size": "11px" }}>
+                    {wsName(s.workspace)}
                   </span>
                 </span>
                 <span class="mono" style={{ "font-size": "11px" }}>

@@ -90,6 +90,8 @@ export const [panelOpen, setPanelOpen] = createSignal(false);
 export const [panelTab, setPanelTab] = createSignal<PanelTab>("conversation");
 /** 사이드 패널 위치 — 패널 탭 줄의 전환 버튼이 토글하고 layout.json에 영속된다 */
 export const [panelSide, setPanelSide] = createSignal<"left" | "right">("right");
+/** 세그먼트 줄 오른쪽 한 줄 요약 (0.5 시안) — 보고 있는 하위 패널이 자기 요약을 올린다(포트 `실측 3 · 새 1` 등) */
+export const [panelNote, setPanelNote] = createSignal("");
 
 /** 패널 탭을 지정해 열기 — 앱 바 도구 버튼(DdrkL)의 진입 경로 */
 export function openPanel(tab: PanelTab) {

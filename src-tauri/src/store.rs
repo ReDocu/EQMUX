@@ -95,7 +95,9 @@ CREATE TABLE IF NOT EXISTS message (
   done INTEGER NOT NULL DEFAULT 0,
   file_path TEXT,
   file_size INTEGER,
-  project TEXT
+  project TEXT,
+  sender_name TEXT,
+  recipient_name TEXT
 );
 CREATE INDEX IF NOT EXISTS message_recipient_kind ON message(recipient, kind);
 ";
@@ -142,7 +144,15 @@ pub(crate) fn open_db(root: &Path, ws: &str) -> rusqlite::Result<Connection> {
     let _ = conn.execute("ALTER TABLE session ADD COLUMN last_recap_at INTEGER", []);
     // 메시지 0.5 열 (W2) — 완료 보고 · --file 첨부 · 다른 프로젝트 발신. 결정 1b로 버전 업 땐
     // session.db를 새로 만들지만, 같은 버전 안에서 열린 DB도 깨지지 않게 한 번 더 보장한다
-    for col in ["done INTEGER NOT NULL DEFAULT 0", "file_path TEXT", "file_size INTEGER", "project TEXT"] {
+    // sender_name·recipient_name (W1) — 보낸 때의 세션 이름. 세션이 사라져도 대화에 이름이 남는다
+    for col in [
+        "done INTEGER NOT NULL DEFAULT 0",
+        "file_path TEXT",
+        "file_size INTEGER",
+        "project TEXT",
+        "sender_name TEXT",
+        "recipient_name TEXT",
+    ] {
         let _ = conn.execute(&format!("ALTER TABLE message ADD COLUMN {col}"), []);
     }
     // FTS5 인덱스 (FR-C-16) — 번들 SQLite에 FTS5가 없으면 조용히 넘어가고 검색은 LIKE 폴백

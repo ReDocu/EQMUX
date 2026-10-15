@@ -168,8 +168,13 @@ fn handle(app: &AppHandle, line: &str) -> Result<serde_json::Value, String> {
             if let Some(f) = req["file"].as_str() {
                 extra.file = Some(crate::messages::attach_file(&cwd, f)?);
             }
+            let attached = extra.file.as_ref().map(|f| format!(" · 첨부 {} ({})", rel_path(&cwd, &f.path), fmt_size(f.size)));
             let target = resolve_target(app, &ws, &cwd, to_raw)?;
-            send_to(app, &ws, session, target, kind, body, extra)
+            let mut resp = send_to(app, &ws, session, target, kind, body, extra)?;
+            if let (Some(a), Some(d)) = (attached, resp["delivery"].as_str().map(str::to_string)) {
+                resp["delivery"] = json!(format!("{d}{a}"));
+            }
+            Ok(resp)
         }
         "report" => {
             // V4 자기 보고 (FR-G-88) — 스트림에는 report 타입으로, 세션 피드에는 event로
@@ -192,34 +197,50 @@ fn handle(app: &AppHandle, line: &str) -> Result<serde_json::Value, String> {
                 message: body.chars().take(200).collect(),
             });
             let extra = crate::messages::Extra { done, ..Default::default() };
-            let resp = publish(app, &ws, session, "나", "report", body, &extra)?;
+            let mut resp = publish(app, &ws, session, "나", "report", body, &extra)?;
             // 완료 보고는 일을 맡긴 팀원에게도 한 건씩 (작업 완료 신호) — 닫힌 프로젝트 팀원은 건너뛴다
             let dir = directory();
+            let mut sent = vec!["나".to_string()];
             for r in &requesters {
-                let target = dir.iter().find(|e| e.session == *r).cloned();
-                if target.is_some() || r.ends_with(&format!("@{ws}")) {
-                    let _ = send_to(app, &ws, session, Target::One(r.clone(), target), "report", body, extra.clone());
+                let target = dir.iter().find(|e| e.session == r.sender).cloned();
+                if target.is_some() || r.sender.ends_with(&format!("@{ws}")) {
+                    let who = target.as_ref().map(|e| e.name.clone()).unwrap_or_else(|| r.sender.split('@').next().unwrap_or(&r.sender).to_string());
+                    let who = match &target {
+                        Some(e) if e.workspace != ws => format!("{who}@{}", e.project),
+                        _ => who,
+                    };
+                    if send_to(app, &ws, session, Target::One(r.sender.clone(), target), "report", body, extra.clone()).is_ok() {
+                        sent.push(format!("{who} (열린 {} {})", r.kind, hhmm(r.ts)));
+                    }
                 }
             }
             if done {
                 crate::agent::notify_report(app, session, body);
             }
+            resp["result"] = json!(format!("보고함 → {}", sent.join(" · ")));
             Ok(resp)
         }
         "who" => {
             let session = req["session"].as_str().ok_or("NO_SESSION")?;
             verify_session(app, session, &req)?;
             let (ws, _) = crate::session_origin(app, session).ok_or("UNKNOWN_SESSION")?;
+            // 직무 칸은 이름으로 (디렉터리에는 id가 온다) — 직무 8종 고정 로스터
+            let store: State<crate::StoreState> = app.state();
+            let jobs: std::collections::HashMap<String, String> =
+                crate::library::list(&store.0.root(), None).jobs.into_iter().map(|j| (j.id, j.name)).collect();
             let dir: Vec<DirEntry> = directory()
                 .into_iter()
                 .map(|mut e| {
                     if let Some((_, t)) = crate::find_tracked(app, &e.session) {
                         e.status = t.last_status; // 실측 상태가 우선 (C4)
                     }
+                    if let Some(n) = jobs.get(&e.job) {
+                        e.job = n.clone();
+                    }
                     e
                 })
                 .collect();
-            Ok(json!({"ok": true, "result": who_text(&dir, &ws)}))
+            Ok(json!({"ok": true, "result": who_text(&dir, &ws, session)}))
         }
         "hook" => {
             // 훅 2차 상태 소스 (D3 · FR-D-30 계열) — 모르는 이벤트는 조용히 무시
@@ -340,22 +361,23 @@ fn name_matches(e: &DirEntry, n: &str) -> bool {
     e.name == n || e.persona == n || e.session.split('@').next() == Some(n)
 }
 
-/// 복사해서 그대로 쓸 수 있는 주소 — 같은 프로젝트면 `@이름`, 다르면 `@이름@프로젝트`
-fn address(e: &DirEntry, my_ws: &str) -> String {
-    if e.workspace == my_ws {
+/// 복사해서 어디서든 그대로 쓸 수 있는 주소 — 열린 프로젝트 전체에서 이름이 하나뿐이면 `@이름`,
+/// 겹치면 `@이름@프로젝트` (시안 T36ZZ `eqmux who`)
+fn address(dir: &[DirEntry], e: &DirEntry) -> String {
+    if dir.iter().filter(|x| x.name == e.name).count() <= 1 {
         format!("@{}", e.name)
     } else {
         format!("@{}@{}", e.name, e.project)
     }
 }
 
-fn pick(found: Vec<&DirEntry>, my_ws: &str) -> Result<Option<DirEntry>, String> {
+fn pick(found: Vec<&DirEntry>) -> Result<Option<DirEntry>, String> {
     match found.len() {
         0 => Ok(None),
         1 => Ok(Some(found[0].clone())),
         _ => Err(format!(
             "AMBIGUOUS:{}",
-            found.iter().map(|e| address(e, my_ws)).collect::<Vec<_>>().join(", ")
+            found.iter().map(|e| format!("@{}@{}", e.name, e.project)).collect::<Vec<_>>().join(" · ")
         )),
     }
 }
@@ -372,11 +394,11 @@ fn resolve_in(dir: &[DirEntry], my_ws: &str, raw: &str) -> Result<Option<DirEntr
         return Ok(Some(e.clone()));
     }
     let hit = if let Some((n, p)) = m.rsplit_once('@') {
-        pick(dir.iter().filter(|e| e.project == p && name_matches(e, n)).collect(), my_ws)?
+        pick(dir.iter().filter(|e| e.project == p && name_matches(e, n)).collect())?
     } else {
-        match pick(dir.iter().filter(|e| e.workspace == my_ws && name_matches(e, m)).collect(), my_ws)? {
+        match pick(dir.iter().filter(|e| e.workspace == my_ws && name_matches(e, m)).collect())? {
             Some(e) => Some(e),
-            None => pick(dir.iter().filter(|e| name_matches(e, m)).collect(), my_ws)?,
+            None => pick(dir.iter().filter(|e| name_matches(e, m)).collect())?,
         }
     };
     hit.map(Some).ok_or_else(|| "UNKNOWN_RECIPIENT".into())
@@ -399,7 +421,7 @@ fn resolve_target(app: &AppHandle, ws: &str, cwd: &str, raw: &str) -> Result<Tar
             .map(|w| w.cross_project)
             .unwrap_or(true);
         if !on {
-            return Err("CROSS_PROJECT_OFF".into());
+            return Err(format!("CROSS_PROJECT_OFF:{}", e.project));
         }
     }
     Ok(Target::One(e.session.clone(), Some(e)))
@@ -417,28 +439,62 @@ fn send_to(
     body: &str,
     extra: crate::messages::Extra,
 ) -> Result<serde_json::Value, String> {
+    let dir = directory();
+    let mine = dir.iter().find(|e| e.workspace == ws).map(|e| e.project.clone()).unwrap_or_else(|| ws.to_string());
     let (to, entry) = match target {
-        Target::All => return publish(app, ws, from, "@all", kind, body, &extra),
+        Target::All => {
+            let mut resp = publish(app, ws, from, "@all", kind, body, &extra)?;
+            resp["delivery"] = json!(format!("보냄 → 팀 전체 ({mine})"));
+            return Ok(resp);
+        }
         Target::One(to, entry) => (to, entry),
     };
     let target_ws = entry.as_ref().map(|e| e.workspace.clone()).unwrap_or_else(|| ws.to_string());
     let mut resp = if target_ws == ws {
         publish(app, ws, from, &to, kind, body, &extra)?
     } else {
-        let dir = directory();
-        let mine = dir.iter().find(|e| e.workspace == ws).map(|e| e.project.clone()).unwrap_or_else(|| ws.to_string());
         let theirs = entry.as_ref().map(|e| e.project.clone());
         let out = crate::messages::Extra { project: theirs, ..extra.clone() };
         let resp = publish(app, ws, from, &to, kind, body, &out)?;
         // 받는 쪽 원장 — 상한은 위에서 이미 한 번 셌다
         let store: State<crate::StoreState> = app.state();
-        let inn = crate::messages::Extra { project: Some(mine), ..extra };
+        let inn = crate::messages::Extra { project: Some(mine.clone()), ..extra };
         let row = crate::messages::send_with(&store.0.root(), &target_ws, from, &to, kind, body, &inn)?;
         let _ = app.emit_to("main", "message-new", json!({ "workspace": target_ws, "message": row }));
         resp
     };
-    resp["delivery"] = json!(delivery(app, &target_ws, &to, entry.as_ref()));
+    let mut d = delivery(app, &target_ws, &to, entry.as_ref());
+    if d == "전달함" {
+        // 시안 T36ZZ — `전달함 → 린 (EQMUX)`: 누구에게, 어느 프로젝트로
+        let name = entry.as_ref().map(|e| e.name.clone()).unwrap_or_else(|| to.split('@').next().unwrap_or(&to).to_string());
+        let project = entry.as_ref().map(|e| e.project.clone()).unwrap_or(mine);
+        d = format!("전달함 → {name} ({project})");
+    }
+    resp["delivery"] = json!(d);
     Ok(resp)
+}
+
+/// 첨부 경로 표시 — 세션 작업 폴더 기준 상대 경로 (`.eqmux/notes/a.md`), 밖이면 그대로
+fn rel_path(cwd: &str, path: &str) -> String {
+    let base = std::fs::canonicalize(cwd).ok().map(|p| p.to_string_lossy().trim_start_matches(r"\\?\").to_string());
+    base.and_then(|b| std::path::Path::new(path).strip_prefix(b).ok().map(|r| r.to_string_lossy().replace('\\', "/")))
+        .unwrap_or_else(|| path.to_string())
+}
+
+/// 3.2KB 꼴
+fn fmt_size(n: u64) -> String {
+    match n {
+        n if n < 1024 => format!("{n}B"),
+        n if n < 1024 * 1024 => format!("{:.1}KB", n as f64 / 1024.0),
+        n => format!("{:.1}MB", n as f64 / (1024.0 * 1024.0)),
+    }
+}
+
+/// ms 에포크 → 로컬 HH:MM
+fn hhmm(ts: i64) -> String {
+    chrono::DateTime::from_timestamp_millis(ts)
+        .map(|t| t.with_timezone(&chrono::Local).format("%H:%M").to_string())
+        .unwrap_or_default()
 }
 
 /// 전달 결과 — conversation.ts deliver()와 같은 규칙(idle이면 전달, 그 밖이면 대기).
@@ -460,38 +516,67 @@ fn delivery(app: &AppHandle, ws: &str, session: &str, entry: Option<&DirEntry>) 
 /// conversation.ts deliver()와 같은 갈래 — 어긋나면 CLI는 "전달함"인데 메시지는 인박스에 잔다
 fn delivery_text(status: &str, role: bool, manual: bool, waiting: impl FnOnce() -> i64) -> String {
     match status {
+        // 기본 터미널에서 손으로 띄운 에이전트 — 레지스트리가 채택하면 idle·busy로도 보인다.
+        // 역할 없는 페인의 에이전트는 상태와 상관없이 손으로 띄운 것이다 (BR-02)
+        _ if manual && !role => "대기 — 손으로 띄운 에이전트 · 사람이 넣기를 누르면 전달".into(),
         "idle" => "전달함".into(),
         // 꺼진 세션도 프런트 인박스에 남아 재개 때 받는다 — 실패는 영영 안 닿는 경우(이름 없음·닫힘·받기 끔)만
-        "dead" => "대기 — 상대 세션 꺼짐 (켜지면 받는다)".into(),
+        "dead" => "대기 — 상대 세션 꺼짐 · 켜지면 전달".into(),
         // 사람이 페인에 직접 띄운 에이전트 — 자동으로 넣지 않는다 (BR-02)
-        "shell" | "" if manual => "대기 — 손으로 띄운 에이전트 (사람이 넣기를 누르면 받는다)".into(),
-        "shell" | "" if role => "대기 — 에이전트가 아직 안 떴음 (뜨면 받는다)".into(),
+        "shell" | "" if manual => "대기 — 손으로 띄운 에이전트 · 사람이 넣기를 누르면 전달".into(),
+        "shell" | "" if role => "대기 — 에이전트가 아직 안 떴음 · 뜨면 전달".into(),
         "shell" | "" => "전달함".into(), // 기본 터미널 — 화면에 바로 찍힌다
-        "starting" => "대기 — 에이전트 기동 중 (뜨면 받는다)".into(),
-        _ => format!("대기 — 상대 작업 중(대기 {}건)", waiting().max(1)),
+        "starting" => "대기 — 에이전트 기동 중 · 뜨면 전달".into(),
+        _ => format!("대기 — 상대 작업 중 (대기 {}건) · 턴이 끝나면 전달", waiting().max(1)),
     }
 }
 
-/// eqmux who — 내 프로젝트 먼저, 그다음 프로젝트 이름순 · 슬롯순. 줄 끝 주소는 그대로 --to에 쓴다
-fn who_text(dir: &[DirEntry], my_ws: &str) -> String {
+/// 고정폭 터미널에서의 칸 수 — 한글·CJK·전각은 두 칸
+fn cols(s: &str) -> usize {
+    s.chars()
+        .map(|c| match c as u32 {
+            0x1100..=0x115F | 0x2E80..=0xA4CF | 0xAC00..=0xD7A3 | 0xF900..=0xFAFF | 0xFE30..=0xFE4F | 0xFF00..=0xFF60 | 0xFFE0..=0xFFE6 => 2,
+            _ => 1,
+        })
+        .sum()
+}
+
+fn pad(s: &str, w: usize) -> String {
+    format!("{s}{}", " ".repeat(w.saturating_sub(cols(s))))
+}
+
+/// eqmux who (시안 T36ZZ) — 내 프로젝트 먼저, 그다음 프로젝트 이름순 · 슬롯순. 줄 끝 주소는 그대로 --to에 쓴다
+fn who_text(dir: &[DirEntry], my_ws: &str, me: &str) -> String {
     let mut rows: Vec<&DirEntry> = dir.iter().collect();
     rows.sort_by_key(|e| (e.workspace != my_ws, e.project.clone(), e.slot.unwrap_or(u32::MAX), e.name.clone()));
     if rows.is_empty() {
         return "열린 세션이 없습니다".into();
     }
-    rows.iter()
-        .map(|e| {
-            let no = e.slot.map(|n| format!("{n:02}")).unwrap_or_else(|| "--".into());
-            let job = match e.title.as_deref().filter(|t| !t.is_empty()) {
-                Some(t) if !e.job.is_empty() => format!("{t} ({})", e.job),
-                Some(t) => t.to_string(),
-                None => e.job.clone(),
-            };
-            let status = if e.status.is_empty() { "-" } else { &e.status };
-            format!("{no} {} · {} · {} · {} · {}", e.name, e.project, job, status, address(e, my_ws))
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+    let line = |no: &str, name: &str, project: &str, job: &str, status: &str, addr: &str| {
+        format!(" {} {} {} {} {} {addr}", pad(no, 3), pad(name, 15), pad(project, 10), pad(job, 25), pad(status, 9))
+            .trim_end()
+            .to_string()
+    };
+    let mut out = vec![line("#", "이름", "프로젝트", "직무 (직함)", "상태", "주소")];
+    for e in rows {
+        let no = e.slot.map(|n| format!("{n:02}")).unwrap_or_else(|| "--".into());
+        let mut name = e.name.clone();
+        if !e.persona.is_empty() && e.persona != e.name {
+            name = format!("{name} ({})", e.persona);
+        }
+        if e.session == me {
+            name.push_str(" (나)");
+        }
+        let job = match (e.job.as_str(), e.title.as_deref().filter(|t| !t.is_empty())) {
+            ("", None) => "—".to_string(),
+            ("", Some(t)) => t.to_string(),
+            (j, None) => j.to_string(),
+            (j, Some(t)) => format!("{j} ({t})"),
+        };
+        let status = if e.status.is_empty() { "-" } else { &e.status };
+        out.push(line(&no, &name, &e.project, &job, status, &address(dir, e)));
+    }
+    out.join("\n")
 }
 
 /// "@이름" → 세션 id (M4) — 세션 id 그대로 / 슬롯 표시 이름 / 페르소나 id / 페르소나 이름 순서.
@@ -570,7 +655,7 @@ mod tests {
         assert_eq!(resolve_in(&d, "w1", "@없는이름").unwrap_err(), "UNKNOWN_RECIPIENT");
         // 내 프로젝트(w9)에 없고 다른 프로젝트 둘 이상 — 복사 가능한 후보 주소
         let err = resolve_in(&d, "w9", "@카이").unwrap_err();
-        assert_eq!(err, "AMBIGUOUS:@카이@app, @카이@app-2, @카이@tool");
+        assert_eq!(err, "AMBIGUOUS:@카이@app · @카이@app-2 · @카이@tool");
     }
 
     #[test]
@@ -586,23 +671,42 @@ mod tests {
         assert_eq!(delivery_text("shell", false, false, || 0), "전달함"); // 기본 터미널 — 화면 에코
         assert!(delivery_text("shell", true, false, || 0).starts_with("대기 — 에이전트가 아직")); // 인박스
         assert!(delivery_text("shell", false, true, || 0).starts_with("대기 — 손으로")); // BR-02 쌓기
+        assert!(delivery_text("idle", false, true, || 0).starts_with("대기 — 손으로")); // 채택돼 idle이어도
         assert!(delivery_text("starting", true, false, || 0).starts_with("대기 — "));
-        assert_eq!(delivery_text("busy", true, false, || 3), "대기 — 상대 작업 중(대기 3건)");
-        assert_eq!(delivery_text("waiting", true, false, || 0), "대기 — 상대 작업 중(대기 1건)");
-        assert_eq!(delivery_text("dead", true, false, || 0), "대기 — 상대 세션 꺼짐 (켜지면 받는다)");
+        assert_eq!(delivery_text("busy", true, false, || 2), "대기 — 상대 작업 중 (대기 2건) · 턴이 끝나면 전달");
+        assert_eq!(delivery_text("waiting", true, false, || 0), "대기 — 상대 작업 중 (대기 1건) · 턴이 끝나면 전달");
+        assert_eq!(delivery_text("dead", true, false, || 0), "대기 — 상대 세션 꺼짐 · 켜지면 전달");
     }
 
     #[test]
-    fn who_lists_my_project_first_with_addresses() {
+    fn size_and_display_width() {
+        assert_eq!(fmt_size(900), "900B");
+        assert_eq!(fmt_size(3277), "3.2KB");
+        assert_eq!(cols("카이 (나)"), 9);
+        assert_eq!(cols("—"), 1);
+    }
+
+    /// eqmux who (시안 T36ZZ) — 고정폭 표, 내 프로젝트 먼저, 겹치는 이름만 프로젝트를 붙인 주소
+    #[test]
+    fn who_table_matches_mockup() {
         let mut d = dir();
-        d[0].slot = Some(1);
+        d[0].slot = Some(3);
+        d[0].persona = "카이".into(); // 디렉터리의 persona는 표시 이름이다 (C4)
         d[0].job = "개발".into();
         d[0].title = Some("클라이언트 개발자".into());
-        d[0].status = "idle".into();
-        let t = who_text(&d, "w2");
+        d[0].status = "busy".into();
+        d[1].slot = Some(4);
+        d[1].name = "백엔드".into();
+        d[1].persona = "노엘".into();
+        d[1].job = "개발".into();
+        d[1].title = Some("서버 개발자".into());
+        d[1].status = "idle".into();
+        let t = who_text(&d, "w1", "kai@w1");
         let lines: Vec<&str> = t.lines().collect();
-        assert!(lines[0].ends_with("· @B02") && lines[1].ends_with("· @카이")); // 내 프로젝트(w2)가 먼저, 주소에 프로젝트 없음
-        assert!(t.contains("01 카이 · app · 클라이언트 개발자 (개발) · idle · @카이@app"));
-        assert_eq!(who_text(&[], "w1"), "열린 세션이 없습니다");
+        assert_eq!(lines[0], " #   이름            프로젝트   직무 (직함)               상태      주소");
+        assert_eq!(lines[1], " 03  카이 (나)       app        개발 (클라이언트 개발자)  busy      @카이@app");
+        assert_eq!(lines[2], " 04  백엔드 (노엘)   app        개발 (서버 개발자)        idle      @백엔드");
+        assert!(lines.iter().any(|l| l.ends_with("@B02") && l.contains(" —  "))); // 하나뿐인 이름 · 직무 없음
+        assert_eq!(who_text(&[], "w1", "x"), "열린 세션이 없습니다");
     }
 }

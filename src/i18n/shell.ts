@@ -17,6 +17,38 @@ export const dict: Record<string, string> = {
   // ── AppBar 0.5 — 탭 메뉴 · 벨 ──
   "워크스페이스 열기·관리": "Open or manage workspaces",
   "워크스페이스 메뉴": "Workspace menu",
+  "패널 닫기": "Close panel",
+  "서버 셸": "Server shell",
+  "셸만 열려 있습니다": "Only the shell is open",
+
+  // ── 사이드 패널 0.5 시안 — 실행·코드·로그·브라우저 ──
+  "실측 {n} · 새 {m}": "Live {n} · new {m}",
+  "목 {n} · 새 {m}": "Mock {n} · new {m}",
+  "열린 포트 · 이 워크스페이스의 프로세스": "Open ports · processes in this workspace",
+  "다시 실측": "Re-scan",
+  "브라우저로 열기": "Open in browser",
+  "포트 {n} · 새 {m}": "Ports {n} · new {m}",
+  "마지막 명령 없음 — 이 셸에서 실행한 명령을 기억합니다": "No last command — commands run in this shell are remembered",
+  변경: "Changed",
+  "변경 {n}건 diff · 에디터로 열기": "{n} changes · open diff in the editor",
+  내보내기: "Export",
+  외부로: "External",
+
+  // ── WorkspaceConnection 0.5 시안 (EYy9T) ──
+  "워크스페이스 열기 · 관리": "Open · manage workspaces",
+  "탭 줄의 + 로 연다 · 열려 있지 않은 워크스페이스가 위":
+    "Opened from + in the tab bar · workspaces not open are listed first",
+  "폴더 찾기…": "Browse folder…",
+  "클론…": "Clone…",
+  "열려 있지 않음": "Not open",
+  "{branch} · {n} 세션": "{branch} · {n} sessions",
+  "{branch} · {n} 세션 저장됨": "{branch} · {n} sessions saved",
+  "경로 재지정": "Relocate path",
+  '등록된 저장소가 없습니다. "폴더 찾기…"로 시작하세요.': 'No repositories registered. Start with "Browse folder…".',
+  "원격 (origin)": "Remote (origin)",
+  "저장된 세션": "Saved sessions",
+  "{n} · 재개 가능 {m}": "{n} · {m} resumable",
+  "등록 해제…": "Unregister…",
   폴더: "Folder",
   "경로를 찾을 수 없음": "Path not found",
   "원격 저장소 열기": "Open remote repository",
@@ -57,6 +89,17 @@ export const dict: Record<string, string> = {
   // ── TeamComposition (0.5 — 가짜 동작 제거) ──
   "자동 저장됨": "Saved automatically",
   "관제 화면으로": "Go to control",
+  "편성은 바뀔 때마다 .eqmux/team.json · team.md에 저장됩니다": "The lineup is saved to .eqmux/team.json · team.md on every change",
+  "기본 편성 채우기 ({name} 프리셋)": "Fill default lineup ({name} preset)",
+  "팀 관계 표 (team.md 그대로)": "Team relations (same as team.md)",
+  권한: "Permissions",
+  "기본 터미널 이름은 team.json이 아니라 이 기기의 앱 데이터에 남습니다 (커밋 대상 아님)":
+    "Default terminal names live in this device's app data, not team.json (not committed)",
+  "주고받은 메시지 없음": "No messages exchanged",
+  "프리셋 · 라이브러리 실데이터": "Presets · from the library",
+  "슬롯 {n}": "{n} slots",
+  "team.json에서 파생": "Derived from team.json",
+  "세션마다 합성": "Composed per session",
 
   // ── DefaultTerminalSetup (0.5 — 실제 값) ──
   "역할 세션은 팀 캐스팅에서": "Role sessions are set up in team casting",
@@ -64,7 +107,6 @@ export const dict: Record<string, string> = {
   "서버를 다시 실행하지 못했습니다 — {err}": "Could not restart the server — {err}",
   "기본 셸은 설정의 '기본 셸' 값입니다. 열기 전에는 아무것도 실행하지 않습니다.":
     "The shell is the Default shell from Settings. Nothing runs before you open it.",
-  "파일이 원본 · 바뀔 때마다 자동 저장 · team.json/team.md는 커밋": "Files are the source · saved on every change · commit team.json/team.md",
   로그: "Logs",
   브라우저: "Browser",
   "패널을 왼쪽으로": "Move panel to the left",
@@ -76,28 +118,17 @@ export const dict: Record<string, string> = {
   // ── LayoutPicker ──
   "페인 배치": "Pane layout",
   "현재 워크스페이스 · {n}개 세션 · 선택 즉시 미리보기": "Current workspace · {n} sessions · previews on select",
-  선택됨: "Selected",
-  "적용 후 분할선을 드래그해 비율을 조정할 수 있습니다.": "After applying, drag the dividers to adjust ratios.",
-  "배치 적용": "Apply layout",
+  현재: "Current",
+  "적용 후 분할선을 드래그해 비율을 조정할 수 있습니다 · 슬롯 번호는 배치와 무관하게 그대로입니다":
+    "After applying, drag the dividers to adjust ratios · slot numbers stay the same in every layout",
 
   // ── DefaultTerminalSetup ──
   "기본 터미널 구성": "Default terminal setup",
-  "역할 없는 셸 세션 설정": "roleless shell session setup",
-  "터미널 열기": "Open terminal",
   "역할 팀 구성": "Role team setup",
-  "변경하면 실행 방식 선택 단계로 돌아갑니다.": "Changing this returns to the launch-mode step.",
-  "역할 없이, 바로 터미널": "No roles — straight to the terminal",
-  "팀·역할·임무를 지정하지 않은 일반 셸 세션입니다. 현재 저장소를 그대로 열고 필요할 때 역할 세션으로 전환할 수 있습니다.":
-    "A plain shell session with no team, role, or mission. Opens the current repo as-is; switch to role sessions whenever needed.",
-  "✓ 추가 설정 없이 즉시 시작": "✓ Starts instantly, no extra setup",
-  "✓ 워크스페이스당 최대 {n}개 세션": "✓ Up to {n} sessions per workspace",
-  "✓ 언제든 역할 · 임무 세션으로 전환": "✓ Switch to role/mission sessions anytime",
-  "스크롤백과 세션 상태는 기존 WAL 정책으로 보존됩니다.": "Scrollback and session state are preserved under the existing WAL policy.",
-  "01 · 기본": "01 · default", // 슬롯 라벨 — 페르소나 단계 "기본"(Basic, roles.ts)과 키를 분리한다
-  "기본 터미널 구성을 저장하시겠습니까?": "Save this default terminal setup?",
-  "팀 역할은 비워 두고 현재 저장소와 셸 설정만 워크스페이스에 기록합니다.":
-    "Team roles stay empty; only the current repo and shell settings are recorded to the workspace.",
-  "저장 후 열기": "Save and open",
+  "실제 기본 셸과 브랜치를 보입니다 · 열기 전에는 아무것도 실행하지 않습니다":
+    "Shows the real default shell and branch · nothing runs before you open it",
+  "실행 방식": "Launch mode",
+  "이 슬롯은 비워 둡니다": "This slot stays empty",
 
   // ── WorkspaceConnection ──
   "clone 실패": "clone failed",

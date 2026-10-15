@@ -3,12 +3,14 @@
 // 그 밖의 파일은 상대 경로를 직접 입력해 연다. 읽기는 fs_read(워크스페이스 밖 거부 · 1MB 상한 ·
 // UTF-8만)를 그대로 쓴다 — 여기서 파일을 따로 열지 않는다.
 // 본문 링크는 가로챈다 — 웹뷰가 앱 화면째 이동해 버리므로 http는 브라우저 패널로, .md는 이 패널로.
-import { createResource, createSignal, For, Show } from "solid-js";
+import { createEffect, createResource, createSignal, For, onCleanup, Show } from "solid-js";
 import { fsRead, fsTree } from "../backend/panels";
-import { isTauri } from "../backend/pty";
-import { openInBrowserPanel, scopeWorkspace } from "../state";
+import { isTauri, revealPath } from "../backend/pty";
+import { openInBrowserPanel, scopeWorkspace, setPanelNote } from "../state";
 import { t } from "../i18n";
+import { Icon } from "./icons";
 import { markdownHtml } from "./markdownHtml";
+import { notify } from "./ui";
 
 const MD_RE = /\.(md|markdown|mdx)$/i;
 
@@ -62,15 +64,20 @@ export function MdViewTab() {
     else if (MD_RE.test(href)) void open(resolveRel(rel(), href));
   };
 
+  // 세그먼트 줄 오른쪽 요약 (0.5 시안 E7Ixk6) — `docs/ · 42 files`
+  createEffect(() => {
+    const dir = rel().includes("/") ? `${rel().slice(0, rel().lastIndexOf("/"))}/` : (ws()?.name ?? t("워크스페이스 탭을 먼저 여세요"));
+    setPanelNote(`${dir} · ${files()?.length ?? 0} files`);
+  });
+  onCleanup(() => setPanelNote(""));
+  const reveal = async () => {
+    const w = ws();
+    if (w && !(await revealPath(rel() || w.path, w.path))) notify(t("폴더를 열 수 없습니다 — 경로가 없어졌습니다"));
+  };
+
   return (
     <div class="browserp">
-      <div class="panel-head-row">
-        <span class="panel-title">MDView</span>
-        <span class="mono muted" style={{ "font-size": "10px" }}>
-          {ws()?.name ?? t("워크스페이스 탭을 먼저 여세요")}
-        </span>
-      </div>
-
+      <div class="mdview-head">
       <div class="card inset browserp-url mono">
         <input
           list="mdview-files"
@@ -90,7 +97,12 @@ export function MdViewTab() {
             void open(rel());
           }}
         >
-          ⟳
+          <Icon name="refresh-cw" size={12} />
+        </button>
+      </div>
+        <button class="btn" disabled={!ws()} onClick={() => void reveal()}>
+          <Icon name="folder-open" size={12} />
+          {t("탐색기")}
         </button>
       </div>
       <Show when={error()}>

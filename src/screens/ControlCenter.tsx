@@ -22,7 +22,8 @@ import {
   tick,
   toggleExplorer,
 } from "../state";
-import { Chip, ConfirmDialog, ContextMenu, Eyebrow, FieldHint, Identity, notify, PersonaDot, StatusLabel, StopConfirm } from "../components/ui";
+import { Chip, ConfirmDialog, ContextMenu, Eyebrow, FieldHint, Identity, notify, Segmented, StatusLabel, StopConfirm } from "../components/ui";
+import { jobMeta } from "../jobs";
 import type { ChipTone, MenuGroup } from "../components/ui";
 import { injectPending, pendingCount, pendingFor, sendConversation, unmanagedAgent } from "../backend/conversation";
 import { nextUnseen } from "../backend/attention";
@@ -36,7 +37,7 @@ import { autoAssignDefault, refreshMissions } from "../backend/missions";
 import { clipWriteText, echoPty, isTauri, killPty, onPtyOutput, revealPath, storePurgeScrollback, storeUsageReal, writePty } from "../backend/pty";
 import type { StoreUsageReal } from "../backend/pty";
 import { removeRoleFile } from "../backend/roles";
-import { maxSlots } from "../backend/settings";
+import { maxSlots, settings, toggleMuted } from "../backend/settings";
 import { ensureWorktree } from "../backend/team";
 import { gridTemplateStyle, PaneDividers } from "../components/PaneDividers";
 import { SidePanel } from "../components/SidePanel";
@@ -55,7 +56,7 @@ import { t, tf } from "../i18n";
 import { SessionDetailPanel } from "./SessionDetailPanel";
 import { TranscriptPane } from "./TranscriptPane";
 import type { AgentCliId, Session, Workspace } from "../types";
-import { AGENT_CLI_LABEL, cliOf, effectivePermissions, effectiveTitle, SESSION_NAME_MAX, sessionDisplayName, sessionName, slotNo } from "../types";
+import { AGENT_CLI_LABEL, agentAttached, cliOf, effectivePermissions, effectiveTitle, SESSION_NAME_MAX, sessionDisplayName, sessionName, slotNo } from "../types";
 
 /** 셸에 에이전트 명령을 쳐 넣는다 — claude 말고는 EQMUX가 관리하는 스폰 경로가 없다
  *  (역할 주입·훅·재개는 agent.rs의 ClaudeCodeAdapter 전용). 사람이 터미널에 직접 치는 것과
@@ -140,6 +141,93 @@ export function ControlCenter(props: { workspace: Workspace }) {
       setFocusRequest(undefined); // 한 번 쓰고 비운다 — 이 탭에 다시 왔다고 또 잡지 않게
     }),
   );
+  // 상단 줄 요약 (시안 Context) — 관리 엔진 종류 수, 확인 단계 신호가 있는 세션 수
+  // 상태바 엔진 칸 — 관리 에이전트가 붙어 있는 엔진만 "CLAUDE 2 · CODEX 1". 없으면 칸이 없다
+  const attachedByEngine = () =>
+    (["claude", "codex"] as AgentCliId[])
+      .map((c) => [c, sessions().filter((x) => x.personaId && cliOf(x) === c && agentAttached(x)).length] as const)
+      .filter(([, n]) => n > 0)
+      .map(([c, n]) => `${c.toUpperCase()} ${n}`)
+      .join(" · ");
+  const engineCount = () => new Set(sessions().filter((s) => s.personaId).map((s) => cliOf(s))).size;
+  const confirmCount = () => sessions().filter((s) => attnChips(s)[0]?.tone === "blue").length;
+  const emptySlots = () => {
+    const used = new Set(sessions().map((s) => s.slot));
+    return Array.from({ length: maxSlots() }, (_, i) => i + 1).filter((n) => !used.has(n));
+  };
+  /** 레일 세션 행 — 클릭=페인 포커스 · ⓘ=상세 · 우클릭=메뉴 (U2·U8). 상세 버튼을 품어야 해서 button이 아니라 div */
+  const railRow = (s: Session) => (
+    <div
+      class="rail-av"
+      role="button"
+      tabIndex={0}
+      classList={{ sel: selected()?.id === s.id }}
+      title={[
+        `${slotNo(s.slot)} ${sessionName(s, persona(s.personaId))}`,
+        effectiveTitle(s, persona(s.personaId)),
+        jobName(s.jobId),
+        s.personaId ? AGENT_CLI_LABEL[cliOf(s)] : undefined,
+        s.status,
+      ]
+        .filter(Boolean)
+        .join(" · ")}
+      onClick={() => {
+        setSelectedSession(s.id);
+        backend.markSeen(s.id); // 페인을 보는 동작이다 (FR-G-44)
+        setCenterTab("terminal");
+      }}
+      onDblClick={() => setDetailOpen(true)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          setSelectedSession(s.id);
+          backend.markSeen(s.id);
+          setCenterTab("terminal");
+        }
+      }}
+      onContextMenu={(e) => openSessMenu(e, s)}
+    >
+      {/* 점 하나 — 주의 신호가 있으면 그 단계 색, 없으면 상태 색 (§페인 헤더 문법) */}
+      <span class={attnChips(s)[0] ? `rail-attn ${attnChips(s)[0]!.tone}` : `sdot ${s.status}`} />
+      {/* 번호는 헤더와 같은 두 자리 슬롯 번호 — 헤더와 레일을 번호로 맞춰 본다 */}
+      <span class="rail-no mono">{slotNo(s.slot)}</span>
+      <span class="rail-nm mono">{sessionName(s, persona(s.personaId))}</span>
+      <Show when={s.personaId}>
+        <span class="rail-jobb mono">{jobMeta(s.jobId, jobName(s.jobId)).badge}</span>
+      </Show>
+      {/* 대기 중인 세션만 — 사람이 답해야 진행되는 자리라 Focus를 상시 노출한다.
+          나머지 행은 호버 때만 뜨는 ⓘ만 갖는다 (U2 — 행 클릭은 페인 선택) */}
+      <Show when={s.status === "waiting"}>
+        <button
+          class="rail-focus mono"
+          title={t("Focus — 이 페인을 전체 화면으로 잡고 키보드를 넘깁니다")}
+          onClick={(e) => {
+            e.stopPropagation();
+            focusSession(s);
+          }}
+        >
+          ⛶
+        </button>
+      </Show>
+      <button
+        class="rail-info mono"
+        title={t("세션 상세")}
+        onClick={(e) => {
+          e.stopPropagation();
+          setSelectedSession(s.id);
+          setDetailOpen(true);
+        }}
+      >
+        ⓘ
+      </button>
+      <Show when={s.unseen}>
+        <span class="unread-dot rail-unread" title={t("미확인")} />
+      </Show>
+    </div>
+  );
+  // 레일 항목 — 세션과 빈 슬롯 번호를 슬롯 순으로 (QA: 04 카이가 01~03 빈 슬롯보다 먼저 보였다)
+  const railItems = (): (Session | number)[] =>
+    [...sessions(), ...emptySlots()].sort((x, y) => (typeof x === "number" ? x : x.slot) - (typeof y === "number" ? y : y.slot));
   /** 지금 사람을 기다리는 세션 — 오래 기다린 것이 먼저다 (ATTENTION_ORDER와 같은 취지) */
   const waitingSessions = createMemo(() =>
     sessions()
@@ -410,22 +498,32 @@ export function ControlCenter(props: { workspace: Workspace }) {
   const [addCli, setAddCli] = createSignal<AgentCliId>("claude"); // 관리 기동 엔진 (M37)
   const [addErr, setAddErr] = createSignal<string | undefined>(undefined);
   const [addName, setAddName] = createSignal(""); // 세션 이름 — 비우면 자동(기본 터미널)·페르소나 이름(역할)
+  const [addMode, setAddMode] = createSignal<"shell" | "role">("role"); // 시안 xukml 세그먼트
+  const [addShell, setAddShell] = createSignal(""); // 이 세션의 셸 — 열 때 기본 셸로 채운다
   const addNameErr = () => backend.sessionNameError(props.workspace.id, addName());
   const availablePersonas = () => {
     const used = new Set(sessions().map((x) => x.personaId));
     return backend.listPersonas().filter((p) => !used.has(p.id));
   };
+  // 페르소나의 저장 직무 — 미지정·삭제된 직무면 개발 → 첫 직무 (세션 상세 personaJob과 같은 규칙)
+  const personaJobId = (pid: string) => {
+    const jobs = backend.listJobs();
+    const saved = persona(pid)?.job;
+    return jobs.find((j) => j.id === saved)?.id ?? jobs.find((j) => j.id === "dev")?.id ?? jobs[0]?.id ?? "";
+  };
   const openAdd = () => {
     setAddPersona(availablePersonas()[0]?.id ?? "");
-    setAddJob(backend.listJobs()[0]?.id ?? "");
+    setAddJob(personaJobId(addPersona()));
     setAddWorktree(false);
     setAddErr(undefined);
     setAddName("");
+    setAddShell(defaultShell().label);
+    setAddMode(availablePersonas().length > 0 ? "role" : "shell");
     setAddOpen(true);
   };
   const addTerminal = () => {
     if (addNameErr()) return;
-    backend.addTerminal(props.workspace.id, defaultShell().label, undefined, addName());
+    backend.addTerminal(props.workspace.id, addShell() || defaultShell().label, undefined, addName());
     setAddOpen(false);
   };
   // 셸 실행 에이전트 열기 (codex 등) — 설치 확인은 카드를 내놓을 때 이미 끝났다.
@@ -433,7 +531,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
   // 화면 에코까지만 간다 (P-2). 관리 에이전트는 이 경로가 아니라 addRoleSession이다.
   const addCliSession = (cmd: string) => {
     if (addNameErr()) return;
-    const created = backend.addTerminal(props.workspace.id, defaultShell().label, undefined, addName());
+    const created = backend.addTerminal(props.workspace.id, addShell() || defaultShell().label, undefined, addName());
     if (created) whenSessionReady(created.id, (id) => runCliIn(id, cmd));
     setAddOpen(false);
   };
@@ -475,9 +573,15 @@ export function ControlCenter(props: { workspace: Workspace }) {
   // 주의 칩 (§주의 신호) — 순위 순. 헤더는 첫 칩만, 나머지는 +N 메뉴(chipMenu)로
   const [chipMenu, setChipMenu] = createSignal<{ x: number; y: number; s: Session } | undefined>(undefined);
   const [inboxPop, setInboxPop] = createSignal<string | undefined>(undefined); // 넣기 팝오버 세션 id
+  const [reportAsk, setReportAsk] = createSignal<Session | undefined>(undefined); // 보고 요청 확인
+  const nameOfId = (id: string) => {
+    const s = sessions().find((x) => x.id === id);
+    return s ? sessionName(s, persona(s.personaId)) : id;
+  };
   type AttnChip = {
     tone: ChipTone;
     text: string;
+    short?: string; // 8슬롯처럼 좁은 페인에서 (시안 T1sVdJ)
     title?: string;
     action?: { label: string; onClick: () => void; title?: string };
     onClick?: () => void;
@@ -487,15 +591,18 @@ export function ControlCenter(props: { workspace: Workspace }) {
     if (s.status === "waiting" && s.waitingFor)
       out.push({
         tone: "amber",
-        text: `⛶ ${t(s.waitingFor)}`,
+        text: `${t("승인 대기")} · ${t(s.waitingFor)}`,
+        short: t("승인 대기"),
         title: t("클릭하면 이 페인을 Focus로 잡습니다 — 답은 여기에 직접 입력합니다"),
         onClick: () => focusSession(s),
       });
+    if (s.status === "dead") out.push({ tone: "red", text: `${t("종료됨")} · exit ${s.exitCode ?? "?"}`, short: `exit ${s.exitCode ?? "?"}` });
     const n = unmanagedAgent(s) ? pendingCount(s.id) : 0;
     if (n > 0)
       out.push({
         tone: "blue",
         text: tf("메시지 {n}건", { n }),
+        short: tf("메시지 {n}", { n }),
         title: t("손으로 띄운 에이전트라 자동으로 넣지 않습니다"),
         action: { label: t("넣기"), onClick: () => setInboxPop(s.id) },
       });
@@ -503,14 +610,12 @@ export function ControlCenter(props: { workspace: Workspace }) {
       out.push({
         tone: "blue",
         text: t("✓ 턴 끝남 · 보고 전"),
+        short: t("✓ 보고 전"),
         title: t("맡은 handoff·ask에 아직 report --done이 없습니다"),
         action: {
           label: t("보고 요청"),
           title: t("이 세션에 결과를 report --done으로 알려 달라는 ask를 보냅니다"),
-          onClick: () =>
-            void sendConversation(s.workspaceId, s.id, "ask", t("맡은 일의 결과를 eqmux report --done 으로 알려 주세요")).then(
-              (err) => err && notify(err),
-            ),
+          onClick: () => setReportAsk(s),
         },
       });
     if (s.unseenDone === "report") out.push({ tone: "blue", text: t("✓ 완료 보고"), title: s.doneText });
@@ -565,12 +670,13 @@ export function ControlCenter(props: { workspace: Workspace }) {
     },
   });
   const removeGroup = (s: Session): MenuGroup => [
-    { label: t(s.personaId ? "역할 세션 제거…" : "터미널 제거"), danger: true, action: () => removeTerminal(s) },
+    { label: t("슬롯 비우기…"), danger: true, action: () => removeTerminal(s) },
   ];
   const sessMenuGroups = (s: Session) => [
     [
       {
         label: t("페인으로 점프"),
+        kbd: `Ctrl+Alt+${s.slot}`,
         action: () => {
           setSelectedSession(s.id);
           backend.markSeen(s.id);
@@ -583,6 +689,11 @@ export function ControlCenter(props: { workspace: Workspace }) {
         label: t("작업 폴더 열기"),
         action: () =>
           void revealPath(s.cwd || props.workspace.path).then((ok) => ok || notify(t("폴더를 열 수 없습니다"))),
+      },
+      {
+        label: t("알림 음소거"),
+        checked: settings().muted.includes(s.id),
+        action: () => toggleMuted(s.id),
       },
     ],
     [
@@ -609,7 +720,8 @@ export function ControlCenter(props: { workspace: Workspace }) {
           ]
         : []),
       {
-        label: t("중지"),
+        label: t("중지…"),
+        danger: true,
         disabled: s.status === "dead",
         action: () => setStopTarget(s), // BR-08 — 확인을 거친다
       },
@@ -778,6 +890,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
                   persona={persona(s.personaId)?.name}
                   title={effectiveTitle(s, persona(s.personaId))}
                   cli={s.personaId ? cliOf(s) : undefined}
+                  job={s.personaId ? jobMeta(s.jobId, jobName(s.jobId)).badge : undefined}
                 />
               </button>
               {/* 마지막 한 줄 요약 (M35) — 주의 칩이 없을 때만, 남는 폭만 쓴다 */}
@@ -789,7 +902,9 @@ export function ControlCenter(props: { workspace: Workspace }) {
                 </Show>
               </span>
               <Show when={attnChips(s)[0]}>
-                {(c) => <Chip tone={c().tone} text={c().text} title={c().title} action={c().action} onClick={c().onClick} />}
+                {(c) => (
+                  <Chip tone={c().tone} text={c().text} short={c().short} title={c().title} action={c().action} onClick={c().onClick} />
+                )}
               </Show>
               <Show when={attnChips(s).length > 1}>
                 <Chip
@@ -887,9 +1002,10 @@ export function ControlCenter(props: { workspace: Workspace }) {
   const statusBar = () => (
     <div class="terminal-statusbar mono">
       <span>
-        <span style={{ color: "var(--eq-green)" }}>◉</span> PTY {sessions().filter((x) => x.status !== "dead").length}
+        <span style={{ color: "var(--eq-green)" }}>◉</span> PTY {sessions().filter((x) => x.status !== "dead").length} ONLINE
       </span>
       <span>▦ {t(PANE_LAYOUTS.find((l) => l.key === paneLayout())?.name ?? "")}</span>
+      <Show when={attachedByEngine()}>{(txt) => <span>{txt()}</span>}</Show>
       {/* Session.scrollbackLines는 목 시드에만 값이 있다 — 실행 모드에서는 아무도 갱신하지
           않아 영원히 0.0K였다. 같은 줄의 WAL 칸이 이미 읽고 있는 실측을 쓴다 (B62) */}
       <span>
@@ -967,8 +1083,9 @@ export function ControlCenter(props: { workspace: Workspace }) {
       <div class="cc-top">
         <div class="cc-title" title={props.workspace.path}>
           <h1>{props.workspace.name}</h1>
-          <span class="mono muted">
-            {props.workspace.branch ?? "—"} · {sessions().length}/{maxSlots()}
+          <span class="mono muted cc-count" title={`${props.workspace.branch ?? "—"} · ${sessions().length}/${maxSlots()}`}>
+            {sessions().length} {sessions().length === 1 ? "SESSION" : "SESSIONS"}
+            <Show when={engineCount() > 0}> · {engineCount()} {engineCount() === 1 ? "ENGINE" : "ENGINES"}</Show>
           </span>
         </div>
         <div class="cc-seg">
@@ -986,14 +1103,18 @@ export function ControlCenter(props: { workspace: Workspace }) {
         <div style={{ flex: 1 }} />
         {/* 응답 대기 (Focus) — 사람이 답해야 진행되는 페인이 있으면 상단 바가 먼저 알린다.
             누르면 가장 오래 기다린 페인을 그대로 잡는다. 대화로는 답할 수 없는 상태다 */}
-        <Show when={waitingSessions().length > 0}>
-          <button
-            class="btn cc-focus-chip"
+        {/* 응답 대기가 있으면 amber, 없고 확인 신호만 있으면 blue (시안 HLeeM · d7GvE) — 둘 다 nextUnseen */}
+        <Show when={waitingSessions().length > 0 || confirmCount() > 0}>
+          <Chip
+            tone={waitingSessions().length > 0 ? "amber" : "blue"}
+            text={
+              waitingSessions().length > 0
+                ? `⛶ ${t("응답 대기")} ${waitingSessions().length} · Ctrl+Shift+U`
+                : `⛶ ${t("확인")} ${confirmCount()} · Ctrl+Shift+U`
+            }
             title={t("다음 미확인으로 (Ctrl+Shift+U) — 누를 때마다 기다리는 페인을 차례로 잡습니다. 답은 터미널에 직접 입력합니다")}
             onClick={() => nextUnseen()}
-          >
-            ⛶ {t("응답 대기")} {waitingSessions().length}
-          </button>
+          />
         </Show>
         {/* 셸 선택 — 새로 추가하는 터미널부터 적용된다 */}
         <div class="shell-picker">
@@ -1116,85 +1237,21 @@ export function ControlCenter(props: { workspace: Workspace }) {
         {/* 좌: 세션 리스트 레일 — 아바타 전용 56px 레일의 후신. 가로형 리스트 버튼으로
             이름·직무를 직접 보여준다. 선택은 테두리, 상태는 점, LEAD는 slot 1 관례 */}
         <div class="cc-rail">
-          <For each={sessions()}>
-            {(s) => (
-              /* 클릭=페인 포커스 · ⓘ=상세 · 우클릭=메뉴 (U2·U8) — 상세 버튼을 품어야 해서 button이 아니라 div */
-              <div
-                class="rail-av"
-                role="button"
-                tabIndex={0}
-                classList={{ sel: selected()?.id === s.id }}
-                title={`${sessionDisplayName(s, personaName(s.personaId))} · ${jobName(s.jobId)} — ${s.status}${s.slot === 1 && persona(s.personaId) ? " · LEAD" : ""}`}
-                onClick={() => {
-                  setSelectedSession(s.id);
-                  backend.markSeen(s.id); // 페인을 보는 동작이다 (FR-G-44)
-                  setCenterTab("terminal");
-                }}
-                onDblClick={() => setDetailOpen(true)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    setSelectedSession(s.id);
-                    backend.markSeen(s.id);
-                    setCenterTab("terminal");
-                  }
-                }}
-                onContextMenu={(e) => openSessMenu(e, s)}
-              >
-                <PersonaDot name={sessionDisplayName(s, personaName(s.personaId))} color={persona(s.personaId)?.color ?? "blue"} />
-                <span class="rail-txt">
-                  {/* 번호는 헤더와 같은 두 자리 슬롯 번호 — 헤더와 레일을 번호로 맞춰 본다 */}
-                  <span class="rail-nm">
-                    <span class="rail-no mono">{slotNo(s.slot)}</span> {sessionName(s, persona(s.personaId))}
-                  </span>
-                  <span class="rail-job mono muted">
-                    {effectiveTitle(s, persona(s.personaId)) ? `${effectiveTitle(s, persona(s.personaId))} · ` : ""}
-                    {jobName(s.jobId)}
-                    {s.slot === 1 && persona(s.personaId) ? " · LEAD" : ""}
-                    {s.personaId && cliOf(s) === "codex" ? " · ◇ Codex" : ""}
-                  </span>
-                </span>
-                {/* 레일은 주의 칩 대신 단계 색 점 하나 (§페인 헤더 문법) */}
-                <Show when={attnChips(s)[0]}>
-                  {(c) => <span class={`rail-attn ${c().tone}`} title={c().text} />}
-                </Show>
-                {/* 대기 중인 세션만 — 사람이 답해야 진행되는 자리라 Focus를 상시 노출한다.
-                    나머지 행은 호버 때만 뜨는 ⓘ만 갖는다 (U2 — 행 클릭은 페인 선택) */}
-                <Show when={s.status === "waiting"}>
-                  <button
-                    class="rail-focus mono"
-                    title={t("Focus — 이 페인을 전체 화면으로 잡고 키보드를 넘깁니다")}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      focusSession(s);
-                    }}
-                  >
-                    ⛶
-                  </button>
-                </Show>
-                <button
-                  class="rail-info mono"
-                  title={t("세션 상세")}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setSelectedSession(s.id);
-                    setDetailOpen(true);
-                  }}
-                >
-                  ⓘ
+          <div class="rail-head mono">SLOTS</div>
+          <For each={railItems()}>
+            {(it) =>
+              typeof it === "number" ? (
+                /* 빈 슬롯 — 번호를 그대로 보여 슬롯이 곧 번호임을 드러낸다. 누르면 세션 추가 */
+                <button class="rail-av rail-empty" title={t("빈 슬롯에 세션 추가 — 클로드코드 · 코덱스 · 기본 터미널")} onClick={openAdd}>
+                  <span class="rail-dot-empty" />
+                  <span class="rail-no mono">{slotNo(it)}</span>
+                  <span class="rail-nm">{t("빈 슬롯")}</span>
                 </button>
-                <span class={`sdot ${s.status}`} />
-                <Show when={s.unseen}>
-                  <span class="unread-dot rail-unread" title={t("미확인")} />
-                </Show>
-              </div>
-            )}
+              ) : (
+                railRow(it)
+              )
+            }
           </For>
-          <Show when={sessions().length < maxSlots()}>
-            <button class="rail-av add mono" title={t("빈 슬롯에 세션 추가 — 클로드코드 · 코덱스 · 기본 터미널")} onClick={openAdd}>
-              {t("+ 세션 추가")}
-            </button>
-          </Show>
           <div class="rail-sep" />
           {/* 로컬 폴더 — 이 워크스페이스의 작업 폴더. 클릭은 앱 안의 파일 탐색기로 간다
               (M25 전체 화면 팝업, 스코프는 현재 워크스페이스). 임무는 "팀 ▾"에 있다.
@@ -1390,7 +1447,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
           </Show>
 
           <Show when={centerTab() === "transcript" && selected()}>
-            {(s) => <TranscriptPane session={s()} />}
+            {(s) => <TranscriptPane session={s()} onJump={() => setCenterTab("terminal")} />}
           </Show>
         </div>
       </div>
@@ -1451,131 +1508,184 @@ export function ControlCenter(props: { workspace: Workspace }) {
 
       {/* 세션 추가 — 여는 것을 그대로 고른다 (클로드코드 · 코덱스 · 기본 터미널).
           설치되지 않은 CLI는 카드를 내놓지 않는다 — 눌러 봐야 command not found가 전부다. */}
+      {/* 세션 만들기 (시안 xukml) — 제목에 슬롯 번호, 세그먼트로 기본 터미널 · 역할 세션을 가른다 */}
       <Show when={addOpen()}>
         <div class="overlay" onClick={() => setAddOpen(false)}>
-          <div class="dialog" style={{ width: "460px", padding: "16px 18px" }} onClick={(e) => e.stopPropagation()}>
-            <div style={{ "font-weight": 800, "font-size": "14px" }}>{t("빈 슬롯에 세션 추가")}</div>
-            <div class="muted" style={{ "font-size": "11px", margin: "4px 0 12px" }}>
-              {props.workspace.name} · {sessions().length}/{maxSlots()} {t("슬롯 사용 중")}
+          <div class="dialog create-dlg" onClick={(e) => e.stopPropagation()}>
+            <div class="create-t">
+              {tf("슬롯 {no}에 세션 만들기", { no: emptySlots()[0] ? slotNo(emptySlots()[0]) : "—" })}
             </div>
-            {/* 세션 이름 (0.5) — 아래 어느 쪽으로 만들든 같이 쓴다. 비우면 기본 터미널은 자동 이름,
-                역할 세션은 페르소나 이름. 중복이면 쓸 수 있는 이름 하나를 제안한다 */}
-            <div style={{ "margin-bottom": "12px" }}>
-              <div class="role-edit-row">
-                <span class="mono muted" style={{ "font-size": "11px" }}>{t("이름")}</span>
-                <input
-                  style={{ flex: 1, "min-width": 0 }}
-                  value={addName()}
-                  maxLength={SESSION_NAME_MAX}
-                  placeholder={tf("비우면 {auto} · 역할 세션은 페르소나 이름", { auto: backend.autoSessionName(props.workspace.id) })}
-                  onInput={(e) => setAddName(e.currentTarget.value.replace(/[\r\n]/g, ""))}
-                />
-              </div>
-              <FieldHint error={addNameErr() && t(addNameErr()!)} count={addName().length} max={SESSION_NAME_MAX} />
-              <Show when={addNameErr() === "이 워크스페이스에서 이미 쓰는 이름입니다"}>
-                <button class="btn ghost" style={{ "font-size": "11px", padding: "2px 8px" }} onClick={() => setAddName(backend.autoSessionName(props.workspace.id))}>
-                  {tf("{name} 쓰기", { name: backend.autoSessionName(props.workspace.id) })}
-                </button>
-              </Show>
-            </div>
+            <Segmented
+              items={[
+                { value: "shell", label: t("기본 터미널") },
+                { value: "role", label: t("역할 세션") },
+              ]}
+              value={addMode()}
+              onChange={setAddMode}
+              label={t("세션 종류")}
+            />
 
-            <div class="card add-choice role" onClick={(e) => e.stopPropagation()}>
-              <div style={{ width: "100%" }}>
-                <div style={{ "font-weight": 700, "font-size": "12px" }}>⛬ {t("에이전트 열기")}</div>
-                <div class="muted" style={{ "font-size": "11px", "margin-bottom": "8px" }}>
-                  {t("페르소나·직무를 정해 바로 기동 · 역할·권한 플래그·훅이 붙은 유일한 경로 (Claude Code · Codex)")}
-                </div>
-                {/* PATH에 그 CLI가 없으면 기동은 스폰에서 실패한다 — 누르기 전에 말한다.
-                    카드를 숨기지는 않는다: 역할 세션은 팀 편성의 기본 단위라 자리가 사라지면
-                    "왜 없지"가 된다. 설치 상태는 설정 > CLI 에이전트에서 다시 확인할 수 있다. */}
-                <Show
-                  when={availablePersonas().length > 0}
-                  fallback={<div class="muted mono" style={{ "font-size": "11px" }}>{t("남은 페르소나가 없습니다")}</div>}
-                >
-                  {/* 엔진 (M37) — 둘 다 같은 역할·훅·메시지 버스가 붙는다. 차이는 재개 앵커와
-                      권한 번역(Claude: permission-mode · Codex: sandbox+approval)뿐이다 */}
-                  <div class="role-edit-row" style={{ "margin-bottom": "6px" }}>
-                    <span class="mono muted" style={{ "font-size": "11px" }}>{t("엔진")}</span>
-                    <select value={addCli()} onChange={(e) => setAddCli(e.currentTarget.value as AgentCliId)}>
-                      <For each={managedClis()}>{(c) => <option value={c}>{AGENT_CLI_LABEL[c]}</option>}</For>
-                    </select>
+            <Show when={addMode() === "role"}>
+              <Show
+                when={availablePersonas().length > 0}
+                fallback={<div class="muted mono create-note">{t("남은 페르소나가 없습니다")}</div>}
+              >
+                <label class="create-f">
+                  <span class="create-l">{t("페르소나")}</span>
+                  <select
+                    value={addPersona()}
+                    onChange={(e) => {
+                      setAddPersona(e.currentTarget.value);
+                      setAddJob(personaJobId(e.currentTarget.value));
+                    }}
+                  >
+                    <For each={availablePersonas()}>
+                      {(p) => (
+                        <option value={p.id} selected={p.id === addPersona()}>
+                          {p.name}
+                          {p.title ? ` · ${p.title}` : ""} ({jobName(personaJobId(p.id))})
+                        </option>
+                      )}
+                    </For>
+                  </select>
+                </label>
+                {/* 엔진 (M37) — 둘 다 같은 역할·훅·메시지 버스가 붙는다. 미설치면 바로 아래에 설치 명령 */}
+                <label class="create-f">
+                  <span class="create-l">{t("엔진")}</span>
+                  <select value={addCli()} onChange={(e) => setAddCli(e.currentTarget.value as AgentCliId)}>
+                    <For each={managedClis()}>
+                      {(c) => (
+                        <option value={c} selected={c === addCli()}>
+                          {AGENT_CLI_LABEL[c]}
+                        </option>
+                      )}
+                    </For>
+                  </select>
+                </label>
+                <Show when={addCliMissing()}>
+                  <div class="engine-missing mono">
+                    <div class="st-dead">{tf("PATH에 {cmd}가 없습니다 — 아래 명령으로 설치한 뒤 다시 감지하세요", { cmd: addCli() })}</div>
+                    <div class="engine-install">
+                      <code>{INSTALL_CMD[addCli()]}</code>
+                      <button class="btn ghost" onClick={() => clipWriteText(INSTALL_CMD[addCli()])}>
+                        {t("복사")}
+                      </button>
+                      <button class="btn ghost" onClick={() => void refreshAgentClis()}>
+                        {t("다시 감지")}
+                      </button>
+                    </div>
                   </div>
-                  {/* 미설치 — 엔진 바로 아래, 같은 그리드. 설치는 사람이 터미널에서 한다 */}
-                  <Show when={addCliMissing()}>
-                    <div class="engine-missing mono">
-                      <div class="st-dead">{tf("PATH에 {cmd}가 없습니다 — 아래 명령으로 설치한 뒤 다시 감지하세요", { cmd: addCli() })}</div>
-                      <div class="engine-install">
-                        <code>{INSTALL_CMD[addCli()]}</code>
-                        <button class="btn ghost" onClick={() => clipWriteText(INSTALL_CMD[addCli()])}>
-                          {t("복사")}
-                        </button>
-                        <button class="btn ghost" onClick={() => void refreshAgentClis()}>
-                          {t("다시 감지")}
-                        </button>
-                      </div>
-                    </div>
-                  </Show>
-                  <div class="role-edit-row">
-                    <select value={addPersona()} onChange={(e) => setAddPersona(e.currentTarget.value)}>
-                      <For each={availablePersonas()}>{(p) => <option value={p.id}>{p.name}</option>}</For>
-                    </select>
-                    <select value={addJob()} onChange={(e) => setAddJob(e.currentTarget.value)}>
-                      <For each={backend.listJobs()}>{(j) => <option value={j.id}>{j.name}</option>}</For>
-                    </select>
-                    <button class="btn primary" onClick={() => void addRoleSession()}>
-                      {t("열기")}
-                    </button>
-                  </div>
-                  {/* 세션 격리 (FR-E-62 · E1′) — 기본은 repo 공유 (FR-E-60) */}
-                  <label class="mono muted" style={{ display: "flex", gap: "6px", "align-items": "center", "font-size": "11px", "margin-top": "8px", cursor: "pointer" }}>
-                    <input type="checkbox" checked={addWorktree()} onChange={(e) => setAddWorktree(e.currentTarget.checked)} />
-                    {t("워크트리 격리 — .eqmux/worktrees/<세션> · 전용 브랜치 eqmux/<세션>")}
-                  </label>
-                  <Show when={addWorktree()}>
-                    <div class="muted" style={{ "font-size": "10px", "margin-top": "4px" }}>
-                      {t("의존성(node_modules 등)은 워크트리마다 별도입니다. 제거 시 워크트리는 남습니다 — 머지·정리는 사람이 합니다")}
-                    </div>
-                  </Show>
-                  <Show when={addErr()}>
-                    <div class="mono st-dead" style={{ "font-size": "10px", "margin-top": "4px" }}>
-                      {addErr()}
-                    </div>
-                  </Show>
                 </Show>
+                <label class="create-f">
+                  <span class="create-l">{t("직무")}</span>
+                  <select value={addJob()} onChange={(e) => setAddJob(e.currentTarget.value)}>
+                    <For each={backend.listJobs()}>
+                      {(j) => (
+                        <option value={j.id} selected={j.id === addJob()}>
+                          {j.name}
+                        </option>
+                      )}
+                    </For>
+                  </select>
+                </label>
+              </Show>
+            </Show>
+
+            {/* 이름 — 두 종류 공통. 자리표시자가 비워 두면 붙을 이름을 보인다 */}
+            <label class="create-f">
+              <span class="create-l">{t("이름")}</span>
+              <input
+                value={addName()}
+                maxLength={SESSION_NAME_MAX}
+                placeholder={
+                  addMode() === "role"
+                    ? tf("비워 두면 {name}", { name: availablePersonas().find((p) => p.id === addPersona())?.name ?? "" })
+                    : tf("비워 두면 {name}", { name: backend.autoSessionName(props.workspace.id) })
+                }
+                onInput={(e) => setAddName(e.currentTarget.value.replace(/[\r\n]/g, ""))}
+              />
+            </label>
+            <FieldHint
+              error={addNameErr() && t(addNameErr()!)}
+              hint={t("24자 이내 · 공백·@·줄바꿈 불가 · 만들 때 한 번 정해져 폴더 이름이 바뀌어도 그대로")}
+              count={addName().length}
+              max={SESSION_NAME_MAX}
+            />
+            <Show when={addNameErr() === "이 워크스페이스에서 이미 쓰는 이름입니다"}>
+              <button class="btn ghost create-suggest" onClick={() => setAddName(backend.autoSessionName(props.workspace.id))}>
+                {tf("{name} 쓰기", { name: backend.autoSessionName(props.workspace.id) })}
+              </button>
+            </Show>
+
+            <Show when={addMode() === "shell"}>
+              <label class="create-f">
+                <span class="create-l">{t("셸")}</span>
+                <select value={addShell()} onChange={(e) => setAddShell(e.currentTarget.value)}>
+                  <For each={SHELLS}>
+                    {(sh) => (
+                      <option value={sh.label} selected={sh.label === addShell()}>
+                        {sh.name}
+                        {sh.label === defaultShell().label ? ` (${t("기본 셸")})` : ""}
+                      </option>
+                    )}
+                  </For>
+                </select>
+              </label>
+              <div class="create-kv">
+                <span class="create-l">{t("브랜치")}</span>
+                <span class="mono">{props.workspace.branch ?? "—"}</span>
               </div>
-            </div>
+              {/* 셸 실행 에이전트 — PATH에 있는 것만. 명령을 치는 것과 같아서 EQMUX가 붙이는 것은 없다 */}
+              <For each={shellClis()}>
+                {(a) => (
+                  <button
+                    class="card add-choice"
+                    title={tf("셸에서 {cmd} 실행 · 역할·훅·재개는 붙지 않고 관제에는 실행 중으로만 보입니다", { cmd: a.cmd })}
+                    onClick={() => addCliSession(a.cmd)}
+                  >
+                    <span style={{ "font-weight": 700, "font-size": "12px" }}>◆ {tf("{name} 열기", { name: a.name })}</span>
+                    <span class="mono muted">→</span>
+                  </button>
+                )}
+              </For>
+            </Show>
 
-            {/* 셸 실행 에이전트 — PATH에 있는 것만. 명령을 치는 것과 같아서 EQMUX가 붙이는 것은 없다 */}
-            <For each={shellClis()}>
-              {(a) => (
-                <button class="card add-choice" onClick={() => addCliSession(a.cmd)}>
-                  <div>
-                    <div style={{ "font-weight": 700, "font-size": "12px" }}>
-                      ◆ {tf("{name} 열기", { name: a.name })}
-                    </div>
-                    <div class="muted" style={{ "font-size": "11px" }}>
-                      {tf("셸에서 {cmd} 실행 · 역할·훅·재개는 붙지 않고 관제에는 실행 중으로만 보입니다", { cmd: a.cmd })}
-                    </div>
-                  </div>
-                  <span class="mono muted">→</span>
-                </button>
-              )}
-            </For>
-
-            <button class="card add-choice" onClick={addTerminal}>
-              <div>
-                <div style={{ "font-weight": 700, "font-size": "12px" }}>&gt;_ {t("기본 터미널 열기")}</div>
-                <div class="muted" style={{ "font-size": "11px" }}>
-                  {t("역할 없이 즉시 시작 · 언제든 역할 부여 가능")}
+            <Show when={addMode() === "role" && availablePersonas().length > 0}>
+              {/* 세션 격리 (FR-E-62 · E1′) — 기본은 repo 공유 (FR-E-60) */}
+              <label class="mono muted create-check">
+                <input type="checkbox" checked={addWorktree()} onChange={(e) => setAddWorktree(e.currentTarget.checked)} />
+                {t("워크트리 격리 — .eqmux/worktrees/<세션> · 전용 브랜치 eqmux/<세션>")}
+              </label>
+              <Show when={addWorktree()}>
+                <div class="muted create-note">
+                  {t("의존성(node_modules 등)은 워크트리마다 별도입니다. 제거 시 워크트리는 남습니다 — 머지·정리는 사람이 합니다")}
                 </div>
-              </div>
-              <span class="mono muted">→</span>
-            </button>
+              </Show>
+              <Show when={addErr()}>
+                <div class="mono st-dead create-note">{addErr()}</div>
+              </Show>
+            </Show>
 
-            <div style={{ display: "flex", "justify-content": "flex-end", "margin-top": "12px" }}>
+            <div class="eq-confirm-f">
               <button class="btn" onClick={() => setAddOpen(false)}>
                 {t("취소")}
               </button>
+              <Show
+                when={addMode() === "role"}
+                fallback={
+                  <button class="btn primary" disabled={!!addNameErr()} onClick={addTerminal}>
+                    {t("열기")}
+                  </button>
+                }
+              >
+                <button
+                  class="btn primary"
+                  disabled={!!addNameErr() || availablePersonas().length === 0}
+                  onClick={() => void addRoleSession()}
+                >
+                  ▶ {tf("{engine} 기동", { engine: AGENT_CLI_LABEL[addCli()] })}
+                </button>
+              </Show>
             </div>
           </div>
         </div>
@@ -1585,14 +1695,26 @@ export function ControlCenter(props: { workspace: Workspace }) {
       <Show when={removeTarget()}>
         {(rt) => (
           <ConfirmDialog
-            title={tf("{name} 제거", { name: sessionDisplayName(rt(), personaName(rt().personaId)) })}
-            body={t(
+            title={tf(rt().personaId ? "{no} {name} 역할 세션을 제거할까요?" : "{no} {name} 기본 터미널을 제거할까요?", {
+              no: slotNo(rt().slot),
+              name: sessionName(rt(), persona(rt().personaId)),
+            })}
+            body={
               rt().personaId
-                ? "제거하면 팀 편성의 이 슬롯이 비워지고 임무 배정이 해제되며 PTY 프로세스가 종료됩니다. 변경은 다음 캐스팅 저장 때 .eqmux/team.json에 반영됩니다."
-                : "셸 프로세스가 종료되고 이 페인의 화면이 닫힙니다. 되돌릴 수 없습니다.",
-            )}
+                ? t("제거하면 팀 편성의 이 슬롯이 비워지고 임무 배정이 해제되며 PTY 프로세스가 종료됩니다. 변경은 다음 캐스팅 저장 때 .eqmux/team.json에 반영됩니다.")
+                : tf("셸 프로세스를 끝내고 이 슬롯({no})을 비웁니다. 되돌릴 수 없습니다. 스크롤백은 30일 보존 규칙대로 남습니다.", { no: slotNo(rt().slot) })
+            }
+            info={
+              rt().personaId
+                ? [`${t("세션")}  ${rt().id} · ${t("슬롯")} ${slotNo(rt().slot)}`, `${t("작업 폴더")}  ${rt().cwd || props.workspace.path}`]
+                : [
+                    `${t("셸")}  ${rt().shell}${rt().pid ? ` · PID ${rt().pid}` : ""}`,
+                    `${t("작업 폴더")}  ${rt().cwd || props.workspace.path}`,
+                    `${t("이름")}  ${sessionName(rt(), undefined)}`,
+                  ]
+            }
             danger
-            confirmLabel={t(rt().personaId ? "세션 제거" : "터미널 제거")}
+            confirmLabel={t("제거")}
             onConfirm={() => doRemove(rt())}
             onCancel={() => setRemoveTarget(undefined)}
           />
@@ -1622,7 +1744,9 @@ export function ControlCenter(props: { workspace: Workspace }) {
         {(id) => (
           <div class="overlay" onClick={() => setInboxPop(undefined)}>
             <div class="dialog eq-confirm" role="dialog" onClick={(e) => e.stopPropagation()}>
-              <div class="eq-confirm-t">{tf("쌓인 메시지 {n}건", { n: pendingFor(id()).length })}</div>
+              <div class="eq-confirm-t">
+                {tf("{name}에 쌓인 메시지 {n}건", { name: nameOfId(id()), n: pendingFor(id()).length })}
+              </div>
               <div class="inbox-pop-list">
                 <For each={pendingFor(id())}>
                   {(m) => (
@@ -1635,7 +1759,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
                   )}
                 </For>
               </div>
-              <div class="eq-confirm-b">{t("승인 창이 떠 있으면 먼저 답하세요. 넣으면 본문과 Enter가 그 페인에 들어갑니다.")}</div>
+              <div class="inbox-pop-warn">{t("승인 창이 떠 있으면 먼저 답하세요. 넣기는 본문과 Enter를 그대로 보냅니다.")}</div>
               <div class="eq-confirm-f">
                 <button class="btn" onClick={() => setInboxPop(undefined)}>
                   {t("닫기")}
@@ -1648,18 +1772,37 @@ export function ControlCenter(props: { workspace: Workspace }) {
                     else setInboxPop(undefined);
                   }}
                 >
-                  {t("넣기")}
+                  {tf("{n}건 넣기", { n: pendingFor(id()).length })}
                 </button>
               </div>
             </div>
           </div>
         )}
       </Show>
+      <Show when={reportAsk()}>
+        {(ra) => (
+          <ConfirmDialog
+            title={tf("{name}에게 보고 요청", { name: sessionName(ra(), persona(ra().personaId)) })}
+            body={t("이 메시지가 그 세션에 들어갑니다. 앱이 스스로 보내지 않습니다.")}
+            info={[`[EQ·ask] ${t("나")}: ${t("맡은 일의 결과를 eqmux report --done 으로 알려 주세요")}`]}
+            confirmLabel={t("보내기")}
+            onConfirm={() => {
+              const s = ra();
+              setReportAsk(undefined);
+              void sendConversation(s.workspaceId, s.id, "ask", t("맡은 일의 결과를 eqmux report --done 으로 알려 주세요")).then(
+                (err) => err && notify(err),
+              );
+            }}
+            onCancel={() => setReportAsk(undefined)}
+          />
+        )}
+      </Show>
       <Show when={stopTarget()}>
         {(st) => (
           <StopConfirm
-            name={sessionDisplayName(st(), personaName(st().personaId))}
-            resumable={st().resumable}
+            session={st()}
+            name={sessionName(st(), persona(st().personaId))}
+            openHandoff={backend.openHandoff(st().id)}
             onConfirm={() => {
               if (isTauri()) killPty(st().id);
               backend.stopSession(st().id);

@@ -2,7 +2,7 @@
 // 브라우저에선 목 로그. 저장: 표시 중인 로그를 파일로 내보내고, 세션 로그 폴더를 연다.
 // Enter = 디스크 전문 검색 (FR-C-16 FTS) — 전체 스크롤백을 뒤지고, 히트 클릭 = 그 지점의
 // 앞뒤 기록을 디스크에서 조각 로드해 보여준다 (FR-C-13·14).
-import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { queryGlobalEvents } from "../backend/events";
 import type { FeedEvent } from "../backend/events";
 import { backend, LOG_METRICS, SERVER_LOGS } from "../backend/mock";
@@ -11,6 +11,8 @@ import { pageScrollback, searchScrollback } from "../backend/panels";
 import type { ScrollbackHit } from "../backend/panels";
 import { isServerTermId } from "../backend/ports";
 import { isTauri, openLogDir } from "../backend/pty";
+import { setPanelNote } from "../state";
+import { Icon } from "./icons";
 import { t, tf } from "../i18n";
 
 /** 세션 id의 표시 이름 — 서버 탭 PTY(`#server@ws`)는 내부 id 대신 "서버" (BR-17) */
@@ -111,6 +113,10 @@ export function LogsPanelTab() {
   );
 
   // 표시 중인 로그를 텍스트 파일로 내보내기 (필터 반영)
+  // 세그먼트 줄 오른쪽 요약 (0.5 시안) — `128 LINES`
+  createEffect(() => setPanelNote(`${metrics().total} LINES`));
+  onCleanup(() => setPanelNote(""));
+
   const exportLogs = () => {
     const text = logs()
       .map((l) => `${l.time} [${l.level.toUpperCase()}] [${l.type}] ${l.message}`)
@@ -125,20 +131,19 @@ export function LogsPanelTab() {
 
   return (
     <div class="logsp">
-      <div class="panel-head-row">
-        <span class="panel-title">{t("로그")}</span>
-        <span class="mono muted" style={{ "font-size": "10px" }}>
-          {metrics().total} LINES
-        </span>
-        <select
-          class="logsp-level mono"
-          value={level()}
-          onChange={(e) => setLevel(e.currentTarget.value as (typeof LEVELS)[number])}
-        >
-          <For each={LEVELS}>{(l) => <option value={l}>{t(l)}</option>}</For>
-        </select>
-        <button class="btn ghost" style={{ padding: "2px 7px" }} title={t("표시 중인 로그를 파일로 저장")} onClick={exportLogs}>
-          ⤓ {t("저장")}
+      {/* 필터 줄 (0.5 시안 e2s6HE) — 수준 칩 · 내보내기. 목록을 거르는 데는 세그먼트가 아니라 칩을 쓴다 */}
+      <div class="logsp-filters">
+        <For each={LEVELS}>
+          {(l) => (
+            <button class="logsp-chip mono" classList={{ on: level() === l }} aria-pressed={level() === l} onClick={() => setLevel(l)}>
+              {t(l)}
+            </button>
+          )}
+        </For>
+        <span style={{ flex: 1 }} />
+        <button class="btn" title={t("표시 중인 로그를 파일로 저장")} onClick={exportLogs}>
+          <Icon name="download" size={12} />
+          {t("내보내기")}
         </button>
       </div>
 
@@ -157,17 +162,17 @@ export function LogsPanelTab() {
       />
 
       <div class="logsp-metrics">
-        <div class="card inset logsp-metric">
+        <div class="logsp-metric">
+          <div class="logsp-metric-k mono">INFO</div>
           <div class="logsp-metric-v mono">{metrics().info}</div>
-          <div class="eyebrow">INFO</div>
         </div>
-        <div class="card inset logsp-metric warn">
+        <div class="logsp-metric warn">
+          <div class="logsp-metric-k mono">WARN</div>
           <div class="logsp-metric-v mono">{metrics().warn}</div>
-          <div class="eyebrow">WARN</div>
         </div>
-        <div class="card inset logsp-metric error">
+        <div class="logsp-metric error">
+          <div class="logsp-metric-k mono">ERROR</div>
           <div class="logsp-metric-v mono">{metrics().error}</div>
-          <div class="eyebrow">ERROR</div>
         </div>
       </div>
 
@@ -231,7 +236,8 @@ export function LogsPanelTab() {
             {(l) => (
               <div class="logsp-row" classList={{ error: l.level === "error", warn: l.level === "warn" }}>
                 <span class="mono muted logsp-time">{l.time}</span>
-                <span class="badge logsp-type">{t(l.type)}</span>
+                <span class="mono logsp-src">{t(l.type)}</span>
+                <span class={`logsp-lv mono ${l.level}`}>{l.level.toUpperCase()}</span>
                 <span class="logsp-msg">{l.message}</span>
                 <Show when={l.expandable}>
                   <span class="mono muted">›</span>
@@ -247,7 +253,7 @@ export function LogsPanelTab() {
         </div>
       </Show>
 
-      <div class="card inset logsp-footer">
+      <div class="logsp-footer">
         <span class="logsp-live">
           <span class="logsp-live-dot" />
           {t(isTauri() ? "event 테이블 스트림 연결됨" : "실시간 스트림 (목)")}

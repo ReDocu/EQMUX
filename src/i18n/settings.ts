@@ -154,4 +154,62 @@ export const dict: Record<string, string> = {
   "에이전트 런타임": "Agent runtime",
   저장소: "Storage",
   보안: "Security",
+  // ── 0.5 시안 (mT3kL·fvlW8) — 행 설명 · 고정 사실 ──
+  "기본 셸": "Default shell",
+  "새로 여는 터미널이 쓰는 셸 · 이미 열린 터미널은 그대로": "Shell for newly opened terminals · open ones keep theirs",
+  "화면 표시만 바뀝니다 — 코드·데이터의 한국어 원문과 직함 값은 그대로":
+    "Changes only what's shown — Korean source text in code/data and title values stay as they are",
+  한국어: "한국어",
+  "디자인 토큰만 바꿉니다 — 터미널 페인은 항상 다크": "Swaps design tokens only — terminal panes stay dark",
+  "배경 명도·색온도만 바뀝니다 — 강조색은 팔레트 공통":
+    "Changes background lightness and warmth only — accent colors are shared",
+  "WebGL이 빠르다 · 잔상이 보일 때만 DOM으로": "WebGL is faster · switch to DOM only if you see ghosting",
+  "WebGL (기본)": "WebGL (default)",
+  "자동 실행 없이 화면 상태만 복원합니다": "Restores screen state only, nothing runs automatically",
+  "앱을 다시 켰을 때 페인에 다시 그리는 줄 수": "Lines redrawn in each pane when the app restarts",
+  "워크스페이스당 세션 수의 상한 · 줄여도 이미 열린 세션은 닫지 않는다":
+    "Session limit per workspace · lowering it doesn't close open sessions",
+  "workspaces.json · layout.json은 버전 업에도 남는다": "workspaces.json · layout.json survive version updates",
+  "검증된 CLI와 관측 어댑터는 고정 정책이다 · 상태 줄 표시만 고른다":
+    "Verified CLIs and observation adapters are fixed policy · only the status line is selectable",
+  "사람의 행동이 필요한 상태만 알립니다 · 꺼도 인앱 미확인은 유지됩니다":
+    "Notifies only states that need a human · in-app unseen marks stay even when off",
+  "완료 보고는 에이전트가 끝났다고 밝힌 것 · 턴 완료는 하루 수십 번이라 기본 끔 · 인앱 칩은 설정과 무관하게 뜬다":
+    "A completion report is the agent saying it's done · turn ends happen dozens of times a day, so off by default · in-app chips show regardless",
+  "승인·입력 대기가 되면 소리를 냅니다 · 창이 포커스면 내지 않는다":
+    "Plays a sound when waiting for approval or input · silent while the window is focused",
+  켜짐: "On",
+  "세션 메모리가 넘으면 배너로 알린다 — 소프트 경고만": "Shows a banner when a session exceeds it — soft warning only",
+  "같은 세션 반복 합치기": "Merge repeats from one session",
+  "60초 안의 반복을 합친다 · 완료 알림은 따로 센다": "Repeats within 60s are merged · completion alerts count separately",
+  "60초": "60s",
+  "훅 기반 상태 감지": "Hook-based state detection",
+  "Stop · Notification 훅으로 idle·waiting을 판정한다": "Stop · Notification hooks decide idle and waiting",
+  "항상 켬": "Always on",
+  "창이 포커스면 OS 알림을 내지 않는다": "No OS notification while the window is focused",
+  "스크롤백에 색 시퀀스를 남긴다 · 끄면 용량 절감": "Keeps color sequences in scrollback · turn off to save space",
+  "메시지 · 스크롤백 보존": "Message · scrollback retention",
+  "30일": "30 days",
+  "버전 업 때 session.db": "session.db on version update",
+  "지우지 않고 .bak으로 옮긴다 · workspaces.json · layout.json은 남긴다":
+    "Moved to .bak, not deleted · workspaces.json · layout.json are kept",
+  "캐릭터 시트 상한": "Character sheet limit",
+  "SessionStart 훅이 싣는 시트 본문": "Sheet body loaded by the SessionStart hook",
+  "4,000자": "4,000 chars",
+  "브라우저 결과 상한": "Browser result limit",
+  "snapshot · get-text 한 번": "One snapshot · get-text call",
+  "10,000자": "10,000 chars",
+  "권한 우회": "Permission bypass",
+  "bypass를 쓰지 않는다 — 승인은 사람이 터미널 페인에서": "Never bypassed — a human approves in the terminal pane",
+  "항상 끔": "Always off",
+  "외부 열기": "External open",
+  "http/https만 연다 · 원격 주소의 토큰은 화면·툴팁·링크 어디에도 나오지 않는다":
+    "Opens http/https only · tokens in remote URLs never appear on screen, in tooltips or links",
+  "메시지 경계 문장": "Message boundary sentence",
+  "팀원·다른 프로젝트 메시지는 요청일 뿐 — 승인·허가로 쓰지 않는다":
+    "Messages from teammates or other projects are requests only — never approval or permission",
+  "역할 파일에 포함": "In role files",
+  "이벤트 방송 범위": "Event broadcast scope",
+  "PTY 출력·메시지·상태 이벤트는 main 창에만": "PTY output, message and state events go to the main window only",
+  "단축키 (읽기 전용)": "Shortcuts (read-only)",
 };

@@ -72,4 +72,18 @@ export const dict: Record<string, string> = {
   "산출물 — 한 줄에 하나 (선택)": "Deliverables — one per line (optional)",
   "산출물 · {done}/{total} 체크": "Deliverables · {done}/{total} checked",
   "산출물 {n}개가 아직 체크되지 않았습니다 — 검토 중으로 옮겼습니다": "{n} deliverable(s) not checked yet — moved to in review anyway",
+
+  // ── 0.5 시안 jc2Fm (목록 | 편집 | 배정) ──
+  "+ 새 임무": "+ New mission",
+  ".eqmux/missions/*.md 가 원본 · 배정하면 역할 파일 임무 블록에 반영 · 세션 클릭 = 배정 토글":
+    ".eqmux/missions/*.md is the source · assigning updates the role file's mission block · click a session to toggle",
+  "배정 없음": "unassigned",
+  "임무가 없습니다 — + 새 임무로 만드세요": "No missions — create one with + New mission",
+  "임무 상태": "Mission status",
+  "목표 없음": "No goal",
+  "파일을 열 수 없습니다": "Cannot open the file",
+  "세션 배정": "Assign sessions",
+  "배정하면 역할 파일을 갱신하고 [EQ] 임무 배정 한 줄을 보냅니다. idle이면 바로, 작업 중이면 턴이 끝날 때.":
+    "Assigning updates the role file and sends an [EQ] mission line — right away if idle, at turn end if busy.",
+  "죽은 세션은 배정해도 재개 전까지 메시지가 쌓입니다": "Dead sessions queue the message until resumed",
 };

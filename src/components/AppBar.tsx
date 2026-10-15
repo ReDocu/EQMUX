@@ -27,6 +27,7 @@ import {
 import { t, tf } from "../i18n";
 import { ATTENTION_ORDER, fmtSince, sessionName, slotNo } from "../types";
 import type { Workspace } from "../types";
+import { Icon } from "./icons";
 import { ContextMenu, notify } from "./ui";
 import type { MenuGroup } from "./ui";
 
@@ -146,7 +147,8 @@ export function AppBar() {
           classList={{ active: view().kind === "control" }}
           onClick={() => setView({ kind: "control" })}
         >
-          {t("관제")}
+          <Icon name="grid-2x2" size={13} />
+          <span class="tab-label">{t("관제")}</span>
           <Show when={anyUnseen()}>
             <span class="unread-dot" />
           </Show>
@@ -154,7 +156,7 @@ export function AppBar() {
         <For each={workspaces()}>
           {(ws) => (
             <button
-              class="tab"
+              class="tab ws-tab"
               classList={{ active: view().kind === "workspace" && (view() as { id?: string }).id === ws.id }}
               onClick={() => setView({ kind: "workspace", id: ws.id })}
               onContextMenu={(e) => {
@@ -162,10 +164,13 @@ export function AppBar() {
                 setTabMenu({ x: e.clientX, y: e.clientY, ws });
               }}
             >
+              <Icon name="users" size={13} />
               <Show when={wsSignal(ws.id)}>
                 {(color) => <span class="dot" style={{ background: color() }} />}
               </Show>
-              {ws.name}
+              <span class="tab-label" title={ws.name}>
+                {ws.name}
+              </span>
               <Show when={wsUnseen(ws.id)}>
                 <span class="unread-dot" />
               </Show>
@@ -179,7 +184,7 @@ export function AppBar() {
                   setTabMenu({ x: r.left, y: r.bottom + 2, ws });
                 }}
               >
-                ⋯
+                <Icon name="ellipsis" size={12} />
               </span>
               <span
                 class="tab-close"
@@ -189,7 +194,7 @@ export function AppBar() {
                   closeWs(ws.id);
                 }}
               >
-                ✕
+                <Icon name="x" size={11} />
               </span>
             </button>
           )}
@@ -200,17 +205,19 @@ export function AppBar() {
           aria-label={t("워크스페이스 열기·관리")}
           onClick={() => toggleOverlay("connect")}
         >
-          +
+          <Icon name="plus" size={14} />
         </button>
       </div>
       <div class="tools">
         <button
           class="tool"
+          aria-label={t("대화")}
           classList={{ active: panelOpen() }}
           title={t("대화 패널 토글 — 전체 화면에서도 열립니다")}
           onClick={toggleConversation}
         >
-          {t("대화")}
+          <Icon name="messages-square" size={13} />
+          <span class="tool-label">{t("대화")}</span>
           <Show when={unreadMsgs()}>
             <span class="unread-dot" />
           </Show>
@@ -220,31 +227,39 @@ export function AppBar() {
             컨트롤 센터의 "로컬 폴더"는 같은 팝업을 탐색기 자리에서 연다 */}
         <button
           class="tool"
+          aria-label={t("임무")}
           classList={{ active: overlay() === "explorer" }}
           title={t("임무 배정 — 전체 화면 팝업 (헤더에서 파일 탐색기로 전환)")}
           onClick={() => toggleExplorer("missions")}
         >
-          {t("임무")}
+          <Icon name="briefcase-business" size={13} />
+          <span class="tool-label">{t("임무")}</span>
         </button>
         <button
           class="tool"
+          aria-label={t("역할")}
           classList={{ active: overlay() === "roles" }}
           title={t("역할 라이브러리 — 전체 화면 팝업")}
           onClick={() => toggleOverlay("roles")}
         >
-          {t("역할")}
+          <Icon name="id-card" size={13} />
+          <span class="tool-label">{t("역할")}</span>
         </button>
         <button
           class="tool"
+          aria-label={t("설정")}
           classList={{ active: overlay() === "settings" }}
           title={t("설정 — 전체 화면 팝업")}
           onClick={() => toggleOverlay("settings")}
         >
-          {t("설정")}
+          <Icon name="settings" size={13} />
+          <span class="tool-label">{t("설정")}</span>
         </button>
-        <button class="tool" onClick={() => setExitOpen(true)}>
-          {t("종료")}
+        <button class="tool exit" title={t("종료")} aria-label={t("종료")} onClick={() => setExitOpen(true)}>
+          <Icon name="power" size={13} />
+          <span class="tool-label">{t("종료")}</span>
         </button>
+        <span class="tools-divider" aria-hidden="true" />
         <div class="bell-wrap" ref={bellEl}>
           <button
             class="tool"
@@ -254,20 +269,17 @@ export function AppBar() {
             aria-expanded={bellOpen()}
             onClick={() => setBellOpen(!bellOpen())}
           >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-              <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
-              <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
-            </svg>
+            <Icon name="bell" size={14} />
             <Show when={bellUnseen() > 0}>
               <span class="bell-count">{bellUnseen()}</span>
             </Show>
           </button>
           <Show when={bellOpen()}>
-            <div class="card bell-pop">
+            <div class="bell-pop">
               <div class="bell-head">
-                <span class="eyebrow">{tf("알림 · 미확인 {n}", { n: bellUnseen() })}</span>
+                <span class="bell-head-title">{tf("알림 · 미확인 {n}", { n: bellUnseen() })}</span>
                 <button
-                  class="btn ghost"
+                  class="bell-link"
                   onClick={() => {
                     setBellOpen(false);
                     toggleOverlay("settings");
@@ -278,6 +290,7 @@ export function AppBar() {
               </div>
               <div class="bell-actions">
                 <button class="btn primary" disabled={bellUnseen() === 0} onClick={() => nextUnseen()}>
+                  <Icon name="arrow-down-to-line" size={12} />
                   {t("다음 미확인으로 · Ctrl+Shift+U")}
                 </button>
                 <button class="btn" disabled={bellUnseen() === 0} onClick={() => backend.markAllSeen()}>
@@ -288,7 +301,7 @@ export function AppBar() {
                 <For each={notifyItems()} fallback={<div class="muted bell-empty">{t("알림이 없습니다")}</div>}>
                   {(it) => (
                     <button class="bell-item" classList={{ read: itemRead(it) }} onClick={() => openItem(it)}>
-                      <span class={`bell-dot ${it.kind}`} />
+                      <span class={`bell-dot ${itemRead(it) ? "" : it.kind}`} />
                       <span class="bell-body">
                         <span class="bell-line">
                           <b class="mono">{itemName(it)}</b>
@@ -298,7 +311,7 @@ export function AppBar() {
                           </Show>
                           <span class="mono muted bell-age">{fmtSince(Date.now() - it.ts)}</span>
                         </span>
-                        <span class="bell-title">{it.title}</span>
+                        <span class={`bell-title ${itemRead(it) ? "" : it.kind}`}>{it.title}</span>
                         <Show when={it.body}>
                           <span class="muted bell-text">{it.body}</span>
                         </Show>

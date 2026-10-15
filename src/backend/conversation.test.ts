@@ -1,7 +1,7 @@
 // 주입 본문 단위 테스트 — 전달 경로(PTY·인박스)는 통합의 몫이고, 여기서는 "여러 건을 어떻게
 // 한 줄로 접는가"만 본다: 단건/묶음 접두 · 개행 평탄화 · 상한에서 덩어리 갈리기.
 import { describe, expect, test } from "vitest";
-import { batches, fmt, fmtEcho, unmanagedAgent } from "./conversation";
+import { batches, fmt, fmtEcho, goneName, unmanagedAgent } from "./conversation";
 import type { ConversationMessage } from "../types";
 
 const msg = (from: string, body: string, type: ConversationMessage["type"] = "ask"): ConversationMessage => ({
@@ -92,7 +92,29 @@ describe("unmanagedAgent", () => {
 
   test("관리 세션은 아니다 — 돌고 있는 동안 status가 shell일 수 없다", () => {
     for (const status of ["starting", "busy", "waiting", "idle", "dead"]) {
-      expect(unmanagedAgent({ status, agent: "Claude" })).toBe(false);
+      expect(unmanagedAgent({ status, agent: "Claude", personaId: "kai" })).toBe(false);
     }
+  });
+
+  test("기본 터미널의 에이전트는 레지스트리가 채택해 idle·busy여도 손으로 띄운 것", () => {
+    for (const status of ["idle", "busy", "waiting"]) {
+      expect(unmanagedAgent({ status, agent: "Claude", personaId: "" })).toBe(true);
+    }
+  });
+});
+
+// 사라진 세션의 이름 — 원장에 남은 보낸 때 이름 → id 앞부분 페르소나 → id 그대로
+describe("goneName", () => {
+  const personas = [{ id: "kai", name: "카이" }];
+  test("원장 이름이 먼저다", () => {
+    const ledger = new Map([["shell1@ws-1", "EQMUX01"]]);
+    expect(goneName("shell1@ws-1", ledger, personas)).toBe("EQMUX01");
+  });
+  test("원장 이름이 없으면 id 앞부분의 페르소나 이름", () => {
+    expect(goneName("kai@ws-1", new Map(), personas)).toBe("카이");
+  });
+  test("둘 다 없으면 id 그대로 — 나·@all도 원문으로 남는다", () => {
+    expect(goneName("shell2@ws-1", new Map(), personas)).toBe("shell2@ws-1");
+    expect(goneName("나", new Map(), personas)).toBe("나");
   });
 });

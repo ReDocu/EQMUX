@@ -16,7 +16,9 @@ import {
 } from "../backend/workspaces";
 import { setView, tick } from "../state";
 import { t, tf } from "../i18n";
-import { Eyebrow, KV, notify } from "../components/ui";
+import { KV, notify } from "../components/ui";
+import { Icon } from "../components/icons";
+import type { Workspace } from "../types";
 
 export function WorkspaceConnection() {
   const workspaces = () => {
@@ -30,8 +32,21 @@ export function WorkspaceConnection() {
   const openFull = () => openCount() >= MAX_OPEN_WORKSPACES;
   const fullReason = () =>
     tf("동시에 열 수 있는 워크스페이스는 {n}개입니다 — 하나를 닫고 다시 시도하세요", { n: MAX_OPEN_WORKSPACES });
-  // 닫아 둔 워크스페이스가 위 — 다시 여는 것이 이 화면에 오는 가장 흔한 이유다 (0.5)
-  const listed = () => [...workspaces()].sort((a, b) => Number(a.open) - Number(b.open));
+  // 닫아 둔 워크스페이스가 위 — 다시 여는 것이 이 화면에 오는 가장 흔한 이유다 (0.5, 시안 EYy9T)
+  const groups = () =>
+    [
+      { label: t("열려 있지 않음"), items: workspaces().filter((w) => !w.open) },
+      { label: t("열림"), items: workspaces().filter((w) => w.open) },
+    ].filter((g) => g.items.length > 0);
+  const sessionsOf = (id: string) => backend.listSessions().filter((s) => s.workspaceId === id);
+  // 행의 보조 글 — 브랜치 · 세션 수. 경로가 없으면 그 사실(branchNote)이 먼저다
+  const rowNote = (ws: Workspace) => {
+    if (ws.pathMissing) return ws.branchNote;
+    const n = sessionsOf(ws.id).length;
+    const branch = ws.branch ?? "—";
+    if (n === 0) return branch;
+    return tf(ws.open ? "{branch} · {n} 세션" : "{branch} · {n} 세션 저장됨", { branch, n });
+  };
   // 원격 표시 — 토큰·사용자 정보를 뗀 주소만 보인다. 웹 주소로 못 바꾸는 것(로컬 경로)은 그대로
   const remoteText = (r: string | undefined) => (r ? (remoteWebUrl(r)?.replace(/^https:\/\//, "") ?? r) : "—");
   const reveal = async (path: string) => {
@@ -150,143 +165,193 @@ export function WorkspaceConnection() {
     <div class="screen">
       <div class="screen-head">
         <div>
-          <h1>{t("워크스페이스 연결")}</h1>
-          <div class="sub">{t("git repo 1개 = 팀 1개 = 탭 1개 · 등록 무제한 · 동시 오픈 10개")}</div>
+          <h1>{t("워크스페이스 열기 · 관리")}</h1>
+          <div class="sub mono">{t("탭 줄의 + 로 연다 · 열려 있지 않은 워크스페이스가 위")}</div>
         </div>
         <div style={{ display: "flex", gap: "8px" }}>
-          <button class="btn" onClick={() => setCloneOpen(true)}>
-            {t("원격에서 Clone")}
+          <button class="btn" onClick={() => void connectLocal()}>
+            <Icon name="folder" size={12} />
+            {t("폴더 찾기…")}
           </button>
-          <button class="btn primary" onClick={() => void connectLocal()}>
-            {t("+ 로컬 저장소 연결")}
+          <button class="btn primary" onClick={() => setCloneOpen(true)}>
+            <Icon name="git-branch" size={12} />
+            {t("클론…")}
           </button>
         </div>
       </div>
       <div class="screen-body conn-body">
         <div class="conn-list">
-          <div class="conn-list-head">
-            <Eyebrow>{t("등록된 저장소")} {isTauri() ? "· workspaces.json" : t("· 목")}</Eyebrow>
-            <span class="mono muted">
-              {tf("{n} 등록 · {m} 열림", { n: workspaces().length, m: openCount() })}
-            </span>
-          </div>
           <Show when={error()}>
             <div class="card conn-error mono">{error()}</div>
           </Show>
-          <For each={listed()}>
-            {(ws) => (
-              <button
-                class="card ws-item"
-                classList={{ selected: selectedId() === ws.id, missing: ws.pathMissing }}
-                onClick={() => setSelectedId(ws.id)}
-              >
-                <div class="ws-item-head">
-                  <span style={{ "font-weight": 700 }}>{ws.name}</span>
-                  <Show when={ws.open}>
-                    <span class="badge green">OPEN</span>
-                  </Show>
-                  <Show when={!ws.pathMissing}>
-                    <span
-                      class="ws-item-action badge"
-                      title={t("탐색기에서 열기")}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        void reveal(ws.path);
-                      }}
-                    >
-                      {t("폴더")}
-                    </span>
-                  </Show>
-                  <span
-                    class="ws-item-action badge"
-                    classList={{ red: ws.pathMissing }}
-                    style={{ cursor: ws.open ? "default" : "pointer", opacity: !ws.open && !ws.pathMissing && openFull() ? 0.5 : undefined }}
-                    title={!ws.open && !ws.pathMissing && openFull() ? fullReason() : undefined}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (ws.pathMissing) void repath(ws.id);
-                      else if (!ws.open && openFull()) notify(fullReason());
-                      else if (!ws.open) backend.openWorkspace(ws.id);
-                    }}
-                  >
-                    {t(ws.pathMissing ? "재지정" : ws.open ? "열림" : "열기")}
-                  </span>
-                </div>
-                <div class="mono muted" style={{ "font-size": "11px" }}>
-                  {ws.path}
-                </div>
-                <div class="mono muted" style={{ "font-size": "11px" }}>
-                  {remoteText(ws.remote)} · <span classList={{ "st-dead": ws.pathMissing }}>{ws.branchNote}</span>
-                </div>
-              </button>
-            )}
-          </For>
-          <Show when={workspaces().length === 0}>
-            <div class="card inset" style={{ padding: "16px", "text-align": "center" }}>
-              <div class="muted" style={{ "font-size": "12px" }}>
-                {t('등록된 저장소가 없습니다. "+ 로컬 저장소 연결"로 시작하세요.')}
-              </div>
-            </div>
-          </Show>
+          <div class="conn-registry">
+            <For each={groups()}>
+              {(g) => (
+                <>
+                  <div class="conn-group-head mono">
+                    {g.label} · {g.items.length}
+                  </div>
+                  <For each={g.items}>
+                    {(ws) => (
+                      <button
+                        class="ws-row"
+                        classList={{ selected: selectedId() === ws.id, missing: ws.pathMissing }}
+                        onClick={() => setSelectedId(ws.id)}
+                      >
+                        <span class="ws-row-ic" classList={{ open: ws.open }}>
+                          <Icon name={ws.open ? "circle-dot" : "circle"} size={12} />
+                        </span>
+                        <span class="ws-row-copy">
+                          <span class="ws-row-top">
+                            <span class="ws-row-name">{ws.name}</span>
+                            <span class="mono muted ws-row-note" classList={{ "st-dead": ws.pathMissing }}>
+                              {rowNote(ws)}
+                            </span>
+                          </span>
+                          <span class="ws-row-line mono muted">
+                            <span class="ws-row-text" title={ws.path}>
+                              {ws.path}
+                            </span>
+                            <span
+                              class="ws-row-link"
+                              classList={{ off: ws.pathMissing }}
+                              title={t(ws.pathMissing ? "경로를 찾을 수 없음" : "탐색기에서 열기")}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (!ws.pathMissing) void reveal(ws.path);
+                              }}
+                            >
+                              <Icon name="folder-open" size={11} />
+                            </span>
+                          </span>
+                          <Show when={ws.remote}>
+                            <Show
+                              when={remoteWebUrl(ws.remote)}
+                              fallback={<span class="ws-row-line mono muted">{remoteText(ws.remote)}</span>}
+                            >
+                              {(web) => (
+                                <span
+                                  class="ws-row-line mono ws-row-remote"
+                                  title={web()}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    openExternal(web());
+                                  }}
+                                >
+                                  <span class="ws-row-text">{remoteText(ws.remote)}</span>
+                                  <Icon name="external-link" size={10} />
+                                </span>
+                              )}
+                            </Show>
+                          </Show>
+                        </span>
+                        <span class="ws-row-act">
+                          <Show
+                            when={!ws.pathMissing}
+                            fallback={
+                              <span
+                                class="btn"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void repath(ws.id);
+                                }}
+                              >
+                                {t("경로 재지정")}
+                              </span>
+                            }
+                          >
+                            <Show
+                              when={!ws.open}
+                              fallback={<span class="mono ws-row-open">{t("열림")}</span>}
+                            >
+                              <span
+                                class="btn primary"
+                                style={{ opacity: openFull() ? 0.45 : undefined }}
+                                title={openFull() ? fullReason() : undefined}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (openFull()) notify(fullReason());
+                                  else backend.openWorkspace(ws.id);
+                                }}
+                              >
+                                {t("열기")}
+                              </span>
+                            </Show>
+                          </Show>
+                        </span>
+                      </button>
+                    )}
+                  </For>
+                </>
+              )}
+            </For>
+            <Show when={workspaces().length === 0}>
+              <div class="muted conn-empty">{t('등록된 저장소가 없습니다. "폴더 찾기…"로 시작하세요.')}</div>
+            </Show>
+          </div>
         </div>
 
         <div class="conn-detail">
           <Show when={selected()} fallback={<div class="muted">{t("저장소를 선택하세요")}</div>}>
             {(ws) => (
               <>
-                <Eyebrow>SELECTED REPOSITORY</Eyebrow>
-                <div style={{ "font-size": "16px", "font-weight": 800, margin: "6px 0 2px" }}>{ws().name}</div>
-                <div class="mono muted" style={{ "font-size": "11px", display: "flex", gap: "8px", "align-items": "center" }}>
-                  <span style={{ "min-width": 0, "overflow-wrap": "anywhere" }}>{ws().path}</span>
-                  <button
-                    class="btn ghost"
-                    disabled={ws().pathMissing}
-                    title={ws().pathMissing ? t("경로를 찾을 수 없음") : undefined}
-                    onClick={() => void reveal(ws().path)}
-                  >
-                    {t("탐색기에서 열기")}
-                  </button>
-                </div>
-                <div class="card inset" style={{ padding: "4px 10px", margin: "12px 0" }}>
+                <div class="eyebrow conn-detail-eyebrow">SELECTED WORKSPACE</div>
+                <div class="conn-detail-name">{ws().name}</div>
+                <div class="conn-detail-kv">
+                  <KV k={t("경로")} v={ws().path} />
                   <KV k={t("브랜치")} v={ws().branch ?? "—"} />
                   <KV
-                    k={t("원격")}
+                    k={t("원격 (origin)")}
                     v={
                       <Show when={remoteWebUrl(ws().remote)} fallback={remoteText(ws().remote)}>
                         {(web) => (
-                          <a href={web()} title={web()} onClick={(e) => (e.preventDefault(), openExternal(web()))}>
+                          <a
+                            class="conn-remote-link"
+                            href={web()}
+                            title={web()}
+                            onClick={(e) => (e.preventDefault(), openExternal(web()))}
+                          >
                             {remoteText(ws().remote)}
+                            <Icon name="external-link" size={11} />
                           </a>
                         )}
                       </Show>
                     }
                   />
-                  <KV k={t("팀 편성")} v={ws().teamFile} />
-                  <KV k={t("마지막 사용")} v={ws().lastUsed ?? "—"} />
+                  <KV
+                    k={t("저장된 세션")}
+                    v={tf("{n} · 재개 가능 {m}", {
+                      n: sessionsOf(ws().id).length,
+                      m: sessionsOf(ws().id).filter((s) => s.resumable).length,
+                    })}
+                  />
                 </div>
-                <div class="card inset" style={{ padding: "10px" }}>
-                  <div style={{ "font-weight": 700, "font-size": "12px" }}>{t("파일이 원본입니다")}</div>
-                  <div class="muted" style={{ "font-size": "11px", "margin-top": "4px" }}>
-                    {t(".eqmux/team.json · team.md를 로드하고 역할 파일을 실측합니다. DB는 캐시이며 불일치 시 파일이 이깁니다.")}
-                  </div>
+                <div class="conn-detail-btns">
+                  <button
+                    class="btn primary"
+                    disabled={ws().pathMissing || (!ws().open && openFull())}
+                    title={!ws().open && openFull() ? fullReason() : undefined}
+                    onClick={() => open(ws().id)}
+                  >
+                    {ws().pathMissing ? t("경로 재지정 필요") : t("열기")}
+                  </button>
+                  <button
+                    class="btn"
+                    disabled={ws().pathMissing}
+                    title={ws().pathMissing ? t("경로를 찾을 수 없음") : undefined}
+                    onClick={() => void reveal(ws().path)}
+                  >
+                    <Icon name="folder-open" size={12} />
+                    {t("탐색기에서 열기")}
+                  </button>
+                  <button
+                    class="btn conn-unreg"
+                    title={t("레지스트리에서만 제거 — 디스크의 저장소는 그대로 · 실행 중 세션은 종료됩니다")}
+                    onClick={() => askUnregister(ws().id)}
+                  >
+                    {t("등록 해제…")}
+                  </button>
                 </div>
-                <button
-                  class="btn primary"
-                  style={{ "margin-top": "14px", width: "100%", "justify-content": "center" }}
-                  disabled={ws().pathMissing || (!ws().open && openFull())}
-                  title={!ws().open && openFull() ? fullReason() : undefined}
-                  onClick={() => open(ws().id)}
-                >
-                  {ws().pathMissing ? t("경로 재지정 필요") : tf("{name} 열기", { name: ws().name })}
-                </button>
-                <button
-                  class="btn ghost"
-                  style={{ "margin-top": "8px", width: "100%", "justify-content": "center" }}
-                  title={t("레지스트리에서만 제거 — 디스크의 저장소는 그대로 · 실행 중 세션은 종료됩니다")}
-                  onClick={() => askUnregister(ws().id)}
-                >
-                  {t("등록 해제 (디스크는 그대로 · 세션 종료)")}
-                </button>
               </>
             )}
           </Show>

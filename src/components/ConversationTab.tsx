@@ -279,28 +279,29 @@ export function ConversationTab() {
         <Eyebrow>
           {t("팀 대화")}{ws() ? ` · ${ws()!.name}` : ""} · {unread()} {t("미확인")}
         </Eyebrow>
-        <div style={{ display: "flex", gap: "4px" }}>
+        <div class="conv-filters">
           <For each={["전체", "미확인"] as const}>
             {(f) => (
-              <button class="btn ghost" classList={{ primary: filter() === f }} onClick={() => setFilter(f)}>
+              <button class="conv-chip" classList={{ on: filter() === f }} onClick={() => setFilter(f)}>
                 {t(f)}
               </button>
             )}
           </For>
           <button
-            class="btn ghost"
-            classList={{ primary: allProjects() }}
+            class="conv-chip"
+            classList={{ on: allProjects() }}
             aria-pressed={allProjects()}
             title={t("끄면 다른 프로젝트와 오간 메시지를 숨깁니다")}
             onClick={() => setAllProjects(!allProjects())}
           >
             {t("모든 프로젝트")}
           </button>
-          <button class="btn ghost" onClick={() => markConversationRead(ws()?.id)}>
+          <span class="conv-head-gap" />
+          <button class="btn ghost conv-act" onClick={() => markConversationRead(ws()?.id)}>
             {t("모두 읽음")}
           </button>
           <button
-            class="btn ghost"
+            class="btn ghost conv-act"
             disabled={!ws() || saving() || !isTauri()}
             title={t(
               isTauri()
@@ -313,7 +314,7 @@ export function ConversationTab() {
           </button>
           {/* 화면 지우기 — 표시만 비운다. 지우기 전에 저장할 수 있게 ⤓ 바로 오른쪽에 둔다 */}
           <button
-            class="btn ghost"
+            class="btn ghost conv-act"
             disabled={!ws() || shown().length === 0}
             title={t("화면만 지웁니다 — 대화 원장과 저장 파일은 그대로 남습니다")}
             onClick={clearScreen}
@@ -402,20 +403,20 @@ export function ConversationTab() {
             {(m) => (
               <div
                 class="card conv-msg"
-                classList={{ unread: m.unread }}
+                classList={{ unread: m.unread, mine: m.from === "나" }}
                 onContextMenu={(e) => {
                   e.preventDefault();
                   setMsgMenu({ x: e.clientX, y: e.clientY, m });
                 }}
               >
-                <div style={{ display: "flex", "align-items": "center", gap: "6px" }}>
-                  <span style={{ "font-weight": 700, "font-size": "12px" }}>
+                <div class="conv-msg-top">
+                  <span class="conv-author">
                     <span title={titleTip(m.from)}>{label(m.from)}</span> → {label(m.to)}
                   </span>
-                  <span class={`badge ${TYPE_COLOR[m.type]}`}>{m.type.toUpperCase()}</span>
-                  <Show when={otherProject(m)}>{(p) => <span class="badge purple">{p()}</span>}</Show>
+                  <span class={`conv-type mono t-${TYPE_COLOR[m.type]}`}>{m.type.toUpperCase()}</span>
+                  <Show when={otherProject(m)}>{(p) => <span class="conv-proj mono">{p()}</span>}</Show>
                   <Show when={m.done}>
-                    <span class="badge blue" title={t("완료 보고 — 에이전트가 맡은 일을 끝냈다고 밝혔습니다")}>
+                    <span class="conv-done" title={t("완료 보고 — 에이전트가 맡은 일을 끝냈다고 밝혔습니다")}>
                       ✓
                     </span>
                   </Show>
@@ -426,14 +427,11 @@ export function ConversationTab() {
                       </span>
                     )}
                   </Show>
-                  <span class="mono muted" style={{ "margin-left": "auto", "font-size": "10px" }}>
-                    {m.time}
-                  </span>
+                  <span class="mono conv-time">{m.time}</span>
                 </div>
                 <div
                   class="conv-body"
                   classList={{ folded: foldable(m.body) && !expanded().has(m.id) }}
-                  style={{ "margin-top": "4px", "font-size": "12px" }}
                 >
                   {m.body}
                 </div>
@@ -463,12 +461,12 @@ export function ConversationTab() {
         </Show>
       </div>
       <div class="conv-composer card">
-        <div style={{ display: "flex", gap: "4px", "flex-wrap": "wrap", "margin-bottom": "6px" }}>
+        <div class="conv-types">
           <For each={TYPES}>
             {(t) => (
               <button
-                class={`badge ${selType() === t ? TYPE_COLOR[t] : ""}`}
-                style={{ cursor: "pointer" }}
+                class={`conv-type-chip mono t-${TYPE_COLOR[t]}`}
+                classList={{ on: selType() === t }}
                 onClick={() => setSelType(t)}
               >
                 {t.toUpperCase()}
@@ -476,7 +474,7 @@ export function ConversationTab() {
             )}
           </For>
         </div>
-        <div style={{ display: "flex", gap: "6px", position: "relative" }}>
+        <div class="conv-input">
           <Show when={mentions().length > 0}>
             <div class="card conv-mention" role="listbox" aria-label={t("받는 사람")}>
               <For each={mentions()}>
@@ -500,7 +498,6 @@ export function ConversationTab() {
             </div>
           </Show>
           <input
-            style={{ flex: 1, "min-width": 0 }}
             placeholder={t(ws() ? "@이름 질문… (@ 없으면 @all)" : "워크스페이스 탭을 먼저 여세요")}
             disabled={!ws()}
             value={draft()}
@@ -516,6 +513,7 @@ export function ConversationTab() {
             {t("보내기")}
           </button>
         </div>
+        <div class="conv-note muted">{t("사람이 쓰는 메시지는 800자 상한에서 뺍니다")}</div>
         <Show when={error()}>
           <div style={{ color: "var(--eq-red)", "font-size": "11px", "margin-top": "4px" }}>
             {error()}

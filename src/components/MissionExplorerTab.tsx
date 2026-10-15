@@ -10,6 +10,7 @@ import { sendConversation } from "../backend/conversation";
 import { isTauri, revealPath } from "../backend/pty";
 import { t, tf } from "../i18n";
 import { openPanel, scopeWorkspace, selectedSession, setExplorerTab, setOverlay, tick } from "../state";
+import { Icon } from "./icons";
 import { ContextMenu, notify } from "./ui";
 
 // 브라우저 dev 폴백 트리 (기존 목)
@@ -278,30 +279,22 @@ export function MissionExplorerTab() {
 
   return (
     <div class="msnp">
-      <div class="panel-head-row">
-        <span class="panel-title">{t("임무 · 파일 탐색기")}</span>
-        <span class="mono muted" style={{ "font-size": "9px", "letter-spacing": "0.06em" }}>
-          {t(isTauri() ? "FS 실측 · CRUD" : "목 데이터")}
-        </span>
-      </div>
-
-      <div class="card inset msnp-terminal">
+      {/* 머리 줄 (0.5 시안 uOK9M) — 왼쪽은 브리프를 받을 세션, 오른쪽은 저장소 경로와 탐색기 열기.
+          팝업 제목이 이미 "임무 · 파일 탐색기"라 패널 제목 줄은 두지 않는다 */}
+      <div class="msnp-bar">
         <span class="msnp-status-dot" />
-        <div style={{ flex: 1, "min-width": 0 }}>
-          <div style={{ "font-weight": 700, "font-size": "11px" }}>
-            {persona()?.name ?? t("세션 없음")} · {job()?.name ?? "—"}
-          </div>
-          {/* 워크스페이스 경로 클릭 → Windows 탐색기 (앱 안 트리는 옆에 이미 있으므로 여기는 OS로 나간다) */}
-          <button
-            class="msnp-path mono muted"
-            disabled={!isTauri() || !ws()}
-            title={t("탐색기에서 열기")}
-            onClick={() => void revealPath(ws()!.path)}
-          >
-            {ws()?.path ?? t("워크스페이스 없음")}
-          </button>
-        </div>
+        <span class="msnp-target">
+          {persona()?.name ?? t("세션 없음")} · {job()?.name ?? "—"}
+        </span>
         <span class="badge blue mono">⎇ {ws()?.branch ?? "—"}</span>
+        <span class="msnp-path mono muted" title={ws()?.path}>
+          {ws()?.path ?? t("워크스페이스 없음")}
+        </span>
+        {/* 워크스페이스 경로 → Windows 탐색기 (앱 안 트리는 아래에 이미 있으므로 여기는 OS로 나간다) */}
+        <button class="btn" disabled={!isTauri() || !ws()} onClick={() => void revealPath(ws()!.path)}>
+          <Icon name="folder-open" size={12} />
+          {t("탐색기에서 열기")}
+        </button>
       </div>
 
       <div class="msnp-content">
@@ -386,7 +379,7 @@ export function MissionExplorerTab() {
                 <button
                   class="msnp-tree-row mono"
                   classList={{ selected: sel()?.rel === n.rel, folder: n.dir }}
-                  style={{ "padding-left": `${8 + n.depth * 12}px` }}
+                  style={{ "padding-left": `${8 + n.depth * 16}px` }}
                   title={n.dir ? t(isCollapsed(n.rel) ? "펼치기" : "접기") : undefined}
                   onClick={() => {
                     pick(n);
@@ -398,9 +391,11 @@ export function MissionExplorerTab() {
                     setRowMenu({ x: e.clientX, y: e.clientY, rel: n.rel });
                   }}
                 >
-                  <span class="msnp-tree-icon">
-                    {n.dir ? (isCollapsed(n.rel) ? "▸" : "▾") : n.name.endsWith(".json") ? "{}" : n.name.endsWith(".md") ? "≡" : "·"}
-                  </span>
+                  <Icon
+                    class="msnp-tree-icon"
+                    size={12}
+                    name={n.dir ? (isCollapsed(n.rel) ? "folder" : "folder-open") : n.name.endsWith(".json") ? "braces" : "file-text"}
+                  />
                   {n.name}
                   {/* 상한에 가려진 폴더 (B15) — 빈 폴더처럼 보이면 "여기 그 파일 없다"로 읽힌다 */}
                   <Show when={n.truncated}>
@@ -427,16 +422,11 @@ export function MissionExplorerTab() {
 
         <div class="msnp-preview card inset">
           <div class="msnp-preview-head">
-            <div style={{ "min-width": 0 }}>
-              <div class="mono" style={{ "font-weight": 700, "font-size": "11px" }}>
-                {sel()?.name ?? t("파일을 선택하세요")}
-                <Show when={editing() !== undefined}>
-                  <span class="st-waiting"> · {t("편집 중")}{dirty() ? " *" : ""}</span>
-                </Show>
-              </div>
-              <div class="mono muted" style={{ "font-size": "10px" }}>
-                {sel()?.rel ?? "—"}
-              </div>
+            <div class="mono msnp-preview-name" title={sel()?.rel}>
+              {sel()?.rel ?? t("파일을 선택하세요")}
+              <Show when={editing() !== undefined}>
+                <span class="st-waiting"> · {t("편집 중")}{dirty() ? " *" : ""}</span>
+              </Show>
             </div>
             <div style={{ display: "flex", gap: "4px" }}>
               <Show when={isTauri() && sel() && !sel()!.dir && editing() === undefined}>

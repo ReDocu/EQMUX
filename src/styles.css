@@ -427,10 +427,11 @@ select:focus-visible,
   overflow-x: hidden; /* 리사이즈 중 내부 픽셀 폭이 레이아웃을 밀어내도 가로 스크롤로 새지 않게 */
 }
 
+/* 앱 바 (0.5 시안 mdRK8) — surface 바탕, 탭·도구 사이 구분선 없음, 활성 탭은 blue-soft + 아래 2px */
 .appbar {
   display: flex;
   align-items: stretch;
-  background: var(--eq-bg);
+  background: var(--eq-surface);
   border-bottom: 1px solid var(--eq-line);
   height: 38px;
   flex-shrink: 0;
@@ -446,30 +447,55 @@ select:focus-visible,
   padding: 0 14px;
   color: var(--eq-blue);
   border-right: 1px solid var(--eq-line);
+  flex-shrink: 0;
 }
+/* 좁은 창 (QA 1024~1080px) — 탭 줄이 남는 폭을 나눠 갖고, 탭은 이름만 말줄임으로 줄어든다.
+   아이콘·점·⋯·✕는 줄지 않는다. 끝까지 모자라면 가로 스크롤이 마지막 안전판이다 */
 .appbar .tabs {
   display: flex;
   align-items: stretch;
+  flex: 1 1 auto;
+  min-width: 0;
   overflow-x: auto;
+  scrollbar-width: none;
 }
 .appbar .tab {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
   padding: 0 14px;
   font-size: 12px;
   font-weight: 600;
   color: var(--eq-muted);
-  border-right: 1px solid var(--eq-line);
   position: relative;
+  flex: 0 1 auto;
+  min-width: 64px;
+  white-space: nowrap;
+}
+.appbar .tab > * {
+  flex-shrink: 0;
+}
+.appbar .tab > .tab-label {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.appbar .tab.tab-add {
+  min-width: 0;
+  flex-shrink: 0;
 }
 .appbar .tab:hover {
   color: var(--eq-text);
 }
 .appbar .tab.active {
   color: var(--eq-text);
-  background: var(--eq-surface);
-  box-shadow: inset 0 2px 0 var(--eq-blue);
+  font-weight: 700;
+  background: var(--eq-blue-soft);
+  box-shadow: inset 0 -2px 0 var(--eq-blue);
+}
+.appbar .tab.active > .eq-ic:first-child {
+  color: var(--eq-blue);
 }
 .appbar .tab .dot {
   width: 6px;
@@ -480,15 +506,35 @@ select:focus-visible,
   margin-left: auto;
   display: flex;
   align-items: stretch;
+  flex-shrink: 0;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+/* 1280px 아래에서는 도구를 아이콘만 — 이름은 title·aria-label에 남는다 (1920에서는 그대로) */
+@media (max-width: 1280px) {
+  .appbar .tool-label {
+    display: none;
+  }
+  .appbar .tools {
+    padding: 0 4px;
+  }
+  .appbar .tab {
+    padding: 0 10px;
+  }
+  /* 워크스페이스 탭은 폭을 똑같이 나눠 비슷한 길이로 줄어든다 — 내용 폭 기준이면 긴 이름이 폭을 독차지한다 */
+  .appbar .tab.ws-tab {
+    flex: 1 1 0;
+    max-width: 180px;
+  }
 }
 .appbar .tool {
   display: flex;
   align-items: center;
-  padding: 0 10px;
-  font-family: var(--eq-mono);
+  gap: 5px;
+  padding: 0 9px;
   font-size: 11px;
+  font-weight: 600;
   color: var(--eq-muted);
-  border-left: 1px solid var(--eq-line);
 }
 .appbar .tool:hover {
   color: var(--eq-text);
@@ -496,6 +542,16 @@ select:focus-visible,
 .appbar .tool.active {
   color: var(--eq-blue);
   background: var(--eq-blue-soft);
+}
+.appbar .tool.exit {
+  color: var(--eq-red);
+}
+.appbar .tools-divider {
+  align-self: center;
+  width: 1px;
+  height: 16px;
+  margin: 0 2px;
+  background: var(--eq-line);
 }
 
 /* ── 화면 공통 레이아웃 ───────────────────────────────────────── */

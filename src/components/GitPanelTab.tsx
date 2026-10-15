@@ -10,12 +10,13 @@ import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from "s
 import { branchList, commitWebUrl, gitOverview, remoteWebUrl, worktreeAdd, worktreeAttach, worktreeGraph, worktreeList } from "../backend/git";
 import type { BranchInfo, GitOverview, GraphRow, WorktreeInfo } from "../backend/git";
 import { GIT_STATE, backend } from "../backend/mock";
-import { clipWriteText, isTauri, openExternal } from "../backend/pty";
+import { clipWriteText, isTauri, openExternal, revealPath } from "../backend/pty";
 import { maxSlots } from "../backend/settings";
 import { checkoutBranch } from "../backend/workspaces";
 import { t, tf } from "../i18n";
-import { defaultShell, scopeWorkspace, setPanelOpen, setView, tick, view } from "../state";
-import { ContextMenu, Eyebrow } from "./ui";
+import { defaultShell, scopeWorkspace, setPanelNote, setPanelOpen, setView, tick, view } from "../state";
+import { Icon } from "./icons";
+import { ContextMenu, Eyebrow, notify } from "./ui";
 
 interface CommitRow {
   hash: string;
@@ -200,6 +201,17 @@ export function GitPanelTab() {
     };
   };
 
+  // 세그먼트 줄 오른쪽 요약 (0.5 시안) — `sub_main · ↑2 ↓0`
+  createEffect(() => {
+    const v = g();
+    setPanelNote(`${v.branch} · ↑${v.ahead} ↓${v.behind}${v.real ? "" : ` · ${t("목 데이터")}`}`);
+  });
+  onCleanup(() => setPanelNote(""));
+  const reveal = async () => {
+    const w = ws();
+    if (w && !(await revealPath(w.path))) notify(t("폴더를 열 수 없습니다 — 경로가 없어졌습니다"));
+  };
+
   const openDiff = () => {
     // 진입 시점 뷰를 기억한다 — diff의 ✕/Esc가 관제 센터가 아니라 여기로 복귀한다 (U11)
     const cur = view();
@@ -241,38 +253,15 @@ export function GitPanelTab() {
 
   return (
     <div class="gitp">
-      {/* 타이틀바 (UI 리파인 §git) — 아이콘+제목 왼쪽 · 출처·새로 읽기 오른쪽. 경로는 툴팁으로 */}
-      <div class="gitp-titlebar">
-        <span class="gitp-git-ic" aria-hidden="true">
-          <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor">
-            <path d="M11.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm-2.25.75a2.25 2.25 0 1 1 3 2.122V6A2.5 2.5 0 0 1 10 8.5H6a1 1 0 0 0-1 1v1.128a2.251 2.251 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.5 0v1.836A2.493 2.493 0 0 1 6 7h4a1 1 0 0 0 1-1v-.628A2.25 2.25 0 0 1 9.5 3.25ZM4.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5ZM3.5 3.25a.75.75 0 1 1 1.5 0 .75.75 0 0 1-1.5 0Z" />
-          </svg>
-        </span>
-        <span class="panel-title">git</span>
-        <span class="mono muted gitp-src" title={ws()?.path ?? ""}>
-          {t(g().real ? "실측" : "목 데이터")}
-        </span>
-        <span style={{ flex: 1 }} />
-        {/* 원격 저장소 (0.5 바로 가기) — 웹 주소로 못 바꾸는 원격(로컬 경로·없음)이면 숨긴다 */}
-        <Show when={remoteWebUrl(ws()?.remote)}>
-          {(web) => (
-            <button class="btn ghost" title={web()} onClick={() => openExternal(web())}>
-              {t("원격 저장소")}
-            </button>
-          )}
-        </Show>
-        <button class="btn ghost gitp-refresh" title={t("새로 읽기")} onClick={() => void load()}>
-          ⟳
-        </button>
-      </div>
-
       <Show when={isTauri() && (failed() || !ws())}>
         <div class="card conn-error mono" style={{ "font-size": "11px" }}>
           {t(ws() ? "저장소를 읽을 수 없습니다 — git 저장소가 아니거나 git CLI가 없습니다" : "워크스페이스 문맥이 없습니다 — 워크스페이스 탭을 먼저 여세요")}
         </div>
       </Show>
 
-      {/* 저장소 드롭다운 (UI 리파인 §git) — 풀폭. 항목 선택 = 그 워크스페이스로 전환 (스코프 단일 소스 유지) */}
+      {/* 머리 줄 (0.5 시안 AYgJv) — 저장소 드롭다운 · 원격 저장소 · 탐색기 · 새로 읽기.
+          저장소 선택 = 그 워크스페이스로 전환 (스코프 단일 소스 유지) */}
+      <div class="gitp-head">
       <div class="gitp-repo-wrap">
         <button
           class="card inset gitp-repo mono"
@@ -280,8 +269,8 @@ export function GitPanelTab() {
           title={ws()?.path ?? t("저장소 = 활성 워크스페이스")}
           onClick={() => setRepoMenu(!repoMenu())}
         >
-          <span>{g().repo}</span>
-          <span class="muted">▾</span>
+          <span class="gitp-repo-name">{ws() ? `${g().repo} · ${ws()!.path}` : g().repo}</span>
+          <Icon name="chevron-down" size={12} class="muted" />
         </button>
         <Show when={repoMenu()}>
           <div class="card gitp-pop">
@@ -307,6 +296,27 @@ export function GitPanelTab() {
           </div>
         </Show>
       </div>
+        {/* 원격 저장소 (0.5 바로 가기) — 웹 주소로 못 바꾸는 원격(로컬 경로·없음)이면 숨긴다 */}
+        <Show when={remoteWebUrl(ws()?.remote)}>
+          {(web) => (
+            <button class="btn" title={web()} onClick={() => openExternal(web())}>
+              <Icon name="external-link" size={12} />
+              {t("원격 저장소")}
+            </button>
+          )}
+        </Show>
+        <button class="btn" disabled={!ws()} onClick={() => void reveal()}>
+          <Icon name="folder-open" size={12} />
+          {t("탐색기")}
+        </button>
+        <button class="btn ghost gitp-refresh" title={t("새로 읽기")} aria-label={t("새로 읽기")} onClick={() => void load()}>
+          <Icon name="refresh-cw" size={12} />
+        </button>
+      </div>
+      {/* 원격 주소 — 토큰·사용자 정보를 뗀 주소만 (시안의 `origin:` 한 줄) */}
+      <Show when={ws()?.remote}>
+        {(r) => <div class="gitp-remote-hint mono">origin: {remoteWebUrl(r()) ?? r()}</div>}
+      </Show>
 
       {/* 한 줄 툴바 (UI 리파인 §git) — 브랜치 ▾ · ↑↓ · diff · pull · commit · push.
           브랜치 체크아웃(M36)은 팝오버, pull·push·commit은 명령 복사뿐 (G7 유지) */}
@@ -329,16 +339,7 @@ export function GitPanelTab() {
           <span class="st-waiting">↑{g().ahead}</span> <span class="muted">↓{g().behind}</span>
         </span>
         <span style={{ flex: 1 }} />
-        <button
-          class="gitp-act mono"
-          title={tf("{n}개 변경 파일 — +{a} ~{m} −{d} · HEAD ↔ 워크트리 나란히 비교", { n: g().changed, a: g().added, m: g().modified, d: g().deleted })}
-          onClick={openDiff}
-        >
-          diff
-          <Show when={g().changed > 0}>
-            <span class="n">{g().changed}</span>
-          </Show>
-        </button>
+        {/* diff는 목록 아래 "변경 N건 diff" 막대가 맡는다 (0.5 시안) — 툴바에서 빼야 한 줄에 들어간다 */}
         <button class="gitp-act mono" title={t("`git pull` 복사 — 실행은 터미널에서")} onClick={() => copyCmd("git pull")}>
           ↓ pull
         </button>
@@ -401,6 +402,22 @@ export function GitPanelTab() {
           </div>
         </Show>
       </div>
+      {/* 변경 요약 (0.5 시안) — git_overview가 주는 값만: 변경 · 수정 · 추가 */}
+      <div class="gitp-sum">
+        <div class="gitp-sum-tile" title={tf("+{a} ~{m} −{d}", { a: g().added, m: g().modified, d: g().deleted })}>
+          <span>{t("변경")}</span>
+          <b class="mono" style={{ color: "var(--eq-amber)" }}>{g().changed}</b>
+        </div>
+        <div class="gitp-sum-tile">
+          <span>{t("수정")}</span>
+          <b class="mono">{g().modified}</b>
+        </div>
+        <div class="gitp-sum-tile">
+          <span>{t("추가")}</span>
+          <b class="mono" style={{ color: "var(--eq-purple)" }}>{g().added}</b>
+        </div>
+      </div>
+
       {/* 체크아웃 결과·명령 복사 안내 — 한 줄 공유 (최신 것 하나만) */}
       <Show when={coNote() ?? actNote()}>
         <div class="mono muted" style={{ "font-size": "10px" }}>
@@ -591,7 +608,7 @@ export function GitPanelTab() {
         </Show>
       </Show>
 
-      <Eyebrow>COMMITS</Eyebrow>
+      <Eyebrow>COMMIT GRAPH</Eyebrow>
       {/* 밀도 높은 커밋 행 (UI 리파인 §git) — 뱃지+메시지 왼쪽 · 작성자·시간·해시 오른쪽 한 줄.
           클릭 = 부모 커밋 ↔ 이 커밋 diff */}
       <div class="gitp-commits">
@@ -611,20 +628,21 @@ export function GitPanelTab() {
                 <div class="gitp-line" classList={{ first: i() === 0, last: i() === g().commits.length - 1 }} />
                 <div class="gitp-dot" />
               </div>
+              <span class="gitp-commit-hash mono">{c.hash}</span>
               <div class="gitp-commit-main">
-                <For each={c.badges}>
-                  {(b) => (
-                    <span class="gitp-ref mono" classList={{ remote: b.includes("/") }}>
-                      {b}
-                    </span>
-                  )}
-                </For>
-                <span class="gitp-commit-txt">{c.message}</span>
-              </div>
-              <div class="gitp-commit-meta mono">
-                <span class="gitp-commit-author">{c.author}</span>
-                <span>{c.when}</span>
-                <span class="gitp-commit-hash">{c.hash}</span>
+                <div class="gitp-commit-top">
+                  <span class="gitp-commit-txt">{c.message}</span>
+                  <For each={c.badges}>
+                    {(b) => (
+                      <span class="gitp-ref mono" classList={{ remote: b.includes("/") }}>
+                        {b}
+                      </span>
+                    )}
+                  </For>
+                </div>
+                <div class="gitp-commit-meta mono">
+                  {c.author} · {c.when}
+                </div>
               </div>
             </div>
           )}
@@ -635,6 +653,10 @@ export function GitPanelTab() {
           </div>
         </Show>
       </div>
+      <button class="gitp-diff-bar" disabled={!ws()} onClick={openDiff}>
+        <span>{tf("변경 {n}건 diff · 에디터로 열기", { n: g().changed })}</span>
+        <Icon name="arrow-right" size={12} />
+      </button>
 
       {/* 정책 고지 1회 — G7. 버튼은 복사만 한다는 것을 여기서 못박는다 */}
       <div class="gitp-foot mono muted">{t("pull · push · commit 버튼은 명령 복사만 — 실행은 터미널에서")}</div>

@@ -5,7 +5,7 @@
 // 위치 전환 — 플렉스 order로 좌/우를 오간다 (app-row · tf-body 양쪽 컨테이너 공용).
 import { createEffect, createSignal, For, Show } from "solid-js";
 import { unseenPortCount } from "../backend/ports";
-import { panelSide, panelTab, setPanelOpen, setPanelSide, setPanelTab } from "../state";
+import { panelNote, panelSide, panelTab, setPanelOpen, setPanelSide, setPanelTab } from "../state";
 import type { PanelTab } from "../state";
 import { t, tf } from "../i18n";
 import { BrowserPanelTab } from "./BrowserPanelTab";
@@ -15,13 +15,15 @@ import { LogsPanelTab } from "./LogsPanelTab";
 import { MdViewTab } from "./MdViewTab";
 import { PortsPanelTab } from "./PortsPanelTab";
 import { ServerPanelTab } from "./ServerPanelTab";
+import { Icon } from "./icons";
+import type { IconName } from "./icons";
 import { Segmented } from "./ui";
 
-const GROUPS: { key: string; label: string; tabs: { key: PanelTab; label: string }[] }[] = [
-  { key: "talk", label: "대화", tabs: [{ key: "conversation", label: "대화" }, { key: "logs", label: "로그" }] },
-  { key: "code", label: "코드", tabs: [{ key: "git", label: "git" }, { key: "mdview", label: "문서" }] },
-  { key: "run", label: "실행", tabs: [{ key: "server", label: "서버" }, { key: "ports", label: "포트" }] },
-  { key: "browser", label: "브라우저", tabs: [{ key: "browser", label: "브라우저" }] },
+const GROUPS: { key: string; label: string; icon: IconName; tabs: { key: PanelTab; label: string }[] }[] = [
+  { key: "talk", label: "대화", icon: "messages-square", tabs: [{ key: "conversation", label: "대화" }, { key: "logs", label: "로그" }] },
+  { key: "code", label: "코드", icon: "git-branch", tabs: [{ key: "git", label: "git" }, { key: "mdview", label: "문서" }] },
+  { key: "run", label: "실행", icon: "play", tabs: [{ key: "server", label: "서버" }, { key: "ports", label: "포트" }] },
+  { key: "browser", label: "브라우저", icon: "globe", tabs: [{ key: "browser", label: "브라우저" }] },
 ];
 const groupOf = (tab: PanelTab) => GROUPS.find((g) => g.tabs.some((x) => x.key === tab)) ?? GROUPS[0];
 
@@ -62,24 +64,27 @@ export function SidePanel() {
               title={g.key === "run" && unseenPortCount() > 0 ? t("세션이 연 새 포트가 있습니다") : undefined}
               onClick={() => setPanelTab(lastSub.get(g.key) ?? g.tabs[0].key)}
             >
+              <Icon name={g.icon} size={13} />
               {t(g.label)}
               {/* 새 세션 포트 (M31) — 배지는 그룹 단위다. 여는 것은 포트 패널 안의 클릭이다 */}
               <Show when={g.key === "run" && unseenPortCount() > 0}>
-                <span class="unread-dot" />
+                <span class="panel-tab-count">{unseenPortCount()}</span>
               </Show>
             </button>
           )}
         </For>
-        <button
-          class="panel-tab side-toggle mono"
-          title={t(panelSide() === "right" ? "패널을 왼쪽으로" : "패널을 오른쪽으로")}
-          onClick={() => setPanelSide(panelSide() === "right" ? "left" : "right")}
-        >
-          {panelSide() === "right" ? "◧" : "◨"}
-        </button>
-        <button class="panel-tab close" onClick={() => setPanelOpen(false)}>
-          ✕
-        </button>
+        <div class="panel-tab-ctl">
+          <button
+            title={t(panelSide() === "right" ? "패널을 왼쪽으로" : "패널을 오른쪽으로")}
+            aria-label={t(panelSide() === "right" ? "패널을 왼쪽으로" : "패널을 오른쪽으로")}
+            onClick={() => setPanelSide(panelSide() === "right" ? "left" : "right")}
+          >
+            <Icon name={panelSide() === "right" ? "panel-right" : "panel-left"} size={13} />
+          </button>
+          <button title={t("패널 닫기")} aria-label={t("패널 닫기")} onClick={() => setPanelOpen(false)}>
+            <Icon name="x" size={13} />
+          </button>
+        </div>
       </div>
       <Show when={notice()}>
         <div class="panel-notice">
@@ -100,6 +105,7 @@ export function SidePanel() {
             value={panelTab()}
             onChange={setPanelTab}
           />
+          <span class="panel-seg-note mono">{panelNote()}</span>
         </div>
       </Show>
       <div class="panel-body">

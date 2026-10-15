@@ -96,3 +96,16 @@ CSS: `screens.css`·`styles.css`는 W4 소유지만 모두가 **파일 끝에 �
 - **C6 Session 필드**(W3 `types.ts`): `title?: string`, `unseenDone?: "turn" | "report"`, `doneText?: string`, `reportPending?: boolean`, `pendingInbox?: number`, `busySinceTs?`는 필요 없음(Rust가 판정). `Persona.title?: string`. 유효 직함 `effectiveTitle(session, persona)`, 세션 이름 `sessionName(session, persona)`를 `types.ts`에 둔다 — 모두 이 함수를 쓴다.
 - **C7 `nextUnseen()`·`attentionRank()`**: `src/backend/attention.ts`(W4). W3 칩·대시보드 정렬이 쓴다.
 - **C8 공통 부품**: `src/components/ui.tsx`(W3). `notify(msg: string)`, `<ConfirmDialog title body danger confirmLabel onConfirm onCancel/>`, `<Segmented items value onChange/>`.
+
+## 2단계 — 시안 적용 (2026-10-15)
+
+기능 구현 뒤 화면을 `docs/design.pen` 0.5 시안에 맞춘다. 동작은 바꾸지 않고 배치·간격·글꼴·색·문구만 맞춘다. 이 단계에서는 소유가 아래처럼 바뀐다. 리드(eqmux-77)는 실기 체크리스트를 진행한다.
+
+| 세션 | 시안 프레임 (id) | 파일 |
+|---|---|---|
+| eqmux-66 | 공통 부품(Chip tmeW4 · Identity Gs8FE · Pane Header q78thq · Segmented cPdj9 · Button WFpkc · Field T9pK8s · Toast zYhXH · ConfirmDialog xHaqq · Menu Item rwIqz · Terminal Workspace l1uSGV) · UX 기반 J1QVO · 관제 2×2 AYlKJ · 8슬롯 T1sVdJ · 세션 상세 N4E0qQ · 세션 만들기 xukml · 작업 완료 HLeeM · 대시보드 SgZhp · 확인창 TzzVT · 손으로 띄운 에이전트 d7GvE · 우클릭 메뉴 모음 HPPf2 | ui.tsx · ControlCenter · Dashboard · SessionDetailPanel |
+| eqmux-8a | App Bar mdRK8 · Panel Tabs jLWpf · 알림 센터 QjESu · 워크스페이스 연결 EYy9T · 실행 N4bJu·qFwsr · 코드 AYgJv·E7Ixk6 · 대화[로그] e2s6HE · 설정 mT3kL·fvlW8 · 팀 편성 C9ljT · 기본 터미널 구성 V4F7KU · 브라우저 탭 w4W5l · 임무 팝업 탐색기 uOK9M · 배치 선택 QeU7f | AppBar · SidePanel · 패널 탭들 · WorkspaceConnection · Settings · TeamComposition · DefaultTerminalSetup · MissionExplorerTab · LayoutPicker |
+| eqmux-08 | 역할 라이브러리 dwiBK · 팀 캐스팅 cjWtF · 기동 모드 선택 xfVq4 · CLI 출력 T36ZZ | RoleLibrary · TeamCasting · LaunchMode · cli.rs 문구 |
+| eqmux-18 | 대화 탭 os0TX · 트랜스크립트 Yd4E5 · git diff·에디터 tYTka · 임무 배정 jc2Fm · 종료 확인 mMpfq | ConversationTab · TranscriptPane · GitDiffEditor · Missions · ExitDialog |
+
+0.5.x 프레임(한도·컨텍스트 P3yQ3P, 확장 w5YnN·i52Vt0·f8JU7M, 저장 명령 u6MRI, 직무·모델 Y69UP)은 적용하지 않는다.

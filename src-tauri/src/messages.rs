@@ -36,6 +36,11 @@ pub struct MsgRow {
     /// 다른 프로젝트에서 온 메시지면 그 주소의 프로젝트 이름 (`카이@app-b`의 app-b)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
+    /// 보낸 때의 세션 이름 (C4 디렉터리) — 세션이 사라진 뒤에도 내부 id 대신 이 이름을 보인다
+    #[serde(rename = "fromName", skip_serializing_if = "Option::is_none")]
+    pub from_name: Option<String>,
+    #[serde(rename = "toName", skip_serializing_if = "Option::is_none")]
+    pub to_name: Option<String>,
 }
 
 /// 원장 행의 0.5 부가 정보 — 없으면 0.4.2 메시지와 같다
@@ -44,6 +49,9 @@ pub struct Extra {
     pub done: bool,
     pub file: Option<FileRef>,
     pub project: Option<String>,
+    /// 이름을 직접 줄 때만 (테스트) — 없으면 send_with가 C4 디렉터리에서 찾는다
+    pub from_name: Option<String>,
+    pub to_name: Option<String>,
 }
 
 /// M2 — 자유 텍스트 금지. 타입은 5종뿐이고 본문은 비어 있을 수 없다.
@@ -60,8 +68,9 @@ pub fn validate(kind: &str, body: &str) -> Result<(), String> {
 
 /// M6 길이 상한 — 받는 에이전트의 컨텍스트를 아끼는 장치라 사람("나")의 글은 세지 않는다
 pub fn check_len(from: &str, body: &str) -> Result<(), String> {
-    if from != "나" && body.trim().chars().count() > MAX_BODY_CHARS {
-        return Err("TOO_LONG".into());
+    let n = body.trim().chars().count();
+    if from != "나" && n > MAX_BODY_CHARS {
+        return Err(format!("TOO_LONG:{n}")); // 글자 수는 CLI 오류 문구가 쓴다 (시안 T36ZZ)
     }
     Ok(())
 }
@@ -126,10 +135,13 @@ pub fn send_with(
         Some(f) => (Some(f.path.as_str()), Some(f.size as i64)),
         None => (None, None),
     };
+    // 보낸 때의 이름을 원장에 남긴다 — "나"·"@all"은 디렉터리에 없어 비고, 화면이 원문을 쓴다
+    let from_name = extra.from_name.clone().or_else(|| crate::ipc::session_name(from));
+    let to_name = extra.to_name.clone().or_else(|| crate::ipc::session_name(to));
     conn.execute(
-        "INSERT INTO message (ts, sender, recipient, kind, body, read, done, file_path, file_size, project)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-        params![now, from, to, kind, body, read as i64, extra.done as i64, fpath, fsize, extra.project],
+        "INSERT INTO message (ts, sender, recipient, kind, body, read, done, file_path, file_size, project, sender_name, recipient_name)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        params![now, from, to, kind, body, read as i64, extra.done as i64, fpath, fsize, extra.project, from_name, to_name],
     )
     .map_err(|e| e.to_string())?;
     Ok(MsgRow {
@@ -143,6 +155,8 @@ pub fn send_with(
         done: extra.done,
         file: extra.file.clone(),
         project: extra.project.clone(),
+        from_name,
+        to_name,
     })
 }
 
@@ -160,21 +174,32 @@ pub fn count_to_since(root: &Path, ws: &str, to: &str, since_ms: i64) -> Result<
 /// 열린 handoff·ask를 준 발신자 (report --done 회신 대상) — 이 세션이 직접 받은 handoff·ask
 /// 가운데 마지막 report --done 뒤에 온 것. `@all`은 직접 받은 것이 아니라 빠진다.
 /// "나"는 빠진다 — report는 원래 "나"에게 간다.
-pub fn open_requesters(root: &Path, ws: &str, me: &str) -> Result<Vec<String>, String> {
+pub fn open_requesters(root: &Path, ws: &str, me: &str) -> Result<Vec<Requester>, String> {
     if !crate::store::db_path(root, ws).exists() {
         return Ok(Vec::new());
     }
     let conn = crate::store::open_db(root, ws).map_err(|e| e.to_string())?;
+    // SQLite의 MIN() 집계는 같은 행의 맨 열(kind·ts)을 함께 준다 — 발신자별 가장 먼저 열린 건
     let mut stmt = conn
         .prepare(
-            "SELECT sender FROM message
+            "SELECT sender, kind, ts, MIN(id) FROM message
              WHERE recipient = ?1 AND kind IN ('handoff', 'ask') AND sender NOT IN ('나', ?1)
                AND id > (SELECT COALESCE(MAX(id), 0) FROM message WHERE sender = ?1 AND kind = 'report' AND done = 1)
              GROUP BY sender ORDER BY MIN(id)",
         )
         .map_err(|e| e.to_string())?;
-    let rows = stmt.query_map(params![me], |r| r.get::<_, String>(0)).map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![me], |r| Ok(Requester { sender: r.get(0)?, kind: r.get(1)?, ts: r.get(2)? }))
+        .map_err(|e| e.to_string())?;
     Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+/// 열린 handoff·ask를 준 발신자 — 보고 회신 대상과 CLI 표기(`린 (열린 handoff 10:34)`)
+#[derive(Debug, PartialEq)]
+pub struct Requester {
+    pub sender: String,
+    pub kind: String,
+    pub ts: i64,
 }
 
 /// before_id 커서로 최신 limit건을 골라 시간 오름차순으로 돌려준다 (대화는 위→아래로 흐른다).
@@ -190,7 +215,7 @@ pub fn list(
     let conn = crate::store::open_db(root, ws).map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(
-            "SELECT id, ts, sender, recipient, kind, body, read, done, file_path, file_size, project FROM
+            "SELECT id, ts, sender, recipient, kind, body, read, done, file_path, file_size, project, sender_name, recipient_name FROM
                (SELECT * FROM message WHERE id < ?1 ORDER BY id DESC LIMIT ?2)
              ORDER BY id ASC",
         )
@@ -212,16 +237,12 @@ pub fn list(
                 done: r.get::<_, i64>(7)? != 0,
                 file,
                 project: r.get(10)?,
+                from_name: r.get(11)?,
+                to_name: r.get(12)?,
             })
         })
         .map_err(|e| e.to_string())?;
     Ok(rows.filter_map(|r| r.ok()).collect())
-}
-
-/// 표시 이름 — 원장에는 세션 id가 남으므로, 프런트가 아는 이름(세션 이름·페르소나)을 받아
-/// 갈아끼운다. 모르는 id는 원문 그대로 둔다 — 사라진 세션도 누가 말했는지는 남아야 한다.
-fn label(names: &HashMap<String, String>, id: &str) -> String {
-    names.get(id).cloned().unwrap_or_else(|| id.to_string())
 }
 
 /// ms 에포크 → 로컬 시각 문자열. 깨진 값이면 원본 숫자를 그대로 둔다 (원장을 각색하지 않는다).
@@ -259,7 +280,7 @@ pub fn export_markdown(
 
     // 수만 건이어도 메모리에 모으지 않게 한 행씩 흘린다 (scrollback_export와 같은 태도)
     let mut stmt = conn
-        .prepare("SELECT ts, sender, recipient, kind, body FROM message ORDER BY id ASC")
+        .prepare("SELECT ts, sender, recipient, kind, body, sender_name, recipient_name FROM message ORDER BY id ASC")
         .map_err(|e| e.to_string())?;
     let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
     let mut day = String::new();
@@ -270,6 +291,9 @@ pub fn export_markdown(
         let to: String = r.get(2).map_err(|e| e.to_string())?;
         let kind: String = r.get(3).map_err(|e| e.to_string())?;
         let body: String = r.get(4).map_err(|e| e.to_string())?;
+        // 프런트가 아는 이름이 우선, 없으면(사라진 세션) 원장에 남은 보낸 때의 이름
+        let from = names.get(&from).cloned().or(r.get(5).ok().flatten()).unwrap_or(from);
+        let to = names.get(&to).cloned().or(r.get(6).ok().flatten()).unwrap_or(to);
         let d = stamp(ts, "%Y-%m-%d");
         if d != day {
             on_chunk(&format!("\n## {d}\n"))?;
@@ -278,8 +302,8 @@ pub fn export_markdown(
         on_chunk(&format!(
             "\n**{} · {} → {}** `{}`\n\n{}\n",
             stamp(ts, "%H:%M"),
-            label(names, &from),
-            label(names, &to),
+            from,
+            to,
             kind.to_uppercase(),
             body,
         ))?;
@@ -306,7 +330,7 @@ mod tests {
         assert_eq!(validate("chat", "x"), Err("BAD_TYPE".into()));
         assert_eq!(validate("ask", "  "), Err("EMPTY".into()));
         let long = "a".repeat(MAX_BODY_CHARS + 1);
-        assert_eq!(check_len("kai@ws", &long), Err("TOO_LONG".into()));
+        assert_eq!(check_len("kai@ws", &long), Err(format!("TOO_LONG:{}", MAX_BODY_CHARS + 1)));
         assert!(check_len("kai@ws", &"a".repeat(MAX_BODY_CHARS)).is_ok());
         assert!(check_len("나", &long).is_ok()); // 사람의 글은 상한 밖 (결정 18)
     }
@@ -342,7 +366,9 @@ mod tests {
         send(&dir, "ws1", "나", me, "handoff", "사람이 맡김").unwrap();
         send(&dir, "ws1", "rin@ws1", "@all", "handoff", "모두에게").unwrap();
         send(&dir, "ws1", "rin@ws1", me, "review", "리뷰는 맡긴 일이 아님").unwrap();
-        assert_eq!(open_requesters(&dir, "ws1", me).unwrap(), vec!["lin@ws1", "noel@ws2"]);
+        let open = open_requesters(&dir, "ws1", me).unwrap();
+        let who: Vec<(&str, &str)> = open.iter().map(|r| (r.sender.as_str(), r.kind.as_str())).collect();
+        assert_eq!(who, vec![("lin@ws1", "handoff"), ("noel@ws2", "ask")]); // 발신자별 가장 먼저 열린 건
         // 진척 보고(--done 아님)로는 닫히지 않는다
         send(&dir, "ws1", me, "나", "report", "절반").unwrap();
         assert_eq!(open_requesters(&dir, "ws1", me).unwrap().len(), 2);
@@ -351,12 +377,14 @@ mod tests {
         assert!(row.done);
         assert!(open_requesters(&dir, "ws1", me).unwrap().is_empty());
         send(&dir, "ws1", "lin@ws1", me, "handoff", "다음 일").unwrap();
-        assert_eq!(open_requesters(&dir, "ws1", me).unwrap(), vec!["lin@ws1"]);
+        assert_eq!(open_requesters(&dir, "ws1", me).unwrap()[0].sender, "lin@ws1");
         // 원장 왕복 — done·file·project가 그대로 읽힌다
         let extra = Extra {
             done: false,
             file: Some(FileRef { path: "D:/r/.eqmux/notes/a.md".into(), size: 42 }),
             project: Some("app-2".into()),
+            from_name: Some("엑스".into()),
+            ..Default::default()
         };
         send_with(&dir, "ws1", "x@ws9", me, "ask", "첨부", &extra).unwrap();
         let rows = list(&dir, "ws1", None, 50).unwrap();
@@ -364,6 +392,24 @@ mod tests {
         let last = rows.last().unwrap();
         assert_eq!(last.file, extra.file);
         assert_eq!(last.project.as_deref(), Some("app-2"));
+        assert_eq!(last.from_name.as_deref(), Some("엑스")); // 보낸 때의 이름이 원장에 남는다
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 세션이 사라진 뒤 — 프런트가 이름을 모르면 원장에 남은 보낸 때의 이름으로 내보낸다
+    #[test]
+    fn export_falls_back_to_the_name_at_send_time() {
+        let dir = std::env::temp_dir().join(format!("eqmux-msgn-{}", crate::workspace::now_ms()));
+        let named = Extra { from_name: Some("EQMUX01".into()), ..Default::default() };
+        send_with(&dir, "ws1", "shell1@gone-ws", "나", "report", "끝", &named).unwrap();
+        let mut out = String::new();
+        export_markdown(&dir, "ws1", "EQMUX", &HashMap::new(), |c| {
+            out.push_str(c);
+            Ok(())
+        })
+        .unwrap();
+        assert!(out.contains("EQMUX01 → 나"), "{out}");
+        assert!(!out.contains("shell1@gone-ws"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

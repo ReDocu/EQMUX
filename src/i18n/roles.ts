@@ -203,4 +203,61 @@ export const dict: Record<string, string> = {
   "테크니컬 라이터": "Technical writer",
   "릴리즈 매니저": "Release manager",
   "빌드 엔지니어": "Build engineer",
+  // ── 0.5 W2 시안 적용 — LaunchMode (xfVq4) ──
+  "→ 계속": "→ Continue",
+  "← 저장소 연결": "← Connect repository",
+  "첫 세션을 어떻게 시작할까요? 나중에 바꿀 수 있다 · 두 방식 모두 워크스페이스의 슬롯 {n}개를 쓴다":
+    "How should the first session start? You can change it later · both use the workspace's {n} slots",
+  "역할 팀": "Role team",
+  "셸만 연다. 에이전트는 필요할 때 사람이 직접 띄운다. 자동 이름은 프로젝트명XX(EQMUX01…)이고, 만들 때 직접 정할 수도 있다.":
+    "Opens a shell only. You launch an agent yourself when needed. Auto names are ProjectNN (EQMUX01…), or set one when creating.",
+  "세션 이름 · 번호가 헤더와 레일에 붙는다": "Session name · number shown in the header and rail",
+  "손으로 띄운 claude에는 메시지를 자동 주입하지 않는다 (넣기 칩)": "Messages are never auto-injected into a hand-launched claude (insert chip)",
+  "역할 팀은 나중에 팀 캐스팅으로 추가": "Add a role team later with team casting",
+  "다음 → 기본 터미널 구성 (셸 · 브랜치 · 이름)": "Next → default terminal setup (shell · branch · name)",
+  "페르소나·직무·직함을 슬롯에 배정해 Claude Code·Codex 세션을 띄운다. 역할 파일과 team.md가 합성되고 메시지 버스가 켜진다.":
+    "Assigns personas, jobs and titles to slots and launches Claude Code·Codex sessions. Role files and team.md are synthesized and the message bus turns on.",
+  "직함으로 맡는 영역을 나눈다 (클라이언트 · 서버 개발자)": "Titles split areas of ownership (client · server developer)",
+  "완료 신호 · 열린 handoff 회신 · 프로젝트 간 통신": "Done signals · replies to open handoffs · cross-project messages",
+  "프리셋: {list}": "Presets: {list}",
+  "다음 → 팀 캐스팅 → 팀 편성 → 관제": "Next → team casting → team composition → control",
+  "헤더 예": "Header",
+  카이: "Kai",
+  "기본 터미널로 시작합니다. 역할 팀은 나중에 추가할 수 있고, 두 방식 모두 슬롯 한도 {n}을 함께 쓴다.":
+    "Starting with a default terminal. You can add a role team later; both share the slot limit of {n}.",
+  "역할 팀으로 시작합니다. 기본 터미널은 나중에 추가할 수 있고, 두 방식 모두 슬롯 한도 {n}을 함께 쓴다.":
+    "Starting with a role team. You can add default terminals later; both share the slot limit of {n}.",
+  // ── 0.5 W2 시안 적용 — TeamCasting (cjWtF) ──
+  "페르소나를 {n}개 슬롯에 배정한다 · 다시 적용해도 남은 세션의 슬롯 번호는 그대로, 새 페르소나만 빈 슬롯에 들어간다":
+    "Assign personas to {n} slots · re-applying keeps the slot numbers of remaining sessions; only new personas take empty slots",
+  "편성 저장 · .eqmux/team.json · team.md": "Save team · .eqmux/team.json · team.md",
+  "저장됨 ✓ · .eqmux/team.json · team.md": "Saved ✓ · .eqmux/team.json · team.md",
+  "유지 · {n} 그대로": "Kept · stays {n}",
+  "새 슬롯": "New slot",
+  "직함 없음 — 역할 파일에 추가 토큰 0": "No title — adds 0 tokens to the role file",
+  "직무 (이 슬롯만)": "Job (this slot only)",
+  "페르소나 변경": "Change persona",
+  "제거…": "Remove…",
+  "페르소나 배정": "Assign persona",
+  "기본 터미널 · {name}": "Default terminal · {name}",
+  "빈 슬롯 · 기본 터미널은 관제에서 만든다 (자동 이름 {name})": "Empty slot · create default terminals from Control (auto name {name})",
+  "편성은 저장하거나 편성 선택으로 넘어갈 때 .eqmux/team.json과 team.md에 적힌다. 직함 칸은 슬롯 덮어쓰기이고 비우면 페르소나 직함을 쓴다. roles/는 합성 후 gitignore · 사용자의 CLAUDE.md는 수정하지 않음.":
+    "The team is written to .eqmux/team.json and team.md when you save or move on to composition. The title field overrides per slot; empty uses the persona title. roles/ is gitignored after synthesis · your CLAUDE.md is never modified.",
+  // ── 0.5 W2 시안 적용 — RoleLibrary (dwiBK) ──
+  "직무 8종 고정 · 세분화는 직함으로 · 직함은 권한·책임·금지를 바꾸지 않는다":
+    "8 fixed jobs · refine with titles · titles never change permissions, duties or prohibitions",
+  "새 페르소나": "New persona",
+  "추천 직함 {n}": "{n} suggested titles",
+  "8종 고정 — 문구·권한만 고친다": "8 fixed — edit wording and permissions only",
+  "추천 직함 — 직무 '{job}'": "Suggested titles — job '{job}'",
+  "모든 워크스페이스가 함께 쓴다": "shared by all workspaces",
+  "이 워크스페이스만 쓴다": "this workspace only",
+  "기본 직무": "Default job",
+  "역할 부여가 직무 선택 없이 이 값을 따릅니다 (미지정이면 부여 시 개발)":
+    "Role assignment follows this when no job is chosen (dev if unset)",
+  "한 줄 · 24자까지 · 직무 '{job}'의 책임·금지·권한은 그대로, 맡는 영역만 정한다. 모든 워크스페이스의 이 페르소나에 쓰인다":
+    "One line · up to 24 chars · job '{job}' duties, prohibitions and permissions stay; this only names the area. Used for this persona in every workspace",
+  "추천 직함 — 직무 '{job}' · 누른 말이 그대로 직함이 된다": "Suggested titles — job '{job}' · the chip text becomes the title as is",
+  "저장하면 {name}가 들어간 세션 {n}개의 역할 파일과 팀원 {m}명의 팀 관계 표를 다시 만들고 '[EQ] 역할 갱신 — .eqmux/roles/<세션>.md 다시 읽기' 한 줄을 보낸다. 재시작 배지는 뜨지 않는다.":
+    "Saving rebuilds the role files of {n} session(s) with {name} and the team tables of {m} teammate(s), and sends one line '[EQ] 역할 갱신 — .eqmux/roles/<session>.md 다시 읽기'. No restart badge.",
 };

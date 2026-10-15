@@ -87,6 +87,10 @@ export const dict: Record<string, string> = {
   "입력 차단 → 저장소 flush → 정상 종료 신호 → 유예 후 트리 종료 (Job Object)":
     "Block input → flush store → graceful shutdown signal → grace period, then tree termination (Job Object)",
   "실행 중인 세션이 없습니다 — 바로 종료합니다.": "No sessions running — quitting immediately.",
+  "실행 중 {n} — 에이전트 {a} · 기본 터미널 {d} · 서버 {s}. 자동 재개하지 않습니다.":
+    "{n} running — {a} agent(s) · {d} default terminal(s) · {s} server(s). Nothing auto-resumes.",
+  "승인 대기 — 종료하면 거부로 끝남": "awaiting approval — quitting denies it",
+  "모두 종료": "Quit all",
   "종료 중…": "Quitting…",
   종료: "Exit",
 
@@ -144,4 +148,14 @@ export const dict: Record<string, string> = {
   // ── 0.5 W3 · 새로 시작 ──
   "새로 시작 (요약 이월)": "Start fresh (carry summary)",
   "이전 대화는 잇지 않습니다 — 마지막 요약만 시작 안내문에 붙여 새 대화를 엽니다. 사람이 치기 전에는 아무것도 실행하지 않습니다": "Doesn't continue the old conversation — opens a new one with only the last summary attached to the start note. Nothing runs until you type",
+
+  // ── 0.5 W3 · 시안 적용 — 세션 상세 ──
+  "기동됨": "running",
+  "직함 (이 워크스페이스만)": "Title (this workspace only)",
+  "비어 있으면 페르소나 직함을 물려받는다 · 덮어쓰면 team.json 슬롯 title에만 남는다": "Empty inherits the persona title · an override is kept only in the team.json slot title",
+  "비우면 페르소나 이름({name})으로 돌아간다 · 공백·@·줄바꿈 불가 · claude --name과 @멘션에 쓴다": "Empty returns to the persona name ({name}) · no spaces, @ or line breaks · used for claude --name and @mentions",
+  "비우면 자동 이름({name})으로 돌아간다 · 공백·@·줄바꿈 불가 · @멘션에 쓴다": "Empty returns to the automatic name ({name}) · no spaces, @ or line breaks · used for @mentions",
+  "권한·엔진 변경 감지 · 다음 기동 때 적용됩니다": "Permission or engine change detected · applies at next start",
+  "권한·엔진 변경 감지 · 재시작 필요": "Permission or engine change detected · restart needed",
+  "새로 시작": "Start fresh",
 };

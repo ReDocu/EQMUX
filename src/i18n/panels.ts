@@ -3,6 +3,7 @@
 export const dict: Record<string, string> = {
   // ── 대화 탭 0.5 (W5) ──
   "모든 프로젝트": "All projects",
+  "사람이 쓰는 메시지는 800자 상한에서 뺍니다": "Messages you write are exempt from the 800-character limit",
   "끄면 다른 프로젝트와 오간 메시지를 숨깁니다": "Turn off to hide messages exchanged with other projects",
   "이전 200건": "Previous 200",
   "완료 보고 — 에이전트가 맡은 일을 끝냈다고 밝혔습니다": "Done report — the agent says its assigned work is finished",

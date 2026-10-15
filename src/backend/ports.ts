@@ -280,6 +280,11 @@ async function poll(): Promise<void> {
   }
 }
 
+/** 포트 패널 `다시 실측` — 다음 주기를 기다리지 않고 지금 한 번 본다 */
+export function refreshPorts(): void {
+  if (started) schedule(0);
+}
+
 /** 앱 셸이 켠다 (App.tsx) — 패널 수명과 무관하게 계속 돈다 */
 let started = false;
 export function startPortWatch(): void {
