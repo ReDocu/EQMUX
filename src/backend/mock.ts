@@ -113,7 +113,7 @@ export interface Backend {
   /** 세션 메모리 실측 반영 (FR-C-09) — 최신값·피크만 유지, 이벤트 적재 없음 */
   applyMemory(samples: { id: string; mb: number; peakMb: number }[]): void;
   /** 세션 에이전트 감지 반영 (셸 우선 모델) — Job 트리 실측. 목록에 없는 세션은 표시를 내린다 */
-  applyAgents(list: { id: string; agent: string }[]): void;
+  applyAgents(list: { id: string; agent: string; peer?: string }[]): void;
   /** 실물 에이전트 상태 반영 (PRD D agent-state 이벤트) — Tauri에서만 호출된다 */
   applyAgentState(evt: AgentStateApply): void;
   /** 마지막 한 줄 요약 반영 (M35) */
@@ -1092,13 +1092,14 @@ export class MockBackend implements Backend {
     if (changed) this.broadcast();
   }
 
-  applyAgents(list: { id: string; agent: string }[]) {
-    const found = new Map(list.map((x) => [x.id, x.agent]));
+  applyAgents(list: { id: string; agent: string; peer?: string }[]) {
+    const found = new Map(list.map((x) => [x.id, x]));
     let changed = false;
     for (const sess of SESSIONS) {
       const next = found.get(sess.id); // 미검출은 undefined — 내려간 에이전트 표시를 지운다
-      if (sess.agent === next) continue;
-      sess.agent = next;
+      if (sess.agent === next?.agent && sess.peerName === next?.peer) continue;
+      sess.agent = next?.agent;
+      sess.peerName = next?.peer; // Claude Code 세션 이름 — 번호 칸이 끝 조각을 보인다
       changed = true;
     }
     if (changed) this.broadcast();

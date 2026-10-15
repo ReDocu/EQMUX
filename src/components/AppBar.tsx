@@ -25,7 +25,7 @@ import {
   view,
 } from "../state";
 import { t, tf } from "../i18n";
-import { ATTENTION_ORDER, fmtSince, sessionName, nameBesideNo, slotNo } from "../types";
+import { ATTENTION_ORDER, fmtSince, nameBesideNo, paneNo, sessionName } from "../types";
 import type { Workspace } from "../types";
 import { Icon } from "./icons";
 import { ContextMenu, notify } from "./ui";
@@ -114,7 +114,7 @@ export function AppBar() {
   const itemName = (it: NotifyItem) => {
     const s = itemSession(it);
     if (!s) return it.session;
-    return `${slotNo(s.slot)} ${nameBesideNo(s.slot, sessionName(s, backend.listPersonas().find((p) => p.id === s.personaId)))}`;
+    return `${paneNo(s)} ${nameBesideNo(s.slot, sessionName(s, backend.listPersonas().find((p) => p.id === s.personaId)))}`;
   };
   // 지금 보고 있는 워크스페이스가 아니면 어디 것인지 붙인다
   const itemWsName = (it: NotifyItem) => {

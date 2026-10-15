@@ -2062,6 +2062,9 @@ async fn sessions_memory(app: AppHandle) -> Vec<MemSample> {
 struct AgentSample {
     id: String,
     agent: String,
+    /// Claude Code가 붙인 세션 이름 (`redocu-92`) — 페인 번호 칸이 끝 조각을 보인다
+    #[serde(skip_serializing_if = "Option::is_none")]
+    peer: Option<String>,
 }
 
 /// 세션 에이전트 감지 (셸 우선 모델) — Job pid 트리에서 알려진 에이전트 CLI(claude/codex 등)를
@@ -2072,7 +2075,10 @@ async fn sessions_agents(app: AppHandle) -> Vec<AgentSample> {
     let jobs = session_jobs(&app);
     tauri::async_runtime::spawn_blocking(move || {
         jobs.into_iter()
-            .filter_map(|(id, j, _)| agentscan::detect(&j.tree_pids()).map(|a| AgentSample { id, agent: a.into() }))
+            .filter_map(|(id, j, _)| {
+                let pids = j.tree_pids();
+                agentscan::detect(&pids).map(|a| AgentSample { id, agent: a.into(), peer: agent::peer_name(&pids) })
+            })
             .collect()
     })
     .await

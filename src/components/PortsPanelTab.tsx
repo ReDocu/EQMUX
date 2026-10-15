@@ -24,7 +24,7 @@ import { openInBrowserPanel, setPanelNote } from "../state";
 import { Icon } from "./icons";
 import { ContextMenu } from "./ui";
 import { t, tf } from "../i18n";
-import { sessionName, nameBesideNo, slotNo } from "../types";
+import { nameBesideNo, paneNo, sessionName } from "../types";
 
 interface Row {
   key: string;
@@ -69,7 +69,7 @@ export function PortsPanelTab() {
     const s = backend.listSessions().find((x) => x.id === sessionId);
     if (!s) return sessionId.split("@")[0];
     // 시안 qFwsr — `01 EQMUX01`처럼 번호와 세션 이름
-    return `${slotNo(s.slot)} ${nameBesideNo(s.slot, sessionName(s, backend.listPersonas().find((x) => x.id === s.personaId)))}`;
+    return `${paneNo(s)} ${nameBesideNo(s.slot, sessionName(s, backend.listPersonas().find((x) => x.id === s.personaId)))}`;
   };
 
   const toRow = (e: PortEntry): Row => ({

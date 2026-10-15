@@ -2,7 +2,7 @@
 // 번역이어야 한다. 화면(세션 상세 "실제/예상 실행 플래그")이 이 문자열을 그대로 보여주므로,
 // 여기가 틀리면 사람은 막혀 있지 않은 것을 막혀 있다고 믿는다.
 import { describe, expect, test } from "vitest";
-import { agentFlagsToString, codexFlagsToString, flagsToString, nameBesideNo, translatePermissions } from "./types";
+import { agentFlagsToString, codexFlagsToString, flagsToString, nameBesideNo, paneNo, translatePermissions } from "./types";
 
 describe("codexFlagsToString", () => {
   test("write:false는 읽기 전용 샌드박스, 승인은 언제나 on-request — bypass는 없다", () => {
@@ -93,5 +93,19 @@ describe("nameBesideNo", () => {
     expect(nameBesideNo(4, "카이")).toBe("카이");
     expect(nameBesideNo(3, "03")).toBe("03");
     expect(nameBesideNo(3, "R2D203")).toBe("R2D203");
+  });
+});
+
+// 페인 번호 칸 — Claude Code가 붙인 세션 이름(`redocu-92`)이 있으면 그 끝 조각, 없으면 슬롯 번호
+describe("paneNo", () => {
+  test("Claude Code 세션 이름의 끝 조각", () => {
+    expect(paneNo({ slot: 1, peerName: "redocu-92" })).toBe("92");
+    expect(paneNo({ slot: 2, peerName: "redocu-ca" })).toBe("ca");
+    expect(paneNo({ slot: 3, peerName: "my-app-7f" })).toBe("7f");
+  });
+
+  test("이름이 없거나 구분자가 없으면 슬롯 번호", () => {
+    expect(paneNo({ slot: 3 })).toBe("03");
+    expect(paneNo({ slot: 4, peerName: "kai" })).toBe("04");
   });
 });

@@ -16,7 +16,7 @@ import { canStartFresh, resumeAgent, startFresh } from "../backend/agent";
 import { attentionRank, inboxWaiting } from "../backend/attention";
 import { sessionTermSize } from "../components/TerminalPane";
 import type { Session } from "../types";
-import { ATTENTION_ORDER, cliOf, effectiveTitle, fmtSince, sessionDisplayName, sessionName, nameBesideNo, slotNo } from "../types";
+import { ATTENTION_ORDER, cliOf, effectiveTitle, fmtSince, nameBesideNo, paneNo, sessionDisplayName, sessionName } from "../types";
 
 /** 빈 슬롯 고스트의 열 span — 셀 그리드는 4열 고정이라 마지막 줄의 남은 칸만 채운다 */
 /** 지표 타일 제목 — 영어 사전 값이 문장 중간용 소문자여도("resumable") 타일은 첫 글자를 대문자로 */
@@ -246,6 +246,7 @@ export function Dashboard() {
                         <div class="cell-name" title={jobName(s)}>
                           <Identity
                             slot={s.slot}
+                            no={paneNo(s)}
                             name={sessionName(s, personaOf(s))}
                             persona={personaOf(s)?.name}
                             cli={s.personaId ? cliOf(s) : undefined}
@@ -385,7 +386,7 @@ export function Dashboard() {
               >
                 <div class="wait-row-top">
                   <span class="mono wait-row-nm">
-                    {slotNo(w.slot)} {nameBesideNo(w.slot, personaName(w))} · {workspaces().find((x) => x.id === w.workspaceId)?.name ?? ""}
+                    {paneNo(w)} {nameBesideNo(w.slot, personaName(w))} · {workspaces().find((x) => x.id === w.workspaceId)?.name ?? ""}
                   </span>
                   <span class="mono muted wait-row-t">{fmtSince(w.sinceMs)}</span>
                 </div>

@@ -133,6 +133,9 @@ export interface Session {
   /** 감지된 에이전트 CLI (셸 우선 모델) — Job 프로세스 트리 실측 표시 이름 (Claude/Codex 등).
    *  관측 전용: 사용자가 터미널에 직접 띄운 것을 이름만 식별한다. 미검출이면 undefined */
   agent?: string;
+  /** Claude Code가 이 페인의 대화창에 붙인 이름 (`redocu-92`) — 피어 메시지(`@redocu-92`)의 주소.
+   *  레지스트리 실측 · 표시 전용. 페인 번호 칸이 끝 조각(`92`)을 보인다 (paneNo) */
+  peerName?: string;
   /** 관리 기동 엔진 (M37) — 세션 추가 때 고른 CLI. 없으면 claude. `agent`(실측 표시)와 다르다:
    *  이것은 "무엇으로 띄울 것인가"라는 편성이고 team.json에 영속된다 */
   cli?: AgentCliId;
@@ -230,6 +233,13 @@ export const cleanTitle = (v: string): string => v.replace(/[\r\n]+/g, " ").slic
 
 /** 세션 번호 — 슬롯을 두 자리로 (헤더·레일 공통) */
 export const slotNo = (slot: number): string => String(slot).padStart(2, "0");
+
+/** 페인 번호 칸 — Claude Code가 붙인 세션 이름이 있으면 그 끝 조각(`redocu-92` → `92`), 없으면 슬롯 번호.
+ *  Claude Code 피어 메시지가 `@redocu-92`로 부르므로 사람이 그 주소를 페인과 맞춰 볼 수 있게 한다 */
+export function paneNo(s: { slot: number; peerName?: string }): string {
+  const tail = s.peerName?.split("-").pop();
+  return tail && tail !== s.peerName ? tail : slotNo(s.slot);
+}
 
 /** 번호 칸 옆에 보일 이름 — 이름 끝 두 자리가 슬롯 번호와 같으면(자동 이름 `EQMUX03`, 직접 쓴 `app-03`)
  *  번호 칸이 이미 그 숫자를 보이므로 뗀다: `03 EQMUX03` → `03 EQMUX`. 표시만 바꾼다 — 저장된 이름과

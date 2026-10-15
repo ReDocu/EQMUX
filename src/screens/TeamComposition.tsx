@@ -9,7 +9,7 @@ import { maxSlots } from "../backend/settings";
 import { t, tf } from "../i18n";
 import { setView, tick } from "../state";
 import { Icon } from "../components/icons";
-import { AGENT_CLI_LABEL, cliOf, effectiveTitle, sessionName, nameBesideNo, slotNo, translatePermissions } from "../types";
+import { AGENT_CLI_LABEL, cliOf, effectiveTitle, nameBesideNo, paneNo, sessionName, translatePermissions } from "../types";
 import type { ConversationMessage, Session } from "../types";
 
 // 브라우저 dev 폴백 — Tauri에서는 presets/*.json 실측이 대체한다 (팀 캐스팅과 같은 시드 구성)
@@ -139,7 +139,7 @@ export function TeamComposition(props: { wsId: string }) {
               <For each={members()}>
                 {(m) => (
                   <div class="tcmp-row">
-                    <span class="mono">{slotNo(m.slot)}</span>
+                    <span class="mono">{paneNo(m)}</span>
                     <span title={nameOf(m)}>{nameBesideNo(m.slot, nameOf(m))}</span>
                     <span>{effectiveTitle(m, persona(m.personaId)) ?? "—"}</span>
                     <span>{m.personaId ? (job(m.jobId)?.name ?? m.jobId) : t("기본 터미널")}</span>

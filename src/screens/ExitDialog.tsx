@@ -9,7 +9,7 @@ import type { ShutdownPhase } from "../backend/shutdown";
 import { Chip, Identity } from "../components/ui";
 import { t, tf } from "../i18n";
 import { setExitOpen } from "../state";
-import { effectiveTitle, sessionName } from "../types";
+import { effectiveTitle, paneNo, sessionName } from "../types";
 
 const PHASE_TEXT: Record<ShutdownPhase, string> = {
   flush: "저장소 flush 중…",
@@ -78,7 +78,7 @@ export function ExitDialog() {
                 const p = () => persona(s.personaId);
                 return (
                   <div class="exit-row">
-                    <Identity slot={s.slot} name={sessionName(s, p())} title={effectiveTitle(s, p())} />
+                    <Identity slot={s.slot} no={paneNo(s)} name={sessionName(s, p())} title={effectiveTitle(s, p())} />
                     <span class="exit-row-r">
                       <Show
                         when={s.status === "waiting"}

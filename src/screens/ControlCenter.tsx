@@ -56,7 +56,7 @@ import { t, tf } from "../i18n";
 import { SessionDetailPanel } from "./SessionDetailPanel";
 import { TranscriptPane } from "./TranscriptPane";
 import type { AgentCliId, Session, Workspace } from "../types";
-import { AGENT_CLI_LABEL, agentAttached, cliOf, effectivePermissions, effectiveTitle, SESSION_NAME_MAX, sessionDisplayName, sessionName, nameBesideNo, slotNo } from "../types";
+import { AGENT_CLI_LABEL, agentAttached, cliOf, effectivePermissions, effectiveTitle, nameBesideNo, paneNo, SESSION_NAME_MAX, sessionDisplayName, sessionName, slotNo } from "../types";
 
 /** 셸에 에이전트 명령을 쳐 넣는다 — claude 말고는 EQMUX가 관리하는 스폰 경로가 없다
  *  (역할 주입·훅·재개는 agent.rs의 ClaudeCodeAdapter 전용). 사람이 터미널에 직접 치는 것과
@@ -163,7 +163,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
       tabIndex={0}
       classList={{ sel: selected()?.id === s.id }}
       title={[
-        `${slotNo(s.slot)} ${sessionName(s, persona(s.personaId))}`,
+        `${paneNo(s)} ${sessionName(s, persona(s.personaId))}${s.peerName ? ` · ${s.peerName}` : ""}`,
         effectiveTitle(s, persona(s.personaId)),
         jobName(s.jobId),
         s.personaId ? AGENT_CLI_LABEL[cliOf(s)] : undefined,
@@ -190,7 +190,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
       {/* 점 하나 — 주의 신호가 있으면 그 단계 색, 없으면 상태 색 (§페인 헤더 문법) */}
       <span class={attnChips(s)[0] ? `rail-attn ${attnChips(s)[0]!.tone}` : `sdot ${s.status}`} />
       {/* 번호는 헤더와 같은 두 자리 슬롯 번호 — 헤더와 레일을 번호로 맞춰 본다 */}
-      <span class="rail-no mono">{slotNo(s.slot)}</span>
+      <span class="rail-no mono">{paneNo(s)}</span>
       <span class="rail-nm mono">{nameBesideNo(s.slot, sessionName(s, persona(s.personaId)))}</span>
       <Show when={s.personaId}>
         <span class="rail-jobb mono">{jobMeta(s.jobId, jobName(s.jobId)).badge}</span>
@@ -886,6 +886,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
               >
                 <Identity
                   slot={s.slot}
+                  no={paneNo(s)}
                   name={sessionName(s, persona(s.personaId))}
                   persona={persona(s.personaId)?.name}
                   title={effectiveTitle(s, persona(s.personaId))}

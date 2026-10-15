@@ -15,7 +15,7 @@ import { checkoutBranch } from "../backend/workspaces";
 import { t, tf } from "../i18n";
 import { setView, tick } from "../state";
 import { Chip, Eyebrow, Identity, notify, Segmented } from "../components/ui";
-import { effectiveTitle, sessionName } from "../types";
+import { effectiveTitle, paneNo, sessionName } from "../types";
 import type { Mission, MissionStatus } from "../types";
 
 export function Missions(props: { wsId: string }) {
@@ -287,7 +287,7 @@ export function Missions(props: { wsId: string }) {
                 const p = () => persona(s.personaId);
                 return (
                   <button class="ma-assignee" classList={{ on: on() }} onClick={() => void toggleAssign(props.wsId, sel()!.id, s.id)}>
-                    <Identity slot={s.slot} name={sessionName(s, p())} title={effectiveTitle(s, p())} />
+                    <Identity slot={s.slot} no={paneNo(s)} name={sessionName(s, p())} title={effectiveTitle(s, p())} />
                     <span class="ma-assignee-r">
                       <span class={`exit-state mono ${ST_CLASS[s.status] ?? "muted"}`}>{s.status.toUpperCase()}</span>
                       <span class="ma-toggle">{on() ? "✓" : ""}</span>

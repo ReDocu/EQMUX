@@ -12,7 +12,7 @@ import { t as tr, tf } from "../i18n";
 import { readTranscript } from "../backend/transcript";
 import type { TranscriptData } from "../backend/transcript";
 import { tick } from "../state";
-import { effectiveTitle, sessionName } from "../types";
+import { effectiveTitle, paneNo, sessionName } from "../types";
 import type { Session } from "../types";
 import { Identity } from "../components/ui";
 
@@ -173,7 +173,7 @@ export function TranscriptPane(props: { session: Session; onJump?: () => void })
       <div class="tr-head">
         <div class="tr-head-l">
           <span class="tr-ident" title={`${who()} · ${sourceLabel()}`}>
-            <Identity slot={props.session.slot} name={who()} title={effectiveTitle(props.session, persona())} />
+            <Identity slot={props.session.slot} no={paneNo(props.session)} name={who()} title={effectiveTitle(props.session, persona())} />
           </span>
           {/* 출처 한 줄 — 어느 워크스페이스(cwd)의 어느 파일에서 읽었는가. 클릭하면 전체 경로 복사 */}
           <Show when={source()} fallback={<span class="tr-src mono">{sourceLabel()}</span>}>

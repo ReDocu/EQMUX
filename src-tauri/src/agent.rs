@@ -287,6 +287,21 @@ fn home() -> PathBuf {
     PathBuf::from(std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\".into()))
 }
 
+/// Claude Code가 세션에 붙인 이름 (`redocu-92`) — 피어 메시지(`@redocu-92`)의 주소다. 레지스트리 파일은
+/// pid로 이름이 붙어 있어(`<pid>.json`) 페인 트리의 pid로 바로 찾는다. 사람이 쓰는 대화창만 —
+/// 서브에이전트·배경 claude도 같은 트리에 있다(B38). 이름이 없거나 못 읽으면 None
+pub(crate) fn peer_name(pids: &[u32]) -> Option<String> {
+    let dir = sessions_dir();
+    pids.iter().find_map(|pid| {
+        let text = fs::read_to_string(dir.join(format!("{pid}.json"))).ok()?;
+        let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+        if v.get("kind").and_then(|k| k.as_str()).is_some_and(|k| k != "interactive") {
+            return None;
+        }
+        v.get("name")?.as_str().filter(|n| !n.is_empty()).map(str::to_string)
+    })
+}
+
 fn sessions_dir() -> PathBuf {
     home().join(".claude").join("sessions")
 }

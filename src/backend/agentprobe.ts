@@ -9,6 +9,7 @@ import { isTauri } from "./pty";
 interface AgentSample {
   id: string;
   agent: string;
+  peer?: string; // Claude Code가 붙인 세션 이름 (redocu-92)
 }
 
 let started = false;

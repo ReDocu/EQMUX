@@ -15,18 +15,7 @@ import { t, tf } from "../i18n";
 import { jumpToSession } from "../state";
 import { Eyebrow, FieldHint, Identity, KV, StatusLabel, StopConfirm } from "../components/ui";
 import type { AgentCliId, Permissions, Session } from "../types";
-import {
-  AGENT_CLI_LABEL,
-  agentAttached,
-  agentFlagsToString,
-  cleanTitle,
-  cliOf,
-  effectiveTitle,
-  SESSION_NAME_MAX,
-  TITLE_MAX,
-  sessionName,
-  translatePermissions,
-} from "../types";
+import { AGENT_CLI_LABEL, agentAttached, agentFlagsToString, cleanTitle, cliOf, effectiveTitle, paneNo, SESSION_NAME_MAX, sessionName, TITLE_MAX, translatePermissions } from "../types";
 
 const PERM_KEYS: (keyof Permissions)[] = ["write", "commit", "push"];
 
@@ -247,6 +236,7 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
           <div class="sd-id" title={job()?.name ?? t("셸")}>
             <Identity
               slot={s().slot}
+              no={paneNo(s())}
               name={sessionName(s(), persona())}
               persona={persona()?.name}
               title={effectiveTitle(s(), persona())}

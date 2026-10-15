@@ -328,6 +328,8 @@ const chipText = (p: { text: string; short?: string }) => (
  *  persona는 세션 이름과 다를 때만 괄호로 붙인다 */
 export function Identity(props: {
   slot?: number;
+  /** 번호 칸 글자 — 없으면 슬롯 번호. Claude Code 세션 이름 끝 조각을 줄 때 쓴다 (paneNo) */
+  no?: string;
   name: string;
   persona?: string;
   title?: string;
@@ -336,9 +338,11 @@ export function Identity(props: {
   compact?: boolean;
 }) {
   const showPersona = () => !!props.persona && props.persona !== props.name;
+  const noText = () => props.no ?? slotNo(props.slot ?? 0);
   const tip = () =>
     [
-      props.slot !== undefined ? slotNo(props.slot) : "",
+      props.slot !== undefined ? noText() : "",
+      props.slot !== undefined && noText() !== slotNo(props.slot) ? `(${t("슬롯")} ${slotNo(props.slot)})` : "",
       props.name,
       showPersona() ? `(${props.persona})` : "",
       props.title ? `· ${props.title}` : "",
@@ -349,7 +353,7 @@ export function Identity(props: {
   return (
     <span class="eq-id" classList={{ compact: props.compact }} title={tip()}>
       <Show when={props.slot !== undefined}>
-        <span class="eq-id-no mono">{slotNo(props.slot!)}</span>
+        <span class="eq-id-no mono">{noText()}</span>
       </Show>
       <span class="eq-id-nm">
         {props.slot !== undefined ? nameBesideNo(props.slot, props.name) : props.name}
