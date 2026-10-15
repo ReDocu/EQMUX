@@ -67,6 +67,9 @@ pub struct PersonaInfo {
     /// 기본 직무 — 역할 부여가 직무 선택 없이 따라가는 값. 빈 값 = 미지정 (프런트가 기본값으로 받친다)
     #[serde(default)]
     pub job: String,
+    /// 직함 (0.5) — 직무 안에서 맡는 영역의 이름. 빈 값 = 직함 없음 (frontmatter에 쓰지 않는다)
+    #[serde(default)]
+    pub title: String,
     /// 고급 캐릭터 시트 절대 경로 — personas/<id>.character.md, 존재가 곧 고급 단계
     #[serde(default)]
     pub character_path: Option<String>,
@@ -340,6 +343,7 @@ fn parse_persona(path: &Path) -> Option<PersonaInfo> {
         personality: active.personality,
         color,
         job: fm_value(&fm, "job").unwrap_or_default(),
+        title: fm_value(&fm, "title").unwrap_or_default(),
         character_path,
         character_name,
         character_source,
@@ -467,7 +471,13 @@ fn render_persona(p: &PersonaInfo) -> String {
     let level_line = if LEVELS.contains(&p.level.as_str()) { format!("level: {}\n", p.level) } else { String::new() };
     // job도 값이 있을 때만 기록 — 미지정 페르소나 파일을 불필요한 키로 더럽히지 않는다
     let job_line = if p.job.is_empty() { String::new() } else { format!("job: {}\n", p.job) };
-    let mut s = format!("---\nid: {}\nname: {}\ncolor: {}\n{}{}---\n", p.id, p.name, p.color, level_line, job_line);
+    // 직함도 같은 규칙 — 한 줄로 접어 frontmatter를 깨지 않게 한다 (입력 단계에서 이미 막지만 한 번 더)
+    let title = p.title.split_whitespace().collect::<Vec<_>>().join(" ");
+    let title_line = if title.is_empty() { String::new() } else { format!("title: {title}\n") };
+    let mut s = format!(
+        "---\nid: {}\nname: {}\ncolor: {}\n{}{}{}---\n",
+        p.id, p.name, p.color, level_line, job_line, title_line
+    );
     // 저장의 원본은 프로필 3벌 — 최상위 편의 필드(hint 등)는 쓰지 않는다.
     // 단, 구 호출 경로(프로필 없이 hint만 온 페이로드)는 세 프로필에 복사해 받아준다.
     // 고급 섹션은 쓰지 않는다 — 고급은 캐릭터 시트(<id>.character.md)가 전부다
@@ -844,6 +854,24 @@ mod tests {
         let old2 = list(&root, None).personas.into_iter().find(|p| p.id == "old2").unwrap();
         assert!(old2.basic.tone.is_empty());
         assert_eq!(old2.mid.tone, "반말");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// 직함 (0.5) — 있을 때만 frontmatter에 쓰고, 저장 후 다시 읽으면 그대로 나온다
+    #[test]
+    fn persona_title_roundtrip() {
+        let root = temp_root("title");
+        seed(&root);
+        let kai = list(&root, None).personas.into_iter().find(|p| p.id == "kai").unwrap();
+        assert!(kai.title.is_empty());
+        save_persona(&root, &kai, None).unwrap();
+        let path = root.join("personas").join("kai.md");
+        assert!(!fs::read_to_string(&path).unwrap().contains("title:")); // 직함 없음 = 키 없음
+        let mut titled = kai.clone();
+        titled.title = "UI | C# 개발자".into();
+        save_persona(&root, &titled, None).unwrap();
+        let again = list(&root, None).personas.into_iter().find(|p| p.id == "kai").unwrap();
+        assert_eq!(again.title, "UI | C# 개발자");
         fs::remove_dir_all(&root).ok();
     }
 

@@ -96,15 +96,15 @@ export const dict: Record<string, string> = {
   "이름 · 색 · 판단 성향": "Name · color · judgment style",
   "+ 말투 · 성격 옵션": "+ tone · personality options",
   "+ 캐릭터 시트 (personas/<id>.character.md)": "+ character sheet (personas/<id>.character.md)",
-  "워크스페이스 오버라이드 — .eqmux/jobs가 원본 (P2)": "Workspace override — .eqmux/jobs is the source (P2)",
-  "워크스페이스 오버라이드 — .eqmux/personas가 원본 (P2)": "Workspace override — .eqmux/personas is the source (P2)",
+  "워크스페이스 오버라이드 — .eqmux/jobs가 원본": "Workspace override — .eqmux/jobs is the source",
+  "워크스페이스 오버라이드 — .eqmux/personas가 원본": "Workspace override — .eqmux/personas is the source",
   금지: "Forbidden",
   "중급 — 말투·성격까지 주입됩니다": "Intermediate — tone & personality are injected too",
   "고급 단계 — 캐릭터 시트:": "Advanced — character sheet:",
 
   // ── RoleLibrary — 직무 편집 ──
-  "직무 편집 (FR-E-28)": "Edit job (FR-E-28)",
-  "기본 권한 (D5) — 실행 플래그로 번역됩니다 (§4.5.1)": "Default permissions (D5) — translated into runtime flags (§4.5.1)",
+  "직무 편집": "Edit job",
+  "기본 권한 — 실행 플래그로 번역됩니다": "Default permissions — translated into runtime flags",
   책임: "Responsibility",
   원본: "Source",
   ".eqmux/jobs/*.md (WS 오버라이드)": ".eqmux/jobs/*.md (WS override)",
@@ -113,16 +113,16 @@ export const dict: Record<string, string> = {
   "8종 고정 — 문구·권한 편집만 가능, 지워도 부팅 시 부활":
     "Fixed set of 8 — only copy & permissions editable; revived at boot if deleted",
   "권한 반영": "Permissions apply",
-  "캐스팅 세션은 재시작 때 (E11′)": "To cast sessions on restart (E11′)",
-  "오버라이드 항목 — 원본은 워크스페이스 .eqmux/jobs/{id}.md 파일입니다. 편집 커맨드는 전역에만 씁니다 (FR-E-28) — 파일을 직접 고치거나 탐색기에서 편집하세요":
-    "Override entry — the source is the workspace .eqmux/jobs/{id}.md file. Edit commands write only to the global library (FR-E-28) — edit the file directly or via the explorer",
+  "캐스팅 세션은 재시작 때": "To cast sessions on restart",
+  "오버라이드 항목 — 원본은 워크스페이스 .eqmux/jobs/{id}.md 파일입니다. 편집 커맨드는 전역에만 씁니다 — 파일을 직접 고치거나 탐색기에서 편집하세요":
+    "Override entry — the source is the workspace .eqmux/jobs/{id}.md file. Edit commands write only to the global library — edit the file directly or via the explorer",
   "직무 또는 페르소나를 선택하면 편집합니다": "Select a job or persona to edit",
 
   // ── RoleLibrary — 페르소나 편집 ──
   "페르소나 편집": "Edit persona",
   "단계 — 단계마다 독립 프로필(성향·말투·성격). 전환해 각각 편집하고, 활성 단계만 주입됩니다 (저장 시 적용)":
     "Level — each level keeps an independent profile (style · tone · personality). Switch to edit each; only the active level is injected (applied on save)",
-  "이름 (세션 이름과 분리 가능 · P5)": "Name (can differ from the session name · P5)",
+  "이름 (세션 이름과 분리 가능)": "Name (can differ from the session name)",
   "색 — 직무 팔레트와 정렬 (점 글자 = 직무 앞글자) · UI 표시 전용":
     "Color — aligned with the job palette (dot letter = job initial) · display only",
   색: "color",
@@ -135,10 +135,10 @@ export const dict: Record<string, string> = {
   "기본 직무 — 역할 부여가 직무 선택 없이 이 값을 따릅니다 (미지정이면 부여 시 개발)":
     "Default job — role assignment follows this without a job picker (Dev if unassigned)",
   미지정: "Unassigned",
-  "판단 성향 ({lvl} 프로필) — 판단 우선순위 · 강조점 · 금기 (FR-E-25) · 예산 5~10줄 (P3)":
-    "Judgment style ({lvl} profile) — priorities · emphases · taboos (FR-E-25) · budget 5–10 lines (P3)",
-  "예산 초과 — {n}줄 / 권장 {max}줄. 성향 묘사는 토큰만 먹고 품질에 기여하지 않습니다 (FR-E-24)":
-    "Over budget — {n} lines / {max} recommended. Long style descriptions only burn tokens without improving quality (FR-E-24)",
+  "판단 성향 ({lvl} 프로필) — 판단 우선순위 · 강조점 · 금기 · 예산 5~10줄":
+    "Judgment style ({lvl} profile) — priorities · emphases · taboos · budget 5–10 lines",
+  "예산 초과 — {n}줄 / 권장 {max}줄. 성향 묘사는 토큰만 먹고 품질에 기여하지 않습니다":
+    "Over budget — {n} lines / {max} recommended. Long style descriptions only burn tokens without improving quality",
   "말투 ({lvl} 프로필) — 응답의 어조. 비우면 지시하지 않음": "Tone ({lvl} profile) — the voice of responses. Empty = not instructed",
   "간결한 존댓말": "Concise formal",
   "친근한 반말": "Friendly casual",
@@ -148,8 +148,8 @@ export const dict: Record<string, string> = {
   "성격 ({lvl} 프로필) — 행동 경향 1~{max}줄. 판단과 겹치면 판단 성향에":
     "Personality ({lvl} profile) — behavior tendencies, 1–{max} lines. If it overlaps judgment, put it in judgment style",
   "예: 신중함 — 되돌릴 수 없는 결정을 늦춘다": "e.g. Cautious — delays irreversible decisions",
-  "예산 — 말투·성격 각 {max}줄 권장. 긴 캐릭터 묘사는 토큰만 먹습니다 (P3)":
-    "Budget — {max} lines each for tone & personality recommended. Long character prose only burns tokens (P3)",
+  "예산 — 말투·성격 각 {max}줄 권장. 긴 캐릭터 묘사는 토큰만 먹습니다":
+    "Budget — {max} lines each for tone & personality recommended. Long character prose only burns tokens",
 
   // ── RoleLibrary — 캐릭터 시트 ──
   "캐릭터 시트 (고급 프로필) — 고급은 시트가 페르소나의 전부입니다. 정체성·성격·말투 규칙을 시트에 적으세요":
@@ -171,10 +171,36 @@ export const dict: Record<string, string> = {
   "앱 데이터 personas/*.md": "App data personas/*.md",
   주입: "Injection",
   ".eqmux/roles/<세션>.md 합성 — 시트는 경로 포인터만": ".eqmux/roles/<session>.md synthesis — the sheet is only a path pointer",
-  "오버라이드 항목 — 원본은 워크스페이스 .eqmux/personas/{id}.md 파일입니다. 편집 커맨드는 전역에만 씁니다 (FR-E-28) — 파일을 직접 고치거나 탐색기에서 편집하세요":
-    "Override entry — the source is the workspace .eqmux/personas/{id}.md file. Edit commands write only to the global library (FR-E-28) — edit the file directly or via the explorer",
+  "오버라이드 항목 — 원본은 워크스페이스 .eqmux/personas/{id}.md 파일입니다. 편집 커맨드는 전역에만 씁니다 — 파일을 직접 고치거나 탐색기에서 편집하세요":
+    "Override entry — the source is the workspace .eqmux/personas/{id}.md file. Edit commands write only to the global library — edit the file directly or via the explorer",
   "오버라이드는 .eqmux 파일에서 지웁니다": "Overrides are deleted from the .eqmux file",
   "캐스팅된 페르소나는 삭제할 수 없습니다": "A cast persona cannot be deleted",
   "personas/<id>.md 파일 삭제": "Deletes the personas/<id>.md file",
   "(캐스팅 중)": "(in casting)",
+  "팀 편성 저장 실패 — {err}": "Team save failed — {err}",
+
+  // ── 0.5 W3 · 직함·추천 칩·캐스팅 직무 변경 ──
+  "직함 — 직무 안에서 맡는 영역 (선택). 모든 워크스페이스의 이 페르소나에 쓰입니다": "Title — the area this persona covers within its job (optional). Used in every workspace",
+  "예: 클라이언트 개발자": "e.g. Client developer",
+  "이 슬롯의 직무를 바꿉니다 — 실행 권한이 따라 바뀝니다": "Change this slot's job — its run permissions change with it",
+  "직무 변경 ▾": "Change job ▾",
+  "직무 선택": "Choose job",
+  "테크 리드": "Tech lead",
+  "프로젝트 리드": "Project lead",
+  "기획자": "Planner",
+  "시스템 기획자": "Systems designer",
+  "콘텐츠 기획자": "Content designer",
+  "클라이언트 개발자": "Client developer",
+  "서버 개발자": "Server developer",
+  "프런트엔드 개발자": "Frontend developer",
+  "백엔드 개발자": "Backend developer",
+  "툴 개발자": "Tools developer",
+  "UI 디자이너": "UI designer",
+  "UX 디자이너": "UX designer",
+  "QA 엔지니어": "QA engineer",
+  "테스트 자동화 담당": "Test automation",
+  "장애 대응 담당": "Incident response",
+  "테크니컬 라이터": "Technical writer",
+  "릴리즈 매니저": "Release manager",
+  "빌드 엔지니어": "Build engineer",
 };

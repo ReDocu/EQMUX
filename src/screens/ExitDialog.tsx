@@ -1,8 +1,9 @@
 // 종료 확인 (sYRf5) — 실행 중 에이전트 목록 + 재개 가능 여부. 자동 재개하지 않는다 (FR-C-61 · C10).
 // 종료를 누르면 실제 시퀀스가 돈다 (FR-C-62·63): 입력 차단(이 다이얼로그) → flush → 신호 → 유예 → 종료.
-import { createSignal, For, Show } from "solid-js";
+import { createResource, createSignal, For, Show } from "solid-js";
 import { backend } from "../backend/mock";
-import { isTauri } from "../backend/pty";
+import { isServerTermId } from "../backend/ports";
+import { isTauri, listAlivePty } from "../backend/pty";
 import { performShutdown } from "../backend/shutdown";
 import type { ShutdownPhase } from "../backend/shutdown";
 import { t, tf } from "../i18n";
@@ -10,12 +11,15 @@ import { setExitOpen } from "../state";
 
 const PHASE_TEXT: Record<ShutdownPhase, string> = {
   flush: "저장소 flush 중…",
-  "flush-late": "flush가 2초를 넘겼습니다 — 계속 진행합니다 (FR-C-63)",
+  "flush-late": "flush가 2초를 넘겼습니다 — 계속 진행합니다",
   closing: "정상 종료 신호 → 유예 후 프로세스 트리 종료…",
 };
 
 export function ExitDialog() {
   const running = () => backend.listSessions().filter((s) => s.status !== "dead");
+  // 서버 탭 PTY (BR-05) — 세션 목록 밖이라 따로 센다. 끄면 dev 서버도 함께 죽는다
+  const [alive] = createResource(() => listAlivePty());
+  const servers = () => (alive() ?? []).filter(isServerTermId).map((id) => id.slice(id.indexOf("@") + 1));
   const persona = (id: string) => backend.listPersonas().find((p) => p.id === id);
   const ws = (id: string) => backend.listWorkspaces().find((w) => w.id === id);
 
@@ -36,7 +40,7 @@ export function ExitDialog() {
         <div style={{ padding: "18px 20px 0" }}>
           <div style={{ "font-size": "16px", "font-weight": 800 }}>{t("EQMUX를 종료할까요?")}</div>
           <div class="muted" style={{ "font-size": "12px", "margin-top": "4px" }}>
-            {tf("실행 중인 세션 {n}개가 종료됩니다. 자동 재개하지 않습니다.", { n: running().length })}
+            {tf("실행 중인 세션 {n}개가 종료됩니다. 자동 재개하지 않습니다.", { n: running().length + servers().length })}
           </div>
         </div>
         <div class="card inset" style={{ margin: "14px 20px", padding: "8px 12px" }}>
@@ -60,7 +64,17 @@ export function ExitDialog() {
               </div>
             )}
           </For>
-          <Show when={running().length === 0}>
+          <For each={servers()}>
+            {(wsId) => (
+              <div class="kv">
+                <span>
+                  <b>{t("서버")}</b> <span class="muted">{ws(wsId)?.name}</span>
+                </span>
+                <span class="mono st-dead">{t("dev 서버도 종료됩니다")}</span>
+              </div>
+            )}
+          </For>
+          <Show when={running().length + servers().length === 0}>
             <div class="muted" style={{ "font-size": "12px" }}>
               {t("실행 중인 세션이 없습니다 — 바로 종료합니다.")}
             </div>

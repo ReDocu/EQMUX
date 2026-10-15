@@ -56,6 +56,7 @@ export interface Persona {
   characterPath?: string; // 고급 캐릭터 시트 절대 경로 — personas/<id>.character.md, 존재가 곧 고급
   characterName?: string; // 시트 frontmatter name — 역할 파일 정체성 줄에 쓴다
   characterSource?: string; // 시트 frontmatter source (원전 — 게임·역사·창작)
+  title?: string; // 직함 (0.5) — 직무 안에서 맡는 영역 이름. 있을 때만 frontmatter에 쓴다
   mtimeMs?: number; // 읽은 시점의 파일 mtime (P-7) — 저장 시 외부 변경 충돌 감지
 }
 
@@ -139,6 +140,14 @@ export interface Session {
   /** 마지막 한 줄 요약 (M35) — Stop 훅이 트랜스크립트에서 뽑아 SQLite에 남긴다.
    *  앱을 껐다 켜도 남는 유일한 "무엇을 하고 있었는가" — 라이브 필드(activity)와 다르다 */
   lastRecap?: string;
+  /** 직함 덮어쓰기 (0.5) — 이 워크스페이스에서만. 비우면 페르소나 직함 (effectiveTitle) */
+  title?: string;
+  /** 턴 완료 신호 (0.5 C1) — turn: Stop으로 30초+ 턴이 끝남, report: report --done 받음.
+   *  본 것(markSeen·3초 보임·다시 busy)이 지운다 */
+  unseenDone?: "turn" | "report";
+  doneText?: string; // report --done 본문 한 줄 — 칩 툴팁
+  /** 턴은 끝났는데 맡은 handoff에 보고가 아직 없다 — 할 일 신호라 보기만 해서는 안 지워진다 */
+  reportPending?: boolean;
 }
 
 /** agent-state 이벤트·스냅숏의 반영 페이로드 (PRD D §7.1) — 인터페이스·구현·수신부가 공유한다 */
@@ -155,6 +164,7 @@ export interface AgentStateApply {
   exitCode?: number;
   degraded?: boolean; // 관측 저하 (FR-D-62·63) — 낮은 신뢰 표시 (FR-G-27)
   sinceMs?: number; // 이 상태로 들어간 시각 epoch ms (B19) — 없으면 수신 시각을 쓴다
+  completed?: boolean; // 턴 완료 (0.5 C1) — 30초 넘은 busy가 Stop으로 idle이 됐다
 }
 
 /** team.json 복원 슬롯 + 재개·워크트리 결합 정보 (team_load 반환의 소비 형태) */
@@ -166,6 +176,7 @@ export interface TeamSlotHydrate {
   worktree?: boolean;
   permissions?: Permissions | null; // 슬롯 권한 오버라이드 (FR-E-34) — 없으면 직무 기본값
   cli?: string | null; // 관리 기동 엔진 (M37) — team.json 원본, 없으면 claude
+  title?: string | null; // 직함 덮어쓰기 (0.5) — 없으면 페르소나 직함
   agentSessionId: string | null;
   resumable: boolean;
   worktreePath?: string | null;
@@ -203,6 +214,74 @@ export const canInject = (s: Session | undefined): boolean =>
 export const sessionDisplayName = (s: Session, personaName: string): string =>
   s.name?.trim() || personaName;
 
+/** 세션 이름 (C6) — 모든 표시가 이것을 쓴다. 기본 터미널은 만들 때 자동 이름이 s.name에 들어간다 */
+export const sessionName = (s: Session, persona: Persona | undefined): string =>
+  sessionDisplayName(s, persona?.name ?? (s.personaId || t("기본 터미널")));
+
+/** 유효 직함 (C6) — 슬롯 덮어쓰기, 없으면 페르소나 직함, 둘 다 없으면 undefined */
+export const effectiveTitle = (s: Session | undefined, persona: Persona | undefined): string | undefined =>
+  s?.title?.trim() || persona?.title?.trim() || undefined;
+
+export const TITLE_MAX = 24;
+export const SESSION_NAME_MAX = 24;
+
+/** 직함 입력 정리 — 줄바꿈만 막고 나머지(#·|)는 그대로 둔다. 표 이스케이프는 합성 쪽 일이다 */
+export const cleanTitle = (v: string): string => v.replace(/[\r\n]+/g, " ").slice(0, TITLE_MAX);
+
+/** 세션 번호 — 슬롯을 두 자리로 (헤더·레일 공통) */
+export const slotNo = (slot: number): string => String(slot).padStart(2, "0");
+
+/** 자동 이름의 프로젝트명 — 워크스페이스 표시 이름에서 글자·숫자·-·_만, 16자까지. 대소문자는 그대로 */
+export const projectStem = (wsName: string): string =>
+  wsName.replace(/[^\p{L}\p{N}_-]/gu, "").slice(0, 16) || "session";
+
+/** 자동 이름 `프로젝트명XX` — XX는 만들 때의 슬롯. 이미 쓰이면 비어 있는 가장 작은 번호.
+ *  taken은 소문자로 넣는다 (@이름 호출은 대소문자를 가리지 않는다) */
+export function pickAutoName(stem: string, slot: number, taken: ReadonlySet<string>): string {
+  const first = `${stem}${slotNo(slot)}`;
+  if (!taken.has(first.toLowerCase())) return first;
+  for (let n = 1; n < 100; n++) {
+    const c = `${stem}${slotNo(n)}`;
+    if (!taken.has(c.toLowerCase())) return c;
+  }
+  return `${stem}${Date.now().toString(36).slice(-3)}`;
+}
+
+/** 캐스팅 슬롯 계획 (0.5) — 캐스팅에 남는 세션은 지금 슬롯 그대로, 새 세션은 빈 슬롯을 앞에서부터.
+ *  current는 그 워크스페이스의 지금 세션 전부. 역할 세션 중 wanted에 없는 것은 비워질 자리로 본다
+ *  (기본 터미널은 편성 대상이 아니라 자리를 지킨다). 빈 슬롯이 모자라면 undefined.
+ *  applyCasting과 캐스팅 화면의 SLOT 라벨이 같이 쓴다 — 화면이 보인 번호가 곧 적용될 번호다 */
+export function planCastingSlots(
+  current: readonly { id: string; slot: number; personaId: string }[],
+  wantedIds: readonly string[],
+  maxSlots: number,
+): (number | undefined)[] {
+  const want = new Set(wantedIds);
+  const keep = current.filter((x) => !x.personaId || want.has(x.id));
+  const used = new Set(keep.map((x) => x.slot));
+  return wantedIds.map((id) => {
+    const ex = keep.find((x) => x.id === id);
+    if (ex) return ex.slot;
+    for (let n = 1; n <= maxSlots; n++) {
+      if (!used.has(n)) {
+        used.add(n);
+        return n;
+      }
+    }
+    return undefined;
+  });
+}
+
+/** 세션 이름 검증 — 거부 이유(한국어 원문 = i18n 키) 또는 undefined. 빈 값은 '기본으로 돌아가기'라 통과 */
+export function sessionNameError(name: string, taken: ReadonlySet<string>): string | undefined {
+  const v = name.trim();
+  if (!v) return undefined;
+  if (v.length > SESSION_NAME_MAX) return "24자까지 쓸 수 있습니다";
+  if (/[\s@]/.test(v)) return "공백과 @는 쓸 수 없습니다";
+  if (taken.has(v.toLowerCase())) return "이 워크스페이스에서 이미 쓰는 이름입니다";
+  return undefined;
+}
+
 export type MissionStatus = "todo" | "in-progress" | "in-review" | "done";
 
 export interface Mission {
@@ -213,6 +292,7 @@ export interface Mission {
   status: MissionStatus;
   goal: string;
   outputs: string[];
+  outputsDone?: boolean[]; // 산출물 체크 (0.5 · C4) — outputs와 같은 순서, 파일의 `- [x]`가 원본
   branch?: string; // 선택 연결 (E12)
   assigned: string[]; // session ids
   isDefault?: boolean; // 워크스페이스 기본 임무 (FR-E-56, M33) — frontmatter default: true
@@ -258,6 +338,9 @@ export interface ConversationMessage {
   unread: boolean;
   workspaceId?: string; // 실물 스트림의 스코프 — 목 시드는 미지정
   ts?: number; // epoch ms — 실물 정렬 키
+  done?: boolean; // report --done (작업 완료 신호) — 대화 탭 ✓ 배지
+  file?: { path: string; size: number }; // send --file 첨부 — 저장소 상대 경로
+  rowId?: number; // 원장 행 id — 이전 페이지(beforeId) 커서
 }
 
 /** PRD D §4.5.1 번역표 */

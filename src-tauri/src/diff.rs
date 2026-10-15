@@ -216,11 +216,15 @@ fn is_binary_diff(out: &str) -> bool {
 }
 
 /// HEAD ↔ 워크트리 양측 라인 재구성. untracked = 전부 add, 삭제 = 전부 del, 바이너리 = Err.
-pub fn file_diff(ws_path: &str, path: &str) -> Result<FileDiff, String> {
+pub fn file_diff(ws_path: &str, path: &str, known_from: Option<&str>) -> Result<FileDiff, String> {
     let base_label = git(&["rev-parse", "--short", "HEAD"], ws_path).unwrap_or_else(|_| "HEAD".into());
     // 이름변경 해석 (P-9) — 스테이징된 rename은 새 경로가 HEAD에 없어 전체 add로 보였다.
     // porcelain에서 원래 경로를 찾아 HEAD:<old> ↔ 워크트리 <new>를 비교한다.
-    let renamed_from = git(&["status", "--porcelain"], ws_path).ok().and_then(|out| {
+    // 최적화 B8 — 변경 목록(changed_files)이 이미 아는 원래 경로를 받으면 status를 다시 돌리지 않는다.
+    // Some("") = 이름변경 아님, None = 모름(예전 호출) → status로 찾는다
+    let renamed_from = match known_from {
+        Some(k) => Some(k.to_string()).filter(|k| !k.is_empty()),
+        None => git(&["status", "--porcelain"], ws_path).ok().and_then(|out| {
         out.lines().find_map(|line| {
             let l = line.trim_start();
             let (code, rest) = l.split_once(' ')?;
@@ -230,7 +234,8 @@ pub fn file_diff(ws_path: &str, path: &str) -> Result<FileDiff, String> {
             let (old, new) = rest.trim_start().split_once(" -> ")?;
             (new.trim_matches('"') == path).then(|| old.trim_matches('"').to_string())
         })
-    });
+        }),
+    };
     let head_path = renamed_from.as_deref().unwrap_or(path);
     let in_head = git(&["cat-file", "-e", &format!("HEAD:{head_path}")], ws_path).is_ok();
 
@@ -408,7 +413,7 @@ mod tests {
         assert_eq!(files.iter().find(|f| f.path == "a.txt").unwrap().stat, "+2 −1");
 
         // 수정 파일 — 양측 정렬 재구성 (B8): 같은 길이, del↔add는 같은 행에, 남는 쪽은 pad
-        let d = file_diff(&ws, "a.txt").unwrap();
+        let d = file_diff(&ws, "a.txt", None).unwrap();
         assert_eq!(d.base.iter().filter(|l| l.kind.as_deref() == Some("del")).count(), 1);
         assert_eq!(d.current.iter().filter(|l| l.kind.as_deref() == Some("add")).count(), 2);
         assert_eq!(d.base.len(), d.current.len()); // 항상 같은 길이 (B8)
@@ -422,9 +427,9 @@ mod tests {
         assert_eq!(d.base[2].no, Some(3)); // 셋 — ctx 줄 번호 유지
 
         // 신규 — BASE 없음, 전부 add / 삭제 — 전부 del
-        let n = file_diff(&ws, "new.txt").unwrap();
+        let n = file_diff(&ws, "new.txt", None).unwrap();
         assert!(n.base.is_empty() && n.current.len() == 1);
-        let g = file_diff(&ws, "gone.txt").unwrap();
+        let g = file_diff(&ws, "gone.txt", None).unwrap();
         assert!(g.current.is_empty() && g.base.len() == 1);
         assert_eq!(g.base[0].kind.as_deref(), Some("del"));
 
@@ -448,16 +453,20 @@ mod tests {
         assert_eq!(f.renamed_from.as_deref(), Some("old.txt"));
         assert_eq!(f.stat, "+1 −1"); // numstat rename 표기가 새 경로로 정규화된다
 
-        let d = file_diff(&ws, "new.txt").unwrap();
+        let d = file_diff(&ws, "new.txt", None).unwrap();
         assert_eq!(d.base.iter().filter(|l| l.kind.as_deref() == Some("del")).count(), 1);
         assert_eq!(d.current.iter().filter(|l| l.kind.as_deref() == Some("add")).count(), 1);
         assert!(d.base.iter().any(|l| l.text == "다섯")); // 옛 경로 내용이 BASE에 있다
+        // B8 — 목록이 아는 원래 경로를 넘기면 status 없이 같은 결과. ""는 이름변경 아님
+        let k = file_diff(&ws, "new.txt", Some("old.txt")).unwrap();
+        assert_eq!(k.base.len(), d.base.len());
+        assert!(file_diff(&ws, "new.txt", Some("")).unwrap().base.iter().all(|l| l.text != "다섯"));
 
         // 내용 동일 rename — 헝크가 없어도 양측 동일 내용으로 보인다 (빈 화면 아님)
         git(&["add", "."], &ws).unwrap();
         git(&["commit", "-m", "second"], &ws).unwrap();
         git(&["mv", "new.txt", "third.txt"], &ws).unwrap();
-        let p = file_diff(&ws, "third.txt").unwrap();
+        let p = file_diff(&ws, "third.txt", None).unwrap();
         assert_eq!(p.base.len(), 5);
         assert_eq!(p.base.len(), p.current.len());
 

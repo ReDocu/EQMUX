@@ -113,7 +113,8 @@ export function BrowserPanelTab() {
       syncSoon();
     }
     const unNav = onBrowserNav(setAddr);
-    const ro = new ResizeObserver(() => syncBounds());
+    // 분할선·패널 드래그 중 프레임마다 IPC를 보내지 않게 rAF로 묶는다 (최적화 C8)
+    const ro = new ResizeObserver(() => syncSoon());
     if (viewEl) ro.observe(viewEl);
     const onResize = () => syncSoon();
     window.addEventListener("resize", onResize);
@@ -156,14 +157,22 @@ export function BrowserPanelTab() {
   });
 
   // 다이얼로그·전체 화면 팝업 감시 — 자식 웹뷰가 이들을 가리므로 떠 있는 동안 숨긴다.
-  // 터미널 출력 등 DOM 변경 폭주는 rAF 한 번으로 묶어 흡수한다
+  // 덮개가 붙거나 떨어진 레코드에서만 판정을 예약한다 (최적화 C7) — 터미널 DOM 행 교체처럼
+  // 덮개와 무관한 변경 폭주는 레코드를 훑기만 하고 문서 전체 querySelector를 돌리지 않는다
+  const COVER = ".overlay, .explorer-fullscreen";
+  const touchesCover = (nodes: NodeList) => {
+    for (const n of nodes) {
+      if (n instanceof Element && (n.matches(COVER) || n.querySelector(COVER))) return true;
+    }
+    return false;
+  };
   onMount(() => {
     if (!isTauri()) return;
     let covered = false;
     let raf = 0;
     const check = () => {
       raf = 0;
-      const now = document.querySelector(".overlay, .explorer-fullscreen") !== null;
+      const now = document.querySelector(COVER) !== null;
       if (now === covered) return;
       covered = now;
       if (!active()) return;
@@ -172,8 +181,9 @@ export function BrowserPanelTab() {
       if (now) reportBrowserRect(undefined);
       else syncSoon();
     };
-    const mo = new MutationObserver(() => {
-      if (!raf) raf = requestAnimationFrame(check);
+    const mo = new MutationObserver((records) => {
+      if (raf) return;
+      if (records.some((r) => touchesCover(r.addedNodes) || touchesCover(r.removedNodes))) raf = requestAnimationFrame(check);
     });
     mo.observe(document.body, { childList: true, subtree: true });
     check();

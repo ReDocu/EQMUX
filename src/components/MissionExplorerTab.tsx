@@ -10,6 +10,7 @@ import { sendConversation } from "../backend/conversation";
 import { isTauri, revealPath } from "../backend/pty";
 import { t, tf } from "../i18n";
 import { openPanel, scopeWorkspace, selectedSession, setExplorerTab, setOverlay, tick } from "../state";
+import { ContextMenu, notify } from "./ui";
 
 // 브라우저 dev 폴백 트리 (기존 목)
 const MOCK_TREE: FsNode[] = [
@@ -32,6 +33,8 @@ export const [editorGuard, setEditorGuard] = createSignal(false);
 
 export function MissionExplorerTab() {
   const [sel, setSel] = createSignal<FsNode | undefined>(undefined);
+  // 트리 행 우클릭 (0.5 바로 가기) — 폴더는 그 폴더, 파일은 선택된 채로 탐색기에서 연다
+  const [rowMenu, setRowMenu] = createSignal<{ x: number; y: number; rel: string } | undefined>(undefined);
   const [query, setQuery] = createSignal("");
   const [fsResult, setFsResult] = createSignal<FsTree | undefined>(undefined);
   const [preview, setPreview] = createSignal<string | undefined>(undefined);
@@ -356,6 +359,27 @@ export function MissionExplorerTab() {
               {fsErr()}
             </div>
           </Show>
+          <Show when={rowMenu()}>
+            {(m) => (
+              <ContextMenu
+                x={m().x}
+                y={m().y}
+                header={m().rel}
+                onClose={() => setRowMenu(undefined)}
+                groups={[
+                  [
+                    {
+                      label: t("탐색기에서 열기"),
+                      action: () =>
+                        void revealPath(m().rel, ws()?.path).then(
+                          (ok) => ok || notify(t("폴더를 열 수 없습니다 — 경로가 없어졌습니다")),
+                        ),
+                    },
+                  ],
+                ]}
+              />
+            )}
+          </Show>
           <div class="msnp-tree-rows">
             <For each={tree()}>
               {(n) => (
@@ -367,6 +391,11 @@ export function MissionExplorerTab() {
                   onClick={() => {
                     pick(n);
                     if (n.dir) toggleFold(n.rel); // 폴더 클릭 = 선택 + 접기 토글 (탐색기 관례)
+                  }}
+                  onContextMenu={(e) => {
+                    if (!isTauri() || !ws()) return;
+                    e.preventDefault();
+                    setRowMenu({ x: e.clientX, y: e.clientY, rel: n.rel });
                   }}
                 >
                   <span class="msnp-tree-icon">
@@ -487,8 +516,20 @@ export function MissionExplorerTab() {
                       <div class="msnp-md-h2">{t("목표")}</div>
                       <div class="msnp-md-p">{m().goal || "—"}</div>
                       <Show when={m().outputs.length > 0}>
-                        <div class="msnp-md-h2">{t("산출물")}</div>
-                        <For each={m().outputs}>{(o) => <div class="msnp-md-p mono">□ {o}</div>}</For>
+                        {/* 체크는 파일의 `- [x]` 줄이 원본이다 — 앱 안 토글은 없고, 파일을 고치면 감시가 다시 읽는다 */}
+                        <div class="msnp-md-h2">
+                          {tf("산출물 · {done}/{total} 체크", {
+                            done: (m().outputsDone ?? []).filter(Boolean).length,
+                            total: m().outputs.length,
+                          })}
+                        </div>
+                        <For each={m().outputs}>
+                          {(o, i) => (
+                            <div class="msnp-md-p mono">
+                              {m().outputsDone?.[i()] ? "☑" : "☐"} {o}
+                            </div>
+                          )}
+                        </For>
                       </Show>
                     </div>
                   </div>

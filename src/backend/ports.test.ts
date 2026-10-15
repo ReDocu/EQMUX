@@ -3,6 +3,7 @@
 // 모양으로 어떻게 접는가"를 본다: 중복 접기 · 대표 호스트 · 기준선 · NEW 창 · 확인 표시.
 import { describe, expect, test } from "vitest";
 import {
+  feedLine,
   foldPortRows,
   isExposed,
   isNewPort,
@@ -169,5 +170,29 @@ describe("reconcileAcked — 확인 표시", () => {
     const out = reconcileAcked(new Set(["old"]), new Set(["old", "fresh"]), true);
     expect(out.has("old")).toBe(true);
     expect(out.has("fresh")).toBe(false);
+  });
+});
+
+describe("서버 탭 마지막 명령 (feedLine)", () => {
+  const empty = { buf: "", broken: false };
+  test("친 줄을 Enter에서 기록, 지우기 반영", () => {
+    let r = feedLine(empty, "npm run devv");
+    r = feedLine(r.st, "\x7f");
+    r = feedLine(r.st, "\r");
+    expect(r.commit).toBe("npm run dev");
+    expect(r.st).toEqual(empty);
+  });
+  test("붙여넣기 한 덩이에 Enter까지", () => {
+    expect(feedLine(empty, "pnpm dev\r").commit).toBe("pnpm dev");
+  });
+  test("히스토리(화살표)·Tab 완성·Ctrl+C가 섞인 줄은 믿지 않는다", () => {
+    expect(feedLine(empty, "\x1b[A\r").commit).toBeUndefined();
+    expect(feedLine(feedLine(empty, "npm ru\t").st, "\r").commit).toBeUndefined();
+    const r = feedLine(feedLine(empty, "abc\x03").st, "\r");
+    expect(r.commit).toBeUndefined();
+    expect(feedLine(r.st, "ls\r").commit).toBe("ls"); // 다음 줄은 다시 믿는다
+  });
+  test("빈 Enter는 기록하지 않는다", () => {
+    expect(feedLine(empty, "   \r").commit).toBeUndefined();
   });
 });

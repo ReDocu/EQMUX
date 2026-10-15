@@ -26,5 +26,7 @@ export function startMemorySampling(): void {
     );
   };
   void sample();
-  setInterval(() => void sample(), 10_000);
+  // 창이 숨겨진 동안은 재지 않는다 (최적화 D7) — 표시 전용 값이라 보일 때 다시 재면 된다
+  setInterval(() => !document.hidden && void sample(), 10_000);
+  document.addEventListener("visibilitychange", () => !document.hidden && void sample());
 }

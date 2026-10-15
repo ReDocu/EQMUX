@@ -5,6 +5,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { createEffect, createRoot } from "solid-js";
 import { backend } from "./mock";
+import { serverCommands, setServerCommands } from "./ports";
 import { isTauri } from "./pty";
 import { settings } from "./settings";
 import {
@@ -12,19 +13,23 @@ import {
   defaultShell,
   PANE_LAYOUTS,
   paneLayouts,
+  panelOpen,
   panelSide,
+  panelTab,
   paneRatios,
   selectedSession,
   setDefaultShell,
   setPaneLayouts,
+  setPanelOpen,
   setPanelSide,
+  setPanelTab,
   setPaneRatios,
   setSelectedSession,
   setView,
   SHELLS,
   view,
 } from "../state";
-import type { PaneLayout, PaneRatio } from "../state";
+import type { PaneLayout, PaneRatio, PanelTab } from "../state";
 
 interface LayoutData {
   openWorkspaces?: string[];
@@ -36,7 +41,13 @@ interface LayoutData {
   paneRatios?: Record<string, PaneRatio>; // 구버전 — 배치별 전역. 읽기 폴백으로만 남는다 (B21)
   paneRatiosByWs?: Record<string, Record<string, PaneRatio>>; // 비율도 워크스페이스별 (B21)
   panelSide?: string; // 사이드 패널 위치 — "left" | "right"
+  terminalNames?: Record<string, string>; // 기본 터미널 이름 (0.5) — 세션 id → 이름. 기기별
+  panelOpen?: boolean; // 사이드 패널 열림 (0.5 서버 탭 상태 저장)
+  panelTab?: string; // 사이드 패널 하위 탭 — 그룹은 이 키에서 풀린다
+  serverCommands?: Record<string, string>; // 워크스페이스 id → 마지막 서버 명령. 다시 칠 때는 사람이 누른다
 }
+
+const PANEL_TABS: readonly PanelTab[] = ["conversation", "git", "ports", "server", "logs", "browser", "mdview"];
 
 const isLayoutKey = (v: unknown): v is PaneLayout =>
   typeof v === "string" && PANE_LAYOUTS.some((l) => l.key === v);
@@ -113,6 +124,14 @@ export async function restoreLayout(): Promise<void> {
   const sh = SHELLS.find((s) => s.label === data.shell);
   if (sh) setDefaultShell(sh);
   if (data.panelSide === "left" || data.panelSide === "right") setPanelSide(data.panelSide);
+  if (PANEL_TABS.includes(data.panelTab as PanelTab)) setPanelTab(data.panelTab as PanelTab);
+  if (data.panelOpen === true) setPanelOpen(true);
+  if (data.serverCommands && typeof data.serverCommands === "object") {
+    setServerCommands(
+      Object.fromEntries(Object.entries(data.serverCommands).filter(([, v]) => typeof v === "string" && v.trim())),
+    );
+  }
+  if (data.terminalNames && typeof data.terminalNames === "object") backend.setSavedTerminalNames(data.terminalNames);
   for (const id of data.openWorkspaces ?? []) {
     backend.openWorkspace(id); // 경로 소실·10개 상한은 openWorkspace가 거른다
   }
@@ -144,6 +163,10 @@ function doSaveLayout(): void {
     lastWorkspace: v.kind === "workspace" ? (v as { id: string }).id : lastWs,
     paneRatiosByWs: paneRatios() as Record<string, Record<string, PaneRatio>>,
     panelSide: panelSide(),
+    terminalNames: backend.savedTerminalNames(),
+    panelOpen: panelOpen(),
+    panelTab: panelTab(),
+    serverCommands: serverCommands(),
   };
   lastWs = data.lastWorkspace;
   const json = JSON.stringify(data);
@@ -175,6 +198,9 @@ export function startLayoutSync(): void {
       defaultShell();
       selectedSession();
       panelSide(); // 패널 위치 전환
+      panelOpen(); // 패널 열림·하위 탭 (0.5)
+      panelTab();
+      serverCommands(); // 마지막 서버 명령 (0.5)
       view();
       save(); // 시그널 변경
     });

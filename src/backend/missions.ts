@@ -6,6 +6,8 @@ import { backend } from "./mock";
 import { isTauri, writePty } from "./pty";
 import { canInject } from "../types";
 import type { Mission, MissionStatus } from "../types";
+import { notify } from "../components/ui";
+import { tf } from "../i18n";
 
 interface MissionFile {
   id: string;
@@ -14,6 +16,7 @@ interface MissionFile {
   branch: string | null;
   goal: string;
   outputs: string[];
+  outputsDone: boolean[]; // 산출물 체크 (C4)
   file: string;
   assigned: string[];
   isDefault: boolean; // 기본 임무 (FR-E-56)
@@ -44,15 +47,14 @@ export async function createMission(
   name: string,
   goal: string,
   branch?: string,
+  outputs: string[] = [],
 ): Promise<void> {
   const path = wsPath(wsId);
   if (!isTauri() || !path) {
     backend.createMission(wsId, name, goal, branch);
     return;
   }
-  await invoke("mission_create", { wsPath: path, name, goal, branch: branch ?? null }).catch(
-    () => {},
-  );
+  await invoke("mission_create", { wsPath: path, name, goal, branch: branch ?? null, outputs }).catch(failed);
   await refreshMissions(wsId);
 }
 
@@ -67,8 +69,33 @@ export async function cycleMissionStatus(wsId: string, missionId: string): Promi
   const m = backend.listMissions().find((x) => x.id === missionId && x.workspaceId === wsId);
   if (!m) return;
   const next = ORDER[(ORDER.indexOf(m.status) + 1) % ORDER.length];
-  await invoke("mission_set_status", { wsPath: path, id: missionId, status: next }).catch(() => {});
+  await setMissionStatus(wsId, missionId, next);
+}
+
+/** 상태를 정해서 바꾼다 — 완료 보고를 본 사람이 누르는 `검토 중으로`가 쓴다. 앱이 스스로 부르지 않는다 */
+export async function setMissionStatus(wsId: string, missionId: string, status: MissionStatus): Promise<void> {
+  const path = wsPath(wsId);
+  if (!isTauri() || !path) {
+    const m = backend.listMissions().find((x) => x.id === missionId);
+    while (m && m.status !== status) backend.cycleMissionStatus(missionId);
+    return;
+  }
+  const ok = await invoke("mission_set_status", { wsPath: path, id: missionId, status }).then(
+    () => true,
+    (e) => (failed(e), false),
+  );
   await refreshMissions(wsId);
+  // 산출물 체크리스트 (C4) — 미체크가 남아도 막지 않고 알리기만 한다. 판단은 사람 몫
+  const m = backend.listMissions().find((x) => x.id === missionId && x.workspaceId === wsId);
+  const open = m?.outputs.filter((_, i) => !m.outputsDone?.[i]).length ?? 0;
+  if (ok && status === "in-review" && open > 0) {
+    notify(tf("산출물 {n}개가 아직 체크되지 않았습니다 — 검토 중으로 옮겼습니다", { n: open }));
+  }
+}
+
+/** 임무 쓰기 실패 (BR-12) — 조용히 삼키면 버튼이 안 먹는 것으로 읽힌다 */
+function failed(e: unknown): void {
+  notify(tf("임무 저장 실패 — {err}", { err: String(e) }));
 }
 
 /** 배정 토글 (FR-E-53·54) — 역할 파일의 임무 블록을 고치고 실측으로 되읽는다 */
@@ -92,7 +119,7 @@ export async function toggleAssign(
     wsPath: sess?.cwd || path,
     session: sessionId,
     missionId: wasAssigned ? null : missionId,
-  }).catch(() => {});
+  }).catch(failed);
   await refreshMissions(wsId);
   if (!wasAssigned) sendBrief(sessionId, m);
 }
@@ -106,14 +133,14 @@ function sendBrief(sessionId: string, m: Mission): void {
   const s = backend.listSessions().find((x) => x.id === sessionId);
   if (!s?.personaId || !canInject(s)) return;
   const goal = m.goal ? ` — ${m.goal}` : "";
-  writePty(sessionId, `[EQMUX] 임무 배정: ${m.name}${goal} · 정의 ${m.file}\r`);
+  writePty(sessionId, `[EQ] 임무 배정: ${m.name}${goal} · 정의 ${m.file}\r`);
 }
 
 /** 기본 임무 지정·해제 (FR-E-56, M33) — frontmatter default: true, 워크스페이스당 1개 */
 export async function setDefaultMission(wsId: string, missionId: string, on: boolean): Promise<void> {
   const path = wsPath(wsId);
   if (!isTauri() || !path) return;
-  await invoke("mission_set_default", { wsPath: path, id: missionId, on }).catch(() => {});
+  await invoke("mission_set_default", { wsPath: path, id: missionId, on }).catch(failed);
   await refreshMissions(wsId);
 }
 

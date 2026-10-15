@@ -36,8 +36,10 @@ export function startFileWatch(): void {
   syncWatchers();
   backend.subscribe(syncWatchers);
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
-  void listen<{ workspaceId: string }>("eqmux-file-change", (e) => {
+  const rewatch = new Set<string>();
+  void listen<{ workspaceId: string; rewatch?: boolean }>("eqmux-file-change", (e) => {
     const wsId = e.payload.workspaceId;
+    if (e.payload.rewatch) rewatch.add(wsId);
     // 500ms 디바운스 — 에디터 저장·git 작업은 이벤트를 몰아서 낸다
     clearTimeout(timers.get(wsId));
     timers.set(
@@ -46,9 +48,10 @@ export function startFileWatch(): void {
         timers.delete(wsId);
         void refreshMissions(wsId);
         void refreshLibrary();
-        // 감시 재등록 — 그 사이 새로 생긴 missions/·jobs/·personas/ 디렉터리를 잡는다
+        // 감시 재등록 — 새로 생긴 missions/·jobs/·personas/ 디렉터리를 잡는다. Rust가 디렉터리
+        // 생성을 알렸을 때만 한다 (최적화 D4) — 파일 변경마다 감시를 버리고 다시 만들 이유가 없다
         const ws = backend.listWorkspaces().find((w) => w.id === wsId);
-        if (ws?.open && !ws.pathMissing) {
+        if (rewatch.delete(wsId) && ws?.open && !ws.pathMissing) {
           void invoke("ws_watch", { workspaceId: wsId, wsPath: ws.path }).catch(() => {});
         }
         setFileChangeTick((t) => t + 1);

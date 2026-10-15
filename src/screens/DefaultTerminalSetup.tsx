@@ -4,7 +4,7 @@ import { backend } from "../backend/mock";
 import { respawnSessionShell } from "../components/TerminalPane";
 import { maxSlots } from "../backend/settings";
 import { t, tf } from "../i18n";
-import { setView } from "../state";
+import { defaultShell, setView } from "../state";
 
 export function DefaultTerminalSetup(props: { wsId: string }) {
   const ws = () => backend.listWorkspaces().find((w) => w.id === props.wsId);
@@ -26,7 +26,7 @@ export function DefaultTerminalSetup(props: { wsId: string }) {
           <div class="sub">{ws()?.name} · {t("역할 없는 셸 세션 설정")}</div>
         </div>
         <button class="btn primary" onClick={openTerminal}>
-          {t("터미널 열기")}
+          {t("열기")}
         </button>
       </div>
 
@@ -62,7 +62,7 @@ export function DefaultTerminalSetup(props: { wsId: string }) {
               </div>
               <div class="kv">
                 <span class="k">shell</span>
-                <span class="v">pwsh · login</span>
+                <span class="v">{defaultShell().label}</span>
               </div>
             </div>
             <div class="dts-persist mono muted">⛁ {t("스크롤백과 세션 상태는 기존 WAL 정책으로 보존됩니다.")}</div>
@@ -71,26 +71,27 @@ export function DefaultTerminalSetup(props: { wsId: string }) {
           <div class="card dts-preview">
             <div class="terminal-head mono">
               <span>
-                <span class="dts-ready-dot" /> session-01 · {t("기본 터미널")}
+                session-01 · {t("기본 터미널")}
               </span>
-              <span>READY</span>
             </div>
-            <div class="terminal-body mono dts-screen">
-              <div class="muted">EQMUX workspace connected · branch {ws()?.branch ?? "main"}</div>
-              <div>
-                <span class="muted">{ws()?.path ?? "~"}</span> $ git status --short
+            {/* 0.4.2의 git status 미리보기는 목 문구였다 — 여는 순간 실제로 보일 값만 둔다. 열기 전에는 아무것도 실행하지 않는다 */}
+            <div class="card inset" style={{ padding: "8px 10px", margin: "10px" }}>
+              <div class="kv">
+                <span class="k">{t("브랜치")}</span>
+                <span class="v mono">{ws()?.branch ?? "—"}</span>
               </div>
-              <div class="st-waiting"> M docs/design.pen</div>
-              <div>
-                <span class="muted">{ws()?.path ?? "~"}</span> $ <span class="dts-cursor">_</span>
+              <div class="kv">
+                <span class="k">{t("작업 폴더")}</span>
+                <span class="v mono">{ws()?.path ?? "—"}</span>
+              </div>
+              <div class="kv">
+                <span class="k">{t("셸")}</span>
+                <span class="v mono">{defaultShell().cmd}</span>
               </div>
             </div>
             <div class="dts-slots">
               <div class="card inset dts-slot active">
                 <span class="mono">{t("01 · 기본")}</span>
-                <span class="mono" style={{ color: "var(--eq-green)" }}>
-                  ready
-                </span>
               </div>
               {/* 빈 슬롯 카드 — 개수는 설정 슬롯 상한(maxSlots)을 따라간다 */}
               <For each={Array.from({ length: maxSlots() - 1 }, (_, i) => i + 2)}>
@@ -106,13 +107,13 @@ export function DefaultTerminalSetup(props: { wsId: string }) {
 
         <div class="cast-footer card">
           <div>
-            <div style={{ "font-weight": 700, "font-size": "12px" }}>{t("기본 터미널 구성을 저장하시겠습니까?")}</div>
+            <div style={{ "font-weight": 700, "font-size": "12px" }}>{t("역할 세션은 팀 캐스팅에서")}</div>
             <div class="muted" style={{ "font-size": "11px" }}>
-              {t("팀 역할은 비워 두고 현재 저장소와 셸 설정만 워크스페이스에 기록합니다.")}
+              {t("기본 셸은 설정의 '기본 셸' 값입니다. 열기 전에는 아무것도 실행하지 않습니다.")}
             </div>
           </div>
           <button class="btn primary" onClick={openTerminal}>
-            {t("저장 후 열기")}
+            {t("열기")}
           </button>
         </div>
       </div>

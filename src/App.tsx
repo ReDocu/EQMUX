@@ -1,16 +1,17 @@
-import { createEffect, createSignal, Match, onCleanup, onMount, Show, Switch } from "solid-js";
+import { createEffect, createSignal, lazy, Match, onCleanup, onMount, Show, Switch } from "solid-js";
 import { AppBar } from "./components/AppBar";
 import { SidePanel } from "./components/SidePanel";
 import { ensureAgentListeners } from "./backend/agent";
-import { startMessageBus } from "./backend/conversation";
+import { nextUnseen, startNotifyFeed } from "./backend/attention";
+import { startDirectorySync, startMessageBus } from "./backend/conversation";
 import { backend } from "./backend/mock";
 import { startAgentProbe } from "./backend/agentprobe";
 import { startMemorySampling } from "./backend/memory";
 import { diagSnapshot, startDiagnostics } from "./backend/diag";
 import { startBrowserRequests } from "./backend/browser";
-import { startPortWatch } from "./backend/ports";
+import { isServerTermId, startPortWatch } from "./backend/ports";
 import { startRecapUpdates } from "./backend/recap";
-import { ensurePtyListeners, isTauri, setPtyExitHook } from "./backend/pty";
+import { ensurePtyListeners, isTauri, listAlivePty, setPtyExitHook } from "./backend/pty";
 import { crashRecovery } from "./backend/recovery";
 import type { CrashReport } from "./backend/recovery";
 import { performShutdown } from "./backend/shutdown";
@@ -40,15 +41,18 @@ import { CrashRecovery } from "./screens/CrashRecovery";
 import { Dashboard } from "./screens/Dashboard";
 import { DefaultTerminalSetup } from "./screens/DefaultTerminalSetup";
 import { ExitDialog } from "./screens/ExitDialog";
-import { GitDiffEditor } from "./screens/GitDiffEditor";
 import { LaunchMode } from "./screens/LaunchMode";
 import { LayoutPicker } from "./screens/LayoutPicker";
 import { Missions } from "./screens/Missions";
-import { RoleLibrary } from "./screens/RoleLibrary";
-import { Settings } from "./screens/Settings";
-import { TeamCasting } from "./screens/TeamCasting";
-import { TeamComposition } from "./screens/TeamComposition";
-import { WorkspaceConnection } from "./screens/WorkspaceConnection";
+
+// 첫 화면 밖 화면은 나눠 싣는다 (최적화 D6) — 설정·역할 라이브러리·diff 편집기·캐스팅 등은
+// 열 때 처음 받는다. 관제·워크스페이스·대화는 첫 화면이라 그대로 둔다
+const GitDiffEditor = lazy(() => import("./screens/GitDiffEditor").then((m) => ({ default: m.GitDiffEditor })));
+const RoleLibrary = lazy(() => import("./screens/RoleLibrary").then((m) => ({ default: m.RoleLibrary })));
+const Settings = lazy(() => import("./screens/Settings").then((m) => ({ default: m.Settings })));
+const TeamCasting = lazy(() => import("./screens/TeamCasting").then((m) => ({ default: m.TeamCasting })));
+const TeamComposition = lazy(() => import("./screens/TeamComposition").then((m) => ({ default: m.TeamComposition })));
+const WorkspaceConnection = lazy(() => import("./screens/WorkspaceConnection").then((m) => ({ default: m.WorkspaceConnection })));
 
 export function App() {
   const v = view;
@@ -84,7 +88,10 @@ export function App() {
   // 팀 편성 자동 저장 (PRD E) — 역할 슬롯 변경 → .eqmux/team.json + team.md
   onMount(() => startTeamSync());
   // 메시지 버스 수신 (PRD F) — message-new → 스트림 반영 + 상태 기반 PTY 전달 (M3)
-  onMount(() => void startMessageBus());
+  onMount(() => {
+    void startMessageBus();
+    onCleanup(startDirectorySync()); // 세션 디렉터리 (C4) — eqmux send 주소 해석·eqmux who
+  });
   // 세션 메모리 계측 (FR-C-09 · C11) — Job Object 10초 샘플링, 표시 전용
   onMount(() => startMemorySampling());
   // 세션 에이전트 감지 (셸 우선 모델) — 터미널에 직접 띄운 claude/codex 등을 관제에 표시
@@ -97,6 +104,8 @@ export function App() {
   onMount(() => startRecapUpdates());
   // 세션 포트 감시 (M31) — 패널을 닫아 둔 동안 열린 포트도 잡아 둔다. 패널이 켜질 때 주기가 빨라진다
   onMount(() => startPortWatch());
+  // 알림 센터 (0.5 C2) — Rust notify-item을 벨 목록에 쌓는다. 창이 포커스여서 OS 알림이 안 뜬 건도 온다
+  onMount(() => startNotifyFeed());
 
   // 화면 손상 진단 (임시 계측, backend/diag) — 배율·모니터 변화와 자식 웹뷰 좌표 어긋남을 남긴다.
   // 자동 보정은 하지 않는다: 원인을 확정하기 전에 가리면 원인을 못 찾는다
@@ -132,9 +141,12 @@ export function App() {
   onMount(() => {
     if (!isTauri()) return;
     void import("@tauri-apps/api/window").then(({ getCurrentWindow }) =>
-      getCurrentWindow().onCloseRequested((e) => {
+      getCurrentWindow().onCloseRequested(async (e) => {
         e.preventDefault();
-        const running = backend.listSessions().some((s) => s.status !== "dead");
+        // 서버 탭 PTY는 세션 목록 밖이다 — 그것만 돌 때도 dev 서버가 말없이 죽지 않게 묻는다 (BR-05)
+        const running =
+          backend.listSessions().some((s) => s.status !== "dead") ||
+          (await listAlivePty()).some(isServerTermId);
         if (running) setExitOpen(true);
         else void performShutdown();
       }),
@@ -147,6 +159,19 @@ export function App() {
       if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "l") {
         e.preventDefault();
         setLayoutPickerOpen((o) => !o);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    onCleanup(() => window.removeEventListener("keydown", onKey));
+  });
+
+  // 다음 미확인으로 (0.5 주의 고리) — `⛶ 응답 대기` 칩과 같은 함수. xterm은 Ctrl+Shift+글자를
+  // 터미널로 보내지 않으므로 셸의 Ctrl+U(줄 지우기)와 겹치지 않는다
+  onMount(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.shiftKey && !e.altKey && e.key.toLowerCase() === "u") {
+        e.preventDefault();
+        nextUnseen();
       }
     };
     window.addEventListener("keydown", onKey);

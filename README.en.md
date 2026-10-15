@@ -5,7 +5,7 @@
 **A desktop app where a team of AI agents works one git repo together, and a human runs the control tower.**
 
 EQMUX is a Windows desktop app that puts agent-team supervision on top of a terminal multiplexer (MUX).
-Each workspace (= 1 git repo = 1 team = 1 tab) runs four Claude Code sessions in parallel by default — six or
+Each workspace (= 1 git repo = 1 team = 1 tab) runs four Claude Code or Codex sessions in parallel by default — six or
 eight if you raise it in settings. You watch their state from the control dashboard, assign missions, and
 step in when needed.
 
@@ -17,7 +17,7 @@ step in when needed.
 - **The terminal panes are the workspace.** The actual work is done by the agent CLI (Claude Code) in each pane.
 - **The app holds no API key.** It has no AI loop of its own — it only launches an external CLI.
 - **Files are the source of truth.** Teams, roles, and missions live as files under `.eqmux/`; the DB is a cache. On conflict, the file wins.
-- **There is no automatic execution path.** A user's button is always what changes state. Even after a restart, you get a **resume suggestion** rather than an automatic resume.
+- **There is no automatic execution path.** A user's button is always what changes state. Even after a restart, agents are not brought back automatically — **a human presses resume**.
 
 ## Domain model
 
@@ -36,17 +36,27 @@ Auxiliary panes (editor, diff, browser) do not consume session slots.
 
 ## Features
 
-- **Control dashboard** — workspace × session grid, sorted by what needs attention, waiting/dead surfaced first, event feed for state transitions · subagents · missions, OS notifications
+- **Control dashboard** — workspace × session grid, sorted by what needs attention, waiting/dead surfaced first, event feed for state transitions and missions, OS notifications plus an in-app notification center (subagent counts show in session detail and the busy card, not in the feed)
 - **Terminal workspace** — ConPTY + xterm.js, 6 pane layouts + draggable splitters + zoom, in-terminal search (Ctrl+F), link detection, clipboard and drag-and-drop
 - **Agent runtime** — managed launch of Claude Code and Codex sessions (role, permission flags, hooks and resume attached), state detection via registry watch + hooks, resume and permission restart, degraded-observability indicator
 - **Teams · roles · missions** — casting presets, job/persona library (global + per-workspace override), role-file frontmatter decides execution permissions, opt-in git worktree isolation per session
-- **Session persistence** — SQLite (WAL) scrollback storage, replays the last 500 lines on restart (SGR colors preserved) with a resume suggestion, FTS full-text search, child process tree cleanup via Job Objects, survives webview crashes
-- **Message bus** — typed inter-agent messages (ask / handoff / report / review / escalate), state-aware delivery (immediate when idle, at end of turn when busy), humans join with `@session` and `@all`, save the whole ledger to a Markdown file
-- **Dev tool panels** — git (status · worktrees · checkout), explorer (file CRUD), ports, logs, diff viewer, localhost browser
+- **Session persistence** — SQLite (WAL) scrollback storage, replays the last 500 lines on restart (SGR colors preserved) with explicit resume, FTS full-text search, child process tree cleanup via Job Objects, survives webview crashes
+- **Message bus** — typed inter-agent messages (ask / handoff / report / review / escalate), state-aware delivery (immediate when idle, at end of turn when busy), humans join with `@session` and `@all`, deliver by name to sessions in other open projects, save the whole ledger to a Markdown file
+- **Dev tool panels** — four groups: conversation · code (git · docs) · run (server · ports) · browser. git (status · worktrees · checkout), explorer (file CRUD), logs, diff viewer, and a browser panel that opens any http/https address
 - **Transcript view** — read Claude Code JSONL logs turn by turn (reference only), collapsible tool calls, scrollback fallback
-- **External interface** — `eqmux send · report · browser · ping` CLI over a named pipe, statusLine cost collection. Claude Code and Codex agents talk to each other over the same bus
+- **External interface** — `eqmux send · report · who · browser · ping` CLI over a named pipe, statusLine cost collection. Claude Code and Codex agents talk to each other over the same bus
 - **Browser control** — agents drive the browser panel with `eqmux browser open · snapshot · click · type · get-text · eval`. Not a hidden window — **the panel the human is watching** is the one that moves
 - **Settings · themes** — dark/light/system themes, notification routing, session slot count (4 · 6 · 8), replay line count, all persisted to settings.json
+
+## What's new in 0.5
+
+- **Titles and session names** — a team with two developers can tell "client developer" from "server developer". Name a session when you create it (leave it blank for an automatic name such as `EQMUX01`); pane headers show a two-digit slot number
+- **Shorter messages** — senders show by name (`[EQ·ask] Kai: …`) and agent message bodies are capped at 800 characters. Longer content goes in a file, sent by path with `eqmux send --file`
+- **Messages across projects** — `--to @name` finds the recipient in every open project. `eqmux who` lists the addresses
+- **Completion signal** — `eqmux report --done` notifies the human and replies to the teammate who handed off the work
+- **Attention loop** — the app-bar bell (notification center) and `Ctrl+Shift+U` take you straight to the pane that needs you
+- **Tidier menus** — the side panel is now four groups: conversation · code · run · browser. New shortcuts open folders in Explorer and the remote repository in your browser, and a server tab runs dev servers
+- **Confirmations and data kept** — stopping a session or removing a basic terminal asks first. Updates keep your workspace registrations and layout (the session history DB is moved to `session.db.bak`)
 
 ## Screens
 
@@ -69,8 +79,8 @@ Read-only by default; staging and committing happen in the terminal.
 
 ![Git diff & editor](docs/screenshots/readme/gitdiff.png)
 
-**Team casting** — assign a job + persona to each slot using a preset (standard / focused build /
-review-heavy / exploration). Each slot carries a preview of its execution permissions (write / commit / push).
+**Team casting** — assign a job + persona to each slot using a preset (standard / dev-heavy /
+product / quality). Each slot carries a preview of its execution permissions (write / commit / push).
 
 ![Team casting](docs/screenshots/readme/casting.png)
 
@@ -91,7 +101,7 @@ review-heavy / exploration). Each slot carries a preview of its execution permis
 - Windows 10/11 (WebView2)
 - [Node.js](https://nodejs.org) 18+
 - [Rust](https://rustup.rs) (stable)
-- [Claude Code CLI](https://claude.com/claude-code) — required to run agent sessions
+- [Claude Code CLI](https://claude.com/claude-code) — required to run agent sessions (Codex CLI is optional)
 
 ### Development
 
@@ -138,7 +148,7 @@ To check only the frontend, run `npm run build` (tsc --noEmit + vite build).
 | `missions/*.md` | mission definitions (branch + goal) |
 | `worktrees/<session>/` | git worktree, when session isolation is opted into |
 
-Your `CLAUDE.md` is never modified — roles are passed as a two-line `--append-system-prompt` pointer.
+Your `CLAUDE.md` is never modified — roles reach the agent only through a role-file pointer in the session start prompt (`--append-system-prompt` for Claude Code, `developer_instructions` for Codex) and a SessionStart hook.
 
 ## Feedback
 

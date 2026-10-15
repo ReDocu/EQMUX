@@ -1,18 +1,19 @@
 // 임무 그룹 사전 — Missions.tsx · MissionExplorerTab.tsx 의 한국어 원문(키) → 영어. i18n.ts가 병합한다.
 export const dict: Record<string, string> = {
   // ── 임무 배정 화면 (Missions.tsx) ──
+  "완료 보고": "Done report",
+  "검토 중으로": "Move to review",
+  "임무 저장 실패 — {err}": "Mission save failed — {err}",
   "임무 배정": "Mission assignment",
   ".eqmux/missions/*.md 가 원본 · 상태 뱃지 클릭 = 단계 전환 · 세션 클릭 = 배정 토글":
     ".eqmux/missions/*.md is the source of truth · click status badge = next stage · click session = toggle assignment",
   "← 컨트롤 센터": "← Control center",
   "클릭하면 다음 단계로": "Click for next stage",
-  "기본 임무 해제 (FR-E-56)": "Unset default mission (FR-E-56)",
+  "기본 임무 해제": "Unset default mission",
   "기본 임무로 지정 — 임무 없는 새 역할 세션이 자동 배정받습니다":
     "Set as default mission — new role sessions without a mission are auto-assigned to it",
   "★ 기본": "★ Default",
   "브랜치 미연결": "no branch linked",
-  "공유 repo의 현재 브랜치를 바꿉니다 — 워크트리 세션은 영향 없음 (FR-E-52)":
-    "Changes the shared repo's current branch — worktree sessions unaffected (FR-E-52)",
   "공유 repo 전환 확정?": "Confirm shared repo switch?",
   "⎇ 체크아웃": "⎇ Checkout",
   "브라우저 dev — 실제 체크아웃 없음": "Browser dev — no actual checkout",
@@ -22,7 +23,7 @@ export const dict: Record<string, string> = {
   "새 임무": "New mission",
   "임무 이름": "Mission name",
   "목표 — 완료 조건을 측정 가능하게": "Goal — make the completion criteria measurable",
-  "브랜치 (선택 · E12)": "Branch (optional · E12)",
+  "브랜치 (선택)": "Branch (optional)",
   "임무 생성": "Create mission",
   "생성하면 .eqmux/missions/<id>.md 파일이 만들어지고 DB는 캐시로 따라갑니다. 불일치 시 파일이 이깁니다 (불변 규칙 4).":
     "Creating writes .eqmux/missions/<id>.md; the DB follows as a cache. On mismatch the file wins (invariant 4).",
@@ -68,4 +69,7 @@ export const dict: Record<string, string> = {
   "파일 우선 · 삭제는 휴지통 · .git 불가침": "Files first · deletes go to trash · .git untouchable",
   "임무 관리": "Manage missions",
   "브리프 전달": "Send brief",
+  "산출물 — 한 줄에 하나 (선택)": "Deliverables — one per line (optional)",
+  "산출물 · {done}/{total} 체크": "Deliverables · {done}/{total} checked",
+  "산출물 {n}개가 아직 체크되지 않았습니다 — 검토 중으로 옮겼습니다": "{n} deliverable(s) not checked yet — moved to in review anyway",
 };

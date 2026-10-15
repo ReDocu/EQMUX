@@ -17,12 +17,13 @@ import type { LibSource, MergedLibrary } from "../backend/library";
 import { backend } from "../backend/mock";
 import { isTauri } from "../backend/pty";
 import { t, tf } from "../i18n";
-import { nudgeRoleReload, saveRoleFile } from "../backend/roles";
+import { nudgeRoleReload, nudgeTeamReload, saveRoleFile } from "../backend/roles";
+import { resaveTeams } from "../backend/team";
 import { fileChangeTick } from "../backend/watch";
 import { tick } from "../state";
-import { Eyebrow, KV } from "../components/ui";
-import { jobMeta } from "../jobs";
-import { personaLevel, personaProfile, personaTagline } from "../types";
+import { Eyebrow, FieldHint, KV } from "../components/ui";
+import { jobMeta, TITLE_SUGGEST } from "../jobs";
+import { cleanTitle, personaLevel, personaProfile, personaTagline, TITLE_MAX } from "../types";
 import type { Job, Persona, PersonaLevel, Workspace } from "../types";
 
 // 색 팔레트 = 직무 8색 (jobs.ts JOB_META와 1:1) — 점 안 글자는 직무 이름 앞글자
@@ -81,6 +82,7 @@ export function RoleLibrary() {
   const [draftName, setDraftName] = createSignal("");
   const [draftColor, setDraftColor] = createSignal<Persona["color"]>("blue");
   const [draftJob, setDraftJob] = createSignal(""); // 기본 직무 — 역할 부여가 따라간다. "" = 미지정
+  const [draftTitle, setDraftTitle] = createSignal(""); // 직함 (0.5) — "" = 직함 없음
   // ── 단계별 독립 프로필 3벌 — 단계 전환은 편집 대상 교체일 뿐, 다른 단계 값은 그대로 남는다 ──
   type DraftProfile = { hint: string; tone: string; personality: string };
   const emptyProf = (): DraftProfile => ({ hint: "", tone: "", personality: "" });
@@ -109,6 +111,7 @@ export function RoleLibrary() {
     setDraftName(p.name);
     setDraftColor(p.color);
     setDraftJob(p.job ?? "");
+    setDraftTitle(p.title ?? "");
     setDraftProfiles({ basic: profileOf(p, "basic"), mid: profileOf(p, "mid"), adv: profileOf(p, "adv") });
     setEditLevel(personaLevel(p));
     setSaved(false);
@@ -135,9 +138,16 @@ export function RoleLibrary() {
       personality: active.personality,
       color: draftColor(),
       job: draftJob(),
+      title: draftTitle().trim() || undefined,
       mtimeMs: editMtime(),
     });
     setSaveErr(err ?? undefined);
+    // 직함이 바뀌었다 — 역할 파일은 팀 동기화(500ms 디바운스)가 다시 만든다. 그 페르소나가 있는
+    // 워크스페이스의 살아 있는 팀원 모두에게 '다시 읽기' 한 줄 (팀 관계 표도 바뀌므로). 재시작 없음
+    if (!err && (p.title ?? "").trim() !== draftTitle().trim()) {
+      resaveTeams();
+      nudgeTeamReload(backend.listSessions().filter((x) => x.personaId === p.id).map((x) => x.workspaceId));
+    }
     reloadScope();
     if (!err) setEditMtime(personas().find((x) => x.id === p.id)?.mtimeMs);
     setSaved(!err);
@@ -337,7 +347,7 @@ export function RoleLibrary() {
                       {j.id}
                     </span>
                     <Show when={j.source === "ws"}>
-                      <span class="badge purple" title={t("워크스페이스 오버라이드 — .eqmux/jobs가 원본 (P2)")}>
+                      <span class="badge purple" title={t("워크스페이스 오버라이드 — .eqmux/jobs가 원본")}>
                         WS
                       </span>
                     </Show>
@@ -368,7 +378,7 @@ export function RoleLibrary() {
                       <div style={{ "font-weight": 700, display: "flex", gap: "6px", "align-items": "center" }}>
                         {p.name}
                         <Show when={p.source === "ws"}>
-                          <span class="badge purple" title={t("워크스페이스 오버라이드 — .eqmux/personas가 원본 (P2)")}>
+                          <span class="badge purple" title={t("워크스페이스 오버라이드 — .eqmux/personas가 원본")}>
                             WS
                           </span>
                         </Show>
@@ -385,6 +395,9 @@ export function RoleLibrary() {
                         </Show>
                       </div>
                       <div class="muted" style={{ "font-size": "11px" }}>
+                        <Show when={p.title}>
+                          <span style={{ color: "var(--eq-text)" }}>{p.title}</span> ·{" "}
+                        </Show>
                         {personaTagline(p)}
                       </div>
                     </div>
@@ -399,14 +412,14 @@ export function RoleLibrary() {
           <Show when={selJob()}>
             {(j) => (
               <>
-                <Eyebrow>{t("직무 편집 (FR-E-28)")}</Eyebrow>
+                <Eyebrow>{t("직무 편집")}</Eyebrow>
                 <div style={{ display: "flex", "flex-direction": "column", gap: "8px", "margin-top": "8px" }}>
                   <label class="muted" style={{ "font-size": "11px" }}>
                     {t("이름")} · <span class="mono">id: {j().id}</span>
                   </label>
                   <input value={jDraft().name} onInput={(e) => setJDraft({ ...jDraft(), name: e.currentTarget.value })} />
                   <label class="muted" style={{ "font-size": "11px" }}>
-                    {t("기본 권한 (D5) — 실행 플래그로 번역됩니다 (§4.5.1)")}
+                    {t("기본 권한 — 실행 플래그로 번역됩니다")}
                   </label>
                   <div style={{ display: "flex", gap: "12px" }}>
                     <For
@@ -447,12 +460,12 @@ export function RoleLibrary() {
                   <div class="card inset" style={{ padding: "4px 10px" }}>
                     <KV k={t("원본")} v={t(selJobIsWs() ? ".eqmux/jobs/*.md (WS 오버라이드)" : "앱 데이터 jobs/*.md")} />
                     <KV k={t("구성")} v={t("8종 고정 — 문구·권한 편집만 가능, 지워도 부팅 시 부활")} />
-                    <KV k={t("권한 반영")} v={t("캐스팅 세션은 재시작 때 (E11′)")} />
+                    <KV k={t("권한 반영")} v={t("캐스팅 세션은 재시작 때")} />
                   </div>
                   <Show when={selJobIsWs()}>
                     <div class="mono st-waiting" style={{ "font-size": "10px" }}>
                       {tf(
-                        "오버라이드 항목 — 원본은 워크스페이스 .eqmux/jobs/{id}.md 파일입니다. 편집 커맨드는 전역에만 씁니다 (FR-E-28) — 파일을 직접 고치거나 탐색기에서 편집하세요",
+                        "오버라이드 항목 — 원본은 워크스페이스 .eqmux/jobs/{id}.md 파일입니다. 편집 커맨드는 전역에만 씁니다 — 파일을 직접 고치거나 탐색기에서 편집하세요",
                         { id: j().id },
                       )}
                     </div>
@@ -497,7 +510,7 @@ export function RoleLibrary() {
                 </For>
               </div>
               <label class="muted" style={{ "font-size": "11px" }}>
-                {t("이름 (세션 이름과 분리 가능 · P5)")}
+                {t("이름 (세션 이름과 분리 가능)")}
               </label>
               <input value={draftName()} onInput={(e) => setDraftName(e.currentTarget.value)} />
               <label class="muted" style={{ "font-size": "11px" }}>
@@ -528,15 +541,39 @@ export function RoleLibrary() {
                 <option value="">{t("미지정")}</option>
                 <For each={jobs()}>{(j) => <option value={j.id}>{j.name}</option>}</For>
               </select>
+              {/* 직함 (0.5) — 직무의 권한·책임은 그대로, 맡는 영역만 이름으로 좁힌다. 칩은 입력 보조 */}
+              <label class="muted" style={{ "font-size": "11px" }}>
+                {t("직함 — 직무 안에서 맡는 영역 (선택). 모든 워크스페이스의 이 페르소나에 쓰입니다")}
+              </label>
+              <div>
+                <input
+                  value={draftTitle()}
+                  maxLength={TITLE_MAX}
+                  placeholder={t("예: 클라이언트 개발자")}
+                  onInput={(e) => setDraftTitle(cleanTitle(e.currentTarget.value))}
+                  onKeyDown={(e) => e.key === "Enter" && e.preventDefault()}
+                  style={{ width: "100%" }}
+                />
+                <FieldHint count={draftTitle().length} max={TITLE_MAX} />
+                <div class="title-chips">
+                  <For each={TITLE_SUGGEST[draftJob() || "dev"] ?? []}>
+                    {(c) => (
+                      <button class="eq-chip info title-chip" onClick={() => setDraftTitle(cleanTitle(t(c)))}>
+                        {t(c)}
+                      </button>
+                    )}
+                  </For>
+                </div>
+              </div>
               {/* ── 프로필 편집 — 단계마다 독립. 기본=성향만 · 중급=성향+말투+성격 · 고급=시트만 ── */}
               <Show when={editLevel() !== "adv"}>
                 <label class="muted" style={{ "font-size": "11px" }}>
-                  {tf("판단 성향 ({lvl} 프로필) — 판단 우선순위 · 강조점 · 금기 (FR-E-25) · 예산 5~10줄 (P3)", { lvl: t(LEVEL_NAME[editLevel()]) })}
+                  {tf("판단 성향 ({lvl} 프로필) — 판단 우선순위 · 강조점 · 금기 · 예산 5~10줄", { lvl: t(LEVEL_NAME[editLevel()]) })}
                 </label>
                 <textarea rows={4} value={prof().hint} onInput={(e) => setProf({ hint: e.currentTarget.value })} />
                 <Show when={hintLines() > HINT_BUDGET}>
                   <div class="mono st-waiting" style={{ "font-size": "11px" }}>
-                    {tf("예산 초과 — {n}줄 / 권장 {max}줄. 성향 묘사는 토큰만 먹고 품질에 기여하지 않습니다 (FR-E-24)", { n: hintLines(), max: HINT_BUDGET })}
+                    {tf("예산 초과 — {n}줄 / 권장 {max}줄. 성향 묘사는 토큰만 먹고 품질에 기여하지 않습니다", { n: hintLines(), max: HINT_BUDGET })}
                   </div>
                 </Show>
               </Show>
@@ -575,7 +612,7 @@ export function RoleLibrary() {
               />
               <Show when={lineCount(prof().tone) > CHAR_BUDGET || lineCount(prof().personality) > CHAR_BUDGET}>
                 <div class="mono st-waiting" style={{ "font-size": "11px" }}>
-                  {tf("예산 — 말투·성격 각 {max}줄 권장. 긴 캐릭터 묘사는 토큰만 먹습니다 (P3)", { max: CHAR_BUDGET })}
+                  {tf("예산 — 말투·성격 각 {max}줄 권장. 긴 캐릭터 묘사는 토큰만 먹습니다", { max: CHAR_BUDGET })}
                 </div>
               </Show>
               </Show>
@@ -658,7 +695,7 @@ export function RoleLibrary() {
               <Show when={selIsWs()}>
                 <div class="mono st-waiting" style={{ "font-size": "10px" }}>
                   {tf(
-                    "오버라이드 항목 — 원본은 워크스페이스 .eqmux/personas/{id}.md 파일입니다. 편집 커맨드는 전역에만 씁니다 (FR-E-28) — 파일을 직접 고치거나 탐색기에서 편집하세요",
+                    "오버라이드 항목 — 원본은 워크스페이스 .eqmux/personas/{id}.md 파일입니다. 편집 커맨드는 전역에만 씁니다 — 파일을 직접 고치거나 탐색기에서 편집하세요",
                     { id: sel()!.id },
                   )}
                 </div>

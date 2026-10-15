@@ -104,12 +104,6 @@ pub fn diag_note(text: String) {
     write(&text);
 }
 
-/// 진단 로그 경로 — 화면이 사용자에게 "이 파일을 주세요"라고 말할 수 있게
-#[tauri::command]
-pub fn diag_log_path() -> String {
-    crate::log_dir().join("diagnostics.log").to_string_lossy().into_owned()
-}
-
 // ── 창 이벤트 ────────────────────────────────────────────────────────────
 // Moved는 드래그 중 계속 온다 — 그대로 적으면 로그가 그것만으로 찬다.
 // 배율·모니터가 실제로 바뀐 순간만 남기고, 나머지는 500ms에 한 줄로 죈다.
@@ -155,4 +149,75 @@ pub fn note_window_event(app: &AppHandle, kind: &str) -> bool {
         g.browser.as_ref().map(|b| (b.x, b.y, b.w, b.h)),
     ));
     changed
+}
+
+// ── 웹뷰 생사 (BR-18) ────────────────────────────────────────────────────
+// 프런트가 10초마다 살아 있다고 알린다. 끊기면 그 사실을 진단 로그에 남긴다 — 웹뷰가 죽거나
+// 굳어도 Rust 쪽에는 흔적이 없던 자리다. 숨은 창은 WebView2가 타이머를 분당 1회까지 죄므로
+// 따로 넉넉한 한도를 둔다 (오탐 방지). 판정만 하고 복구는 하지 않는다 (위 원칙과 같다).
+
+const ALIVE_LIMIT_MS: u128 = 30_000;
+const ALIVE_LIMIT_HIDDEN_MS: u128 = 180_000;
+
+struct Beat {
+    at_ms: u128,
+    hidden: bool,
+    silent: bool,
+}
+
+static BEAT: Mutex<Option<Beat>> = Mutex::new(None);
+
+fn now_ms() -> u128 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0)
+}
+
+/// 이 박동 뒤로 now까지 소식이 없으면 끊긴 것인가
+fn overdue(b: &Beat, now: u128) -> bool {
+    let limit = if b.hidden { ALIVE_LIMIT_HIDDEN_MS } else { ALIVE_LIMIT_MS };
+    now.saturating_sub(b.at_ms) > limit
+}
+
+/// 프런트 하트비트 — 끊겼다 돌아온 것이면 그 길이를 남긴다
+#[tauri::command]
+pub fn diag_alive(hidden: bool) {
+    let now = now_ms();
+    let mut guard = BEAT.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(b) = guard.as_ref().filter(|b| b.silent) {
+        write(&format!("WEBVIEW-BACK silent {}ms hidden={hidden}", now.saturating_sub(b.at_ms)));
+    }
+    *guard = Some(Beat { at_ms: now, hidden, silent: false });
+}
+
+/// 감시 스레드 — 첫 박동 전에는 판정하지 않는다 (앱 시작·로딩 중은 끊김이 아니다)
+pub fn start_alive_watch() {
+    std::thread::spawn(|| loop {
+        std::thread::sleep(std::time::Duration::from_secs(10));
+        let mut guard = BEAT.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(b) = guard.as_mut().filter(|b| !b.silent) {
+            let now = now_ms();
+            if overdue(b, now) {
+                b.silent = true;
+                write(&format!(
+                    "WEBVIEW-SILENT no heartbeat for {}ms hidden={}",
+                    now.saturating_sub(b.at_ms),
+                    b.hidden
+                ));
+            }
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hidden_window_gets_a_longer_leash() {
+        let shown = Beat { at_ms: 1_000, hidden: false, silent: false };
+        let hidden = Beat { at_ms: 1_000, hidden: true, silent: false };
+        assert!(!overdue(&shown, 1_000 + ALIVE_LIMIT_MS));
+        assert!(overdue(&shown, 1_001 + ALIVE_LIMIT_MS));
+        assert!(!overdue(&hidden, 1_001 + ALIVE_LIMIT_MS), "숨은 창의 타이머 스로틀은 끊김이 아니다");
+        assert!(overdue(&hidden, 1_001 + ALIVE_LIMIT_HIDDEN_MS));
+    }
 }

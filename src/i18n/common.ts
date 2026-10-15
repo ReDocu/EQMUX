@@ -87,8 +87,8 @@ export const dict: Record<string, string> = {
   // ── 상태 표현 (ui.tsx StatusLabel) ──
   서브: "sub",
   "낮은 신뢰": "low confidence",
-  "관측 저하 (FR-G-27) — 세션 레지스트리 접근 불가. 상태는 훅 + 프로세스 생존으로만 유지됩니다 (FR-D-63)":
-    "Degraded observation (FR-G-27) — session registry unreachable. Status is maintained only via hooks + process liveness (FR-D-63)",
+  "관측 저하 — 세션 레지스트리 접근 불가. 상태는 훅 + 프로세스 생존으로만 유지됩니다":
+    "Degraded observation — session registry unreachable. Status is maintained only via hooks + process liveness",
 
   // ── 자주 겹치는 문구 ──
   "세션 추가": "Add session",

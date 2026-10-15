@@ -8,6 +8,9 @@ import { isTauri } from "./pty";
 export interface AppSettings {
   startView: "control" | "last";
   notifications: "waiting-dead" | "waiting" | "off";
+  /** 완료 OS 알림 (0.5 §결정 11) — Rust maybe_notify가 이 키로 읽는다. report=완료 보고만(기본) ·
+   *  all=턴 끝날 때마다도 · off. 인앱 칩·벨은 이 값과 무관하게 뜬다 */
+  doneNotifications: "report" | "all" | "off";
   waitingSound: boolean;
   scrollbackReplay: number; // 500 | 1000 | 2000
   /** 음소거 (FR-G-35) — 세션 id 또는 워크스페이스 id. OS 알림·사운드만 막고 인앱 미확인은 유지 (FR-G-37) */
@@ -21,6 +24,10 @@ export interface AppSettings {
   memBannerMb: number;
   /** SGR 색 저장 (FR-C-15, M32) — 스크롤백에 색 시퀀스 보존. 끄면 평문만 (용량 절감) */
   sgrStore: boolean;
+  /** 터미널 렌더러 — webgl(기본)·dom. WebGL은 빠르지만 드라이버·컨텍스트 유실에서 낡은 프레임이
+   *  남고, 쉬지 않고 다시 그리는 TUI(코덱스의 점 애니메이션 등)에서 잔상·유령 커서가 보인다.
+   *  dom은 느린 대신 그런 잔상이 없다 — 화면이 깨질 때 사람이 직접 물러설 자리다 */
+  termRenderer: "webgl" | "dom";
   /** 워크스페이스당 세션 슬롯 상한 — 4(기본)·6·8. 줄여도 이미 열린 세션은 닫지 않는다 */
   maxSlots: number;
   /** UI 언어 — 한국어(기본)·영어. 코드의 한국어 원문이 키이고 영어는 사전 치환(i18n.ts) */
@@ -45,6 +52,7 @@ export const HARD_MAX_SLOTS = 8;
 export const DEFAULT_SETTINGS: AppSettings = {
   startView: "control", // FR-G-02 — 기본 포커스는 관제 탭
   notifications: "waiting-dead", // G3
+  doneNotifications: "report", // 턴 완료는 하루 수십 번이라 기본 끔 — 완료 보고만
   waitingSound: false, // G6 — 기본 꺼짐
   scrollbackReplay: 500,
   muted: [],
@@ -52,6 +60,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   palette: "soft", // 순검정 대신 띄운 배경 — 번짐을 줄인다
   memBannerMb: 0, // FR-G-67 — 기본 꺼짐
   sgrStore: true, // FR-C-15 — 기본 켜짐, 끄면 용량 절감
+  termRenderer: "webgl", // 현행 유지 — 잔상이 보일 때만 dom으로 내린다
   maxSlots: 4, // 세션 슬롯 상한 — 기본 4, 옵션으로 6·8
   language: "ko", // UI 언어 — 기본 한국어
   statusLine: "full", // 현행 유지 — 모델·비용 한 줄
@@ -69,6 +78,7 @@ function sanitize(raw: unknown): AppSettings {
     startView: v.startView === "last" ? "last" : "control",
     notifications:
       v.notifications === "waiting" || v.notifications === "off" ? v.notifications : "waiting-dead",
+    doneNotifications: v.doneNotifications === "all" || v.doneNotifications === "off" ? v.doneNotifications : "report",
     waitingSound: v.waitingSound === true,
     scrollbackReplay: [500, 1000, 2000].includes(v.scrollbackReplay as number)
       ? (v.scrollbackReplay as number)
@@ -80,6 +90,7 @@ function sanitize(raw: unknown): AppSettings {
       : "soft",
     memBannerMb: [0, 2048, 4096, 8192].includes(v.memBannerMb as number) ? (v.memBannerMb as number) : 0,
     sgrStore: v.sgrStore !== false,
+    termRenderer: v.termRenderer === "dom" ? "dom" : "webgl",
     maxSlots: (SLOT_OPTIONS as readonly number[]).includes(v.maxSlots as number) ? (v.maxSlots as number) : 4,
     language: v.language === "en" ? "en" : "ko",
     statusLine: (STATUSLINE_MODES as readonly string[]).includes(v.statusLine as string)

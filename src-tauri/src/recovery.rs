@@ -35,7 +35,8 @@ pub struct CrashReport {
 
 /// 크래시 시점에 살아 있었을 세션 스캔 — 각 워크스페이스 DB에서 exit 기록 없이 끝난
 /// 세션을 최근 활동순으로 모은다. 재개 가능 여부는 agent_session 매핑 +
-/// 트랜스크립트 실측 (FR-D-20)으로 다시 판정한다.
+/// 트랜스크립트 실측 (FR-D-20)으로 다시 판정한다. 서버 탭 셸(`#server@ws`)은 세션이 아니라
+/// 사이드 패널의 터미널이라 목록에 올리지 않는다 — 내부 id가 복구 카드에 그대로 보이던 자리다 (BR-17).
 pub fn crash_scan(root: &Path) -> Vec<CrashSession> {
     let mut out = Vec::new();
     // 등록 해제된 워크스페이스의 DB는 디스크에 남지만(FR-E-09) 복구 목록에는 올리지 않는다 —
@@ -59,6 +60,7 @@ pub fn crash_scan(root: &Path) -> Vec<CrashSession> {
                 "SELECT s.id, s.cwd, s.shell, s.last_output_at, a.agent_session_id
                  FROM session s LEFT JOIN agent_session a ON a.session_id = s.id
                  WHERE s.exit_code IS NULL AND s.last_output_at IS NOT NULL
+                   AND s.id NOT LIKE '#server@%'
                  ORDER BY s.last_output_at DESC LIMIT 8",
             ) else {
                 continue;
@@ -115,6 +117,7 @@ mod tests {
                 remote: None,
                 branch: None,
                 last_used: 0,
+                cross_project: true,
             }],
         )
         .expect("save registry");
@@ -133,7 +136,8 @@ mod tests {
              VALUES ('alive@ws1', 'ws1', 'C:\\w', 'claude', 1, 2000, NULL),
                     ('older@ws1', 'ws1', 'C:\\w', 'pwsh', 1, 1000, NULL),
                     ('exited@ws1', 'ws1', 'C:\\w', 'pwsh', 1, 3000, 0),
-                    ('silent@ws1', 'ws1', 'C:\\w', 'pwsh', 1, NULL, NULL)",
+                    ('silent@ws1', 'ws1', 'C:\\w', 'pwsh', 1, NULL, NULL),
+                    ('#server@ws1', 'ws1', 'C:\\w', 'pwsh', 1, 5000, NULL)",
             [],
         )
         .expect("seed");
@@ -141,7 +145,7 @@ mod tests {
 
         let found = crash_scan(&root);
         let ids: Vec<&str> = found.iter().map(|s| s.id.as_str()).collect();
-        // exit 0 기록·활동 전무 세션은 제외, 최근 활동이 위
+        // exit 0 기록·활동 전무 세션·서버 탭 셸은 제외, 최근 활동이 위
         assert_eq!(ids, vec!["alive@ws1", "older@ws1"]);
         assert_eq!(found[0].last_output_at, Some(2000));
         assert!(!found[0].resumable); // agent_session 매핑 없음 = 재개 불가

@@ -9,8 +9,12 @@ import { backend, LOG_METRICS, SERVER_LOGS } from "../backend/mock";
 import type { ServerLog } from "../backend/mock";
 import { pageScrollback, searchScrollback } from "../backend/panels";
 import type { ScrollbackHit } from "../backend/panels";
+import { isServerTermId } from "../backend/ports";
 import { isTauri, openLogDir } from "../backend/pty";
 import { t, tf } from "../i18n";
+
+/** 세션 id의 표시 이름 — 서버 탭 PTY(`#server@ws`)는 내부 id 대신 "서버" (BR-17) */
+const shortId = (id: string) => (isServerTermId(id) ? t("서버") : id.split("@")[0]);
 
 const LEVELS = ["전체", "INFO", "WARN", "ERROR"] as const;
 
@@ -23,7 +27,7 @@ function toLog(e: FeedEvent): ServerLog {
         ? "warn"
         : "info";
   const type: ServerLog["type"] = e.kind === "state" ? "agent" : e.kind === "app" ? "세션" : "store";
-  const who = e.sessionId ? `${e.sessionId.split("@")[0]} · ` : "";
+  const who = e.sessionId ? `${shortId(e.sessionId)} · ` : "";
   return { time: e.time, type, message: `${who}${e.message}`, level };
 }
 
@@ -122,7 +126,7 @@ export function LogsPanelTab() {
   return (
     <div class="logsp">
       <div class="panel-head-row">
-        <span class="panel-title">{t("서버 로그")}</span>
+        <span class="panel-title">{t("로그")}</span>
         <span class="mono muted" style={{ "font-size": "10px" }}>
           {metrics().total} LINES
         </span>
@@ -182,7 +186,7 @@ export function LogsPanelTab() {
                 {(h) => (
                   <div class="logsp-row" style={{ cursor: "pointer" }} onClick={() => void openContext(h)}>
                     <span class="mono muted logsp-time">{hhmmss(h.ts)}</span>
-                    <span class="badge logsp-type">{h.sessionId.split("@")[0]}</span>
+                    <span class="badge logsp-type">{shortId(h.sessionId)}</span>
                     <span class="logsp-msg mono" style={{ "font-size": "10.5px" }}>{h.text}</span>
                   </div>
                 )}

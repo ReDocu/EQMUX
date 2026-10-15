@@ -7,10 +7,11 @@
 // UI 리파인 §git: 카드 스택 → 한 줄 툴바 · 밀도 높은 커밋 행(뱃지 복수 + 우측 메타) ·
 // 커밋 행 클릭 = 부모 커밋 ↔ 이 커밋 diff · 워크트리는 한 줄 스트립.
 import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
-import { branchList, gitOverview, worktreeAdd, worktreeAttach, worktreeList } from "../backend/git";
-import type { BranchInfo, GitOverview, WorktreeInfo } from "../backend/git";
+import { branchList, commitWebUrl, gitOverview, remoteWebUrl, worktreeAdd, worktreeAttach, worktreeGraph, worktreeList } from "../backend/git";
+import type { BranchInfo, GitOverview, GraphRow, WorktreeInfo } from "../backend/git";
 import { GIT_STATE, backend } from "../backend/mock";
-import { clipWriteText, isTauri } from "../backend/pty";
+import { clipWriteText, isTauri, openExternal } from "../backend/pty";
+import { maxSlots } from "../backend/settings";
 import { checkoutBranch } from "../backend/workspaces";
 import { t, tf } from "../i18n";
 import { defaultShell, scopeWorkspace, setPanelOpen, setView, tick, view } from "../state";
@@ -44,6 +45,9 @@ export function GitPanelTab() {
   const [failed, setFailed] = createSignal(false);
   const [branches, setBranches] = createSignal<BranchInfo[]>([]);
   const [worktrees, setWorktrees] = createSignal<WorktreeInfo[]>([]);
+  // 워크트리 트리 — 펼쳤을 때만 읽는다 (폴링 비용을 접힌 패널에 물리지 않는다)
+  const [graphOpen, setGraphOpen] = createSignal(false);
+  const [graph, setGraph] = createSignal<GraphRow[]>([]);
 
   let loadReq = 0; // 워크스페이스 전환·10초 폴링의 늦은 응답이 현재 저장소 표시를 덮지 않게
   const load = async () => {
@@ -58,10 +62,14 @@ export function GitPanelTab() {
     if (req !== loadReq) return; // 그새 워크스페이스가 바뀌었다
     setReal(o);
     setFailed(o === undefined);
-    const [b, wt] = [await branchList(target.path), await worktreeList(target.path)];
+    const [b, wt] = await Promise.all([branchList(target.path), worktreeList(target.path)]);
     if (req !== loadReq) return;
     setBranches(b ?? []);
     setWorktrees(wt ?? []);
+    if (!graphOpen()) return;
+    const gr = await worktreeGraph(target.path);
+    if (req !== loadReq) return;
+    setGraph(gr ?? []);
   };
 
   onMount(() => {
@@ -131,6 +139,11 @@ export function GitPanelTab() {
     }
   };
   /** 워크트리에서 기본 터미널 열기 — 셸로 시작, 역할 부여는 세션 상세에서 이어서 가능 */
+  const slotsFull = () => {
+    tick();
+    const id = ws()?.id;
+    return !!id && backend.listSessions().filter((s) => s.workspaceId === id).length >= maxSlots();
+  };
   const openShell = (wt: WorktreeInfo) => {
     const target = ws();
     if (!target) return;
@@ -195,7 +208,7 @@ export function GitPanelTab() {
   };
 
   /** 커밋 행 클릭 (UI 리파인 §git) — 부모 커밋 ↔ 이 커밋 비교로 진입. 복귀 규칙은 openDiff와 동일 (U11) */
-  const openCommitDiff = (c: CommitRow) => {
+  const openCommitDiff = (c: Pick<CommitRow, "hash" | "message">) => {
     const cur = view();
     setView({
       kind: "gitdiff",
@@ -212,7 +225,7 @@ export function GitPanelTab() {
   const copyCmd = (cmd: string) => {
     void clipWriteText(cmd);
     clearTimeout(actTimer);
-    setActNote(tf("`{cmd}` 복사됨 — 실행은 터미널에서 (G7)", { cmd }));
+    setActNote(tf("`{cmd}` 복사됨 — 실행은 터미널에서", { cmd }));
     actTimer = setTimeout(() => setActNote(undefined), 3000);
   };
 
@@ -240,6 +253,14 @@ export function GitPanelTab() {
           {t(g().real ? "실측" : "목 데이터")}
         </span>
         <span style={{ flex: 1 }} />
+        {/* 원격 저장소 (0.5 바로 가기) — 웹 주소로 못 바꾸는 원격(로컬 경로·없음)이면 숨긴다 */}
+        <Show when={remoteWebUrl(ws()?.remote)}>
+          {(web) => (
+            <button class="btn ghost" title={web()} onClick={() => openExternal(web())}>
+              {t("원격 저장소")}
+            </button>
+          )}
+        </Show>
         <button class="btn ghost gitp-refresh" title={t("새로 읽기")} onClick={() => void load()}>
           ⟳
         </button>
@@ -294,7 +315,7 @@ export function GitPanelTab() {
           <button
             class="card inset gitp-branch mono"
             style={{ cursor: "pointer", "text-align": "left" }}
-            title={t("브랜치 체크아웃 (M36) — 공유 repo 전체에 적용, 2단 확인")}
+            title={t("브랜치 체크아웃 — 공유 repo 전체에 적용, 2단 확인")}
             onClick={() => {
               setBranchMenu(!branchMenu());
               setCoArm(undefined);
@@ -318,17 +339,17 @@ export function GitPanelTab() {
             <span class="n">{g().changed}</span>
           </Show>
         </button>
-        <button class="gitp-act mono" title={t("`git pull` 복사 — 실행은 터미널에서 (G7)")} onClick={() => copyCmd("git pull")}>
+        <button class="gitp-act mono" title={t("`git pull` 복사 — 실행은 터미널에서")} onClick={() => copyCmd("git pull")}>
           ↓ pull
         </button>
         <button
           class="gitp-act mono"
-          title={t("`git add -A && git commit` 복사 — 실행은 터미널에서 (G7)")}
+          title={t("`git add -A && git commit` 복사 — 실행은 터미널에서")}
           onClick={() => copyCmd("git add -A && git commit")}
         >
           commit
         </button>
-        <button class="gitp-act mono" title={t("`git push` 복사 — 실행은 터미널에서 (G7)")} onClick={() => copyCmd("git push")}>
+        <button class="gitp-act mono" title={t("`git push` 복사 — 실행은 터미널에서")} onClick={() => copyCmd("git push")}>
           ↑ push
           <Show when={g().ahead > 0}>
             <span class="n">{g().ahead}</span>
@@ -375,7 +396,7 @@ export function GitPanelTab() {
               </button>
             </div>
             <div class="muted" style={{ "font-size": "10px" }}>
-              {t("공유 repo의 현재 브랜치를 바꿉니다 — 워크트리 세션은 영향 없음 (FR-E-52)")}
+              {t("공유 repo의 현재 브랜치를 바꿉니다 — 워크트리 세션은 영향 없음")}
             </div>
           </div>
         </Show>
@@ -392,6 +413,20 @@ export function GitPanelTab() {
         <div class="gitp-wt-head">
           <div class="panel-head-row" style={{ "margin-top": "4px" }}>
             <span class="eyebrow">WORKTREES · {worktrees().length}</span>
+            <Show when={worktrees().length > 1}>
+              <button
+                class="btn ghost"
+                classList={{ active: graphOpen() }}
+                style={{ "font-size": "10px", padding: "1px 8px" }}
+                title={t("워크트리 브랜치가 갈라진 모양 — git log --graph")}
+                onClick={() => {
+                  setGraphOpen(!graphOpen());
+                  if (graphOpen()) void load();
+                }}
+              >
+                {t("트리")}
+              </button>
+            </Show>
             <button
               class="btn ghost"
               style={{ "font-size": "10px", padding: "1px 8px" }}
@@ -493,7 +528,7 @@ export function GitPanelTab() {
         <div class="gitp-wt-list">
           <For each={worktrees()}>
             {(wt) => (
-              <div class="gitp-wt" title={tf("{path} · {head} — 삭제는 제공하지 않습니다 (FR-E-64) · git worktree remove", { path: wt.path, head: wt.head })}>
+              <div class="gitp-wt" title={tf("{path} · {head} — 삭제는 제공하지 않습니다 · git worktree remove", { path: wt.path, head: wt.head })}>
                 <span class="mono gitp-wt-name">{wtLabel(wt)}</span>
                 <span
                   class="gitp-wt-tag mono"
@@ -508,7 +543,12 @@ export function GitPanelTab() {
                   <button
                     class="btn ghost"
                     style={{ "font-size": "10px", padding: "1px 8px" }}
-                    title={t("이 워크트리에서 기본 터미널 열기 — 역할 부여는 세션 상세에서")}
+                    disabled={slotsFull()}
+                    title={
+                      slotsFull()
+                        ? tf("슬롯이 가득 찼습니다 ({n}개) — 세션을 하나 닫거나 설정에서 상한을 올리세요", { n: maxSlots() })
+                        : t("이 워크트리에서 기본 터미널 열기 — 역할 부여는 세션 상세에서")
+                    }
                     onClick={() => openShell(wt)}
                   >
                     {t("셸 열기")}
@@ -518,6 +558,37 @@ export function GitPanelTab() {
             )}
           </For>
         </div>
+        {/* 워크트리 트리 — 레인은 git이 그린 문자 그대로. 커밋 줄 클릭 = 부모 커밋 ↔ 이 커밋 diff */}
+        <Show when={graphOpen() && worktrees().length > 1}>
+          <div class="gitp-wt-graph mono">
+            <For each={graph()}>
+              {(r) => (
+                <div
+                  class="gitp-wt-graph-row"
+                  classList={{ link: !!r.hash }}
+                  title={r.hash ? tf("{msg} — 클릭: 부모 커밋과 나란히 비교(diff)", { msg: r.message ?? "" }) : undefined}
+                  onClick={() => r.hash && openCommitDiff({ hash: r.hash, message: r.message ?? "" })}
+                >
+                  <span class="gitp-wt-lanes">{r.graph}</span>
+                  <Show when={r.hash}>
+                    <span class="gitp-commit-hash">{r.hash}</span>
+                    <For each={refBadges(r.refs ?? "")}>
+                      {(b) => (
+                        <span class="gitp-ref" classList={{ remote: b.includes("/") }}>
+                          {b}
+                        </span>
+                      )}
+                    </For>
+                    <span class="gitp-commit-txt">{r.message}</span>
+                  </Show>
+                </div>
+              )}
+            </For>
+            <Show when={graph().length === 0}>
+              <div class="muted">{t("트리를 읽는 중…")}</div>
+            </Show>
+          </div>
+        </Show>
       </Show>
 
       <Eyebrow>COMMITS</Eyebrow>
@@ -566,7 +637,7 @@ export function GitPanelTab() {
       </div>
 
       {/* 정책 고지 1회 — G7. 버튼은 복사만 한다는 것을 여기서 못박는다 */}
-      <div class="gitp-foot mono muted">{t("pull · push · commit 버튼은 명령 복사만 — 실행은 터미널에서 (G7)")}</div>
+      <div class="gitp-foot mono muted">{t("pull · push · commit 버튼은 명령 복사만 — 실행은 터미널에서")}</div>
 
       <Show when={cmMenu()}>
         {(m) => (
@@ -579,6 +650,11 @@ export function GitPanelTab() {
               [
                 { label: t("해시 복사"), action: () => clipWriteText(m().c.hash) },
                 { label: t("메시지 복사"), action: () => clipWriteText(m().c.message) },
+                // 원격에서 보기 (0.5) — GitHub·GitLab·Bitbucket만. 푸시 안 한 커밋은 404일 수 있다
+                ...((url) =>
+                  url
+                    ? [{ label: t("원격에서 보기 (푸시 안 한 커밋은 없을 수 있음)"), action: () => openExternal(url) }]
+                    : [])(commitWebUrl(ws()?.remote, m().c.hash)),
               ],
               [
                 // 커밋 기준 diff (UI 리파인 §git) — 행 클릭과 같은 동작. B11의 "워크트리 비교만"은 여기서 풀렸다

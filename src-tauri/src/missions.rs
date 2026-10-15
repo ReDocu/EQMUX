@@ -21,6 +21,8 @@ pub struct MissionInfo {
     pub branch: Option<String>,
     pub goal: String,
     pub outputs: Vec<String>,
+    /// 산출물 체크 (0.5 · 필요 기능 C4) — outputs와 같은 순서. 파일의 `- [x]`가 원본이다
+    pub outputs_done: Vec<bool>,
     pub file: String,
     pub assigned: Vec<String>,
     /// 워크스페이스 기본 임무 (FR-E-56, M33) — frontmatter `default: true`. 워크스페이스당 1개
@@ -95,8 +97,18 @@ fn split_frontmatter(text: &str) -> (Vec<String>, String) {
     (Vec::new(), normalized)
 }
 
+/// 산출물 한 줄 — `- [ ] 항목` / `- [x] 항목` / 체크 칸 없는 옛 `- 항목`(미체크)
+fn parse_output(item: &str) -> (String, bool) {
+    for (mark, done) in [("[ ]", false), ("[x]", true), ("[X]", true)] {
+        if let Some(rest) = item.strip_prefix(mark) {
+            return (rest.trim().to_string(), done);
+        }
+    }
+    (item.to_string(), false)
+}
+
 /// 본문에서 "## 목표" 문단과 "## 산출물" 목록을 뽑는다 — 다른 섹션은 무시 (부분 파싱)
-fn parse_body(body: &str) -> (String, Vec<String>) {
+fn parse_body(body: &str) -> (String, Vec<(String, bool)>) {
     let mut goal = Vec::new();
     let mut outputs = Vec::new();
     let mut section = "";
@@ -115,7 +127,7 @@ fn parse_body(body: &str) -> (String, Vec<String>) {
             "goal" if !line.trim().is_empty() => goal.push(line.trim().to_string()),
             "outputs" => {
                 if let Some(item) = line.trim().strip_prefix("- ") {
-                    outputs.push(item.trim().to_string());
+                    outputs.push(parse_output(item.trim()));
                 }
             }
             _ => {}
@@ -132,7 +144,8 @@ fn parse_file(path: &Path) -> Option<(String, MissionInfo)> {
     let status = roles::fm_value(&fm, "status")
         .filter(|s| STATUSES.contains(&s.as_str()))
         .unwrap_or_else(|| "todo".into());
-    let (goal, outputs) = parse_body(&body);
+    let (goal, items) = parse_body(&body);
+    let (outputs, outputs_done) = items.into_iter().unzip();
     Some((
         stem.clone(),
         MissionInfo {
@@ -142,6 +155,7 @@ fn parse_file(path: &Path) -> Option<(String, MissionInfo)> {
             branch: roles::fm_value(&fm, "branch"),
             goal,
             outputs,
+            outputs_done,
             file: format!(".eqmux/missions/{stem}.md"),
             assigned: Vec::new(),
             is_default: roles::fm_value(&fm, "default").map(|v| v == "true").unwrap_or(false),
@@ -167,8 +181,9 @@ fn render(m: &MissionInfo) -> String {
     }
     if !m.outputs.is_empty() {
         s.push_str("\n## 산출물\n");
-        for o in &m.outputs {
-            s.push_str(&format!("- {o}\n"));
+        for (i, o) in m.outputs.iter().enumerate() {
+            let mark = if m.outputs_done.get(i).copied().unwrap_or(false) { "x" } else { " " };
+            s.push_str(&format!("- [{mark}] {o}\n"));
         }
     }
     s
@@ -204,7 +219,15 @@ pub fn list(ws_path: &str) -> Vec<MissionInfo> {
 
 /// 임무 생성 (FR-E-50·51) — id는 이름의 슬러그, 충돌 시 -2 -3 …
 /// 충돌 검사는 파일명과 frontmatter id 양쪽 (P-6) — rename된 파일의 id와도 겹치면 안 된다
-pub fn create(ws_path: &str, name: &str, goal: &str, branch: Option<String>) -> Result<MissionInfo, String> {
+pub fn create(
+    ws_path: &str,
+    name: &str,
+    goal: &str,
+    branch: Option<String>,
+    outputs: Vec<String>,
+) -> Result<MissionInfo, String> {
+    // 산출물 — 한 줄에 하나, 빈 줄은 버린다. 처음엔 모두 미체크 (`- [ ]`)
+    let outputs: Vec<String> = outputs.iter().map(|o| o.trim().to_string()).filter(|o| !o.is_empty()).collect();
     let existing: std::collections::HashSet<String> = list(ws_path).into_iter().map(|m| m.id).collect();
     let base = slug(name);
     let mut id = base.clone();
@@ -219,7 +242,8 @@ pub fn create(ws_path: &str, name: &str, goal: &str, branch: Option<String>) -> 
         status: "todo".into(),
         branch: branch.filter(|b| !b.trim().is_empty()),
         goal: goal.trim().to_string(),
-        outputs: Vec::new(),
+        outputs_done: vec![false; outputs.len()],
+        outputs,
         file: format!(".eqmux/missions/{id}.md"),
         assigned: Vec::new(),
         is_default: false,
@@ -247,6 +271,24 @@ pub fn set_status(ws_path: &str, id: &str, status: &str) -> Result<(), String> {
     out.push_str("---\n");
     out.push_str(&body);
     atomic_write(&path, &out)
+}
+
+/// 임무 이벤트 기록 (0.5 C1) — 생성·배정·상태 변경을 이벤트 피드에 남긴다. 원본은 여전히 파일이다.
+/// 커맨드는 경로만 받으므로 워크스페이스 id는 레지스트리에서 찾는다 (없으면 경로 파생 id)
+pub fn log_event(app: &tauri::AppHandle, ws_path: &str, session: Option<&str>, message: String) {
+    use tauri::Manager;
+    let store: tauri::State<crate::StoreState> = app.state();
+    let ws = crate::workspace::load(&store.0.root())
+        .into_iter()
+        .find(|w| w.path.eq_ignore_ascii_case(ws_path))
+        .map(|w| w.id)
+        .unwrap_or_else(|| crate::workspace::make_id(ws_path));
+    let _ = store.0.sender().send(crate::store::StoreMsg::Event {
+        ws,
+        id: session.map(str::to_string),
+        kind: "mission".into(),
+        message,
+    });
 }
 
 /// 단건 조회 — 배정 토글이 임무 블록을 만들 때 쓴다
@@ -317,20 +359,28 @@ mod tests {
             personality: String::new(),
             job: "lead".into(),
             job_name: "리드".into(),
+            title: None,
             permissions: roles::RolePermissions { write: true, commit: true, push: false },
             responsibility: "전체 구조 · 최종 판단".into(),
             forbidden: "원격 push".into(),
             character_path: None,
             character_name: None,
             character_source: None,
-            teammates: vec![roles::Teammate { slot: 1, name: "카이".into(), job_name: "리드".into(), me: true }],
+            teammates: vec![roles::Teammate {
+                slot: 1,
+                name: "카이".into(),
+                job_name: "리드".into(),
+                me: true,
+                persona_name: None,
+                title: None,
+            }],
         }
     }
 
     #[test]
     fn mission_file_roundtrip_and_status() {
         let ws = temp_ws("mission");
-        let m = create(&ws, "인증 리팩터", "결합을 낮춘다", Some("feature/auth".into())).unwrap();
+        let m = create(&ws, "인증 리팩터", "결합을 낮춘다", Some("feature/auth".into()), vec![]).unwrap();
         assert_eq!(m.id, "인증-리팩터");
         let listed = list(&ws);
         assert_eq!(listed.len(), 1);
@@ -343,12 +393,29 @@ mod tests {
         fs::remove_dir_all(&ws).ok();
     }
 
+    /// 산출물 체크리스트 (필요 기능 C4) — 만들 때 `- [ ]`, 파일의 `- [x]`·옛 `- 항목`을 읽는다
+    #[test]
+    fn outputs_checklist_roundtrip() {
+        let ws = temp_ws("outputs");
+        let m = create(&ws, "체크", "목표", None, vec!["API 문서".into(), "  ".into(), "테스트 12개".into()]).unwrap();
+        let path = std::path::Path::new(&ws).join(&m.file);
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("## 산출물\n- [ ] API 문서\n- [ ] 테스트 12개\n")); // 빈 줄은 버린다
+        fs::write(&path, text.replace("- [ ] API 문서", "- [x] API 문서") + "- 옛 항목\n").unwrap();
+        let got = get(&ws, &m.id).unwrap();
+        assert_eq!(got.outputs, vec!["API 문서", "테스트 12개", "옛 항목"]);
+        assert_eq!(got.outputs_done, vec![true, false, false]);
+        set_status(&ws, &m.id, "in-review").unwrap(); // 상태 변경은 본문(체크)을 건드리지 않는다
+        assert_eq!(get(&ws, &m.id).unwrap().outputs_done, vec![true, false, false]);
+        fs::remove_dir_all(&ws).ok();
+    }
+
     /// 파일명 ↔ frontmatter id 불일치 (P-6) — 탐색기 rename 후에도 id로 상태·기본 임무·조회가
     /// 전부 동작해야 한다. 이전에는 파일명으로만 찾아 조용히 무반응이었다.
     #[test]
     fn renamed_mission_file_still_resolves_by_id() {
         let ws = temp_ws("rename");
-        let m = create(&ws, "리네임 대상", "목표", None).unwrap();
+        let m = create(&ws, "리네임 대상", "목표", None, vec![]).unwrap();
         fs::rename(mission_path(&ws, &m.id), missions_dir(&ws).join("다른이름.md")).unwrap();
         set_status(&ws, &m.id, "in-progress").unwrap();
         let got = get(&ws, &m.id).unwrap();
@@ -356,7 +423,7 @@ mod tests {
         set_default(&ws, &m.id, true).unwrap();
         assert!(get(&ws, &m.id).unwrap().is_default);
         // 새 임무 생성이 rename된 파일의 frontmatter id와 충돌하지 않는다
-        let m2 = create(&ws, "리네임 대상", "다른 목표", None).unwrap();
+        let m2 = create(&ws, "리네임 대상", "다른 목표", None, vec![]).unwrap();
         assert_ne!(m2.id, m.id);
         fs::remove_dir_all(&ws).ok();
     }
@@ -366,8 +433,8 @@ mod tests {
     #[test]
     fn default_mission_is_exclusive_and_preserves_body() {
         let ws = temp_ws("default");
-        let a = create(&ws, "임무 A", "목표 A", None).unwrap();
-        let b = create(&ws, "임무 B", "목표 B", Some("feat/b".into())).unwrap();
+        let a = create(&ws, "임무 A", "목표 A", None, vec![]).unwrap();
+        let b = create(&ws, "임무 B", "목표 B", Some("feat/b".into()), vec![]).unwrap();
         set_default(&ws, &a.id, true).unwrap();
         assert!(get(&ws, &a.id).unwrap().is_default);
         assert!(!get(&ws, &b.id).unwrap().is_default);
@@ -387,7 +454,7 @@ mod tests {
     #[test]
     fn role_synthesis_preserves_mission_block() {
         let ws = temp_ws("role");
-        let m = create(&ws, "회귀 검증", "증거 수집", None).unwrap();
+        let m = create(&ws, "회귀 검증", "증거 수집", None, vec![]).unwrap();
         // 합성 → 배정 → 재합성해도 블록 보존 → 재배정 멱등 → 해제
         roles::save(&ws, &payload("kai@test")).unwrap();
         let block = roles::MissionBlock {

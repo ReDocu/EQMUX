@@ -3,7 +3,9 @@
 // Tauri: 에이전트 JSONL이 1급 소스 (FR-G-80), 인식 불가면 스크롤백 폴백 + 그 사실 표시 (FR-G-86).
 // 도구 호출은 접힌 상태가 기본이다 (FR-G-83).
 import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
+import { listen } from "@tauri-apps/api/event";
 import { backend } from "../backend/mock";
+import type { AgentStateEvt } from "../backend/agent";
 import { cleanScrollback, exportSessionScrollback } from "../backend/panels";
 import { clipWriteText, isTauri, scrollbackTail, writePty } from "../backend/pty";
 import { t as tr, tf } from "../i18n";
@@ -33,13 +35,23 @@ export function TranscriptPane(props: { session: Session }) {
       }
     };
     createEffect(on(() => props.session.id, () => void load()));
-    const unsub = backend.subscribe(() => {
+    const later = () => {
       clearTimeout(timer);
       timer = setTimeout(() => void load(), 1000);
+    };
+    // 최적화 D1 — 아무 세션 방송이 아니라 이 세션의 agent-state(상태·도구 활동)에만 다시 읽는다.
+    // 터미널에서 직접 띄운 에이전트(guessed)는 이 세션 이름의 이벤트가 없어 느린 폴링으로 받친다 —
+    // Rust가 크기·mtime 캐시를 가지므로 바뀌지 않았으면 메타데이터 한 번이다
+    const unlisten = listen<AgentStateEvt>("agent-state", (e) => {
+      if (e.payload.session === props.session.id) later();
     });
+    const poll = setInterval(() => {
+      if (data()?.guessed) void load();
+    }, 10_000);
     onCleanup(() => {
       clearTimeout(timer);
-      unsub();
+      clearInterval(poll);
+      void unlisten.then((f) => f());
     });
   });
 
@@ -110,7 +122,7 @@ export function TranscriptPane(props: { session: Session }) {
       if (d.skipped > 0) parts.push(tf("건너뜀 {n}줄", { n: d.skipped }));
       return parts.join(" · ");
     }
-    return tr("스크롤백 폴백 (FR-G-86)");
+    return tr("스크롤백 폴백");
   };
 
   // 출처 (FR-G-80·86) — 도구 턴만 늘어놓으면 이게 어느 폴더의 로그인지 알 수 없다.
@@ -142,7 +154,7 @@ export function TranscriptPane(props: { session: Session }) {
         <span class="transcript-head-tools">
           <input
             class="transcript-search mono"
-            placeholder={tr("검색 (FR-G-87)")}
+            placeholder={tr("검색")}
             value={query()}
             onInput={(e) => setQuery(e.currentTarget.value)}
           />
@@ -239,7 +251,7 @@ export function TranscriptPane(props: { session: Session }) {
             fallback={<div class="muted">{tr("트랜스크립트 없음 — 에이전트 로그도 스크롤백도 아직 없습니다")}</div>}
           >
             <div class="mono st-waiting" style={{ "font-size": "10px", "margin-bottom": "6px" }}>
-              {tr("트랜스크립트를 인식할 수 없어 스크롤백으로 표시합니다 (FR-G-86)")}
+              {tr("트랜스크립트를 인식할 수 없어 스크롤백으로 표시합니다")}
             </div>
             <For each={shownFallback()}>
               {(line) => (

@@ -1,6 +1,6 @@
 [package]
 name = "eqmux"
-version = "0.4.2"
+version = "0.5.0"
 description = "EQMUX — 멀티 에이전트 관제 MUX"
 edition = "2021"
 license = "MIT"
@@ -27,6 +27,8 @@ trash = "5" # 탐색기 삭제(M24)는 영구 삭제가 아니라 휴지통으�
 [target.'cfg(windows)'.dependencies]
 # 웹뷰 렌더러 크래시 생존 (FR-C-06) — wry가 쓰는 것과 같은 버전으로 고정해 COM 타입을 공유한다
 webview2-com = "0.38"
+# 알림 클릭 → 페인 (P2 · 필요 기능 A2) — 알림 플러그인이 이미 쓰는 그 크레이트. 플러그인은 활성화 콜백을 내주지 않는다
+tauri-winrt-notification = "0.7"
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_Security",
@@ -40,6 +42,13 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_ProcessStatus",
     "Win32_System_Threading",
 ] }
+
+# 릴리스 빌드 (최적화 B11) — exe 크기·속도. panic = "abort"는 넣지 않는다: 연결·리더 스레드의
+# panic이 그 스레드에서 끝나야 앱이 산다 (크래시 생존 경로)
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
 
 [lib]
 name = "eqmux_lib"

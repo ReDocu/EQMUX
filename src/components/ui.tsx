@@ -1,9 +1,9 @@
 // 상태 표현 공통 — 주의 예산: 색은 waiting·dead 에만 (PRD G §4.2).
 import { createEffect, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import type { JSX } from "solid-js";
-import { t } from "../i18n";
-import type { AgentStatus, Session } from "../types";
-import { fmtSince } from "../types";
+import { t, tf } from "../i18n";
+import type { AgentCliId, AgentStatus, Session } from "../types";
+import { AGENT_CLI_LABEL, fmtSince, slotNo } from "../types";
 
 export function statusClass(st: AgentStatus): string {
   return `st-${st}`;
@@ -22,7 +22,7 @@ export function StatusLabel(props: { session: Session }) {
         {" "}
         <span
           class="badge"
-          title={t("관측 저하 (FR-G-27) — 세션 레지스트리 접근 불가. 상태는 훅 + 프로세스 생존으로만 유지됩니다 (FR-D-63)")}
+          title={t("관측 저하 — 세션 레지스트리 접근 불가. 상태는 훅 + 프로세스 생존으로만 유지됩니다")}
         >
           {t("낮은 신뢰")}
         </span>
@@ -110,7 +110,7 @@ export function ContextMenu(props: {
 
   const item = (it: MenuEntry) =>
     it.sub ? (
-      <div class="cmenu-it sub" role="menuitem">
+      <div class="cmenu-it sub" role="menuitem" tabIndex={0} aria-haspopup="menu">
         <Show when={it.checked !== undefined}>
           <span class="cmenu-chk">{it.checked ? "✓" : ""}</span>
         </Show>
@@ -159,5 +159,224 @@ export function ContextMenu(props: {
         <For each={danger()}>{(it) => item(it)}</For>
       </Show>
     </div>
+  );
+}
+
+/* ── 0.5 공통 부품 (기획서 §UX 기반 › 공통 부품) ───────────────────── */
+
+/** 화면 아래 한 줄 토스트, 4초 — 사람이 한 동작의 실패·거부만. 벨(세션이 사람을 부름)과 섞지 않는다.
+ *  호스트 컴포넌트 없이 어디서든 부를 수 있게 DOM에 직접 붙인다 */
+export function notify(msg: string): void {
+  let host = document.getElementById("eq-toasts");
+  if (!host) {
+    host = document.createElement("div");
+    host.id = "eq-toasts";
+    host.setAttribute("role", "status");
+    host.setAttribute("aria-live", "polite");
+    document.body.appendChild(host);
+  }
+  const el = document.createElement("div");
+  el.className = "eq-toast";
+  el.textContent = msg;
+  host.appendChild(el);
+  setTimeout(() => el.remove(), 4000);
+}
+
+/** 되돌릴 수 없는 동작 확인창 — 제목에 대상 이름, 본문에 되돌릴 수 있는지, 위험 버튼은 동사.
+ *  기본 포커스는 취소이고 Enter·Esc 모두 취소다 (위험 버튼에 탭으로 옮겨 누른 Enter만 실행) */
+export function ConfirmDialog(props: {
+  title: string;
+  body: JSX.Element;
+  danger?: boolean;
+  confirmLabel: string;
+  cancelLabel?: string;
+  busy?: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  let cancelBtn!: HTMLButtonElement;
+  let okBtn!: HTMLButtonElement;
+  onMount(() => {
+    cancelBtn.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" || (e.key === "Enter" && document.activeElement !== okBtn)) {
+        e.preventDefault();
+        e.stopPropagation();
+        props.onCancel();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    onCleanup(() => window.removeEventListener("keydown", onKey, true));
+  });
+  return (
+    <div class="overlay" onClick={(e) => (e.stopPropagation(), props.onCancel())}>
+      <div
+        class="dialog eq-confirm"
+        role="alertdialog"
+        aria-modal="true"
+        aria-label={props.title}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div class="eq-confirm-t">{props.title}</div>
+        <div class="eq-confirm-b">{props.body}</div>
+        <div class="eq-confirm-f">
+          <button ref={cancelBtn} class="btn" onClick={() => props.onCancel()}>
+            {props.cancelLabel ?? t("취소")}
+          </button>
+          <button
+            ref={okBtn}
+            class={`btn ${props.danger ? "danger" : "primary"}`}
+            disabled={props.busy}
+            onClick={() => props.onConfirm()}
+          >
+            {props.confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export interface SegItem<T extends string> {
+  value: T;
+  label: string;
+  title?: string;
+  disabled?: boolean;
+}
+
+/** 2~3개 중 하나 — 다른 화면으로 바꾸는 데만 쓴다. 목록 거르기는 필터 칩 */
+export function Segmented<T extends string>(props: {
+  items: SegItem<T>[];
+  value: T;
+  onChange: (v: T) => void;
+  label?: string;
+}) {
+  return (
+    <div class="eq-seg" role="radiogroup" aria-label={props.label}>
+      <For each={props.items}>
+        {(it) => (
+          <button
+            class="eq-seg-it"
+            classList={{ on: it.value === props.value }}
+            role="radio"
+            aria-checked={it.value === props.value}
+            title={it.title}
+            disabled={it.disabled}
+            onClick={() => it.value !== props.value && props.onChange(it.value)}
+          >
+            {it.label}
+          </button>
+        )}
+      </For>
+    </div>
+  );
+}
+
+/** 주의 단계 (§주의 단계) — 색은 행동(amber·red)·확인(blue)에만, 정보는 색 없음 */
+export type ChipTone = "amber" | "red" | "blue" | "info";
+
+/** 칩 — 글자 + 선택적 동작 버튼. 칩 자체는 span이고 동작은 형제 버튼이라 헤더 안에서도 탭으로 닿는다 */
+export function Chip(props: {
+  tone?: ChipTone;
+  text: string;
+  title?: string;
+  action?: { label: string; onClick: () => void; title?: string; disabled?: boolean };
+  onClick?: () => void; // 칩 글자 자체가 동작일 때 (+N 펼치기 등)
+}) {
+  const tone = () => props.tone ?? "info";
+  return (
+    <span class={`eq-chip ${tone()}`} title={props.title}>
+      <Show when={props.onClick} fallback={<span class="eq-chip-tx">{props.text}</span>}>
+        <button class="eq-chip-tx" onClick={(e) => (e.stopPropagation(), props.onClick!())}>
+          {props.text}
+        </button>
+      </Show>
+      <Show when={props.action}>
+        {(a) => (
+          <button
+            class="eq-chip-act"
+            title={a().title}
+            disabled={a().disabled}
+            onClick={(e) => (e.stopPropagation(), a().onClick())}
+          >
+            {a().label}
+          </button>
+        )}
+      </Show>
+    </span>
+  );
+}
+
+/** 정체성 — `번호 이름 · 직함 엔진`. 좁으면(compact) 직함을 접고 툴팁에 남긴다.
+ *  persona는 세션 이름과 다를 때만 괄호로 붙인다 */
+export function Identity(props: {
+  slot?: number;
+  name: string;
+  persona?: string;
+  title?: string;
+  cli?: AgentCliId;
+  compact?: boolean;
+}) {
+  const showPersona = () => !!props.persona && props.persona !== props.name;
+  const tip = () =>
+    [
+      props.slot !== undefined ? slotNo(props.slot) : "",
+      props.name,
+      showPersona() ? `(${props.persona})` : "",
+      props.title ? `· ${props.title}` : "",
+      props.cli ? `· ${AGENT_CLI_LABEL[props.cli]}` : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+  return (
+    <span class="eq-id" classList={{ compact: props.compact }} title={tip()}>
+      <Show when={props.slot !== undefined}>
+        <span class="eq-id-no mono">{slotNo(props.slot!)}</span>
+      </Show>
+      <span class="eq-id-nm">{props.name}</span>
+      <Show when={showPersona()}>
+        <span class="eq-id-pe">({props.persona})</span>
+      </Show>
+      <Show when={props.title}>
+        <span class="eq-id-ti">· {props.title}</span>
+      </Show>
+      <Show when={props.cli === "codex"}>
+        <span class="eq-id-cli mono" aria-label={AGENT_CLI_LABEL.codex}>
+          ◇
+        </span>
+      </Show>
+    </span>
+  );
+}
+
+/** 입력 칸 아래 — 검증 이유(있으면 빨강) 또는 도움말, 오른쪽에 글자 수. 자르지 않고 maxLength로 막는다 */
+export function FieldHint(props: { error?: string; hint?: string; count?: number; max?: number }) {
+  return (
+    <div class="eq-fh" classList={{ err: !!props.error }}>
+      <span class="eq-fh-m">{props.error || props.hint || ""}</span>
+      <Show when={props.max !== undefined}>
+        <span class="eq-fh-c mono">
+          {props.count ?? 0}/{props.max}
+        </span>
+      </Show>
+    </div>
+  );
+}
+
+/** 세션 중지 확인 (BR-08) — 대시보드·페인 메뉴·세션 상세가 같은 문구를 쓴다 */
+export function StopConfirm(props: { name: string; resumable: boolean; onConfirm: () => void; onCancel: () => void }) {
+  return (
+    <ConfirmDialog
+      title={tf("{name} 중지", { name: props.name })}
+      body={t(
+        props.resumable
+          ? "이 세션의 프로세스를 끝냅니다. 하던 턴은 멈추고, 대화는 나중에 재개로 이어 갈 수 있습니다."
+          : "이 세션의 프로세스를 끝냅니다. 하던 턴은 멈추고, 이 세션은 재개할 수 없어 되돌릴 수 없습니다.",
+      )}
+      danger
+      confirmLabel={t("중지")}
+      onConfirm={props.onConfirm}
+      onCancel={props.onCancel}
+    />
   );
 }

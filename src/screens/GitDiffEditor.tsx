@@ -93,7 +93,7 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
     const req = ++diffReq;
     setDiffLoading(true);
     const c = commit();
-    const d = c ? await commitFileDiff(target.path, c.hash, path) : await diffFile(target.path, path);
+    const d = c ? await commitFileDiff(target.path, c.hash, path) : await diffFile(target.path, path, files().find((f) => f.path === path)?.renamedFrom);
     if (req !== diffReq) return;
     setDiffLoading(false);
     if (typeof d === "string") setDiffErr(d);
@@ -486,7 +486,7 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
               >
                 {foldCtx() ? t("전체 문맥") : t("변경만")}
               </button>
-              <button class="btn ghost" classList={{ on: wrap() }} title={t("줄바꿈 (U13)")} onClick={() => setWrap(!wrap())}>
+              <button class="btn ghost" classList={{ on: wrap() }} title={t("줄바꿈")} onClick={() => setWrap(!wrap())}>
                 ↩ {t("줄바꿈")}
               </button>
               <button class="btn ghost" title={t("닫기 (Esc) — 진입한 화면으로 복귀")} onClick={close}>

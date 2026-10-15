@@ -1764,6 +1764,32 @@
 .gitp-wt-tag.main {
   color: var(--eq-blue);
 }
+/* 워크트리 트리 — git log --graph 문자 레인. 가로로 길면 스크롤, 세로는 상한 */
+.gitp-wt-graph {
+  max-height: 240px;
+  overflow: auto;
+  font-size: 11px;
+  border-top: 1px solid var(--eq-line);
+  padding-top: 4px;
+}
+.gitp-wt-graph-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+.gitp-wt-graph-row.link {
+  cursor: pointer;
+}
+.gitp-wt-graph-row.link:hover {
+  background: var(--eq-surface-2);
+}
+.gitp-wt-lanes {
+  white-space: pre;
+  color: var(--eq-blue-mid);
+  flex-shrink: 0;
+}
 .gitp-foot {
   font-size: 10px;
   border-top: 1px solid var(--eq-line);
@@ -3172,5 +3198,608 @@
   color: var(--eq-muted);
 }
 .setting-v.changed {
+  color: var(--eq-blue);
+}
+
+/* 0.5 W3: 공통 부품 — 토스트·확인창·세그먼트·칩·정체성·입력 도움말 (ui.tsx) */
+#eq-toasts {
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  z-index: 200;
+  pointer-events: none;
+}
+.eq-toast {
+  max-width: min(560px, calc(100vw - 32px));
+  padding: 7px 14px;
+  background: var(--eq-surface);
+  border: 1px solid var(--eq-red);
+  border-radius: var(--eq-r-sm);
+  color: var(--eq-text);
+  font-size: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+.eq-confirm {
+  width: 440px;
+  padding: 16px 18px;
+}
+.eq-confirm-t {
+  font-weight: 800;
+  font-size: 14px;
+}
+.eq-confirm-b {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--eq-muted);
+}
+.eq-confirm-f {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+.eq-seg {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  border: 1px solid var(--eq-line);
+  border-radius: var(--eq-r-sm);
+  background: var(--eq-bg);
+}
+.eq-seg-it {
+  padding: 3px 10px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--eq-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.eq-seg-it.on {
+  background: var(--eq-blue-soft);
+  color: var(--eq-text);
+}
+.eq-seg-it:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.eq-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--eq-line);
+  color: var(--eq-dim);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.eq-chip.amber {
+  color: var(--eq-amber);
+  border-color: var(--eq-amber);
+  background: var(--eq-amber-soft);
+}
+.eq-chip.red {
+  color: var(--eq-red);
+  border-color: var(--eq-red);
+  background: var(--eq-red-soft);
+}
+.eq-chip.blue {
+  color: var(--eq-blue);
+  border-color: var(--eq-blue-mid);
+  background: var(--eq-blue-soft);
+}
+.eq-chip-tx {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+button.eq-chip-tx,
+.eq-chip-act {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.eq-chip-act {
+  padding: 0 4px;
+  border-left: 1px solid currentColor;
+  font-weight: 700;
+}
+.eq-chip-act:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.eq-id {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
+  white-space: nowrap;
+}
+.eq-id-no {
+  color: var(--eq-dim);
+  font-size: 0.9em;
+}
+.eq-id-nm {
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.eq-id-pe,
+.eq-id-ti {
+  color: var(--eq-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.eq-id-cli {
+  color: var(--eq-dim);
+  font-size: 0.85em;
+}
+.eq-id.compact .eq-id-ti,
+.eq-id.compact .eq-id-pe {
+  display: none;
+}
+.eq-fh {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--eq-dim);
+}
+.eq-fh.err .eq-fh-m {
+  color: var(--eq-red);
+}
+
+/* 0.5 W5: 대화 탭 — 긴 본문 접기 · 첨부 · 전달 상태 · 다른 프로젝트로 전달 */
+.conv-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.conv-body.folded {
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.conv-fold,
+.conv-file {
+  padding: 2px 0;
+  font-size: 10px;
+  color: var(--eq-blue);
+}
+.conv-file {
+  display: block;
+  word-break: break-all;
+  text-align: left;
+}
+.conv-delivery {
+  font-size: 10px;
+  color: var(--eq-dim);
+}
+.conv-delivery.queued {
+  color: var(--eq-amber);
+}
+.conv-forward {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  flex-shrink: 0;
+}
+.conv-forward-preview {
+  font-size: 11px;
+  max-height: 3.6em;
+  overflow: hidden;
+}
+.mission-done {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  margin-bottom: 6px;
+  font-size: 11px;
+}
+.mission-done .btn {
+  margin-left: auto;
+}
+
+/* 0.5 W3: 페인 헤더 문법 — [정체성 │ 요약 │ 주의 칩 1개 + N │ 상태], 접는 순서 요약 → 직함 → 엔진 */
+.terminal-pane {
+  container-type: inline-size;
+}
+.pane-head {
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-start;
+  color: var(--eq-text);
+}
+.pane-head-id {
+  display: inline-flex;
+  min-width: 0;
+  flex: 0 1 auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: zoom-in;
+}
+.pane-head-mid {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  justify-content: flex-end;
+  overflow: hidden;
+}
+.pane-head .eq-chip {
+  flex: 0 1 auto;
+  max-width: 55%;
+}
+.pane-head > :last-child {
+  flex: 0 0 auto;
+}
+@container (max-width: 520px) {
+  .pane-head .pane-recap {
+    display: none;
+  }
+}
+@container (max-width: 400px) {
+  .pane-head .eq-id-ti,
+  .pane-head .eq-id-pe {
+    display: none;
+  }
+}
+@container (max-width: 300px) {
+  .pane-head .eq-id-cli {
+    display: none;
+  }
+}
+.inbox-pop-list {
+  max-height: 220px;
+  overflow: auto;
+  margin-top: 8px;
+  font-size: 12px;
+}
+.inbox-pop-row {
+  padding: 4px 0;
+  border-bottom: 1px solid var(--eq-line);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.rail-no {
+  color: var(--eq-dim);
+  font-size: 0.9em;
+}
+.rail-attn {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--eq-blue);
+}
+.rail-attn.amber {
+  background: var(--eq-amber);
+}
+.rail-attn.red {
+  background: var(--eq-red);
+}
+
+/* 0.5 W4: 셸 — 사이드 패널 그룹 세그먼트 · 탭 메뉴 `⋯` · 벨(알림 센터) */
+.panel-seg {
+  padding: 6px 12px 0;
+  flex-shrink: 0;
+}
+.panel-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 12px 0;
+  padding: 6px 10px;
+  font-size: 11px;
+  border: 1px solid var(--eq-blue);
+  border-radius: var(--eq-r-sm);
+  background: var(--eq-blue-soft);
+}
+.panel-notice span {
+  flex: 1;
+}
+.appbar .tab-more {
+  visibility: hidden;
+  font-size: 11px;
+  color: var(--eq-muted);
+  padding: 2px 3px;
+}
+.appbar .tab:hover .tab-more,
+.appbar .tab.active .tab-more {
+  visibility: visible;
+}
+.appbar .tab-more:hover {
+  color: var(--eq-text);
+}
+.bell-wrap {
+  position: relative;
+  display: flex;
+}
+.bell-count {
+  margin-left: 4px;
+  padding: 0 5px;
+  border-radius: 8px;
+  font-size: 10px;
+  color: var(--eq-bg);
+  background: var(--eq-blue);
+}
+.bell-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 4px;
+  z-index: 50;
+  width: 380px;
+  max-width: calc(100vw - 16px);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+.bell-head,
+.bell-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.bell-actions .btn.primary {
+  flex: 1;
+  justify-content: center;
+}
+.bell-list {
+  max-height: 360px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.bell-item {
+  display: flex;
+  gap: 8px;
+  padding: 8px 6px;
+  text-align: left;
+  border-top: 1px solid var(--eq-line);
+  color: var(--eq-text);
+}
+.bell-item:hover {
+  background: var(--eq-surface-2);
+}
+.bell-item.read {
+  opacity: 0.55;
+}
+.bell-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--eq-blue);
+}
+.bell-dot.waiting {
+  background: var(--eq-amber);
+}
+.bell-dot.dead {
+  background: var(--eq-red);
+}
+.bell-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.bell-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.bell-age {
+  margin-left: auto;
+  font-size: 10px;
+}
+.bell-title {
+  font-size: 12px;
+}
+.bell-text,
+.bell-empty,
+.bell-foot {
+  font-size: 11px;
+}
+.bell-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bell-empty {
+  padding: 16px 0;
+  text-align: center;
+}
+/* 0.5 W3: 직함 추천 칩 */
+.title-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+.title-chip {
+  cursor: pointer;
+  background: none;
+  font: inherit;
+  font-size: 11px;
+}
+.title-chip:hover {
+  color: var(--eq-text);
+  border-color: var(--eq-blue-mid);
+}
+.setting-select {
+  font-size: 11px;
+  padding: 3px 6px;
+  color: var(--eq-text);
+  background: var(--eq-bg);
+  border: 1px solid var(--eq-line);
+  border-radius: var(--eq-r-sm);
+}
+/* 0.5 W4: 대화 입력 @멘션 자동완성 (iqhwU) — 입력란 위로 뜬다 */
+.conv-mention {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 4px);
+  z-index: 20;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+.conv-mention-it {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 8px;
+  text-align: left;
+  border-radius: var(--eq-r-sm);
+  color: var(--eq-text);
+  font-size: 12px;
+}
+.conv-mention-it.on,
+.conv-mention-it:hover {
+  background: var(--eq-blue-soft);
+}
+.conv-mention-hint {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.conv-mention-proj {
+  font-size: 10px;
+  color: var(--eq-blue);
+}
+/* 0.5 W3: 대시보드 셀 직함 줄 · 주의 카드 여러 장 */
+.cell-title {
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cell-status .eq-chip {
+  margin-left: auto;
+}
+.waiting-alert + .waiting-alert {
+  margin-top: 6px;
+}
+/* 0.5 W3: 엔진 미설치 안내 — 엔진 셀렉트 바로 아래 */
+.engine-missing {
+  font-size: 10px;
+  margin: 0 0 8px;
+}
+.engine-install {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: 4px;
+}
+.engine-install code {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+  padding: 3px 6px;
+  border-radius: var(--eq-r-sm);
+  background: var(--eq-bg);
+}
+/* 0.5 W4: 설정 왼쪽 카테고리 내비 (mT3kL·fvlW8) */
+.settings-layout {
+  display: grid;
+  grid-template-columns: 160px 1fr;
+  gap: 16px;
+  align-items: start;
+}
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  position: sticky;
+  top: 0;
+}
+.settings-nav button {
+  text-align: left;
+  padding: 7px 10px;
+  border-radius: var(--eq-r-sm);
+  font-size: 12px;
+  color: var(--eq-muted);
+}
+.settings-nav button:hover {
+  color: var(--eq-text);
+}
+.settings-nav button.on {
+  color: var(--eq-text);
+  background: var(--eq-blue-soft);
+  box-shadow: inset 2px 0 0 var(--eq-blue);
+}
+.settings-layout .settings-grid {
+  grid-template-columns: repeat(2, 1fr);
+}
+@media (max-width: 900px) {
+  .settings-layout {
+    grid-template-columns: 1fr;
+  }
+  .settings-nav {
+    flex-direction: row;
+    flex-wrap: wrap;
+    position: static;
+  }
+  .settings-layout .settings-grid {
+    grid-template-columns: 1fr;
+  }
+}
+/* 0.5 W3: 페인 상주 상태 줄 (U-1·U-7) — 헤더와 터미널 사이 한 줄. 출력을 가리지 않는다 */
+.pane-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 12px;
+  border-bottom: 1px solid var(--eq-line);
+  font-size: 11px;
+  color: var(--eq-muted);
+  background: var(--eq-gutter);
+}
+.pane-status.warn {
+  color: var(--eq-amber);
+}
+.pane-status-tx {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pane-status-btn {
+  flex: 0 0 auto;
+  padding: 1px 10px;
+  font-size: 11px;
+  border-color: var(--eq-blue-mid);
+}
+.pane-status-btn:hover {
+  border-color: var(--eq-blue);
   color: var(--eq-blue);
 }

@@ -9,6 +9,7 @@ import {
   holdFastPoll,
   isExposed,
   isNewPort,
+  isServerTermId,
   markPortsSeen,
   portAddress,
   portsLive,
@@ -59,6 +60,7 @@ export function PortsPanelTab() {
   onMount(() => onCleanup(holdFastPoll()));
 
   const personaName = (sessionId: string) => {
+    if (isServerTermId(sessionId)) return t("서버");
     const s = backend.listSessions().find((x) => x.id === sessionId);
     const p = s && backend.listPersonas().find((x) => x.id === s.personaId);
     return p?.name ?? sessionId.split("@")[0];
@@ -77,7 +79,9 @@ export function PortsPanelTab() {
   });
 
   const rows = createMemo<{ session: Row[]; system: Row[] }>(() => {
-    if (isTauri() && portsLive()) {
+    if (isTauri()) {
+      // 첫 실측 전에는 빈 상태다 — 목 행을 보이면 실제 앱에 가짜 포트가 뜬다 (BR-13)
+      if (!portsLive()) return { session: [], system: [] };
       return { session: sessionPorts().map(toRow), system: systemPorts().map(toRow) };
     }
     return {
@@ -104,7 +108,7 @@ export function PortsPanelTab() {
   // 외부 노출 = 루프백 밖에 바인딩된 '세션' 포트. 시스템 포트를 함께 세면 Windows 파일공유
   // (NetBIOS 139 등)만으로도 항상 ⚠가 켜져, 보안 성격의 경고가 상시 오탐이 된다 (B61)
   const summary = createMemo(() => {
-    if (!isTauri() || !portsLive()) return PORT_SUMMARY;
+    if (!isTauri()) return PORT_SUMMARY;
     const all = [...rows().session, ...rows().system];
     const counts = new Map<number, number>();
     for (const p of all) counts.set(p.port, (counts.get(p.port) ?? 0) + 1);
@@ -173,7 +177,7 @@ export function PortsPanelTab() {
       </For>
       <Show when={filtered().length === 0}>
         <div class="muted" style={{ padding: "8px", "font-size": "11px" }}>
-          {t("세션이 연 LISTENING 포트가 없습니다")}
+          {t(isTauri() && !portsLive() ? "포트를 처음 읽는 중…" : "세션이 연 LISTENING 포트가 없습니다")}
         </div>
       </Show>
 

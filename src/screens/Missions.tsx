@@ -2,10 +2,18 @@
 // Tauri에서는 .eqmux/missions/*.md 실파일이 원본이다 (FR-E-51) — 화면은 브리지를 통해서만 쓴다.
 import { createSignal, For, onMount, Show } from "solid-js";
 import { backend } from "../backend/mock";
-import { createMission, cycleMissionStatus, refreshMissions, setDefaultMission, toggleAssign } from "../backend/missions";
+import {
+  createMission,
+  cycleMissionStatus,
+  refreshMissions,
+  setDefaultMission,
+  setMissionStatus,
+  toggleAssign,
+} from "../backend/missions";
+import { nameOf } from "../backend/conversation";
 import { isTauri } from "../backend/pty";
 import { checkoutBranch } from "../backend/workspaces";
-import { t } from "../i18n";
+import { t, tf } from "../i18n";
 import { setView, tick } from "../state";
 import { Eyebrow, PersonaDot } from "../components/ui";
 
@@ -44,17 +52,31 @@ export function Missions(props: { wsId: string }) {
     return backend.listSessions().filter((s) => s.workspaceId === props.wsId);
   };
   const persona = (id: string) => backend.listPersonas().find((p) => p.id === id);
+  // 배정된 세션의 마지막 완료 보고(report --done) — 원장에서 찾는다. 페인을 열어 미확인이 지워져도
+  // 임무 카드의 `검토 중으로`는 사람이 누를 때까지 남는다
+  const doneReport = (assigned: string[]) => {
+    tick();
+    const m = backend
+      .listMessages()
+      .filter((x) => x.done && x.workspaceId === props.wsId && assigned.includes(x.from))
+      .at(-1);
+    return m ? { name: nameOf(m.from), text: m.body } : undefined;
+  };
 
   const [name, setName] = createSignal("");
   const [goal, setGoal] = createSignal("");
   const [branch, setBranch] = createSignal("");
+  const [outputs, setOutputs] = createSignal("");
 
   const create = () => {
     if (!name().trim()) return;
-    void createMission(props.wsId, name().trim(), goal().trim(), branch().trim() || undefined);
+    // 산출물 체크리스트 (C4) — 한 줄에 하나. 파일에 `- [ ]`로 남고, 체크는 파일의 `- [x]`가 원본이다
+    const items = outputs().split("\n").map((s) => s.trim()).filter(Boolean);
+    void createMission(props.wsId, name().trim(), goal().trim(), branch().trim() || undefined, items);
     setName("");
     setGoal("");
     setBranch("");
+    setOutputs("");
   };
 
   return (
@@ -92,7 +114,7 @@ export function Missions(props: { wsId: string }) {
                     style={{ cursor: "pointer" }}
                     title={t(
                       m.isDefault
-                        ? "기본 임무 해제 (FR-E-56)"
+                        ? "기본 임무 해제"
                         : "기본 임무로 지정 — 임무 없는 새 역할 세션이 자동 배정받습니다",
                     )}
                     onClick={() => void setDefaultMission(props.wsId, m.id, !m.isDefault)}
@@ -107,7 +129,7 @@ export function Missions(props: { wsId: string }) {
                       class="btn ghost"
                       classList={{ danger: coConfirm() === m.id }}
                       style={{ "font-size": "10px", padding: "1px 8px" }}
-                      title={t("공유 repo의 현재 브랜치를 바꿉니다 — 워크트리 세션은 영향 없음 (FR-E-52)")}
+                      title={t("공유 repo의 현재 브랜치를 바꿉니다 — 워크트리 세션은 영향 없음")}
                       onClick={() => void doCheckout(m.id, m.branch!)}
                     >
                       {t(coConfirm() === m.id ? "공유 repo 전환 확정?" : "⎇ 체크아웃")}
@@ -122,9 +144,30 @@ export function Missions(props: { wsId: string }) {
                 <div class="muted" style={{ "font-size": "12px", margin: "6px 0" }}>
                   {m.goal}
                 </div>
+                {/* 완료 보고 (작업 완료 신호) — 배정된 세션이 report --done을 보냈다. 상태는 사람이
+                    눌러야 in-review가 된다. 앱이 스스로 임무 상태를 바꾸지 않는다 */}
+                <Show when={m.status === "in-progress" && doneReport(m.assigned)}>
+                  {(d) => (
+                    <div class="card inset mission-done">
+                      <span class="badge blue">✓</span>
+                      <span class="muted">
+                        {t("완료 보고")} · {d().name}
+                        <Show when={d().text}>: {d().text}</Show>
+                      </span>
+                      <button class="btn" onClick={() => void setMissionStatus(props.wsId, m.id, "in-review")}>
+                        {t("검토 중으로")}
+                      </button>
+                    </div>
+                  )}
+                </Show>
                 <Show when={m.outputs.length > 0}>
+                  {/* 산출물 체크 (C4 · 시안 hBVB0) — 파일의 `- [x]`를 그대로 보인다. 체크는 파일에서 한다 */}
                   <div class="mono muted" style={{ "font-size": "11px", "margin-bottom": "6px" }}>
-                    {t("산출물")} · {m.outputs.join(" · ")}
+                    {tf("산출물 · {done}/{total} 체크", {
+                      done: m.outputs.filter((_, i) => m.outputsDone?.[i]).length,
+                      total: m.outputs.length,
+                    })}{" "}
+                    · {m.outputs.map((o, i) => `${m.outputsDone?.[i] ? "☑" : "☐"} ${o}`).join(" · ")}
                   </div>
                 </Show>
                 <div style={{ display: "flex", gap: "6px", "flex-wrap": "wrap" }}>
@@ -157,8 +200,14 @@ export function Missions(props: { wsId: string }) {
           <div style={{ display: "flex", "flex-direction": "column", gap: "8px", "margin-top": "8px" }}>
             <input placeholder={t("임무 이름")} value={name()} onInput={(e) => setName(e.currentTarget.value)} />
             <textarea rows={3} placeholder={t("목표 — 완료 조건을 측정 가능하게")} value={goal()} onInput={(e) => setGoal(e.currentTarget.value)} />
+            <textarea
+              rows={3}
+              placeholder={t("산출물 — 한 줄에 하나 (선택)")}
+              value={outputs()}
+              onInput={(e) => setOutputs(e.currentTarget.value)}
+            />
             <input
-              placeholder={t("브랜치 (선택 · E12)")}
+              placeholder={t("브랜치 (선택)")}
               class="mono"
               value={branch()}
               onInput={(e) => setBranch(e.currentTarget.value)}

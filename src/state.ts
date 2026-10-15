@@ -47,7 +47,7 @@ export function toggleExplorer(tab: ExplorerTab): void {
   setOverlay("explorer");
 }
 
-export type PanelTab = "conversation" | "git" | "ports" | "logs" | "browser" | "mdview";
+export type PanelTab = "conversation" | "git" | "ports" | "server" | "logs" | "browser" | "mdview";
 
 const [viewSig, setViewRaw] = createSignal<View>({ kind: "control" });
 export const view = viewSig;
@@ -59,6 +59,10 @@ export function setView(v: View): View {
   const wsId = v.kind === "workspace" ? v.id : "wsId" in v ? v.wsId : undefined;
   if (wsId) setLastWorkspaceId(wsId);
   setOverlay(undefined); // 화면 전환 = 팝업 문맥을 떠난다 — 열린 팝업이 새 화면을 가리지 않게
+  // 같은 화면이면 건너뛴다 (최적화 C1) — 새 객체를 넣으면 관제 화면이 통째로 다시 만들어져
+  // 터미널 재부착·폴링 재시작·줌 소실이 난다. 값이 같으면 지금 것을 그대로 둔다
+  const cur = viewSig();
+  if (JSON.stringify(cur) === JSON.stringify(v)) return cur;
   return setViewRaw(v);
 }
 export const [selectedSession, setSelectedSession] = createSignal<string | undefined>(undefined);

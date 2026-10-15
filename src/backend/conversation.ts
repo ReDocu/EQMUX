@@ -6,13 +6,15 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { createSignal } from "solid-js";
-import { t, tf } from "../i18n";
+import { t } from "../i18n";
 import { backend } from "./mock";
-import { echoPty, isTauri, writePty } from "./pty";
-import { canInject } from "../types";
+import { echoPty, humanTyping, isTauri, writePty } from "./pty";
+import { canInject, effectiveTitle, sessionName } from "../types";
 import type { ConversationMessage } from "../types";
 
-export const MSG_MAX_BODY = 2000; // M6 — Rust MAX_BODY_CHARS와 같은 값
+/** 에이전트 발신 본문 상한 (결정 8) — Rust MAX_BODY_CHARS와 같은 값. 사람이 대화 탭에서
+ *  보내는 메시지는 이 상한에서 뺀다(결정 18) — 상한은 받는 에이전트의 컨텍스트를 아끼는 장치다 */
+export const MSG_MAX_BODY = 800;
 
 interface MsgRow {
   id: number;
@@ -22,6 +24,8 @@ interface MsgRow {
   type: ConversationMessage["type"];
   body: string;
   read: boolean;
+  done?: boolean;
+  file?: { path: string; size: number } | null;
 }
 
 const pad = (n: number) => String(n).padStart(2, "0");
@@ -38,10 +42,18 @@ function toMsg(wsId: string, r: MsgRow): ConversationMessage {
     unread: !r.read,
     workspaceId: wsId,
     ts: r.ts,
+    rowId: r.id,
+    ...(r.done ? { done: true } : {}),
+    ...(r.file ? { file: r.file } : {}),
   };
 }
 
+const PAGE = 200;
 const loaded = new Set<string>();
+const [olderLeft, setOlderLeft] = createSignal<Record<string, boolean>>({});
+
+/** 원장에 화면보다 오래된 메시지가 남아 있는가 — 대화 탭 `▲ 이전` 칩 (BR-15) */
+export const hasOlder = (wsId: string): boolean => !!olderLeft()[wsId];
 
 /** 원장 실측 → 그 워크스페이스 스트림 교체. 부트스트랩과 늦게 열린 워크스페이스가 쓴다. */
 export async function refreshConversation(wsId: string): Promise<void> {
@@ -49,8 +61,9 @@ export async function refreshConversation(wsId: string): Promise<void> {
   const rows = await invoke<MsgRow[]>("msg_list", {
     workspace: wsId,
     beforeId: null,
-    limit: 200,
+    limit: PAGE,
   }).catch(() => undefined);
+  if (rows) setOlderLeft((m) => ({ ...m, [wsId]: rows.length >= PAGE }));
   // 로드 실패(일시 오류)에 빈 배열로 스트림을 덮으면 대화 내역이 화면에서 사라진다 —
   // 성공했을 때만 교체하고, 실패면 다음 재실측까지 기존 표시를 유지한다
   if (rows) {
@@ -58,6 +71,21 @@ export async function refreshConversation(wsId: string): Promise<void> {
     backend.hydrateMessages(wsId, rows.map((r) => toMsg(wsId, r)));
   }
   await restoreInbox(wsId); // 인박스 영속 (F) — 재시작 전 대기분을 되살린다
+}
+
+/** 이전 페이지 (BR-15) — 화면에 있는 가장 오래된 행 앞의 PAGE건을 원장에서 더 불러온다.
+ *  hydrate는 그 워크스페이스 스트림을 통째로 바꾸므로, 지금 스트림 앞에 붙여 다시 넘긴다 */
+export async function loadOlder(wsId: string): Promise<void> {
+  if (!isTauri()) return;
+  const mine = backend.listMessages().filter((m) => m.workspaceId === wsId);
+  const oldest = Math.min(...mine.map((m) => m.rowId ?? Infinity));
+  if (!Number.isFinite(oldest)) return;
+  const rows = await invoke<MsgRow[]>("msg_list", { workspace: wsId, beforeId: oldest, limit: PAGE }).catch(
+    () => undefined,
+  );
+  if (!rows) return;
+  setOlderLeft((m) => ({ ...m, [wsId]: rows.length >= PAGE }));
+  backend.hydrateMessages(wsId, [...rows.map((r) => toMsg(wsId, r)), ...mine]);
 }
 
 export function ensureConversation(wsId: string): void {
@@ -82,9 +110,9 @@ export async function sendConversation(
     return null;
   } catch (e) {
     const s = String(e);
-    if (s.includes("RATE_LIMIT")) return t("분당 발신 상한에 닿았습니다 (M6) — 잠시 후 다시");
-    if (s.includes("TOO_LONG")) return tf("본문이 너무 깁니다 — {n}자 상한", { n: MSG_MAX_BODY });
-    if (s.includes("EMPTY") || s.includes("BAD_TYPE")) return t("타입 5종과 본문이 필요합니다 (M2)");
+    if (s.includes("RATE_LIMIT")) return t("분당 발신 상한에 닿았습니다 — 잠시 후 다시");
+    if (s.includes("TOO_LONG")) return t("본문이 너무 깁니다");
+    if (s.includes("EMPTY") || s.includes("BAD_TYPE")) return t("타입 5종과 본문이 필요합니다");
     return t("전송 실패 — 로그 패널을 확인하세요");
   }
 }
@@ -136,23 +164,30 @@ let inboxSaveTimer: ReturnType<typeof setTimeout> | undefined;
 function scheduleInboxSave(): void {
   if (!isTauri()) return;
   clearTimeout(inboxSaveTimer);
-  inboxSaveTimer = setTimeout(() => {
-    const byWs = new Map<string, Record<string, ConversationMessage[]>>();
-    for (const [sid, q] of inbox) {
-      const wsId = q[0]?.workspaceId ?? backend.listSessions().find((s) => s.id === sid)?.workspaceId;
-      if (!wsId || q.length === 0) continue;
-      const m = byWs.get(wsId) ?? {};
-      m[sid] = q;
-      byWs.set(wsId, m);
-    }
-    for (const ws of backend.listWorkspaces()) {
-      if (ws.pathMissing) continue;
-      const json = JSON.stringify(byWs.get(ws.id) ?? {});
-      if (lastInboxSaved.get(ws.id) === json) continue;
-      lastInboxSaved.set(ws.id, json);
-      void invoke("cache_set", { workspace: ws.id, key: INBOX_KEY, value: json }).catch(() => {});
-    }
-  }, 500);
+  inboxSaveTimer = setTimeout(saveInboxNow, 500);
+}
+
+/** 바로 저장 — 배출(전달) 직후에 쓴다. 디바운스 창 안에 웹뷰가 죽으면 이미 넣은 대기분이
+ *  캐시에 남아 복원 때 다시 주입된다 */
+function saveInboxNow(): void {
+  if (!isTauri()) return;
+  clearTimeout(inboxSaveTimer);
+  const byWs = new Map<string, Record<string, ConversationMessage[]>>();
+  for (const [sid, q] of inbox) {
+    const wsId = q[0]?.workspaceId ?? backend.listSessions().find((s) => s.id === sid)?.workspaceId;
+    if (!wsId || q.length === 0) continue;
+    const m = byWs.get(wsId) ?? {};
+    m[sid] = q;
+    byWs.set(wsId, m);
+  }
+  for (const ws of backend.listWorkspaces()) {
+    // 아직 복원 전인 워크스페이스는 쓰지 않는다 — `{}`로 덮으면 재시작 전 대기분이 영영 사라진다
+    if (ws.pathMissing || !inboxRestored.has(ws.id)) continue;
+    const json = JSON.stringify(byWs.get(ws.id) ?? {});
+    if (lastInboxSaved.get(ws.id) === json) continue;
+    lastInboxSaved.set(ws.id, json);
+    void invoke("cache_set", { workspace: ws.id, key: INBOX_KEY, value: json }).catch(() => {});
+  }
 }
 
 const inboxRestored = new Set<string>();
@@ -197,6 +232,72 @@ export function pendingInbox(): { sessionId: string; count: number }[] {
     .map(([sessionId, q]) => ({ sessionId, count: q.length }));
 }
 
+/** 주소용 프로젝트 이름 (결정 20) — 열린 워크스페이스의 표시 이름. 같은 이름이 둘 열려 있으면
+ *  열린 순서로 `app`, `app-2`를 붙여 주소가 하나로 풀리게 한다. Rust 디렉터리(C4)도 이 값을 받는다 */
+export function projectLabels(): Map<string, string> {
+  const out = new Map<string, string>();
+  const seen = new Map<string, number>();
+  for (const w of backend.listWorkspaces()) {
+    if (!w.open) continue;
+    const n = (seen.get(w.name) ?? 0) + 1;
+    seen.set(w.name, n);
+    out.set(w.id, n === 1 ? w.name : `${w.name}-${n}`);
+  }
+  return out;
+}
+
+/** 세션 id → 세션 이름. 원장에는 id만 남는다 — 이름을 아는 것은 프런트뿐이다 */
+export function nameOf(sessionId: string): string {
+  const s = backend.listSessions().find((x) => x.id === sessionId);
+  if (!s) return sessionId;
+  return sessionName(s, backend.listPersonas().find((p) => p.id === s.personaId));
+}
+
+/** 받는 쪽에서 보이는 발신자 (BR-14) — 같은 프로젝트면 `카이`, 다른 프로젝트면 `카이@app-b`.
+ *  받은 그대로 `eqmux send --to @카이@app-b`로 답할 수 있게 주소 꼴을 맞춘다 */
+export function senderLabel(from: string, toWs: string | undefined): string {
+  const s = backend.listSessions().find((x) => x.id === from);
+  if (!s) return from; // "나" · 이미 닫힌 세션
+  const name = nameOf(from);
+  if (!toWs || s.workspaceId === toWs) return name;
+  return `${name}@${projectLabels().get(s.workspaceId) ?? s.workspaceId}`;
+}
+
+/** 세션 디렉터리 (C4) — 열린 모든 프로젝트의 세션을 Rust에 넘긴다. `eqmux send`의 주소 해석과
+ *  `eqmux who`가 이것을 본다. 바뀐 때만 보낸다 — 방송은 잦고 내용은 드물게 바뀐다 */
+export function startDirectorySync(): () => void {
+  if (!isTauri()) return () => {};
+  let last = "";
+  const push = () => {
+    const labels = projectLabels();
+    const personas = backend.listPersonas();
+    const entries = backend
+      .listSessions()
+      .filter((s) => labels.has(s.workspaceId))
+      .map((s) => {
+        const p = personas.find((x) => x.id === s.personaId);
+        return {
+          session: s.id,
+          workspace: s.workspaceId,
+          project: labels.get(s.workspaceId)!,
+          name: sessionName(s, p),
+          persona: p?.name ?? "",
+          job: s.jobId ?? "",
+          title: effectiveTitle(s, p) ?? null, // Rust Option — 직함 없음은 None
+          agent: s.agent ?? "", // 손으로 띄운 에이전트 — CLI 전달 판정이 deliver()와 같은 갈래를 타게
+          slot: s.slot,
+          status: s.status,
+        };
+      });
+    const json = JSON.stringify(entries);
+    if (json === last) return;
+    last = json;
+    void invoke("directory_set", { entries }).catch(() => {});
+  };
+  push();
+  return backend.subscribe(push);
+}
+
 /** 수신 세션의 페르소나 표시 이름 — 역할 없는 세션이면 undefined */
 function personaNameOf(sessionId: string): string | undefined {
   const s = backend.listSessions().find((x) => x.id === sessionId);
@@ -225,12 +326,19 @@ function personaTail(sessionId: string): string {
  *
  *  여러 건은 한 줄로 묶는다 — 대기분을 건건이 주입하면 래퍼도 수신자의 턴도 건수만큼 든다.
  *  묶으면 래퍼 하나에 턴 하나다. 접두를 짧게 쥐는 이유도 같다 — 건당 비용이라 길이가 곱해진다. */
-export function fmt(msgs: ConversationMessage[], tail = ""): string {
-  const flat = (m: ConversationMessage) => m.body.replace(/\s*\r?\n\s*/g, " ");
-  if (msgs.length === 1) return `[EQ·${msgs[0].type}] ${msgs[0].from}: ${flat(msgs[0])}${tail}`;
-  const items = msgs.map((m, i) => `${i + 1}) ${m.from}·${m.type}: ${flat(m)}`).join(" ");
+export function fmt(
+  msgs: ConversationMessage[],
+  tail = "",
+  label: (m: ConversationMessage) => string = (m) => m.from,
+): string {
+  const flat = (m: ConversationMessage) => m.body.replace(/\s*\r?\n\s*/g, " ") + attach(m);
+  if (msgs.length === 1) return `[EQ·${msgs[0].type}] ${label(msgs[0])}: ${flat(msgs[0])}${tail}`;
+  const items = msgs.map((m, i) => `${i + 1}) ${label(m)}·${m.type}: ${flat(m)}`).join(" ");
   return `[EQ ${msgs.length}건] ${items}${tail}`;
 }
+
+/** `--file` 첨부 — 본문은 요약뿐이라 경로를 붙여야 받는 쪽이 읽으러 간다 */
+const attach = (m: ConversationMessage) => (m.file ? ` (파일: ${m.file.path})` : "");
 
 const SUBMIT_DELAY_MS = 80; // 본문 접수 → 제출 사이. TUI가 붙여넣기를 정리할 시간을 준다
 const TURN_GAP_MS = 400; // 연속 주입 간격 — 앞 메시지의 턴 시작과 겹치지 않게
@@ -270,7 +378,8 @@ function injectMessages(sessionId: string, msgs: ConversationMessage[]): void {
     .then(async () => {
       // 페르소나는 큐에 넣을 때가 아니라 실제로 쓸 때 읽는다 — 앞 덩어리를 기다리는 동안
       // 재캐스팅될 수 있고, 그때는 새 인물의 이름이 맞다
-      writePty(sessionId, fmt(msgs, personaTail(sessionId)));
+      const ws = backend.listSessions().find((s) => s.id === sessionId)?.workspaceId;
+      writePty(sessionId, fmt(msgs, personaTail(sessionId), (m) => senderLabel(m.from, ws)));
       await sleep(SUBMIT_DELAY_MS);
       writePty(sessionId, "\r"); // 제출 — 여기서 비로소 수신자의 턴이 돈다
       await sleep(TURN_GAP_MS);
@@ -286,10 +395,11 @@ function injectMessages(sessionId: string, msgs: ConversationMessage[]): void {
 
 /** 기본 터미널용 표시 전용 라인 (P-2) — PTY 입력에 넣지 않는다. 주석 접두(`#`)를 붙여도
  *  사용자가 치던 미제출 명령 뒤에 이어 붙어 \r이 그 명령을 그대로 실행하므로,
- *  화면·로컬 버퍼에만 에코한다. 원문은 어차피 대화 원장(message 테이블)에 있다. */
-function fmtEcho(m: ConversationMessage): string {
-  const body = m.body.replace(/\r?\n/g, "\r\n");
-  return `\r\n\x1b[2m[EQMUX 메시지·${m.type}] ${m.from}: ${body}\x1b[0m\r\n`;
+ *  화면·로컬 버퍼에만 에코한다. 원문은 어차피 대화 원장(message 테이블)에 있다.
+ *  머리는 에이전트가 받는 것과 같은 `[EQ·타입] 이름:` — 사람과 에이전트가 같은 꼴을 본다. */
+export function fmtEcho(m: ConversationMessage, label = m.from): string {
+  const body = (m.body + attach(m)).replace(/\r?\n/g, "\r\n");
+  return `\r\n\x1b[2m[EQ·${m.type}] ${label}: ${body}\x1b[0m\r\n`;
 }
 
 /** 수신 세션 결정 (M4) — "@all"이면 그 워크스페이스의 살아 있는 참여자 전원.
@@ -300,36 +410,136 @@ function fmtEcho(m: ConversationMessage): string {
  *  다시 켠 직후에 보낸 @all이 아무에게도 닿지 않고 흔적도 남지 않았다.
  *  dead도 뺀 적이 있었는데, 그러면 전달 루프가 한 바퀴도 안 돌아 인박스에도 안 쌓이고
  *  화면에만 정상 발신으로 남았다 (B50). 지금은 후보로 두고 deliver가 인박스에 재운다 —
- *  재개하면 idle 전이에서 기존 flush 경로가 그대로 흘려보낸다. */
+ *  재개하면 idle 전이에서 기존 flush 경로가 그대로 흘려보낸다.
+ *  프로젝트 간 메시지는 Rust가 받는 워크스페이스 원장에도 적고 그쪽 message-new를 낸다 —
+ *  그래서 받는 사람은 언제나 이벤트의 워크스페이스 안에서 찾으면 된다. */
 function recipients(wsId: string, to: string) {
   const live = backend.listSessions().filter((s) => s.workspaceId === wsId);
   return to === "@all" ? live : live.filter((s) => s.id === to);
 }
 
+/** 사람이 페인에 직접 띄운 에이전트 (M37 후속) — 관리 기동이 아니라 훅이 없고, 그래서 상태가
+ *  shell에 머문 채 프로세스 트리에만 claude/codex가 보인다(agentscan). 관리 세션은 돌고 있는 동안
+ *  status가 shell일 수 없으므로 이 조합이 곧 "손으로 띄웠다"는 뜻이다.
+ *
+ *  턴 경계도 승인 창도 모른다. 그래서 자동으로 넣지 않는다 (BR-02) — 승인 창이 떠 있으면 본문과
+ *  Enter가 그 답이 되어 사람 확인 없이 도구가 실행될 수 있다. 메시지는 쌓아 두고, 페인 헤더의
+ *  `메시지 N건 · 넣기` 칩을 사람이 눌렀을 때만 injectPending으로 넣는다. */
+export const unmanagedAgent = (s: { status: string; agent?: string }): boolean =>
+  s.status === "shell" && !!s.agent;
+
+/** 손으로 띄운 에이전트에 쌓인 메시지 수 — 페인 헤더 칩 (반응형) */
+export function pendingCount(sessionId: string): number {
+  inboxTick();
+  return inbox.get(sessionId)?.length ?? 0;
+}
+
+/** 쌓인 메시지 목록 — `넣기` 팝오버가 사람에게 보여 준다 (반응형) */
+export function pendingFor(sessionId: string): ConversationMessage[] {
+  inboxTick();
+  return [...(inbox.get(sessionId) ?? [])];
+}
+
+/** 사람이 `넣기`를 눌렀다 — 그때만 넣는다. 쳐 둔 줄이 있으면 덮지 않고 그대로 둔다 */
+export function injectPending(sessionId: string): boolean {
+  const q = inbox.get(sessionId);
+  if (!q?.length || humanTyping(sessionId)) return false;
+  inbox.delete(sessionId);
+  setInboxTick((t) => t + 1);
+  saveInboxNow(); // 넣은 대기분 — 디바운스 없이 캐시에서 비운다
+  markDelivered(q);
+  for (const b of batches(q)) injectMessages(sessionId, b);
+  return true;
+}
+
+// ── 사람이 보낸 메시지의 전달 상태 — `eqmux send`가 에이전트에게 돌려주는 것과 같은 판정 ──
+
+export type Delivery = "delivered" | "queued";
+const [deliveries, setDeliveries] = createSignal<Record<string, Delivery>>({});
+
+/** 대화 탭이 "나"의 메시지 옆에 붙이는 `전달됨` · `대기 중` (반응형). 앱을 다시 켜면 비운다 */
+export const deliveryOf = (msgId: string): Delivery | undefined => deliveries()[msgId];
+
+function markDelivered(msgs: ConversationMessage[]): void {
+  const mine = msgs.filter((m) => m.from === "나");
+  if (mine.length === 0) return;
+  setDeliveries((d) => {
+    const n = { ...d };
+    for (const m of mine) n[m.id] = "delivered";
+    return n;
+  });
+}
+
+/** 유휴 주입 묶기 (토큰 #3) — 유휴 세션은 메시지마다 바로 한 턴을 돌았다. 잠깐 모았다가 한 줄로
+ *  넣으면 연달아 온 N건이 한 턴이 된다. 모으는 사이 세션이 바빠졌으면 인박스로 넘겨 기존 idle
+ *  전이 경로가 흘려보낸다 */
+const GATHER_MS = 2000;
+const gathering = new Map<string, ConversationMessage[]>();
+
+function gather(sessionId: string, m: ConversationMessage): void {
+  const q = gathering.get(sessionId);
+  if (q) {
+    q.push(m);
+    return;
+  }
+  gathering.set(sessionId, [m]);
+  setTimeout(() => {
+    const msgs = gathering.get(sessionId) ?? [];
+    gathering.delete(sessionId);
+    const s = backend.listSessions().find((x) => x.id === sessionId);
+    if (!s) return;
+    if (canInject(s)) {
+      for (const b of batches(msgs)) injectMessages(sessionId, b);
+      return;
+    }
+    inbox.set(sessionId, [...(inbox.get(sessionId) ?? []), ...msgs]);
+    setInboxTick((t) => t + 1);
+    scheduleInboxSave();
+    // 모으는 사이 바빠졌다 — 먼저 붙인 `전달됨`을 `대기 중`으로 되돌린다. 배출 때 다시 전달됨이 된다
+    const mine = msgs.filter((m) => m.from === "나");
+    if (mine.length) setDeliveries((d) => ({ ...d, ...Object.fromEntries(mine.map((m) => [m.id, "queued" as const])) }));
+  }, GATHER_MS);
+}
+
 function deliver(wsId: string, m: ConversationMessage): void {
+  let queued = false;
+  let reached = false;
   const park = (id: string) => {
     const q = inbox.get(id) ?? [];
     q.push(m);
     inbox.set(id, q);
     setInboxTick((t) => t + 1);
     scheduleInboxSave(); // 인박스 영속 — 대기분은 재시작을 넘긴다
+    queued = true;
+  };
+  const inject = (id: string) => {
+    gather(id, m);
+    reached = true;
   };
   for (const s of recipients(wsId, m.to)) {
     if (s.id === m.from) continue; // 에이전트 발신(@all)이 자기 자신에게 되돌아가지 않게
     if (s.status === "dead") {
       park(s.id); // 프로세스가 없다 — 재개하면 idle 전이에서 흘러간다 (B50)
+    } else if (unmanagedAgent(s)) {
+      // 사람이 페인에 직접 띄운 에이전트 — 쌓기만 한다 (BR-02). 화면 에코도 하지 않는다:
+      // TUI는 우리가 끼워 넣은 줄을 모르므로 이후 차등 재그리기가 전부 어긋난다.
+      park(s.id);
     } else if (!s.personaId) {
-      echoPty(s.id, fmtEcho(m)); // 기본 터미널 — 표시 전용, 셸 입력에는 닿지 않는다 (P-2)
+      echoPty(s.id, fmtEcho(m, senderLabel(m.from, wsId))); // 기본 터미널 — 표시 전용 (P-2)
+      reached = true;
     } else if (s.status === "shell") {
       // 역할은 있는데 에이전트가 아직 안 떴다 — 셸에 주입하면 사람이 치던 명령을 실행시킨다.
       // 사람이 읽도록 화면에만 에코하고, 원문은 인박스에 남겨 기동 직후 에이전트에게 전달한다.
-      echoPty(s.id, fmtEcho(m));
+      echoPty(s.id, fmtEcho(m, senderLabel(m.from, wsId)));
       park(s.id);
     } else if (canInject(s)) {
-      injectMessages(s.id, [m]); // 유휴 = 프롬프트가 비어 있다 → 즉시 (M3)
+      inject(s.id); // 유휴 = 프롬프트가 비어 있다 → 즉시 (M3)
     } else {
       park(s.id);
     }
+  }
+  if (m.from === "나" && (queued || reached)) {
+    setDeliveries((d) => ({ ...d, [m.id]: queued ? "queued" : "delivered" }));
   }
 }
 
@@ -340,7 +550,8 @@ export function flushInboxOnState(sessionId: string, status: string | undefined)
   if (!q?.length) return;
   inbox.delete(sessionId);
   setInboxTick((t) => t + 1);
-  scheduleInboxSave(); // 전달 완료 — 캐시의 대기분도 비운다
+  saveInboxNow(); // 전달 완료 — 캐시의 대기분도 바로 비운다
+  markDelivered(q);
   // 대기분은 한 줄로 묶어 턴 하나로 흘린다 — 넘치는 만큼만 덩어리가 갈리고 큐가 사이를 벌린다
   for (const b of batches(q)) injectMessages(sessionId, b);
 }

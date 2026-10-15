@@ -155,7 +155,7 @@ let data = crate::transcript::read(&transcript_path(cwd, uuid), 0).ok()?;
 | 수정본 실제 기동 | `startup` + `heartbeat(sweep)` 기록 확인 = 프론트 정상, 회귀 없음 |
 | IPC 응답 | `eqmux ping` → `EQMUX 응답 · v0.4.0` |
 
-**한계:** 이 세션에서는 GUI 자동화 수단(Chrome 확장 · wmux CLI)을 쓸 수 없어
+**한계:** 이 세션에서는 GUI 자동화 수단(Chrome 확장 · 터미널 멀티플렉서 CLI)을 쓸 수 없어
 터미널 10개 이상을 띄운 재현은 하지 못했다. 위 실측은 전부 사용자의 실제
 로그와 DB, 그리고 앱을 띄운 상태의 IPC 측정에 근거한다.
 

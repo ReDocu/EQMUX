@@ -298,33 +298,92 @@ fn parse_line(turns: &mut Vec<Turn>, line: &str) -> Result<(), ()> {
     }
 }
 
-/// 파일 끝 창을 읽어 턴 목록으로. 유효 턴이 하나도 없으면 Err → 스크롤백 폴백 (FR-G-86).
-pub fn read(path: &std::path::Path, limit: usize) -> Result<TranscriptData, String> {
+/// 파일별 파싱 상태 (최적화 B3) — 열린 트랜스크립트 창은 방송마다 다시 읽는다. 크기·mtime이 그대로면
+/// 다시 파싱하지 않고, 늘었으면 이어 쓴 부분만 파싱한다. 끝의 미완성 줄은 상태에 넣지 않는다
+/// (쓰는 중일 수 있다) — 매번 따로 파싱해 붙인다.
+struct Parsed {
+    len: u64,
+    mtime: Option<std::time::SystemTime>,
+    /// 완결 줄까지 소비한 바이트 위치
+    offset: u64,
+    turns: Vec<Turn>,
+    skipped: u32,
+    windowed: bool,
+    /// 끝의 미완성 줄 (개행 없음)
+    tail: String,
+}
+
+/// 상태에 남기는 턴 상한 — 화면 상한(200)의 두 배. 그보다 앞 턴은 보이지도 짝지어지지도 않는다
+const KEEP_TURNS: usize = 400;
+
+// ponytail: 전역 잠금 하나 — 파싱은 잠금 밖에서 하므로 열린 창 몇 개로는 경합이 없다
+static CACHE: std::sync::Mutex<Option<std::collections::HashMap<std::path::PathBuf, Parsed>>> =
+    std::sync::Mutex::new(None);
+
+/// lossy 읽기 — 2MB 창 경계가 멀티바이트(한글) 문자 중간을 자르면 read_to_string은
+/// 파일 전체를 Err로 버린다. 바이트로 읽고 손상 바이트만 대체해, 깨진 줄은 파서가
+/// 건너뛰고 나머지는 집계한다는 계약(FR-G-85)을 지킨다.
+fn read_from(path: &std::path::Path, start: u64) -> Result<Vec<u8>, String> {
     let mut f = File::open(path).map_err(|_| "트랜스크립트 파일이 없습니다".to_string())?;
-    let len = f.metadata().map_err(|e| e.to_string())?.len();
-    let windowed = len > TAIL_WINDOW;
-    if windowed {
-        f.seek(SeekFrom::Start(len - TAIL_WINDOW)).map_err(|e| e.to_string())?;
-    }
-    // lossy 읽기 — 2MB 창 경계가 멀티바이트(한글) 문자 중간을 자르면 read_to_string은
-    // 파일 전체를 Err로 버린다. 바이트로 읽고 손상 바이트만 대체해, 깨진 줄은 파서가
-    // 건너뛰고 나머지는 집계한다는 계약(FR-G-85)을 지킨다.
+    f.seek(SeekFrom::Start(start)).map_err(|e| e.to_string())?;
     let mut raw = Vec::new();
     f.read_to_end(&mut raw).map_err(|e| e.to_string())?;
-    let buf = String::from_utf8_lossy(&raw).into_owned();
-    let mut lines: Vec<&str> = buf.lines().collect();
-    if windowed && !lines.is_empty() {
-        lines.remove(0); // 창 경계의 부분 라인
+    Ok(raw)
+}
+
+/// 완결 줄들을 상태에 더하고 끝의 미완성 줄을 tail로 남긴다
+fn feed(p: &mut Parsed, raw: &[u8], start: u64, skip_first: bool) {
+    let cut = raw.iter().rposition(|b| *b == b'\n').map(|i| i + 1).unwrap_or(0);
+    let text = String::from_utf8_lossy(&raw[..cut]);
+    let mut lines = text.lines();
+    if skip_first {
+        lines.next(); // 창 경계의 부분 라인
     }
-    let mut turns = Vec::new();
-    let mut skipped = 0u32;
-    for line in &lines {
-        if line.trim().is_empty() {
-            continue;
+    for line in lines {
+        if !line.trim().is_empty() && parse_line(&mut p.turns, line).is_err() {
+            p.skipped += 1;
         }
-        if parse_line(&mut turns, line).is_err() {
-            skipped += 1;
+    }
+    if p.turns.len() > KEEP_TURNS {
+        p.turns.drain(..p.turns.len() - KEEP_TURNS);
+    }
+    p.offset = start + cut as u64;
+    p.tail = String::from_utf8_lossy(&raw[cut..]).into_owned();
+}
+
+/// 파일 끝 창을 읽어 턴 목록으로. 유효 턴이 하나도 없으면 Err → 스크롤백 폴백 (FR-G-86).
+pub fn read(path: &std::path::Path, limit: usize) -> Result<TranscriptData, String> {
+    let meta = std::fs::metadata(path).map_err(|_| "트랜스크립트 파일이 없습니다".to_string())?;
+    let (len, mtime) = (meta.len(), meta.modified().ok());
+    let prev = CACHE.lock().ok().and_then(|mut c| c.get_or_insert_with(Default::default).remove(path));
+    let p = match prev {
+        Some(p) if p.len == len && p.mtime == mtime => p,
+        // 이어 쓰기 — 늘어난 부분이 창보다 작으면 거기만
+        Some(mut p) if len > p.len && len - p.offset <= TAIL_WINDOW => {
+            let raw = read_from(path, p.offset)?;
+            let start = p.offset;
+            feed(&mut p, &raw, start, false);
+            p.len = len;
+            p.mtime = mtime;
+            p.windowed |= len > TAIL_WINDOW; // 처음부터 읽은 게 창보다 커졌다 — 앞부분은 상한으로 잘린다
+            p
         }
+        // 처음 · 줄었음(교체) · 너무 많이 늘었음 — 끝 창부터 새로
+        _ => {
+            let start = len.saturating_sub(TAIL_WINDOW);
+            let mut p = Parsed { len, mtime, offset: start, turns: Vec::new(), skipped: 0, windowed: start > 0, tail: String::new() };
+            feed(&mut p, &read_from(path, start)?, start, start > 0);
+            p
+        }
+    };
+    let mut turns = p.turns.clone();
+    let mut skipped = p.skipped;
+    if !p.tail.trim().is_empty() && parse_line(&mut turns, &p.tail).is_err() {
+        skipped += 1;
+    }
+    let windowed = p.windowed;
+    if let Ok(mut c) = CACHE.lock() {
+        c.get_or_insert_with(Default::default).insert(path.to_path_buf(), p);
     }
     if turns.is_empty() {
         return Err(format!("인식할 수 있는 턴이 없습니다 (건너뜀 {skipped}줄)"));
@@ -369,6 +428,39 @@ mod tests {
         let d = tool.detail.as_deref().unwrap();
         assert!(d.contains("입력:") && d.contains("출력:") && d.contains("auth()")); // 짝짓기
         assert!(!data.windowed);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 이어 쓰기 캐시 (최적화 B3) — 늘어난 부분만 파싱해도 처음부터 읽은 결과와 같아야 한다.
+    /// 쓰는 중인 미완성 줄과, 경계를 넘는 tool_use ↔ tool_result 짝짓기를 함께 본다
+    #[test]
+    fn appended_reads_match_full_parse() {
+        use std::io::Write as _;
+        let dir = std::env::temp_dir().join(format!("eqmux-ts-inc-{}", crate::workspace::now_ms()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.jsonl");
+        let user = r#"{"type":"user","timestamp":"2026-08-13T01:00:00.000Z","message":{"role":"user","content":"시작"}}"#;
+        let tool = r#"{"type":"assistant","timestamp":"2026-08-13T01:00:05.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"a.ts"}}]}}"#;
+        let result = r#"{"type":"user","timestamp":"2026-08-13T01:00:06.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"본문"}]}}"#;
+        let done = r#"{"type":"assistant","timestamp":"2026-08-13T01:00:10.000Z","message":{"role":"assistant","content":[{"type":"text","text":"끝"}]}}"#;
+        let (half1, half2) = result.split_at(40);
+        std::fs::write(&path, format!("{user}\n{tool}\n{half1}")).unwrap(); // 마지막 줄은 쓰는 중
+        let first = read(&path, 200).unwrap();
+        assert_eq!(first.turns.len(), 2);
+        assert_eq!(first.skipped, 1); // 미완성 줄은 이번 응답에서만 건너뜀으로 센다
+        let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+        write!(f, "{half2}\n{done}\n").unwrap();
+        drop(f);
+        let inc = read(&path, 200).unwrap();
+        let roles: Vec<&str> = inc.turns.iter().map(|t| t.role.as_str()).collect();
+        assert_eq!(roles, vec!["user", "tool", "agent"]);
+        assert_eq!(inc.skipped, 0); // 완성된 줄은 다시 센다 — 이전 미완성 집계가 남지 않는다
+        assert!(inc.turns[1].detail.as_deref().unwrap().contains("본문")); // 경계 넘는 짝짓기
+        // 같은 파일 그대로 — 캐시 응답이 같다
+        assert_eq!(read(&path, 200).unwrap().turns.len(), 3);
+        // 줄어든 파일(교체) — 처음부터 다시
+        std::fs::write(&path, format!("{done}\n")).unwrap();
+        assert_eq!(read(&path, 200).unwrap().turns.len(), 1);
         std::fs::remove_dir_all(&dir).ok();
     }
 

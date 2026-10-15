@@ -33,3 +33,49 @@ describe("codexFlagsToString", () => {
     expect(agentFlagsToString("codex", f)).toBe(codexFlagsToString(f));
   });
 });
+
+// 세션 이름 (0.5) — 자동 이름 `프로젝트명XX`와 입력 검증
+import { pickAutoName, projectStem, sessionNameError } from "./types";
+
+describe("세션 이름", () => {
+  test("프로젝트명은 글자·숫자·-·_만 16자까지, 대소문자 그대로", () => {
+    expect(projectStem("EQMUX")).toBe("EQMUX");
+    expect(projectStem("my app.v2 (copy)")).toBe("myappv2copy");
+    expect(projectStem("한글-프로젝트_이름이아주아주길다")).toBe("한글-프로젝트_이름이아주아주길");
+  });
+
+  test("슬롯 번호로 붙이고, 남이 쓰고 있으면 비어 있는 가장 작은 번호", () => {
+    expect(pickAutoName("EQMUX", 3, new Set())).toBe("EQMUX03");
+    expect(pickAutoName("EQMUX", 2, new Set(["eqmux02", "eqmux01"]))).toBe("EQMUX03");
+  });
+
+  test("24자 · 공백 · @ · 중복은 거부, 빈 값은 통과", () => {
+    expect(sessionNameError("", new Set())).toBeUndefined();
+    expect(sessionNameError("카이", new Set())).toBeUndefined();
+    expect(sessionNameError("a".repeat(25), new Set())).toBeDefined();
+    expect(sessionNameError("백엔드 카이", new Set())).toBeDefined();
+    expect(sessionNameError("kai@ws", new Set())).toBeDefined();
+    expect(sessionNameError("Kai", new Set(["kai"]))).toBeDefined();
+  });
+});
+
+// 캐스팅 재적용 (0.5) — 남는 세션의 슬롯은 그대로, 새 페르소나만 빈 슬롯에
+import { planCastingSlots } from "./types";
+
+describe("planCastingSlots", () => {
+  const cur = [
+    { id: "lin@w", slot: 1, personaId: "lin" },
+    { id: "kai@w", slot: 2, personaId: "kai" },
+    { id: "noel@w", slot: 3, personaId: "noel" },
+    { id: "shell4@w", slot: 4, personaId: "" },
+  ];
+  test("카이를 빼고 다시 적용해도 노엘은 03, 기본 터미널 자리도 그대로", () => {
+    expect(planCastingSlots(cur, ["lin@w", "noel@w"], 8)).toEqual([1, 3]);
+  });
+  test("새 페르소나는 비워질 자리부터 앞에서 채운다", () => {
+    expect(planCastingSlots(cur, ["lin@w", "noel@w", "rin@w", "mio@w"], 8)).toEqual([1, 3, 2, 5]);
+  });
+  test("빈 슬롯이 모자라면 undefined", () => {
+    expect(planCastingSlots(cur, ["lin@w", "kai@w", "noel@w", "rin@w"], 4)).toEqual([1, 2, 3, undefined]);
+  });
+});

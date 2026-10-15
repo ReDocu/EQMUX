@@ -4,7 +4,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { backend } from "./mock";
 import { isTauri, writePty } from "./pty";
-import { canInject, personaLevel } from "../types";
+import { canInject, effectiveTitle, personaLevel, sessionName } from "../types";
 import type { Session } from "../types";
 
 export interface RolePayload {
@@ -22,7 +22,9 @@ export interface RolePayload {
   characterPath?: string; // 고급 캐릭터 시트 — 전재 없이 경로 포인터만 실린다 (FR-E-40)
   characterName?: string;
   characterSource?: string;
-  teammates: { slot: number; name: string; jobName: string; me: boolean }[];
+  title?: string; // 유효 직함 (0.5) — 없으면 역할 파일이 0.4.2와 같다
+  /** name = 세션 이름, personaName은 세션 이름과 다를 때만, title = 유효 직함 (0.5) */
+  teammates: { slot: number; name: string; personaName?: string; title?: string; jobName: string; me: boolean }[];
 }
 
 /** 목 상태(라이브러리 + 편성)에서 합성 페이로드를 만든다 — 역할 없는 세션이면 undefined */
@@ -36,12 +38,19 @@ export function buildRolePayload(s: Session): RolePayload | undefined {
     .listSessions()
     .filter((x) => x.workspaceId === s.workspaceId && x.personaId)
     .sort((a, b) => a.slot - b.slot)
-    .map((x) => ({
-      slot: x.slot,
-      name: personas.find((p) => p.id === x.personaId)?.name ?? x.personaId,
-      jobName: jobs.find((j) => j.id === x.jobId)?.name ?? x.jobId,
-      me: x.id === s.id,
-    }));
+    .map((x) => {
+      const p = personas.find((pp) => pp.id === x.personaId);
+      const name = sessionName(x, p);
+      const pn = p?.name ?? x.personaId;
+      return {
+        slot: x.slot,
+        name,
+        ...(pn !== name ? { personaName: pn } : {}),
+        ...(effectiveTitle(x, p) ? { title: effectiveTitle(x, p) } : {}),
+        jobName: jobs.find((j) => j.id === x.jobId)?.name ?? x.jobId,
+        me: x.id === s.id,
+      };
+    });
   // 단계 = 활성 프로필 선택 — 최상위 필드는 이미 활성 프로필의 사본이다 (Rust 실측).
   // 기본 = 판단 성향만 · 중급 = 성향+말투+성격 · 고급 = 캐릭터 시트만 주입.
   const level = personaLevel(persona);
@@ -57,6 +66,7 @@ export function buildRolePayload(s: Session): RolePayload | undefined {
     characterSource: level === "adv" ? persona.characterSource : undefined,
     job: job.id,
     jobName: job.name,
+    ...(effectiveTitle(s, persona) ? { title: effectiveTitle(s, persona) } : {}),
     permissions: s.permOverride ?? job.permissions, // 유효 권한 (FR-E-34) — frontmatter에 반영
     responsibility: job.responsibility,
     forbidden: job.forbidden,
@@ -92,4 +102,22 @@ export function nudgeRoleReload(sessionId: string, roleFile: string): void {
   const s = backend.listSessions().find((x) => x.id === sessionId);
   if (!canInject(s)) return;
   writePty(sessionId, `[EQMUX] 역할 파일이 갱신되었습니다 — ${roleFile} 를 다시 읽어주세요\r`);
+}
+
+/** 직함·이름 변경 안내 (0.5) — 역할 파일만 다시 만들고 짧은 한 줄을 보낸다. 재시작 배지는 없다.
+ *  넣지 못하면 흘린다: 파일은 이미 갱신됐고 다음 기동·다음 읽기에서 반영된다 */
+export function nudgeTitleReload(sessionId: string): void {
+  if (!isTauri()) return;
+  const s = backend.listSessions().find((x) => x.id === sessionId);
+  if (!canInject(s)) return;
+  writePty(sessionId, `[EQ] 역할 갱신 — .eqmux/roles/${sessionId}.md 다시 읽기\r`);
+}
+
+/** 이름·직함 변경 뒤 그 워크스페이스 역할 세션 전원에 '다시 읽기' — 팀 관계 표가 같이 바뀌기 때문이다.
+ *  역할 파일은 팀 동기화(500ms 디바운스)가 다시 쓰므로 그 뒤에 보낸다 */
+export function nudgeTeamReload(wsIds: Iterable<string>): void {
+  const ids = new Set(wsIds);
+  setTimeout(() => {
+    for (const x of backend.listSessions()) if (x.personaId && ids.has(x.workspaceId)) nudgeTitleReload(x.id);
+  }, 900);
 }

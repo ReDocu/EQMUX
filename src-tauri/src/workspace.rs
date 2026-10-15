@@ -24,6 +24,21 @@ pub struct WsEntry {
     pub remote: Option<String>,
     pub branch: Option<String>,
     pub last_used: i64,
+    /// 다른 프로젝트 메시지 받기 (0.5 결정 10) — 기본 켬. 끄면 다른 프로젝트 발신이 오류로 돌아간다
+    #[serde(default = "default_true")]
+    pub cross_project: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// 다른 프로젝트 메시지 받기 토글 (워크스페이스 탭 메뉴 — W4)
+pub fn set_cross_project(root: &Path, id: &str, on: bool) -> Result<(), String> {
+    let mut list = load_strict(root)?;
+    let w = list.iter_mut().find(|w| w.id == id).ok_or("UNKNOWN_WORKSPACE")?;
+    w.cross_project = on;
+    save(root, &list)
 }
 
 #[derive(Serialize)]
@@ -321,6 +336,24 @@ pub fn worktree_list(ws_path: &str) -> Result<Vec<WorktreeInfo>, String> {
     Ok(items)
 }
 
+/// 워크트리 트리 (git 패널) — 모든 워크트리 HEAD에서 닿는 커밋을 `git log --graph`로 그린다.
+/// 레인 배치는 git이 한다. rev는 worktree list에서 직접 얻는다 — 프런트 입력이 git 인자로 가지 않는다.
+/// 줄 모양: `<그래프>\x1f<짧은 해시>\x1f<refs>\x1f<제목>`, 연결선만 있는 줄은 그래프뿐이다.
+pub fn worktree_graph(ws_path: &str) -> Result<String, String> {
+    let heads: Vec<String> = worktree_list(ws_path)?
+        .into_iter()
+        .map(|w| w.head)
+        .filter(|h| !h.is_empty())
+        .collect();
+    if heads.is_empty() {
+        return Ok(String::new());
+    }
+    let mut args = vec!["log", "--graph", "-n", "60", "--format=%x1f%h%x1f%D%x1f%s"];
+    args.extend(heads.iter().map(String::as_str));
+    args.push("--");
+    git(&args, ws_path)
+}
+
 /// 체크아웃 후보 브랜치 (M36) — 로컬 + 원격 전용 이름. 원격 전용은 checkout 시
 /// git의 DWIM이 추적 브랜치를 만들므로 ws_checkout 경로가 그대로 성립한다.
 #[derive(serde::Serialize, Clone)]
@@ -501,9 +534,16 @@ mod tests {
             remote: None,
             branch: None,
             last_used: 1,
+            cross_project: false,
         };
         save(&dir, &[entry]).unwrap();
         assert_eq!(load_strict(&dir).unwrap().len(), 1);
+        // 받기 토글 — 저장·되읽기, 키가 없던 0.4.2 레코드는 켬
+        set_cross_project(&dir, "ws1", true).unwrap();
+        assert!(load_strict(&dir).unwrap()[0].cross_project);
+        assert!(set_cross_project(&dir, "none", true).is_err());
+        let old: WsEntry = serde_json::from_str(r#"{"id":"a","name":"a","path":"p","remote":null,"branch":null,"last_used":0}"#).unwrap();
+        assert!(old.cross_project);
         assert!(!dir.join("workspaces.json.tmp").exists()); // rename 완료 — tmp 잔재 없음
         fs::write(dir.join("workspaces.json"), "{broken").unwrap();
         assert!(load_strict(&dir).is_err()); // 손상 = 변경 경로 차단 (빈 목록 덮어쓰기 방지)

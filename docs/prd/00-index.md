@@ -2,7 +2,7 @@
 
 > 기준일 2026-08-10 · 세션 기록 [`20260810_1.md`](../../20260810_1.md) ·
 > **갱신 2026-08-13 — 구현 M36 기준 정합화** ([implementation-status.md](../implementation-status.md) 대조)
-> 근거 [features-comparison.html](../features-comparison.html) · [features-tree.md](../features-tree.md)
+> 근거 [features-comparison.html](../archive/features-comparison.html) · [features-tree.md](../archive/features-tree.md)
 >
 > **역할** — 제품을 PRD 단위로 쪼갠 지도이자 결정 대장(臺帳). 결정에는 ID를 붙이고,
 > 각 PRD는 이 ID를 참조한다. 화면 목록은 §6.

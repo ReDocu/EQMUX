@@ -126,8 +126,15 @@ const typingSince = new Map<string, number>();
 // 자리를 떴다고 보고 푼다 — 정확히 재려면 셸/TUI의 줄 편집 상태를 알아야 한다.
 const TYPING_TTL_MS = 60_000;
 
+let inputHook: ((id: string, data: string) => void) | undefined;
+/** 사람 키 입력 훅 — 서버 탭이 마지막 명령을 기억하는 데 쓴다 (ports.ts, 0.5 서버 탭 상태 저장) */
+export function setUserInputHook(cb: (id: string, data: string) => void): void {
+  inputHook = cb;
+}
+
 /** 사람이 이 페인에 뭔가 쳤다 — Enter·Ctrl+C는 그 줄을 끝내므로 표식을 지운다 */
 export function noteUserInput(id: string, data: string): void {
+  inputHook?.(id, data);
   if (data === "\r" || data === "\n" || data === "\x03" || data === "\x1b") typingSince.delete(id);
   else if (data) typingSince.set(id, Date.now());
 }
@@ -205,11 +212,6 @@ export async function clipSaveImage(): Promise<string | null> {
   return invoke<string | null>("clip_save_image").catch(() => null);
 }
 
-/** 세션 로그 폴더 (~/.eqmux/logs) — 1차 파일 로그. Tauri 밖에서는 빈 문자열. */
-export async function sessionLogDir(): Promise<string> {
-  if (!isTauri()) return "";
-  return invoke<string>("session_log_dir").catch(() => "");
-}
 
 export function openLogDir(): void {
   if (!isTauri()) return;

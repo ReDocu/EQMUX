@@ -21,7 +21,9 @@ export function startAgentProbe(): void {
     backend.applyAgents(list);
   };
   void probe();
-  setInterval(() => void probe(), 5_000);
+  // 창이 숨겨진 동안은 돌지 않는다 (최적화 D7) — Job 트리 스캔이다. 다시 보이면 바로 한 번
+  setInterval(() => !document.hidden && void probe(), 5_000);
+  document.addEventListener("visibilitychange", () => !document.hidden && void probe());
 }
 
 // ── CLI 에이전트 명부 (설치 실측) ──

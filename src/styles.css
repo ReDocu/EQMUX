@@ -238,6 +238,21 @@ textarea:focus {
   border-color: var(--eq-blue);
 }
 
+/* 접근성 1차 (0.5 P2 U-5) — 키보드로 닿은 컨트롤에만 고리를 보인다. 마우스 클릭에는 뜨지 않는다.
+   터미널(xterm의 숨은 textarea)은 제외 — 페인 테두리가 이미 포커스를 말한다 */
+button:focus-visible,
+a:focus-visible,
+select:focus-visible,
+[role="menuitem"]:focus-visible,
+[role="option"]:focus-visible,
+[tabindex]:not([tabindex="-1"]):focus-visible {
+  outline: 2px solid var(--eq-blue);
+  outline-offset: 1px;
+}
+.xterm textarea:focus-visible {
+  outline: none;
+}
+
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -636,6 +651,7 @@ textarea:focus {
   box-shadow: 0 14px 36px rgba(0, 0, 0, 0.5);
 }
 .cmenu-it.sub:hover .cmenu-sub,
+.cmenu-it.sub:focus-within .cmenu-sub,
 .cmenu-sub:hover {
   display: block;
 }

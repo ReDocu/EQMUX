@@ -8,8 +8,8 @@ import { isTauri } from "./pty";
 import { saveRoleFile } from "./roles";
 import { settings } from "./settings";
 import { beepWaiting } from "./sound";
-import type { AgentCliId, AgentStatus, Permissions } from "../types";
-import { agentFlagsToString, translatePermissions } from "../types";
+import type { AgentCliId, AgentStatus, Permissions, Session } from "../types";
+import { agentFlagsToString, cliOf, sessionName, translatePermissions } from "../types";
 
 export interface AgentStateEvt {
   session: string;
@@ -25,6 +25,7 @@ export interface AgentStateEvt {
   exitCode: number | null;
   degraded: boolean; // 관측 저하 (FR-D-62·63, M34) — 낮은 신뢰 표시 (FR-G-27)
   seq?: number; // 순번 (P-4) — 전역 단조 증가. 스냅숏·이벤트 순서 역전 가드
+  completed?: boolean; // 턴 완료 (0.5 C1) — Rust가 30초+ 턴의 Stop → idle에만 싣는다
 }
 
 const STATUSES: AgentStatus[] = ["starting", "busy", "waiting", "shell", "idle", "dead"];
@@ -89,6 +90,8 @@ function applyEvt(p: AgentStateEvt, fromSnapshot = false): void {
     exitCode: p.exitCode ?? undefined,
     degraded: p.degraded,
     sinceMs: p.sinceMs ?? undefined,
+    // 스냅숏은 전이가 아니다 — 지난 완료를 웹뷰 재시작 때 다시 켜지 않는다
+    completed: !fromSnapshot && !!p.completed,
   });
 }
 
@@ -126,6 +129,7 @@ export async function spawnAgent(
   cols: number,
   rows: number,
   cli: AgentCliId = "claude",
+  carryRecap = false, // 새로 시작 (토큰 #6) — Rust가 마지막 요약을 시작 안내문 끝에 자료로 붙인다
 ): Promise<string> {
   await ensureAgentListeners();
   await saveRoleFile(sessionId);
@@ -140,12 +144,32 @@ export async function spawnAgent(
     cols,
     rows,
     cli,
+    ...(carryRecap ? { carryRecap: true } : {}),
   });
   // 실제로 넘긴 플래그를 그대로 기억한다 (B39) — 권한 파일이 나중에 바뀌어도 돌고 있는
   // 프로세스의 플래그는 이 값이다. 다시 계산하면 '실제'가 아니라 '현재 설정'이 된다.
   // Codex의 uuid는 자리표시라 여기 싣지 않는다 — 진짜 id는 SessionStart 훅이 agent-state로 알려준다
   backend.noteSpawnFlags(sessionId, agentFlagsToString(cli, f, cli === "codex" ? undefined : uuid));
   return uuid;
+}
+
+/** 새로 시작 (요약 이월) 버튼을 보일까 — 죽은 역할 세션이고 넘길 요약이 있을 때만.
+ *  요약이 없으면 그냥 기동과 같아 뜻이 없다 */
+export const canStartFresh = (s: Session): boolean => s.status === "dead" && !!s.personaId && !!s.lastRecap;
+
+/** 새로 시작 (요약 이월) — 새 uuid로 새 대화를 연다(재개 아님). 첫 프롬프트로 넣지 않으므로 사람이
+ *  치기 전에는 턴이 돌지 않는다. 이전 대화의 재개 앵커는 새 uuid로 바뀐다. 실패는 오류 문구로 돌려준다 */
+export async function startFresh(s: Session, cols: number, rows: number): Promise<string | undefined> {
+  if (!isTauri()) return undefined;
+  const p = s.permOverride ?? backend.listJobs().find((j) => j.id === s.jobId)?.permissions;
+  if (!p) return "직무 권한을 찾을 수 없습니다 — 역할을 다시 지정하세요";
+  const persona = backend.listPersonas().find((x) => x.id === s.personaId);
+  try {
+    await spawnAgent(s.id, s.workspaceId, s.cwd, sessionName(s, persona), p, cols, rows, cliOf(s), true);
+  } catch (err) {
+    return String(err);
+  }
+  return undefined;
 }
 
 /** 재개 (FR-D-21~23) — 사용자 트리거 전용. 앱 재시작 후엔 스토어 매핑으로 복원된다. */

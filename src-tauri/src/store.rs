@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS event (
   kind TEXT NOT NULL,
   payload TEXT
 );
+CREATE INDEX IF NOT EXISTS event_session ON event(session_id, id);
 CREATE TABLE IF NOT EXISTS agent_session (
   session_id TEXT PRIMARY KEY,
   agent_session_id TEXT,
@@ -90,8 +91,13 @@ CREATE TABLE IF NOT EXISTS message (
   recipient TEXT NOT NULL,
   kind TEXT NOT NULL,
   body TEXT NOT NULL,
-  read INTEGER NOT NULL DEFAULT 0
+  read INTEGER NOT NULL DEFAULT 0,
+  done INTEGER NOT NULL DEFAULT 0,
+  file_path TEXT,
+  file_size INTEGER,
+  project TEXT
 );
+CREATE INDEX IF NOT EXISTS message_recipient_kind ON message(recipient, kind);
 ";
 
 const SCROLLBACK_CAP_PER_SESSION: i64 = 1_000; // FR-C-50 — 0.3.7에서 10만 → 1,000줄
@@ -116,7 +122,7 @@ pub fn db_path(root: &Path, ws: &str) -> PathBuf {
     root.join("workspaces").join(sanitize(ws)).join("session.db")
 }
 
-/// 쓰기 열림 — 스키마 보장 포함. 메시지 버스(messages.rs)도 이 경로로 연다.
+/// 쓰기 열림 — 스키마 보장까지만 하는 가벼운 열기. 메시지 버스(messages.rs)도 이 경로로 연다.
 pub(crate) fn open_db(root: &Path, ws: &str) -> rusqlite::Result<Connection> {
     let path = db_path(root, ws);
     if let Some(dir) = path.parent() {
@@ -134,10 +140,27 @@ pub(crate) fn open_db(root: &Path, ws: &str) -> rusqlite::Result<Connection> {
     // 세션당 한 행이라 event 테이블처럼 턴마다 자라지 않는다
     let _ = conn.execute("ALTER TABLE session ADD COLUMN last_recap TEXT", []);
     let _ = conn.execute("ALTER TABLE session ADD COLUMN last_recap_at INTEGER", []);
+    // 메시지 0.5 열 (W2) — 완료 보고 · --file 첨부 · 다른 프로젝트 발신. 결정 1b로 버전 업 땐
+    // session.db를 새로 만들지만, 같은 버전 안에서 열린 DB도 깨지지 않게 한 번 더 보장한다
+    for col in ["done INTEGER NOT NULL DEFAULT 0", "file_path TEXT", "file_size INTEGER", "project TEXT"] {
+        let _ = conn.execute(&format!("ALTER TABLE message ADD COLUMN {col}"), []);
+    }
     // FTS5 인덱스 (FR-C-16) — 번들 SQLite에 FTS5가 없으면 조용히 넘어가고 검색은 LIKE 폴백
     let _ = conn.execute_batch(
         "CREATE VIRTUAL TABLE IF NOT EXISTS scrollback_fts USING fts5(text, session_id UNINDEXED, seq UNINDEXED, ts UNINDEXED)",
     );
+    Ok(conn)
+}
+
+/// 쓰기 스레드의 첫 열기 — 무거운 정리(FTS 시드·30일 보존·세션 상한)는 여기서만 돈다 (최적화 B1·B4).
+/// 메시지·캐시 같은 짧은 호출은 open_db만 거친다 — 호출마다 전체 스캔을 돌면 송수신이 느려진다.
+pub(crate) fn open_writer(root: &Path, ws: &str) -> rusqlite::Result<Connection> {
+    let conn = open_db(root, ws)?;
+    maintain(&conn);
+    Ok(conn)
+}
+
+fn maintain(conn: &Connection) {
     // 기존 DB 1회 시드 — 이 마일스톤 이전에 쌓인 줄도 검색에 잡히게. 실패(FTS 없음)면
     // 표식을 남기지 않아 다음 열림 때 다시 시도한다.
     let seeded: Option<String> = conn
@@ -146,23 +169,29 @@ pub(crate) fn open_db(root: &Path, ws: &str) -> rusqlite::Result<Connection> {
     if seeded.is_none()
         && conn
             .execute(
-                "INSERT INTO scrollback_fts (text, session_id, seq, ts)
-                 SELECT text, session_id, seq, ts FROM scrollback",
+                "INSERT INTO scrollback_fts (rowid, text, session_id, seq, ts)
+                 SELECT rowid, text, session_id, seq, ts FROM scrollback",
                 [],
             )
             .is_ok()
     {
         let _ = conn.execute("INSERT OR REPLACE INTO meta VALUES ('fts_seeded', '1')", []);
     }
-    // 열 때 1회 보존 정리 (FR-C-50 30일) — 백그라운드 스레드라 UI를 막지 않는다 (FR-C-51)
+    // 열 때 1회 보존 정리 (FR-C-50 30일) — 쓰기 스레드라 UI를 막지 않는다 (FR-C-51)
     let cutoff = now_ms() - RETENTION_DAYS_MS;
+    // 색인 먼저 — 본문을 먼저 지우면 지울 rowid를 찾을 수 없다 (drop_lines와 같은 순서)
+    let _ = conn.execute(
+        "DELETE FROM scrollback_fts WHERE rowid IN (SELECT rowid FROM scrollback WHERE ts < ?1)",
+        params![cutoff],
+    );
     let _ = conn.execute("DELETE FROM scrollback WHERE ts < ?1", params![cutoff]);
-    let _ = conn.execute("DELETE FROM scrollback_fts WHERE ts < ?1", params![cutoff]);
+    // 이벤트 피드도 같은 30일 (최적화 B5) — 상태 전이마다 쌓여 지우는 길이 없었다.
+    // 세션 상세가 세션별로 최신순 조회하므로 (session_id, id) 인덱스를 둔다 (SCHEMA)
+    let _ = conn.execute("DELETE FROM event WHERE ts < ?1", params![cutoff]);
     // 세션당 상한도 열 때 한 번 적용한다 — 상한을 낮춘 뒤 처음 여는 DB에는 옛 상한으로 쌓인
     // 줄이 남아 있고, 그 세션이 다시 살아나지 않으면 적재 경로의 정리는 영영 돌지 않는다.
     // 검색이 최신 SCROLLBACK_CAP_PER_SESSION줄만 보게 하려면 여는 김에 여기서 끊어 준다.
-    trim_to_cap(&conn);
-    Ok(conn)
+    trim_to_cap(conn);
 }
 
 /// 세션마다 최신 SCROLLBACK_CAP_PER_SESSION줄만 남긴다 (FR-C-50) — 본문과 FTS를 함께 자른다.
@@ -181,15 +210,25 @@ fn trim_to_cap(conn: &Connection) {
         if floor <= 0 {
             continue;
         }
-        let _ = conn.execute(
-            "DELETE FROM scrollback WHERE session_id = ?1 AND seq <= ?2",
-            params![id, floor],
-        );
-        let _ = conn.execute(
-            "DELETE FROM scrollback_fts WHERE session_id = ?1 AND seq <= ?2",
-            params![id, floor],
-        );
+        drop_lines(conn, &id, floor);
     }
+}
+
+/// 세션의 seq 이하 줄을 본문·색인에서 함께 지운다. FTS 행의 rowid는 scrollback 행의 rowid와 같게
+/// 적재되므로 색인은 rowid로 지운다 (최적화 B2) — session_id·seq는 UNINDEXED라 그 조건으로 지우면
+/// 매번 색인 전체를 훑는다. 색인을 먼저 지운다 — 본문이 먼저 사라지면 지울 rowid를 찾을 수 없다.
+/// scrollback은 INTEGER PRIMARY KEY가 없어 VACUUM이 rowid를 다시 매길 수 있다 — VACUUM은 둘을 다
+/// 비운 뒤에만 한다 (purge_scrollback).
+fn drop_lines(conn: &Connection, id: &str, floor: i64) {
+    let _ = conn.execute(
+        "DELETE FROM scrollback_fts WHERE rowid IN
+           (SELECT rowid FROM scrollback WHERE session_id = ?1 AND seq <= ?2)",
+        params![id, floor],
+    );
+    let _ = conn.execute(
+        "DELETE FROM scrollback WHERE session_id = ?1 AND seq <= ?2",
+        params![id, floor],
+    );
 }
 
 impl Store {
@@ -274,7 +313,7 @@ fn flush(
 
     for (ws, msgs) in by_ws {
         if !dbs.contains_key(&ws) {
-            match open_db(root, &ws) {
+            match open_writer(root, &ws) {
                 Ok(c) => {
                     dbs.insert(ws.clone(), c);
                 }
@@ -346,15 +385,23 @@ fn flush(
                     cur.seq += 1;
                     cur.lines_since_cap += 1;
                     cur.bytes += text.len() as i64;
-                    let _ = tx.execute(
-                        "INSERT OR IGNORE INTO scrollback (session_id, seq, ts, text, styled) VALUES (?1, ?2, ?3, ?4, ?5)",
-                        params![id, cur.seq, now, text, styled],
-                    );
-                    // FTS 인덱스 동반 적재 (FR-C-16) — FTS5가 없으면 조용히 실패한다
-                    let _ = tx.execute(
-                        "INSERT INTO scrollback_fts (text, session_id, seq, ts) VALUES (?1, ?2, ?3, ?4)",
-                        params![text, id, cur.seq, now],
-                    );
+                    // 줄마다 도는 핫패스 — 문장은 준비해 둔 것을 쓴다 (최적화 B6)
+                    let added = tx
+                        .prepare_cached(
+                            "INSERT OR IGNORE INTO scrollback (session_id, seq, ts, text, styled) VALUES (?1, ?2, ?3, ?4, ?5)",
+                        )
+                        .and_then(|mut st| st.execute(params![id, cur.seq, now, text, styled]))
+                        .unwrap_or(0);
+                    // FTS 인덱스 동반 적재 (FR-C-16) — 본문과 같은 rowid로 (drop_lines가 rowid로 지운다).
+                    // FTS5가 없으면 조용히 실패한다
+                    if added == 1 {
+                        let rowid = tx.last_insert_rowid();
+                        let _ = tx
+                            .prepare_cached(
+                                "INSERT INTO scrollback_fts (rowid, text, session_id, seq, ts) VALUES (?1, ?2, ?3, ?4, ?5)",
+                            )
+                            .and_then(|mut st| st.execute(params![rowid, text, id, cur.seq, now]));
+                    }
                     *touched.entry(id.clone()).or_insert(0) += text.len() as i64;
                 }
                 StoreMsg::Event { id, kind, message, .. } => {
@@ -390,14 +437,7 @@ fn flush(
             if let Some(cur) = cursors.get_mut(id) {
                 if cur.lines_since_cap >= CAP_CHECK_EVERY {
                     cur.lines_since_cap = 0;
-                    let _ = conn.execute(
-                        "DELETE FROM scrollback WHERE session_id = ?1 AND seq <= ?2",
-                        params![id, cur.seq - SCROLLBACK_CAP_PER_SESSION],
-                    );
-                    let _ = conn.execute(
-                        "DELETE FROM scrollback_fts WHERE session_id = ?1 AND seq <= ?2",
-                        params![id, cur.seq - SCROLLBACK_CAP_PER_SESSION],
-                    );
+                    drop_lines(conn, id, cur.seq - SCROLLBACK_CAP_PER_SESSION);
                 }
             }
         }
@@ -936,7 +976,7 @@ mod tests {
                 );
             }
         }
-        drop(open_db(&dir, "ws").unwrap()); // 다시 여는 것만으로 상한이 적용된다
+        drop(open_writer(&dir, "ws").unwrap()); // 쓰기 스레드가 다시 여는 것만으로 상한이 적용된다
 
         let conn = Connection::open(db_path(&dir, "ws")).unwrap();
         let kept: i64 = conn
@@ -953,6 +993,62 @@ mod tests {
         let recent = search(&dir, "ws", "hay", None, 5).unwrap();
         assert_eq!(recent.len(), 5);
         assert_eq!(recent[0].seq, total); // 최신부터
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 이벤트 피드 30일 보존 (최적화 B5) — 쓰기 스레드가 열 때 옛 이벤트만 걷는다
+    #[test]
+    fn writer_open_drops_month_old_events() {
+        let dir = std::env::temp_dir().join(format!("eqmux-b5-{}", crate::workspace::now_ms()));
+        std::fs::create_dir_all(&dir).unwrap();
+        {
+            let conn = open_db(&dir, "ws").unwrap();
+            conn.execute(
+                "INSERT INTO event (ts, session_id, kind) VALUES (?1, 's1', 'old'), (?2, 's1', 'new')",
+                params![now_ms() - RETENTION_DAYS_MS - 1_000, now_ms()],
+            )
+            .unwrap();
+        }
+        drop(open_writer(&dir, "ws").unwrap());
+        let conn = Connection::open(db_path(&dir, "ws")).unwrap();
+        let kinds: Vec<String> = conn
+            .prepare("SELECT kind FROM event")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        assert_eq!(kinds, vec!["new".to_string()]);
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 적재 경로의 상한 자르기가 색인도 같이 자른다 — FTS 행은 본문과 같은 rowid로 들어가고
+    /// rowid로 지워진다 (최적화 B2). 둘이 어긋나면 잘린 옛 줄이 검색에 남는다
+    #[test]
+    fn writer_trims_index_with_the_lines() {
+        let dir = std::env::temp_dir().join(format!("eqmux-b2-{}", crate::workspace::now_ms()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Store::new(dir.clone());
+        let tx = store.sender();
+        let total = SCROLLBACK_CAP_PER_SESSION + CAP_CHECK_EVERY * 2;
+        for i in 1..=total {
+            let text = if i == 1 { "oldneedle".to_string() } else { format!("line {i} hay") };
+            tx.send(StoreMsg::Line { ws: "ws".into(), id: "s1".into(), text, styled: None }).unwrap();
+        }
+        let (ack, done) = std::sync::mpsc::channel();
+        tx.send(StoreMsg::Flush(ack)).unwrap();
+        done.recv_timeout(Duration::from_secs(10)).unwrap();
+
+        let conn = Connection::open(db_path(&dir, "ws")).unwrap();
+        let lines: i64 = conn.query_row("SELECT COUNT(*) FROM scrollback", [], |r| r.get(0)).unwrap();
+        assert!(lines < total, "상한 자르기가 돌아야 한다");
+        if let Ok(indexed) = conn.query_row("SELECT COUNT(*) FROM scrollback_fts", [], |r| r.get::<_, i64>(0)) {
+            assert_eq!(indexed, lines, "색인과 본문의 줄 수가 같아야 한다");
+            assert!(search(&dir, "ws", "oldneedle", None, 10).unwrap().is_empty());
+        }
+        drop(conn);
+        drop((tx, store));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

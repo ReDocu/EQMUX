@@ -164,23 +164,62 @@ fn handle(app: &AppHandle, line: &str) -> Result<serde_json::Value, String> {
             let to_raw = req["to"].as_str().unwrap_or("@all");
             // 원점은 스폰 관문이 남긴다 — 에이전트 추적 맵을 요구하면 셸 세션은 영영 못 보낸다
             let (ws, cwd) = crate::session_origin(app, session).ok_or("UNKNOWN_SESSION")?;
-            let to = resolve_recipient(&ws, &cwd, to_raw)?;
-            publish(app, &ws, session, &to, kind, body)
+            let mut extra = crate::messages::Extra::default();
+            if let Some(f) = req["file"].as_str() {
+                extra.file = Some(crate::messages::attach_file(&cwd, f)?);
+            }
+            let target = resolve_target(app, &ws, &cwd, to_raw)?;
+            send_to(app, &ws, session, target, kind, body, extra)
         }
         "report" => {
             // V4 자기 보고 (FR-G-88) — 스트림에는 report 타입으로, 세션 피드에는 event로
             let session = req["session"].as_str().ok_or("NO_SESSION")?;
             verify_session(app, session, &req)?;
             let body = req["body"].as_str().ok_or("EMPTY")?;
+            let done = req["done"].as_bool().unwrap_or(false);
             let (ws, _) = crate::session_origin(app, session).ok_or("UNKNOWN_SESSION")?;
+            // 회신 대상은 이번 보고를 적기 전에 찾는다 — 적고 나면 열린 handoff가 닫힌다
             let store: State<crate::StoreState> = app.state();
+            let requesters = if done {
+                crate::messages::open_requesters(&store.0.root(), &ws, session).unwrap_or_default()
+            } else {
+                Vec::new()
+            };
             let _ = store.0.sender().send(crate::store::StoreMsg::Event {
                 ws: ws.clone(),
                 id: Some(session.to_string()),
                 kind: "report".into(),
                 message: body.chars().take(200).collect(),
             });
-            publish(app, &ws, session, "나", "report", body)
+            let extra = crate::messages::Extra { done, ..Default::default() };
+            let resp = publish(app, &ws, session, "나", "report", body, &extra)?;
+            // 완료 보고는 일을 맡긴 팀원에게도 한 건씩 (작업 완료 신호) — 닫힌 프로젝트 팀원은 건너뛴다
+            let dir = directory();
+            for r in &requesters {
+                let target = dir.iter().find(|e| e.session == *r).cloned();
+                if target.is_some() || r.ends_with(&format!("@{ws}")) {
+                    let _ = send_to(app, &ws, session, Target::One(r.clone(), target), "report", body, extra.clone());
+                }
+            }
+            if done {
+                crate::agent::notify_report(app, session, body);
+            }
+            Ok(resp)
+        }
+        "who" => {
+            let session = req["session"].as_str().ok_or("NO_SESSION")?;
+            verify_session(app, session, &req)?;
+            let (ws, _) = crate::session_origin(app, session).ok_or("UNKNOWN_SESSION")?;
+            let dir: Vec<DirEntry> = directory()
+                .into_iter()
+                .map(|mut e| {
+                    if let Some((_, t)) = crate::find_tracked(app, &e.session) {
+                        e.status = t.last_status; // 실측 상태가 우선 (C4)
+                    }
+                    e
+                })
+                .collect();
+            Ok(json!({"ok": true, "result": who_text(&dir, &ws)}))
         }
         "hook" => {
             // 훅 2차 상태 소스 (D3 · FR-D-30 계열) — 모르는 이벤트는 조용히 무시
@@ -222,9 +261,12 @@ fn publish(
     to: &str,
     kind: &str,
     body: &str,
+    extra: &crate::messages::Extra,
 ) -> Result<serde_json::Value, String> {
     crate::messages::validate(kind, body)?;
+    crate::messages::check_len(from, body)?; // 무효 발신은 상한을 소모하지 않는다
     {
+        // 상한은 받는 프로젝트와 상관없이 발신자 하나로 센다 (프로젝트 간 통신 — 상한 공유)
         let rate: State<crate::MsgRate> = app.state();
         let mut map = rate.0.lock().map_err(|e| e.to_string())?;
         let times = map.entry(format!("{ws}/{from}")).or_default();
@@ -233,9 +275,223 @@ fn publish(
         }
     }
     let store: State<crate::StoreState> = app.state();
-    let row = crate::messages::send(&store.0.root(), ws, from, to, kind, body)?;
-    let _ = app.emit("message-new", json!({ "workspace": ws, "message": row }));
+    let row = crate::messages::send_with(&store.0.root(), ws, from, to, kind, body, extra)?;
+    let _ = app.emit_to("main", "message-new", json!({ "workspace": ws, "message": row }));
     Ok(json!({"ok": true, "id": row.id}))
+}
+
+// ── 세션 디렉터리 (계약 C4) — 프런트가 세션 목록이 바뀔 때마다 통째로 밀어 넣는다 ──
+
+#[derive(serde::Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DirEntry {
+    /// 세션 id (`kai@eqmux-1e3b93`) — 원장의 발신·수신 값
+    pub session: String,
+    /// 워크스페이스 id — 원장(session.db)의 키
+    pub workspace: String,
+    /// 주소용 프로젝트 이름 — 표시 이름, 겹치면 `-2` (결정 20)
+    pub project: String,
+    /// 세션 이름
+    pub name: String,
+    #[serde(default)]
+    pub persona: String,
+    #[serde(default)]
+    pub job: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub slot: Option<u32>,
+    #[serde(default)]
+    pub status: String,
+    /// 손으로 띄운 에이전트 이름 (agentscan) — 상태가 shell인데 이것이 있으면 자동 주입하지 않는다
+    #[serde(default)]
+    pub agent: String,
+}
+
+/// 세션 표시 이름 — 디렉터리(C4)의 세션 이름. 알림 제목 등 Rust가 사람에게 이름을 보일 때 쓴다
+pub fn session_name(session: &str) -> Option<String> {
+    DIRECTORY.lock().ok()?.iter().find(|e| e.session == session).map(|e| e.name.clone())
+}
+
+// ponytail: 전역 잠금 하나 — 세션 수십 개라 충분하다
+static DIRECTORY: std::sync::Mutex<Vec<DirEntry>> = std::sync::Mutex::new(Vec::new());
+
+#[tauri::command]
+pub fn directory_set(entries: Vec<DirEntry>) {
+    if let Ok(mut d) = DIRECTORY.lock() {
+        *d = entries;
+    }
+}
+
+fn directory() -> Vec<DirEntry> {
+    DIRECTORY.lock().map(|d| d.clone()).unwrap_or_default()
+}
+
+/// 받는 쪽 — 팀 전체(@all, 자기 프로젝트만) 또는 세션 하나. 디렉터리 항목이 없으면(디렉터리를
+/// 아직 못 받았을 때의 team.json 폴백) 같은 워크스페이스 세션이다.
+#[derive(Debug)]
+#[cfg_attr(not(windows), allow(dead_code))]
+enum Target {
+    All,
+    One(String, Option<DirEntry>),
+}
+
+fn name_matches(e: &DirEntry, n: &str) -> bool {
+    e.name == n || e.persona == n || e.session.split('@').next() == Some(n)
+}
+
+/// 복사해서 그대로 쓸 수 있는 주소 — 같은 프로젝트면 `@이름`, 다르면 `@이름@프로젝트`
+fn address(e: &DirEntry, my_ws: &str) -> String {
+    if e.workspace == my_ws {
+        format!("@{}", e.name)
+    } else {
+        format!("@{}@{}", e.name, e.project)
+    }
+}
+
+fn pick(found: Vec<&DirEntry>, my_ws: &str) -> Result<Option<DirEntry>, String> {
+    match found.len() {
+        0 => Ok(None),
+        1 => Ok(Some(found[0].clone())),
+        _ => Err(format!(
+            "AMBIGUOUS:{}",
+            found.iter().map(|e| address(e, my_ws)).collect::<Vec<_>>().join(", ")
+        )),
+    }
+}
+
+/// 주소 해석 (프로젝트 간 통신 · BR-01) — 열린 모든 워크스페이스의 디렉터리에서 찾는다.
+/// 자기 프로젝트에 그 이름이 있으면 그쪽이 이긴다 — 기본 페르소나(카이·노엘…)는 프로젝트마다
+/// 겹치므로, 그렇지 않으면 팀 안 메시지마저 모호성 오류가 된다. None = @all.
+fn resolve_in(dir: &[DirEntry], my_ws: &str, raw: &str) -> Result<Option<DirEntry>, String> {
+    let m = raw.trim().trim_start_matches('@');
+    if m.is_empty() || m == "all" {
+        return Ok(None);
+    }
+    if let Some(e) = dir.iter().find(|e| e.session == m) {
+        return Ok(Some(e.clone()));
+    }
+    let hit = if let Some((n, p)) = m.rsplit_once('@') {
+        pick(dir.iter().filter(|e| e.project == p && name_matches(e, n)).collect(), my_ws)?
+    } else {
+        match pick(dir.iter().filter(|e| e.workspace == my_ws && name_matches(e, m)).collect(), my_ws)? {
+            Some(e) => Some(e),
+            None => pick(dir.iter().filter(|e| name_matches(e, m)).collect(), my_ws)?,
+        }
+    };
+    hit.map(Some).ok_or_else(|| "UNKNOWN_RECIPIENT".into())
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+fn resolve_target(app: &AppHandle, ws: &str, cwd: &str, raw: &str) -> Result<Target, String> {
+    let dir = directory();
+    // 디렉터리를 아직 못 받았으면(앱 기동 직후) 자기 팀 로스터로만 푼다 — 0.4.2 경로
+    if !dir.iter().any(|e| e.workspace == ws) {
+        let to = resolve_recipient(ws, cwd, raw)?;
+        return Ok(if to == "@all" { Target::All } else { Target::One(to, None) });
+    }
+    let Some(e) = resolve_in(&dir, ws, raw)? else { return Ok(Target::All) };
+    if e.workspace != ws {
+        let store: State<crate::StoreState> = app.state();
+        let on = crate::workspace::load(&store.0.root())
+            .iter()
+            .find(|w| w.id == e.workspace)
+            .map(|w| w.cross_project)
+            .unwrap_or(true);
+        if !on {
+            return Err("CROSS_PROJECT_OFF".into());
+        }
+    }
+    Ok(Target::One(e.session.clone(), Some(e)))
+}
+
+/// 발신 + 전달 결과. 다른 프로젝트로 가는 메시지는 두 원장에 적는다 — 각 줄의 project는
+/// 상대 쪽 프로젝트 이름이다. 전달(PTY 주입)은 받는 워크스페이스의 message-new가 맡는다.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn send_to(
+    app: &AppHandle,
+    ws: &str,
+    from: &str,
+    target: Target,
+    kind: &str,
+    body: &str,
+    extra: crate::messages::Extra,
+) -> Result<serde_json::Value, String> {
+    let (to, entry) = match target {
+        Target::All => return publish(app, ws, from, "@all", kind, body, &extra),
+        Target::One(to, entry) => (to, entry),
+    };
+    let target_ws = entry.as_ref().map(|e| e.workspace.clone()).unwrap_or_else(|| ws.to_string());
+    let mut resp = if target_ws == ws {
+        publish(app, ws, from, &to, kind, body, &extra)?
+    } else {
+        let dir = directory();
+        let mine = dir.iter().find(|e| e.workspace == ws).map(|e| e.project.clone()).unwrap_or_else(|| ws.to_string());
+        let theirs = entry.as_ref().map(|e| e.project.clone());
+        let out = crate::messages::Extra { project: theirs, ..extra.clone() };
+        let resp = publish(app, ws, from, &to, kind, body, &out)?;
+        // 받는 쪽 원장 — 상한은 위에서 이미 한 번 셌다
+        let store: State<crate::StoreState> = app.state();
+        let inn = crate::messages::Extra { project: Some(mine), ..extra };
+        let row = crate::messages::send_with(&store.0.root(), &target_ws, from, &to, kind, body, &inn)?;
+        let _ = app.emit_to("main", "message-new", json!({ "workspace": target_ws, "message": row }));
+        resp
+    };
+    resp["delivery"] = json!(delivery(app, &target_ws, &to, entry.as_ref()));
+    Ok(resp)
+}
+
+/// 전달 결과 — conversation.ts deliver()와 같은 규칙(idle이면 전달, 그 밖이면 대기).
+/// 상태는 agent.rs 실측이 우선, 맨 셸 세션은 디렉터리 상태. 사람이 그 페인에 치는 중이라
+/// 프런트가 미루는 경우는 여기서 모른다 — 메시지는 어쨌든 인박스에 남는다.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn delivery(app: &AppHandle, ws: &str, session: &str, entry: Option<&DirEntry>) -> String {
+    let (status, since) = match crate::find_tracked(app, session) {
+        Some((_, t)) => (t.last_status, t.status_ms),
+        None => (entry.map(|e| e.status.clone()).unwrap_or_default(), crate::workspace::now_ms()),
+    };
+    let store: State<crate::StoreState> = app.state();
+    let waiting = || crate::messages::count_to_since(&store.0.root(), ws, session, since).unwrap_or(1);
+    let role = entry.is_none_or(|e| !e.persona.is_empty()); // 디렉터리 없음(폴백) = team.json 역할 세션
+    let manual = entry.is_some_and(|e| !e.agent.is_empty());
+    delivery_text(&status, role, manual, waiting)
+}
+
+/// conversation.ts deliver()와 같은 갈래 — 어긋나면 CLI는 "전달함"인데 메시지는 인박스에 잔다
+fn delivery_text(status: &str, role: bool, manual: bool, waiting: impl FnOnce() -> i64) -> String {
+    match status {
+        "idle" => "전달함".into(),
+        // 꺼진 세션도 프런트 인박스에 남아 재개 때 받는다 — 실패는 영영 안 닿는 경우(이름 없음·닫힘·받기 끔)만
+        "dead" => "대기 — 상대 세션 꺼짐 (켜지면 받는다)".into(),
+        // 사람이 페인에 직접 띄운 에이전트 — 자동으로 넣지 않는다 (BR-02)
+        "shell" | "" if manual => "대기 — 손으로 띄운 에이전트 (사람이 넣기를 누르면 받는다)".into(),
+        "shell" | "" if role => "대기 — 에이전트가 아직 안 떴음 (뜨면 받는다)".into(),
+        "shell" | "" => "전달함".into(), // 기본 터미널 — 화면에 바로 찍힌다
+        "starting" => "대기 — 에이전트 기동 중 (뜨면 받는다)".into(),
+        _ => format!("대기 — 상대 작업 중(대기 {}건)", waiting().max(1)),
+    }
+}
+
+/// eqmux who — 내 프로젝트 먼저, 그다음 프로젝트 이름순 · 슬롯순. 줄 끝 주소는 그대로 --to에 쓴다
+fn who_text(dir: &[DirEntry], my_ws: &str) -> String {
+    let mut rows: Vec<&DirEntry> = dir.iter().collect();
+    rows.sort_by_key(|e| (e.workspace != my_ws, e.project.clone(), e.slot.unwrap_or(u32::MAX), e.name.clone()));
+    if rows.is_empty() {
+        return "열린 세션이 없습니다".into();
+    }
+    rows.iter()
+        .map(|e| {
+            let no = e.slot.map(|n| format!("{n:02}")).unwrap_or_else(|| "--".into());
+            let job = match e.title.as_deref().filter(|t| !t.is_empty()) {
+                Some(t) if !e.job.is_empty() => format!("{t} ({})", e.job),
+                Some(t) => t.to_string(),
+                None => e.job.clone(),
+            };
+            let status = if e.status.is_empty() { "-" } else { &e.status };
+            format!("{no} {} · {} · {} · {} · {}", e.name, e.project, job, status, address(e, my_ws))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// "@이름" → 세션 id (M4) — 세션 id 그대로 / 슬롯 표시 이름 / 페르소나 id / 페르소나 이름 순서.
@@ -245,6 +501,9 @@ fn publish(
 /// 않은 페르소나 이름으로도 '그럴듯한' 세션 id가 합성돼, CLI는 "전송됨"을 찍고 원장에는 적재되고
 /// 대화창에는 날 id가 뜨는데 아무도 받지 않는다. 슬롯 표시 이름(P5)을 후보에 넣어 대화 패널의
 /// 멘션 규칙과 범위도 맞춘다 — 그쪽에서 되는 이름이 CLI에서만 안 되던 반대 방향의 어긋남.
+///
+/// 0.5부터는 디렉터리(C4)를 아직 못 받았을 때의 폴백이다. `@`가 든 주소는 자기 워크스페이스
+/// 세션 id만 받는다 — 남의 id를 그냥 통과시키면 아무도 받지 않는데 "전송됨"이 찍혔다 (BR-01).
 #[cfg_attr(not(windows), allow(dead_code))]
 fn resolve_recipient(ws: &str, ws_path: &str, raw: &str) -> Result<String, String> {
     let m = raw.trim().trim_start_matches('@');
@@ -252,7 +511,7 @@ fn resolve_recipient(ws: &str, ws_path: &str, raw: &str) -> Result<String, Strin
         return Ok("@all".into());
     }
     if m.contains('@') {
-        return Ok(m.to_string()); // 이미 세션 id
+        return if m.ends_with(&format!("@{ws}")) { Ok(m.to_string()) } else { Err("UNKNOWN_RECIPIENT".into()) };
     }
     for sl in &crate::team::load(ws_path).slots {
         let display = sl.name.as_deref().unwrap_or(&sl.persona_name);
@@ -261,4 +520,89 @@ fn resolve_recipient(ws: &str, ws_path: &str, raw: &str) -> Result<String, Strin
         }
     }
     Err("UNKNOWN_RECIPIENT".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn e(session: &str, ws: &str, project: &str, name: &str) -> DirEntry {
+        DirEntry {
+            session: session.into(),
+            workspace: ws.into(),
+            project: project.into(),
+            name: name.into(),
+            persona: session.split('@').next().unwrap().into(),
+            ..Default::default()
+        }
+    }
+
+    fn dir() -> Vec<DirEntry> {
+        vec![
+            e("kai@w1", "w1", "app", "카이"),
+            e("noel@w1", "w1", "app", "노엘"),
+            e("kai@w2", "w2", "app-2", "카이"),
+            e("b02@w2", "w2", "app-2", "B02"),
+            e("kai@w3", "w3", "tool", "카이"),
+        ]
+    }
+
+    fn sid(r: Result<Option<DirEntry>, String>) -> Option<String> {
+        r.unwrap().map(|e| e.session)
+    }
+
+    #[test]
+    fn resolves_addresses_across_projects() {
+        let d = dir();
+        assert_eq!(sid(resolve_in(&d, "w1", "@all")), None); // @all은 자기 프로젝트 (호출부)
+        assert_eq!(sid(resolve_in(&d, "w1", "@카이")), Some("kai@w1".into())); // 자기 프로젝트가 이긴다
+        assert_eq!(sid(resolve_in(&d, "w1", "@B02")), Some("b02@w2".into())); // 하나뿐이면 다른 프로젝트로
+        assert_eq!(sid(resolve_in(&d, "w1", "@카이@app-2")), Some("kai@w2".into()));
+        assert_eq!(sid(resolve_in(&d, "w1", "kai@w3")), Some("kai@w3".into())); // 세션 id 그대로
+        assert_eq!(sid(resolve_in(&d, "w1", "@kai@tool")), Some("kai@w3".into())); // 페르소나 id도
+    }
+
+    #[test]
+    fn rejects_unknown_closed_and_ambiguous() {
+        let d = dir();
+        // BR-01 — 닫힌 프로젝트의 세션 id는 통과시키지 않는다
+        assert_eq!(resolve_in(&d, "w1", "@kai@closed-ws").unwrap_err(), "UNKNOWN_RECIPIENT");
+        assert_eq!(resolve_in(&d, "w1", "@없는이름").unwrap_err(), "UNKNOWN_RECIPIENT");
+        // 내 프로젝트(w9)에 없고 다른 프로젝트 둘 이상 — 복사 가능한 후보 주소
+        let err = resolve_in(&d, "w9", "@카이").unwrap_err();
+        assert_eq!(err, "AMBIGUOUS:@카이@app, @카이@app-2, @카이@tool");
+    }
+
+    #[test]
+    fn fallback_rejects_foreign_session_ids() {
+        assert_eq!(resolve_recipient("w1", "", "@kai@w1").unwrap(), "kai@w1");
+        assert_eq!(resolve_recipient("w1", "", "@kai@other").unwrap_err(), "UNKNOWN_RECIPIENT");
+        assert_eq!(resolve_recipient("w1", "", "@all").unwrap(), "@all");
+    }
+
+    #[test]
+    fn delivery_text_by_status() {
+        assert_eq!(delivery_text("idle", true, false, || 0), "전달함");
+        assert_eq!(delivery_text("shell", false, false, || 0), "전달함"); // 기본 터미널 — 화면 에코
+        assert!(delivery_text("shell", true, false, || 0).starts_with("대기 — 에이전트가 아직")); // 인박스
+        assert!(delivery_text("shell", false, true, || 0).starts_with("대기 — 손으로")); // BR-02 쌓기
+        assert!(delivery_text("starting", true, false, || 0).starts_with("대기 — "));
+        assert_eq!(delivery_text("busy", true, false, || 3), "대기 — 상대 작업 중(대기 3건)");
+        assert_eq!(delivery_text("waiting", true, false, || 0), "대기 — 상대 작업 중(대기 1건)");
+        assert_eq!(delivery_text("dead", true, false, || 0), "대기 — 상대 세션 꺼짐 (켜지면 받는다)");
+    }
+
+    #[test]
+    fn who_lists_my_project_first_with_addresses() {
+        let mut d = dir();
+        d[0].slot = Some(1);
+        d[0].job = "개발".into();
+        d[0].title = Some("클라이언트 개발자".into());
+        d[0].status = "idle".into();
+        let t = who_text(&d, "w2");
+        let lines: Vec<&str> = t.lines().collect();
+        assert!(lines[0].ends_with("· @B02") && lines[1].ends_with("· @카이")); // 내 프로젝트(w2)가 먼저, 주소에 프로젝트 없음
+        assert!(t.contains("01 카이 · app · 클라이언트 개발자 (개발) · idle · @카이@app"));
+        assert_eq!(who_text(&[], "w1"), "열린 세션이 없습니다");
+    }
 }

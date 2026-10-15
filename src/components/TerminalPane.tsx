@@ -88,6 +88,8 @@ interface TermEntry {
   mounted: boolean;
   /** 마지막 attach 순번 — 회수 순서 결정용 (같은 조건이면 오래된 것부터) */
   touched: number;
+  /** 화면에서 내려간 뒤 메모리를 놓는 예약 (park) — 다시 붙으면 취소한다 */
+  parkTimer?: ReturnType<typeof setTimeout>;
   /** 재개 제안 대기 (FR-C-33·34) — 복원된 역할 세션. 사용자가 선택할 때까지 아무것도 스폰하지 않는다 */
   /** pty 구독 해제 — dispose 시 함께 정리하지 않으면 disposed 터미널이 클로저로 영구 잔류한다 */
   unsubs?: (() => void)[];
@@ -99,6 +101,29 @@ interface TermEntry {
 
 const REGISTRY = new Map<string, TermEntry>();
 let attachSeq = 0;
+
+// 메모리 상한 (최적화 C2·C3) — 화면에서 내려간 지 1분이 지난 페인은 WebGL 컨텍스트를 놓고
+// 링버퍼를 줄인다. 탭 전환·줌 같은 잠깐의 리마운트는 건드리지 않는다 — 그때마다 놓으면 컨텍스트
+// 재생성 히치가 나고 위로 올려 보던 기록이 사라진다. 줄인 만큼의 옛 줄은 디스크 기록(FR-C-13)에 있다.
+const SCROLLBACK_LIVE = 5000; // FR-C-10 — 인메모리 링버퍼, 초과분은 스토어가 갖고 있다
+const SCROLLBACK_PARKED = 1000;
+const PARK_AFTER_MS = 60_000;
+
+function park(e: TermEntry): void {
+  clearTimeout(e.parkTimer);
+  e.parkTimer = setTimeout(() => {
+    e.parkTimer = undefined;
+    if (e.mounted) return;
+    dropWebgl(e);
+    e.term.options.scrollback = SCROLLBACK_PARKED;
+  }, PARK_AFTER_MS);
+}
+
+function unpark(e: TermEntry): void {
+  clearTimeout(e.parkTimer);
+  e.parkTimer = undefined;
+  e.term.options.scrollback = SCROLLBACK_LIVE; // 같은 값이면 xterm이 아무것도 안 한다
+}
 
 // 화면 손상 진단 — 살아 있는 터미널 수와 그중 WebGL 컨텍스트를 쥔 수. 진단이 이 파일을
 // import하면 순환이 되므로 방향을 뒤집어 여기서 꽂는다.
@@ -114,6 +139,7 @@ provideTerminalStats(() => ({
  *  0이 되어, 지금 막으려는 그 깨짐을 직접 만든다. */
 function ensureWebgl(id: string, e: TermEntry): void {
   if (e.webgl) return;
+  if (settings().termRenderer === "dom") return; // 사람이 DOM 렌더러를 골랐다 (잔상 회피)
   for (const victim of pickEvictions([...REGISTRY.values()].filter((x) => x.webgl))) dropWebgl(victim);
   try {
     const webgl = new WebglAddon();
@@ -149,6 +175,19 @@ if (typeof window !== "undefined") {
   window.addEventListener("eq-tokens-changed", () => {
     const theme = readTermTheme();
     for (const e of REGISTRY.values()) e.term.options.theme = theme;
+    // 렌더러 설정도 여기서 반영한다 — updateSettings가 매번 이 이벤트를 쏘고, 살아 있는
+    // 터미널은 컴포넌트 밖 레지스트리에 있어 반응성으로 닿지 않는다 (테마와 같은 이유).
+    // 끌 때는 즉시 강등하고(dropWebgl이 전체 리페인트까지 한다), 켤 때는 이미 열려 있고
+    // 보이는 페인에만 붙인다 — 0-크기에서 붙이면 char atlas가 0이 되어 화면이 깨진다.
+    const dom = settings().termRenderer === "dom";
+    for (const [id, e] of REGISTRY) {
+      try {
+        if (dom) dropWebgl(e);
+        else if (e.opened && e.mounted) ensureWebgl(id, e);
+      } catch {
+        /* 한 페인의 렌더러 교체 실패가 나머지 페인의 테마 반영을 막지 않게 */
+      }
+    }
   });
 }
 
@@ -279,6 +318,7 @@ export async function launchAgentInSession(
 export function disposeSessionTerminal(id: string) {
   const e = REGISTRY.get(id);
   if (e) {
+    clearTimeout(e.parkTimer);
     e.unsubs?.forEach((u) => u());
     e.term.dispose();
     REGISTRY.delete(id);
@@ -535,7 +575,7 @@ function createEntry(): TermEntry {
     fontSize: 12,
     lineHeight: 1.25,
     cursorBlink: true,
-    scrollback: 5000, // FR-C-10 — 인메모리 링버퍼, 초과분은 스토어가 갖고 있다
+    scrollback: SCROLLBACK_LIVE,
     // 유니코드 애드온이 쓰는 term.unicode는 xterm의 proposed API다 — 이 플래그가 없으면
     // loadAddon이 던지고, 그 예외가 페인 생성 전체를 무너뜨린다 (터미널도 스폰도 없다).
     allowProposedApi: true,
@@ -657,7 +697,7 @@ async function initSession(
       // FR-C-32 경계 — 복원 대기 중에는 "새 세션 시작"이 아니다 (아직 아무것도 안 떴다)
       term.writeln(
         props.revive
-          ? "\x1b[90m─── 웹뷰 재시작 — 실행 중인 세션에 재부착 (FR-C-06) ───\x1b[0m"
+          ? "\x1b[90m─── 웹뷰 재시작 — 실행 중인 세션에 재부착 ───\x1b[0m"
           : "\x1b[90m─── 새 세션 시작 ───\x1b[0m",
       );
     }
@@ -665,7 +705,7 @@ async function initSession(
     // ConPTY가 resize에 전체 리페인트로 응답하는 성질로 현재 화면을 다시 그리게 한다.
     if (props.revive) {
       if (cleaned.length === 0) {
-        term.writeln("\x1b[90m─── 웹뷰 재시작 — 실행 중인 세션에 재부착 (FR-C-06) ───\x1b[0m");
+        term.writeln("\x1b[90m─── 웹뷰 재시작 — 실행 중인 세션에 재부착 ───\x1b[0m");
       }
       entry.lastCols = term.cols;
       entry.lastRows = term.rows;
@@ -865,6 +905,7 @@ export function TerminalPane(props: {
       // 히치가 난다. 대신 예산이 모자랄 때 안 보이는 페인 것부터 뺏는다 (pickEvictions).
       e.mounted = true;
       e.touched = ++attachSeq;
+      unpark(e);
       // 렌더러는 세션 부팅을 막을 자격이 없다 — 여기서 던지면 아래 initSession에 영영
       // 도달하지 못해 PTY 없는 빈 페인이 된다. WebGL이 안 되면 DOM 렌더러로 돌면 그만이다
       try {
@@ -922,6 +963,7 @@ export function TerminalPane(props: {
     onCleanup(() => {
       cancelled = true;
       e.mounted = false; // 컨텍스트는 그대로 쥔 채 회수 1순위가 된다 (리마운트 히치 회피)
+      park(e); // 1분 넘게 안 돌아오면 그때 놓는다 (C2·C3)
       if (e.sync === syncSize) e.sync = undefined;
       if (e.onRevealFail === showRevealFail) e.onRevealFail = undefined;
       scrollDisp?.dispose();
@@ -1017,7 +1059,7 @@ export function TerminalPane(props: {
         </Show>
         <Show when={isTauri() && atTop() && !history()}>
           <button class="btn term-history-chip" onClick={() => void openHistory()}>
-            {t("▲ 디스크 기록 보기 — 링버퍼 위 기록 (FR-C-13)")}
+            {t("▲ 디스크 기록 보기 — 링버퍼 위 기록")}
           </button>
         </Show>
         <Show when={history()}>

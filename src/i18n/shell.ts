@@ -14,9 +14,57 @@ export const dict: Record<string, string> = {
   "설정 — 전체 화면 팝업": "Settings — fullscreen popup",
   종료: "Exit",
 
+  // ── AppBar 0.5 — 탭 메뉴 · 벨 ──
+  "워크스페이스 열기·관리": "Open or manage workspaces",
+  "워크스페이스 메뉴": "Workspace menu",
+  폴더: "Folder",
+  "경로를 찾을 수 없음": "Path not found",
+  "원격 저장소 열기": "Open remote repository",
+  "워크스페이스 관리…": "Manage workspaces…",
+  "알림 음소거": "Mute notifications",
+  "다른 프로젝트 메시지 받기": "Receive messages from other projects",
+  "닫기 (세션은 유지)": "Close (sessions keep running)",
+  "폴더를 열 수 없습니다 — 경로가 없어졌습니다": "Cannot open the folder — the path no longer exists",
+  "받기 설정을 바꾸지 못했습니다 — {err}": "Could not change the receive setting — {err}",
+  "알림 센터": "Notification center",
+  "알림 센터 · 미확인 {n}": "Notification center · {n} unseen",
+  "알림 · 미확인 {n}": "Notifications · {n} unseen",
+  "알림 설정": "Notification settings",
+  "다음 미확인으로 · Ctrl+Shift+U": "Next unseen · Ctrl+Shift+U",
+  "알림이 없습니다": "No notifications",
+  "최근 50건 · 앱을 다시 켜면 비웁니다 · 음소거는 소리·OS 알림만 끕니다":
+    "Last 50 · cleared on restart · mute silences sound and OS alerts only",
+
   // ── SidePanel ──
-  개요: "Overview",
+  코드: "Code",
+  실행: "Run",
+  문서: "Docs",
+  "포트 · {n}": "Ports · {n}",
+  "포트를 처음 읽는 중…": "Reading ports for the first time…",
+  "이 프로젝트 전체": "Everyone in this project",
+  "받는 사람": "Recipient",
+  "세션 {n} 실행 중": "{n} sessions running",
+  "탭이 묶였습니다 — 대화 [대화 | 로그] · 코드 [git | 문서] · 실행 [서버 | 포트] · 브라우저":
+    "Tabs are grouped — Conversation [Conversation | Logs] · Code [git | Docs] · Run [Server | Ports] · Browser",
   포트: "Ports",
+  서버: "Server",
+  "종료됨 (exit {code})": "Exited (exit {code})",
+  "↻ 다시 실행": "↻ Run again",
+  "dev 서버도 종료됩니다": "The dev server stops too",
+  "셸에 마지막 서버 명령을 입력합니다 — 이미 서버가 돌고 있으면 누르지 마세요":
+    "Types the last server command into the shell — don't press it while the server is already running",
+
+  // ── TeamComposition (0.5 — 가짜 동작 제거) ──
+  "자동 저장됨": "Saved automatically",
+  "관제 화면으로": "Go to control",
+
+  // ── DefaultTerminalSetup (0.5 — 실제 값) ──
+  "역할 세션은 팀 캐스팅에서": "Role sessions are set up in team casting",
+  "작업 폴더": "Working folder",
+  "서버를 다시 실행하지 못했습니다 — {err}": "Could not restart the server — {err}",
+  "기본 셸은 설정의 '기본 셸' 값입니다. 열기 전에는 아무것도 실행하지 않습니다.":
+    "The shell is the Default shell from Settings. Nothing runs before you open it.",
+  "파일이 원본 · 바뀔 때마다 자동 저장 · team.json/team.md는 커밋": "Files are the source · saved on every change · commit team.json/team.md",
   로그: "Logs",
   브라우저: "Browser",
   "패널을 왼쪽으로": "Move panel to the left",
@@ -73,8 +121,8 @@ export const dict: Record<string, string> = {
     "Loads .eqmux/team.json · team.md and reads role files from disk. The DB is a cache; when they disagree, files win.",
   "경로 재지정 필요": "Path re-assignment needed",
   "{name} 열기": "Open {name}",
-  "레지스트리에서만 제거 — 디스크의 저장소는 그대로 · 실행 중 세션은 종료됩니다 (FR-E-09)":
-    "Removes from the registry only — the repo on disk stays, but running sessions are terminated (FR-E-09)",
+  "레지스트리에서만 제거 — 디스크의 저장소는 그대로 · 실행 중 세션은 종료됩니다":
+    "Removes from the registry only — the repo on disk stays, but running sessions are terminated",
   "등록 해제 (디스크는 그대로 · 세션 종료)": "Unregister (disk untouched · sessions end)",
   "등록을 해제할까요?": "Unregister this workspace?",
   "실행 중인 세션 {n}개가 지금 종료됩니다 — 재등록해도 돌아오지 않습니다.":
@@ -94,15 +142,15 @@ export const dict: Record<string, string> = {
   앱: "app",
   "관제 대시보드": "Control dashboard",
   "등록 {n} · 열림 {m} · 정렬: 주의 필요 순": "Registered {n} · Open {m} · sorted by attention",
-  "폴링 없음 · 상태 스트림 구독 (FR-G-09)": "No polling · subscribed to the status stream (FR-G-09)",
-  "⚠ 동시 작업 중 에이전트 {n}개 — 소프트 경고 (D11 · 임계값 {limit}, 실측 전 잠정). 시스템이 느려지면 일부 세션을 중지하세요.":
-    "⚠ {n} agents busy at once — soft warning (D11 · threshold {limit}, provisional). Stop some sessions if the system slows down.",
+  "폴링 없음 · 상태 스트림 구독": "No polling · subscribed to the status stream",
+  "⚠ 동시 작업 중 에이전트 {n}개 — 소프트 경고 (임계값 {limit}, 실측 전 잠정). 시스템이 느려지면 일부 세션을 중지하세요.":
+    "⚠ {n} agents busy at once — soft warning (threshold {limit}, provisional). Stop some sessions if the system slows down.",
   "세션 메모리 임계 초과": "Session memory over threshold",
   임계: "threshold",
   "소프트 경고": "soft warning",
   "세션 상세에서 현재·피크를 확인하세요.": "Check current/peak in session details.",
-  "클릭하면 해당 페인으로 점프 (FR-G-50) · 우클릭 메뉴": "Click to jump to that pane (FR-G-50) · right-click for menu",
-  "미확인 — 열람하면 해제 (FR-G-44)": "Unseen — cleared when viewed (FR-G-44)",
+  "클릭하면 해당 페인으로 점프 · 우클릭 메뉴": "Click to jump to that pane · right-click for menu",
+  "미확인 — 열람하면 해제": "Unseen — cleared when viewed",
   "터미널에서 실행 중인 에이전트 CLI — 프로세스 트리 실측": "Agent CLI running in the terminal — read from the process tree",
   "팀 캐스팅으로 이동": "Go to team casting",
   "+ 빈 슬롯 {n} · 캐스팅": "+ {n} empty slots · casting",
@@ -112,7 +160,7 @@ export const dict: Record<string, string> = {
   "경로 소실": "Path missing",
   "워크스페이스 연결에서 경로 재지정": "Re-assign the path in Workspace connection",
   "주의 & 이벤트 · 전역": "Attention & events · global",
-  "모든 세션의 미확인 해제 (FR-G-47)": "Clear unseen on all sessions (FR-G-47)",
+  "모든 세션의 미확인 해제": "Clear unseen on all sessions",
   "모두 확인": "Mark all seen",
   "아직 이벤트가 없습니다": "No events yet",
   미배정: "Unassigned",
@@ -120,5 +168,5 @@ export const dict: Record<string, string> = {
   "대화 패널 열기": "Open conversation panel",
   "임무 배정…": "Assign missions…",
   "팀 편성…": "Team composition…",
-  "승인·거부는 터미널 페인에서 (G7)": "Approve/deny in the terminal pane (G7)",
+  "승인·거부는 터미널 페인에서": "Approve/deny in the terminal pane",
 };

@@ -13,6 +13,7 @@ use std::time::Duration;
 use portable_pty::CommandBuilder;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
+#[cfg(not(windows))]
 use tauri_plugin_notification::NotificationExt;
 
 /// 추적 중인 에이전트 — 앱 세션(페인) ↔ Claude sessionId(FR-D-01 발급 UUID) 매핑
@@ -60,6 +61,10 @@ pub struct Tracked {
     /// Claude는 cwd+uuid로 경로를 계산하지만, Codex는 세션 id도 파일 위치도 스스로 정하므로
     /// 훅이 알려준 값을 들고 있어야 재개 가능 판정(resumable_of)이 성립한다.
     pub transcript: Option<String>,
+    /// 이번 턴이 시작된 시각 ms — busy로 들어갈 때 찍고 Stop(idle)에서 거둔다. 턴 완료 신호의 길이 판정
+    pub busy_since: Option<i64>,
+    /// Stop이 30초 넘는 턴을 닫았다 — apply_hook이 방송에 실으며 지운다 (AgentStateEvt.completed)
+    pub turn_done: bool,
 }
 
 // ── 실행 엔진 (M37) — 관리 기동이 되는 CLI는 둘: Claude Code(기본)와 Codex ──
@@ -201,7 +206,13 @@ pub struct AgentRt {
     /// IPC 발신(send·report)이 워크스페이스를 푸는 자리다. by_uuid는 관리되는 에이전트만
     /// 담으므로, 그것만 보면 셸 우선 모델의 보통 세션은 자기 워크스페이스를 못 밝힌다.
     pub session_origin: Mutex<HashMap<String, (String, String)>>,
+    /// 레지스트리 파일 파싱 캐시 (최적화 A5) — 2초마다 전부 다시 읽지 않는다. 스캔 스레드만 쓴다
+    registry_cache: Mutex<RegistryCache>,
 }
+
+/// 레지스트리 파일별 (수정 시각, 크기) → 파싱 결과. 둘이 같으면 다시 읽지 않는다.
+/// 파싱 실패도 기억한다 — 손상 파일을 2초마다 다시 읽지 않게. 사라진 파일은 스캔마다 걷힌다
+type RegistryCache = HashMap<PathBuf, (std::time::SystemTime, u64, Option<RegistryRecord>)>;
 
 /// 세션 영구 제거 시 잔류 상태 정리 (P-9) — 추적 맵·알림 게이트·IPC 토큰·세션 원점.
 /// expected_exit는 남긴다 — 진행 중인 kill의 EOF 처리(on_pty_exit)가 스스로 소비한다.
@@ -244,11 +255,14 @@ pub struct AgentStateEvt {
     pub seq: u64,
     /// 이 상태로 들어간 시각 epoch ms (B19) — 없으면 프런트가 수신 시각을 쓴다
     pub since_ms: Option<i64>,
+    /// 30초 넘게 일한 턴이 방금 끝났다 (계약 C1) — 그 한 번의 방송에만 실린다
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub completed: bool,
 }
 
 /// 세션 레지스트리 레코드 (§10.1) — 부분 파싱 (FR-D-64): 모르는 필드는 무시,
 /// 필드 부재는 None. 공개 계약이 아니므로 전부 Option이다.
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct RegistryRecord {
     #[serde(default)]
@@ -388,7 +402,7 @@ pub fn agent_builders(
 
 /// 상태 방송 + 상태 전이 이벤트 기록 (FR-D-17) + OS 알림 (FR-G-30)
 pub fn emit_state(app: &AppHandle, evt: &AgentStateEvt) {
-    let _ = app.emit("agent-state", evt.clone());
+    let _ = app.emit_to("main", "agent-state", evt.clone());
     let store: tauri::State<crate::StoreState> = app.state();
     let waiting = evt
         .waiting_for
@@ -405,9 +419,12 @@ pub fn emit_state(app: &AppHandle, evt: &AgentStateEvt) {
 }
 
 const NOTIFY_MIN_INTERVAL_MS: i64 = 60_000; // 세션당 최소 간격 — 반복 전이는 이 창 안에서 합쳐진다
+/// 턴 완료 신호의 하한 — 이보다 짧은 턴은 대화 한 번이라 알리면 소음이다. 설정이 아니라 고정값이다
+pub const TURN_DONE_MIN_MS: i64 = 30_000;
 
 /// OS 알림 — `waiting`·`dead` 진입 2종에만 (G3 · FR-G-30). 상태 diff는 호출부(scan·EOF)가
 /// 이미 보장하므로 여기 도달한 waiting/dead는 전부 "진입"이다.
+/// OS 알림을 내든 게이트에 막히든 알림 센터 항목(notify-item, 계약 C2)은 남긴다.
 fn maybe_notify(app: &AppHandle, evt: &AgentStateEvt) {
     if evt.status != "waiting" && evt.status != "dead" {
         return;
@@ -423,61 +440,190 @@ fn maybe_notify(app: &AppHandle, evt: &AgentStateEvt) {
         }
     }
     // 설정 라우팅 (PRD J · FR-G-30) — 꺼도 인앱 미확인 표시는 계속 동작한다 (FR-G-37)
-    match crate::setting_str(app, "notifications").as_deref() {
-        Some("off") => return,
-        Some("waiting") if evt.status == "dead" => return,
-        _ => {} // 기본값 waiting-dead
+    let routed = match crate::setting_str(app, "notifications").as_deref() {
+        Some("off") => false,
+        Some("waiting") => evt.status != "dead",
+        _ => true, // 기본값 waiting-dead
+    };
+    let suppressed = (routed && !os_quiet(app, &evt.session))
+        .then(|| pass_gate(app, &evt.session))
+        .flatten();
+    let name = &display_name(&evt.session);
+    // 표시 언어를 따른다 (B66) — 알림은 창을 안 볼 때 쓰라고 있는 기능이라 읽히지 않으면
+    // 기능 자체가 무의미하다. 사전은 프런트에 있으므로 여기서는 이 문구들만 분기한다.
+    let en = crate::setting_str(app, "language").as_deref() == Some("en");
+    let (title, body) = notify_text(evt, name, suppressed.unwrap_or(0), en);
+    emit_item(app, &evt.session, &evt.status, &title, &body, suppressed.is_some());
+    if suppressed.is_some() {
+        show_os(app, &evt.session, &title, &body);
     }
-    // 음소거 (FR-G-35) — 세션·워크스페이스 단위. 역시 인앱 미확인은 유지된다
+}
+
+/// 작업 완료 신호 — `turn`(앱이 감지한 30초 넘는 턴의 끝)과 `report`(에이전트의 `report --done`).
+/// 게이트 키는 `세션#done` — waiting과 같은 키를 쓰면 완료 알림 직후 60초 안의 waiting 알림이
+/// 합쳐져 사라진다. OS 알림은 완료 알림 설정(doneNotifications: report·all·off, 기본 report)을 따른다.
+fn notify_done(app: &AppHandle, session: &str, kind: &str, detail: Option<&str>) {
+    let routed = match crate::setting_str(app, "doneNotifications").as_deref() {
+        Some("off") => false,
+        Some("all") => true,
+        _ => kind == "report", // 기본값 report (결정 11)
+    };
+    let suppressed = (routed && !os_quiet(app, session))
+        .then(|| pass_gate(app, &done_key(session)))
+        .flatten();
+    let name = &display_name(session);
+    let en = crate::setting_str(app, "language").as_deref() == Some("en");
+    let (title, body) = done_text(kind, name, detail, suppressed.unwrap_or(0), en);
+    emit_item(app, session, kind, &title, &body, suppressed.is_some());
+    if suppressed.is_some() {
+        show_os(app, session, &title, &body);
+    }
+}
+
+/// OS 알림 한 건. Windows는 토스트를 직접 띄워 누르면 그 페인으로 간다 (P2 · 필요 기능 A2) —
+/// 창을 앞으로 올리고 main 창에 `notify-activate {session}`을 보낸다. 페인 이동은 프런트 몫이다.
+/// 다른 OS는 알림 플러그인 그대로(누르기 동작 없음).
+fn show_os(app: &AppHandle, session: &str, title: &str, body: &str) {
+    #[cfg(windows)]
+    {
+        use tauri_winrt_notification::Toast;
+        // 알림 플러그인과 같은 규칙 — 설치본만 앱 AUMID를 쓰고, 빌드 폴더에서 돈 exe는 등록된
+        // AUMID가 없어 PowerShell의 것을 빌린다 (안 그러면 토스트가 아예 안 뜬다)
+        let dev = std::env::current_exe()
+            .ok()
+            .and_then(|e| e.parent().map(|d| d.to_string_lossy().to_lowercase()))
+            .is_some_and(|d| d.ends_with(r"\target\debug") || d.ends_with(r"\target\release"));
+        let app_id = if dev { Toast::POWERSHELL_APP_ID.to_string() } else { app.config().identifier.clone() };
+        let (app2, session) = (app.clone(), session.to_string());
+        let _ = Toast::new(&app_id)
+            .title(title)
+            .text1(body)
+            .on_activated(move |_| {
+                activate_pane(&app2, &session);
+                Ok(())
+            })
+            .show();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = session;
+        let _ = app.notification().builder().title(title).body(body).show();
+    }
+}
+
+/// 알림을 눌렀다 — 창을 앞으로 올리고 어느 페인인지 프런트에 알린다
+#[cfg(windows)]
+fn activate_pane(app: &AppHandle, session: &str) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.unminimize();
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
+    let _ = app.emit_to("main", "notify-activate", serde_json::json!({ "session": session }));
+}
+
+/// 알림 제목의 이름 — 화면과 같은 세션 이름(디렉터리 C4). 프런트가 아직 안 보냈으면 id 앞부분
+fn display_name(session: &str) -> String {
+    crate::ipc::session_name(session).unwrap_or_else(|| session.split('@').next().unwrap_or(session).to_string())
+}
+
+fn done_key(session: &str) -> String {
+    format!("{session}#done")
+}
+
+/// `eqmux report --done` (W2 ipc.rs)이 부른다 — OS 알림 "이름 · 완료" + 알림 센터 항목
+pub fn notify_report(app: &AppHandle, session: &str, text: &str) {
+    notify_done(app, session, "report", Some(text));
+}
+
+/// OS 알림을 삼켜야 하는 자리인가 — 음소거(FR-G-35, 세션·워크스페이스)·창 포커스(FR-G-31).
+/// 어느 쪽이든 인앱 표시(미확인·알림 센터)는 그대로 동작한다
+fn os_quiet(app: &AppHandle, session: &str) -> bool {
     let settings_state: tauri::State<crate::SettingsState> = app.state();
     let muted = settings_state
         .0
         .lock()
         .map(|v| {
-            let ws = evt.session.split('@').nth(1).unwrap_or("");
+            let ws = session.split('@').nth(1).unwrap_or("");
             v.get("muted")
                 .and_then(|m| m.as_array())
-                .map(|list| {
-                    list.iter()
-                        .filter_map(|x| x.as_str())
-                        .any(|m| m == evt.session || m == ws)
-                })
+                .map(|list| list.iter().filter_map(|x| x.as_str()).any(|m| m == session || m == ws))
                 .unwrap_or(false)
         })
         .unwrap_or(false);
-    if muted {
-        return;
+    muted
+        || app
+            .webview_windows()
+            .values()
+            .any(|w| w.is_focused().unwrap_or(false))
+}
+
+/// 같은 키의 반복 합침 (FR-G-32) — 최소 간격 안에서는 개수만 센다.
+/// Some(그 사이 합친 건수) = 내도 된다 · None = 이번 것은 합쳐졌다
+fn pass_gate(app: &AppHandle, key: &str) -> Option<u32> {
+    let rt: tauri::State<AgentRt> = app.state();
+    let mut gates = rt.notify_gate.lock().ok()?;
+    let gate = gates
+        .entry(key.to_string())
+        .or_insert(NotifyGate { last_ms: 0, suppressed: 0 });
+    gate_step(gate, crate::workspace::now_ms())
+}
+
+fn gate_step(gate: &mut NotifyGate, now: i64) -> Option<u32> {
+    if now - gate.last_ms < NOTIFY_MIN_INTERVAL_MS {
+        gate.suppressed += 1;
+        return None;
     }
-    // 창이 포커스를 갖고 있으면 내지 않는다 (FR-G-31) — 인앱 표현으로 충분하다
-    let focused = app
-        .webview_windows()
-        .values()
-        .any(|w| w.is_focused().unwrap_or(false));
-    if focused {
-        return;
-    }
-    // 같은 세션의 반복 전이 합침 (FR-G-32) — 최소 간격 안에서는 개수만 센다
-    let suppressed = {
-        let Ok(mut gates) = rt.notify_gate.lock() else { return };
-        let now = crate::workspace::now_ms();
-        let gate = gates
-            .entry(evt.session.clone())
-            .or_insert(NotifyGate { last_ms: 0, suppressed: 0 });
-        if now - gate.last_ms < NOTIFY_MIN_INTERVAL_MS {
-            gate.suppressed += 1;
-            return;
-        }
-        let n = gate.suppressed;
-        gate.last_ms = now;
-        gate.suppressed = 0;
-        n
+    let n = gate.suppressed;
+    gate.last_ms = now;
+    gate.suppressed = 0;
+    Some(n)
+}
+
+/// 알림 센터 항목 (계약 C2) — main 창에만 보낸다. os = 실제로 OS 알림을 냈는가
+fn emit_item(app: &AppHandle, session: &str, kind: &str, title: &str, body: &str, os: bool) {
+    let workspace = crate::session_origin(app, session)
+        .map(|(ws, _)| ws)
+        .unwrap_or_else(|| session.split('@').nth(1).unwrap_or("default").to_string());
+    let ts = crate::workspace::now_ms();
+    let _ = app.emit_to(
+        "main",
+        "notify-item",
+        serde_json::json!({
+            "id": format!("{session}-{ts}-{}", next_seq()),
+            "session": session,
+            "workspace": workspace,
+            "kind": kind,
+            "title": title,
+            "body": body,
+            "ts": ts,
+            "os": os,
+        }),
+    );
+}
+
+/// 완료 알림 제목·본문 — "완료"는 에이전트가 직접 밝힌 report에만 쓴다. 앱이 감지한 것은 "턴 끝남"
+fn done_text(kind: &str, name: &str, detail: Option<&str>, suppressed: u32, en: bool) -> (String, String) {
+    let report = kind == "report";
+    let title = match (report, en) {
+        (true, true) => format!("{name} · done"),
+        (true, false) => format!("{name} · 완료"),
+        (false, true) => format!("{name} · turn ended"),
+        (false, false) => format!("{name} · 턴 끝남"),
     };
-    let name = evt.session.split('@').next().unwrap_or(&evt.session);
-    // 표시 언어를 따른다 (B66) — 알림은 창을 안 볼 때 쓰라고 있는 기능이라 읽히지 않으면
-    // 기능 자체가 무의미하다. 사전은 프런트에 있으므로 여기서는 이 문구들만 분기한다.
-    let en = crate::setting_str(app, "language").as_deref() == Some("en");
-    let (title, body) = notify_text(evt, name, suppressed, en);
-    let _ = app.notification().builder().title(title).body(body).show();
+    let mut body = match detail.map(str::trim).filter(|d| !d.is_empty()) {
+        Some(d) => d.to_string(),
+        None if en => "The turn has ended".into(),
+        None => "턴이 끝났습니다".into(),
+    };
+    if suppressed > 0 {
+        body.push_str(&if en {
+            format!(" ({suppressed} more coalesced)")
+        } else {
+            format!(" (그 사이 {suppressed}건 합침)")
+        });
+    }
+    (title, body)
 }
 
 /// 토스트 제목·본문 조립 (B66) — 순수 함수라 언어 분기를 테스트로 고정할 수 있다
@@ -651,8 +797,19 @@ fn apply_effect(
                 .then(|| payload.get("message").and_then(|m| m.as_str()).map(str::to_string))
                 .flatten();
             t.asking = false; // 턴 경계(Stop·UserPromptSubmit)를 넘었다 — 프롬프트는 닫혔다
-            if t.last_status == *status && t.last_waiting == waiting {
-                return None; // 변화 없음 — 방송하지 않는다
+            // 턴 길이 — 시작은 처음 busy가 된 때(레지스트리가 먼저 busy로 올렸어도 여기서 찍는다),
+            // 끝은 Stop. 중간의 승인 대기도 턴의 일부다
+            match *status {
+                "busy" => {
+                    t.busy_since.get_or_insert(now);
+                }
+                "idle" => {
+                    t.turn_done = t.busy_since.take().is_some_and(|s| now - s >= TURN_DONE_MIN_MS);
+                }
+                _ => {}
+            }
+            if t.last_status == *status && t.last_waiting == waiting && !t.turn_done {
+                return None; // 변화 없음 — 방송하지 않는다 (레지스트리가 먼저 idle로 내렸어도 완료는 알린다)
             }
             t.last_status = (*status).into();
             t.status_ms = now;
@@ -685,6 +842,9 @@ fn apply_effect(
             // degraded(레지스트리 없음) 모드에선 이 전이가 없으면 다음 Stop까지 "승인 대기"로 남는다
             let unstick = t.last_status == "waiting";
             t.asking = false; // 답이 들어왔거나(PostToolUse) 다른 도구가 시작됐다
+            if tool.is_some() {
+                t.busy_since.get_or_insert(now); // UserPromptSubmit을 놓쳤어도 도구가 돌면 턴 중이다
+            }
             if t.activity == *tool && !unstick {
                 return None;
             }
@@ -779,7 +939,7 @@ fn recap_from_transcript(path: &std::path::Path) -> Option<String> {
 /// 실패는 조용하다: 요약이 없다고 상태 기계가 멈출 이유가 없다.
 /// Codex는 Stop payload에 마지막 응답(last_assistant_message)이 실려 온다 — 트랜스크립트를 열지
 /// 않고 그것을 쓴다. Claude는 payload에 그 필드가 없으므로 종전대로 트랜스크립트 꼬리에서 뽑는다.
-pub fn record_recap(app: &AppHandle, session: &str, payload: &serde_json::Value) {
+pub fn record_recap(app: &AppHandle, session: &str, payload: &serde_json::Value) -> Option<String> {
     let from_payload = payload
         .get("last_assistant_message")
         .and_then(|v| v.as_str())
@@ -789,20 +949,16 @@ pub fn record_recap(app: &AppHandle, session: &str, payload: &serde_json::Value)
         None => {
             let rt: tauri::State<AgentRt> = app.state();
             let Some((cwd, uuid)) = ({
-                let map = match rt.by_uuid.lock() {
-                    Ok(m) => m,
-                    Err(_) => return,
-                };
+                let map = rt.by_uuid.lock().ok()?;
                 current_uuid(&map, session)
                     .and_then(|u| map.get(&u).map(|t| (t.cwd.clone(), u)))
             }) else {
-                return;
+                return None;
             };
-            let Some(text) = recap_from_transcript(&transcript_path(&cwd, &uuid)) else { return };
-            text
+            recap_from_transcript(&transcript_path(&cwd, &uuid))?
         }
     };
-    let Some((ws, _)) = crate::session_origin(app, session) else { return };
+    let (ws, _) = crate::session_origin(app, session)?;
     let store: tauri::State<crate::StoreState> = app.state();
     let _ = store.0.sender().send(crate::store::StoreMsg::Recap {
         ws: ws.clone(),
@@ -810,10 +966,11 @@ pub fn record_recap(app: &AppHandle, session: &str, payload: &serde_json::Value)
         text: text.clone(),
     });
     // 화면은 재시작을 기다리지 않는다 — 지금 보고 있는 페인도 바로 바뀐다
-    let _ = app.emit(
+    let _ = app.emit_to("main", 
         "session-recap",
         serde_json::json!({ "workspace": ws, "session": session, "text": text }),
     );
+    Some(text)
 }
 
 /// Codex 세션 id 채택 (M37) — Codex에는 --session-id가 없어 스폰 때 앱이 발급한 uuid는 자리표시일
@@ -860,6 +1017,7 @@ fn adopt_codex_session(app: &AppHandle, session: &str, payload: &serde_json::Val
             degraded: t.degraded,
             seq: t.seq,
             since_ms: Some(t.status_ms),
+            completed: false,
         };
         out = Some((t.ws.clone(), t.transcript.clone(), evt));
         map.insert(sid.to_string(), t);
@@ -874,7 +1032,7 @@ fn adopt_codex_session(app: &AppHandle, session: &str, payload: &serde_json::Val
         resumable: evt.resumable,
     });
     // 앵커가 바뀌었을 뿐 상태 전이가 아니다 — 피드·알림 없이 방송만 (activity와 같은 규칙)
-    let _ = app.emit("agent-state", evt);
+    let _ = app.emit_to("main", "agent-state", evt);
 }
 
 pub fn apply_hook(app: &AppHandle, session: &str, event: &str, payload: &serde_json::Value) {
@@ -884,9 +1042,7 @@ pub fn apply_hook(app: &AppHandle, session: &str, event: &str, payload: &serde_j
     }
     // 턴이 끝나는 자리 — 여기서만 "마지막에 한 작업"이 확정된다 (M35).
     // 상태 반영보다 먼저 한다: effect가 Ignore여도 요약은 남아야 한다
-    if event == "Stop" {
-        record_recap(app, session, payload);
-    }
+    let recap = if event == "Stop" { record_recap(app, session, payload) } else { None };
     let effect = hook_effect(event, payload);
     if matches!(effect, HookEffect::Ignore) {
         return;
@@ -898,6 +1054,7 @@ pub fn apply_hook(app: &AppHandle, session: &str, event: &str, payload: &serde_j
             let Some(t) = map.get_mut(&uuid) else { return };
             if let Some(quiet) = apply_effect(t, &effect, payload, crate::workspace::now_ms()) {
                 t.seq = next_seq();
+                let completed = std::mem::take(&mut t.turn_done);
                 out = Some((
                     quiet,
                     AgentStateEvt {
@@ -914,6 +1071,7 @@ pub fn apply_hook(app: &AppHandle, session: &str, event: &str, payload: &serde_j
                         degraded: t.degraded,
                         seq: t.seq,
                         since_ms: Some(t.status_ms),
+                        completed,
                     },
                 ));
             }
@@ -921,9 +1079,12 @@ pub fn apply_hook(app: &AppHandle, session: &str, event: &str, payload: &serde_j
     }
     if let Some((quiet, e)) = out {
         if quiet {
-            let _ = app.emit("agent-state", e);
+            let _ = app.emit_to("main", "agent-state", e);
         } else {
             emit_state(app, &e);
+            if e.completed {
+                notify_done(app, session, "turn", recap.as_deref()); // 본문은 마지막 한 줄 요약 (M35)
+            }
         }
     }
 }
@@ -967,11 +1128,12 @@ pub fn apply_statusline(app: &AppHandle, session: &str, payload: &serde_json::Va
                 degraded: t.degraded,
                 seq: t.seq,
                 since_ms: Some(t.status_ms),
+                completed: false,
             });
         }
     }
     if let Some(e) = evt {
-        let _ = app.emit("agent-state", e);
+        let _ = app.emit_to("main", "agent-state", e);
     }
 }
 
@@ -1001,6 +1163,7 @@ pub fn on_pty_exit(app: &AppHandle, id: &str, code: Option<u32>, gen: u64) {
                     degraded: t.degraded,
                     seq: t.seq,
                     since_ms: Some(t.status_ms),
+                    completed: false,
                 });
                 break;
             }
@@ -1061,21 +1224,33 @@ pub fn pane_for_pid(
 /// 그러면 그 레코드의 pid는 어느 잡에도 없어 채택(A)이 실패하고, mtime이 낡아 스테일 가드(P-3)가
 /// 상태 갱신까지 막는다 — 재개한 에이전트가 영영 페인에 붙지 않는 자리가 여기다.
 /// 가장 최근에 쓰인 파일이 살아 있는 프로세스다.
-fn read_registry(entries: fs::ReadDir) -> HashMap<String, (RegistryRecord, i64)> {
+fn read_registry(entries: fs::ReadDir, cache: &mut RegistryCache) -> HashMap<String, (RegistryRecord, i64)> {
     let mut found: HashMap<String, (RegistryRecord, i64)> = HashMap::new();
+    let mut seen: HashSet<PathBuf> = HashSet::new();
     for entry in entries.flatten() {
         let p = entry.path();
         if p.extension().and_then(|e| e.to_str()) != Some("json") {
             continue;
         }
-        let Ok(text) = fs::read_to_string(&p) else { continue };
-        let Ok(rec) = serde_json::from_str::<RegistryRecord>(&text) else { continue };
+        // 디렉터리 열거가 이미 준 메타데이터 — 파일마다 따로 stat하지 않는다 (Windows에서 공짜)
+        let Ok(meta) = entry.metadata() else { continue };
+        let Ok(modified) = meta.modified() else { continue };
+        seen.insert(p.clone());
+        let rec = match cache.get(&p) {
+            Some((m, len, rec)) if *m == modified && *len == meta.len() => rec.clone(),
+            _ => {
+                let rec = fs::read_to_string(&p)
+                    .ok()
+                    .and_then(|text| serde_json::from_str::<RegistryRecord>(&text).ok());
+                cache.insert(p.clone(), (modified, meta.len(), rec.clone()));
+                rec
+            }
+        };
+        let Some(rec) = rec else { continue };
         let Some(sid) = rec.session_id.clone() else { continue };
         // 파일 mtime = 이 레지스트리 상태의 신선도 (P-3) — 훅 도착 시각과 비교한다
-        let mtime_ms = fs::metadata(&p)
-            .and_then(|m| m.modified())
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        let mtime_ms = modified
+            .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0);
         if found.get(&sid).is_some_and(|(_, prev)| *prev >= mtime_ms) {
@@ -1083,6 +1258,7 @@ fn read_registry(entries: fs::ReadDir) -> HashMap<String, (RegistryRecord, i64)>
         }
         found.insert(sid, (rec, mtime_ms));
     }
+    cache.retain(|p, _| seen.contains(p));
     found
 }
 
@@ -1196,12 +1372,13 @@ fn scan(app: &AppHandle) {
                 degraded: t.degraded,
                 seq: t.seq,
                 since_ms: Some(t.status_ms),
+                completed: false,
             });
         }
     }
     for evt in &flips {
         // 상태 전이가 아니므로 알림 없이 방송만 — 대신 전환 자체는 피드에 기록한다 (FR-D-65)
-        let _ = app.emit("agent-state", evt.clone());
+        let _ = app.emit_to("main", "agent-state", evt.clone());
         let store: tauri::State<crate::StoreState> = app.state();
         let _ = store.0.sender().send(crate::store::StoreMsg::Event {
             ws: evt.session.split('@').nth(1).unwrap_or("default").to_string(),
@@ -1215,7 +1392,10 @@ fn scan(app: &AppHandle) {
         });
     }
     let Ok(entries) = entries else { return };
-    let found = read_registry(entries);
+    let found = match rt.registry_cache.lock() {
+        Ok(mut cache) => read_registry(entries, &mut cache),
+        Err(_) => return,
+    };
     // ── 채택 (A · FR-D-12 확장) — 앱이 띄우지 않은 claude를 pid로 페인에 잇는다 ──
     //
     // 셸 우선 모델에서는 사용자가 페인 안에서 손으로 `claude`를 띄우거나 재기동하는 일이 흔하고,
@@ -1278,6 +1458,7 @@ fn scan(app: &AppHandle) {
                     seq,
                     // 앱이 붙기 전부터 그 상태였다 — 레코드가 쓰인 시각이 전이 시각이다 (B19)
                     since_ms: Some(*mtime_ms),
+                    completed: false,
                 });
                 let name = app_session.split('@').next().unwrap_or(&app_session).to_string();
                 map.insert(
@@ -1340,6 +1521,7 @@ fn scan(app: &AppHandle) {
                     degraded: false,
                     seq: next_seq(),
                     since_ms: Some(crate::workspace::now_ms()),
+                    completed: false,
                 });
             }
             alive // 추적에서 뺀다 — 사용자가 다시 띄우면 그때 새 uuid로 다시 채택된다
@@ -1374,6 +1556,7 @@ fn scan(app: &AppHandle) {
                     degraded: t.degraded,
                     seq: t.seq,
                     since_ms: Some(t.status_ms),
+                    completed: false,
                 });
             }
         }
@@ -1387,7 +1570,8 @@ fn scan(app: &AppHandle) {
 mod tests {
     use super::{
         adopted_alive, apply_effect, apply_registry, current_uuid, hook_effect, keep_on_adopt,
-        read_registry, recap_from_transcript, recap_line, HookEffect, Tracked, RECAP_MAX,
+        done_key, done_text, gate_step, read_registry, recap_from_transcript, recap_line, HookEffect, NotifyGate,
+        Tracked, RECAP_MAX, TURN_DONE_MIN_MS,
     };
     use std::collections::HashMap;
 
@@ -1398,6 +1582,69 @@ mod tests {
             last_status: status.into(),
             ..Default::default()
         }
+    }
+
+    fn stop() -> HookEffect {
+        hook_effect("Stop", &nil())
+    }
+
+    fn submit() -> HookEffect {
+        hook_effect("UserPromptSubmit", &nil())
+    }
+
+    /// 턴 완료는 30초 경계에서 갈린다 — 짧은 턴은 신호하지 않는다
+    #[test]
+    fn turn_done_needs_thirty_seconds_of_work() {
+        let mut t = tracked("idle");
+        apply_effect(&mut t, &submit(), &nil(), 0);
+        apply_effect(&mut t, &stop(), &nil(), TURN_DONE_MIN_MS - 1);
+        assert!(!t.turn_done, "30초 미만은 소음이다");
+        apply_effect(&mut t, &submit(), &nil(), 100_000);
+        apply_effect(&mut t, &pre("Bash"), &nil(), 110_000);
+        apply_effect(&mut t, &stop(), &nil(), 100_000 + TURN_DONE_MIN_MS);
+        assert!(t.turn_done);
+        assert!(t.busy_since.is_none(), "Stop이 턴 시작 시각을 거둔다");
+    }
+
+    /// 레지스트리가 먼저 idle로 내렸어도 Stop은 완료를 방송한다 — 같은 상태라고 삼키지 않는다
+    #[test]
+    fn turn_done_survives_a_registry_that_went_idle_first() {
+        let mut t = tracked("busy");
+        apply_effect(&mut t, &pre("Edit"), &nil(), 0); // 도구가 돌면 턴 중이다
+        t.last_status = "idle".into(); // 2초 재스캔이 먼저 내린 자리
+        assert_eq!(apply_effect(&mut t, &stop(), &nil(), 60_000), Some(false));
+        assert!(t.turn_done);
+        // 다음 Stop은 시작 시각이 없으니 그냥 조용하다
+        t.turn_done = false;
+        assert_eq!(apply_effect(&mut t, &stop(), &nil(), 61_000), None);
+    }
+
+    /// 완료 알림과 waiting 알림은 게이트를 따로 센다 — 완료 직후의 waiting이 합쳐져 사라지면 안 된다
+    #[test]
+    fn done_gate_never_swallows_a_waiting_alert() {
+        let mut gates: HashMap<String, NotifyGate> = HashMap::new();
+        let mut step = |key: String, now: i64| {
+            let g = gates.entry(key).or_insert(NotifyGate { last_ms: 0, suppressed: 0 });
+            gate_step(g, now)
+        };
+        assert_eq!(step(done_key("카이@ws"), 100_000), Some(0));
+        assert_eq!(step("카이@ws".into(), 105_000), Some(0), "waiting은 제 게이트로 나간다");
+        assert_eq!(step(done_key("카이@ws"), 110_000), None, "완료끼리는 60초 안에서 합친다");
+        assert_eq!(step(done_key("카이@ws"), 170_000), Some(1));
+    }
+
+    #[test]
+    fn done_text_says_done_only_for_reports() {
+        assert_eq!(
+            done_text("report", "카이", Some("로그인 API 완료"), 0, false),
+            ("카이 · 완료".into(), "로그인 API 완료".into())
+        );
+        assert_eq!(done_text("report", "kai", Some("done"), 0, true).0, "kai · done");
+        assert_eq!(
+            done_text("turn", "카이", None, 2, false),
+            ("카이 · 턴 끝남".into(), "턴이 끝났습니다 (그 사이 2건 합침)".into())
+        );
+        assert_eq!(done_text("turn", "kai", Some("  "), 0, true).1, "The turn has ended");
     }
 
     fn pre(tool: &str) -> HookEffect {
@@ -1640,11 +1887,21 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(30)); // mtime 해상도 확보
         std::fs::write(dir.join("0007.json"), rec(7, "idle")).unwrap(); // --resume 후 살아 있는 쪽
 
-        let found = read_registry(std::fs::read_dir(&dir).unwrap());
+        let mut cache = HashMap::new();
+        let found = read_registry(std::fs::read_dir(&dir).unwrap(), &mut cache);
         assert_eq!(found.len(), 1); // 같은 sessionId는 하나로 접힌다
-        let (rec, _) = found.get("same-uuid").unwrap();
-        assert_eq!(rec.pid, Some(7)); // 파일 이름 순서("0007" < "1000")가 아니라 최신 mtime
-        assert_eq!(rec.status.as_deref(), Some("idle"));
+        let (live, _) = found.get("same-uuid").unwrap();
+        assert_eq!(live.pid, Some(7)); // 파일 이름 순서("0007" < "1000")가 아니라 최신 mtime
+        assert_eq!(live.status.as_deref(), Some("idle"));
+
+        // 캐시 (A5) — 바뀐 파일만 다시 읽고, 사라진 파일은 걷힌다
+        assert_eq!(cache.len(), 3, "json 파일 셋 — 손상 파일도 실패로 기억한다");
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        std::fs::write(dir.join("0007.json"), rec(7, "busy")).unwrap();
+        std::fs::remove_file(dir.join("1000.json")).unwrap();
+        let found = read_registry(std::fs::read_dir(&dir).unwrap(), &mut cache);
+        assert_eq!(found["same-uuid"].0.status.as_deref(), Some("busy"), "바뀐 파일은 다시 읽는다");
+        assert_eq!(cache.len(), 2);
         std::fs::remove_dir_all(&dir).ok();
     }
 

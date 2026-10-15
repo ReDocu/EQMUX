@@ -1,8 +1,10 @@
 // 팀 편성 (nspu3) — 관계·LEAD·권한 최종 확인. 파일이 원본 · LEAD 최대 1명.
 // 권한 번역 결과(permission-mode)를 시작 전에 노출한다 (FR-D-40·41).
 import { createSignal, For, Show } from "solid-js";
+import { listPresets } from "../backend/library";
 import { backend } from "../backend/mock";
-import { t, tf } from "../i18n";
+import { maxSlots } from "../backend/settings";
+import { t } from "../i18n";
 import { setOverlay, setView, tick } from "../state";
 import { Eyebrow, KV } from "../components/ui";
 import { translatePermissions } from "../types";
@@ -18,7 +20,6 @@ export function TeamComposition(props: { wsId: string }) {
       .sort((a, b) => a.slot - b.slot);
   };
   const [sel, setSel] = createSignal(0);
-  const [saved, setSaved] = createSignal(false);
   const persona = (id: string) => backend.listPersonas().find((p) => p.id === id);
   const job = (id: string) => backend.listJobs().find((j) => j.id === id);
   const lead = () => members().find((m) => m.slot === 1);
@@ -26,36 +27,24 @@ export function TeamComposition(props: { wsId: string }) {
 
   const badge = (m: Session) =>
     m.slot === 1 ? "LEAD" : m.jobId === "qa" ? "QA" : `REPORTS TO ${leadName()}`;
-  const relations = (m: Session): string[] => {
-    if (m.slot === 1) {
-      const rest = members().filter((x) => x.slot !== 1).map((x) => persona(x.personaId)?.name);
-      return [`${t("지도")} ⇢ ${rest.join(" · ") || "—"}`, t("협업 — 전원")];
-    }
-    const rel = [`${t("보고")} → ${leadName()}`];
-    // 고정 8종 관계 — QA는 개발·디버거의 변경을 검토, 디버거는 개발 산출물을 대상으로 한다
-    if (m.jobId === "qa") {
-      const devs = members().filter((x) => x.jobId === "dev" || x.jobId === "debug").map((x) => persona(x.personaId)?.name);
-      if (devs.length) rel.push(`${t("검토")} ◇ ${devs.join(" · ")}`);
-    }
-    if (m.jobId === "debug") {
-      const targets = members().filter((x) => x.jobId === "dev").map((x) => persona(x.personaId)?.name);
-      if (targets.length) rel.push(`${t("수정")} → ${targets.join(" · ")}`);
-    }
-    return rel;
-  };
+  // 관계는 보고선 하나만 보인다 — 지도·검토·협업 문구는 역할 파일 어디에도 근거가 없었다 (BR-10)
+  const relations = (m: Session): string[] => (m.slot === 1 ? [] : [`${t("보고")} → ${leadName()}`]);
 
   const selMember = () => members()[Math.min(sel(), members().length - 1)];
   const selJob = () => (selMember() ? job(selMember().jobId) : undefined);
   const selFlags = () => (selJob() ? translatePermissions(selJob()!.permissions) : undefined);
 
-  const fillDefault = () => {
-    backend.applyCasting(props.wsId, [
-      { personaId: "kai", jobId: "lead" },
-      { personaId: "noel", jobId: "dev" },
-      { personaId: "lin", jobId: "qa" },
-      { personaId: "sol", jobId: "debug" },
-    ]);
-    setSaved(false);
+  // 기본 편성 = 첫 프리셋(presets/*.json 실측)의 직무 구성 + 라이브러리 페르소나 순서대로 중복 없이.
+  // 팀 캐스팅의 프리셋 채우기와 같은 규칙이다. 프리셋이 없으면(브라우저 dev) 표준 구성을 쓴다
+  const fillDefault = async () => {
+    const jobs = (await listPresets())[0]?.jobs ?? ["lead", "dev", "dev", "qa"];
+    const known = new Set(backend.listJobs().map((j) => j.id));
+    const personas = backend.listPersonas();
+    const slots = jobs
+      .filter((j) => known.has(j))
+      .slice(0, Math.min(maxSlots(), personas.length))
+      .map((jobId, i) => ({ personaId: personas[i].id, jobId }));
+    if (slots.length > 0) backend.applyCasting(props.wsId, slots);
   };
 
   // 관계도 SVG — 리드 상단 중앙, 나머지 하단. 보고선은 아래→위.
@@ -78,15 +67,16 @@ export function TeamComposition(props: { wsId: string }) {
           <div class="sub">{t(".eqmux/team.json 원본 · team.md 파생 · LEAD 최대 1명")}</div>
         </div>
         <div style={{ display: "flex", gap: "8px" }}>
-          <button class="btn" onClick={fillDefault}>
+          <button class="btn" onClick={() => void fillDefault()}>
             {t("기본 편성 채우기")}
           </button>
           <button class="btn" onClick={() => setOverlay("roles")}>
             {t("역할 라이브러리")}
           </button>
-          <button class="btn" onClick={() => setSaved(true)}>
-            {t(saved() ? "저장됨 ✓" : "편성 저장")}
-          </button>
+          {/* 편성은 바뀔 때마다 team.json·team.md로 자동 저장된다 (startTeamSync) — 저장 버튼은 하는 일이 없었다 (BR-10) */}
+          <span class="muted mono" style={{ "font-size": "11px", "align-self": "center" }}>
+            {t("자동 저장됨")}
+          </span>
         </div>
       </div>
       <div class="screen-body comp-body">
@@ -155,10 +145,10 @@ export function TeamComposition(props: { wsId: string }) {
           </div>
           <div class="card cast-footer" style={{ "margin-top": "12px" }}>
             <div class="muted" style={{ "font-size": "11px" }}>
-              {t("파일이 원본 · 중복 관계와 자기 참조는 저장 시 제거 · team.json/team.md는 커밋")}
+              {t("파일이 원본 · 바뀔 때마다 자동 저장 · team.json/team.md는 커밋")}
             </div>
             <button class="btn primary" onClick={() => setView({ kind: "workspace", id: props.wsId })}>
-              {tf("{n}개 세션 시작", { n: members().length })}
+              {t("관제 화면으로")}
             </button>
           </div>
         </div>
@@ -186,9 +176,6 @@ export function TeamComposition(props: { wsId: string }) {
                 {t("파일은 즉시 저장되지만 실행 플래그는 프로세스 수명 동안 고정됩니다.")}
               </div>
             </div>
-            <button class="btn" style={{ "margin-top": "10px", width: "100%", "justify-content": "center" }} onClick={() => setSaved(true)}>
-              {t(saved() ? "저장됨 ✓" : "변경 저장")}
-            </button>
           </Show>
         </div>
       </div>

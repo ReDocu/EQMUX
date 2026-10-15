@@ -18,7 +18,7 @@ export const dict: Record<string, string> = {
   "페인으로 점프": "Jump to pane",
 
   // ── 페인 그리드 ──
-  "클릭하면 줌 토글 (B1) · 우클릭 세션 메뉴": "Click to toggle zoom (B1) · right-click for session menu",
+  "클릭하면 줌 토글 · 우클릭 세션 메뉴": "Click to toggle zoom · right-click for session menu",
   "승인 대기 중인 도구 요청 — y/n은 이 페인에 입력": "Tool request awaiting approval — type y/n in this pane",
   "클릭하면 이 페인을 Focus로 잡습니다 — 답은 여기에 직접 입력합니다":
     "Click to grab this pane with Focus — the answer is typed here",
@@ -26,8 +26,8 @@ export const dict: Record<string, string> = {
     "Focus — grabs the longest-waiting pane fullscreen. The answer is typed in the terminal",
   "응답 대기": "Awaiting answer",
   "ESC 종료": "ESC to exit",
-  "이 자리에서 재개 — --resume · 대화 복원 (FR-D-21)":
-    "Resume in place — --resume · restores the conversation (FR-D-21)",
+  "이 자리에서 재개 — --resume · 대화 복원":
+    "Resume in place — --resume · restores the conversation",
   "재개 — 대화 복원": "Resume — restore conversation",
 
   // ── 상태바 ──
@@ -74,7 +74,7 @@ export const dict: Record<string, string> = {
     "You can keep {n} workspaces open at once — close one and try again",
   "선택 터미널에 브랜치 부여": "Assign branch to selected terminal",
   "경로 복사": "Copy path",
-  "삭제는 두지 않는다 — git worktree remove (FR-E-64)": "No delete here — use git worktree remove (FR-E-64)",
+  "삭제는 두지 않는다 — git worktree remove": "No delete here — use git worktree remove",
   "빈 슬롯에 세션 추가 — 클로드코드 · 코덱스 · 기본 터미널":
     "Add a session to an empty slot — Claude Code · Codex · default terminal",
   // ── 에이전트 기동 ──
@@ -135,8 +135,8 @@ export const dict: Record<string, string> = {
   "남은 페르소나가 없습니다": "No personas left",
   "워크트리 격리 — .eqmux/worktrees/<세션> · 전용 브랜치 eqmux/<세션>":
     "Worktree isolation — .eqmux/worktrees/<session> · dedicated branch eqmux/<session>",
-  "의존성(node_modules 등)은 워크트리마다 별도입니다. 제거 시 워크트리는 남습니다 — 머지·정리는 사람이 합니다 (FR-E-64)":
-    "Dependencies (node_modules etc.) are separate per worktree. The worktree remains on removal — merging and cleanup are up to you (FR-E-64)",
+  "의존성(node_modules 등)은 워크트리마다 별도입니다. 제거 시 워크트리는 남습니다 — 머지·정리는 사람이 합니다":
+    "Dependencies (node_modules etc.) are separate per worktree. The worktree remains on removal — merging and cleanup are up to you",
   "역할 세션 제거": "Remove role session",
   "제거하면 팀 편성의 이 슬롯이 비워지고 임무 배정이 해제되며 PTY 프로세스가 종료됩니다. 변경은 다음 캐스팅 저장 때 .eqmux/team.json에 반영됩니다.":
     "Removing empties this slot in the team composition, unassigns its missions, and terminates the PTY process. The change is written to .eqmux/team.json on the next casting save.",
@@ -167,22 +167,63 @@ export const dict: Record<string, string> = {
   실측: "live",
   "끝 2MB 창": "last-2MB window",
   "건너뜀 {n}줄": "{n} lines skipped",
-  "스크롤백 폴백 (FR-G-86)": "Scrollback fallback (FR-G-86)",
+  "스크롤백 폴백": "Scrollback fallback",
   출처: "Source",
   "출처 {path} — 클릭하면 경로를 복사합니다": "Source {path} — click to copy the path",
   "▸ 사람": "▸ Human",
   "⚙ 도구": "⚙ Tool",
   에이전트: "Agent",
   "참조만 저장 (V2)": "Reference only (V2)",
-  "검색 (FR-G-87)": "Search (FR-G-87)",
+  "검색": "Search",
   "세션 저장 — 스크롤백 전체(디스크 포함, VT 제거 평문)를 .txt로 내보낸다":
     "Save session — exports the full scrollback (incl. disk, VT-stripped plain text) to .txt",
   "저장 중…": "Saving…",
   "세션 저장": "Save session",
   "트랜스크립트 없음 — 에이전트 로그도 스크롤백도 아직 없습니다": "No transcript — no agent log or scrollback yet",
-  "트랜스크립트를 인식할 수 없어 스크롤백으로 표시합니다 (FR-G-86)":
-    "Transcript not recognized — showing scrollback instead (FR-G-86)",
+  "트랜스크립트를 인식할 수 없어 스크롤백으로 표시합니다":
+    "Transcript not recognized — showing scrollback instead",
   "트랜스크립트 없음 (목)": "No transcript (mock)",
   "{name}의 PTY로 입력 전달 (V3)": "Send input to {name}'s PTY (V3)",
   전송: "Send",
+
+  // ── 0.5 W3 · 확인창·페인 헤더·주의 칩·세션 이름 ──
+  "{name} 중지": "Stop {name}",
+  "이 세션의 프로세스를 끝냅니다. 하던 턴은 멈추고, 대화는 나중에 재개로 이어 갈 수 있습니다.": "This ends the session's process. The current turn stops; you can pick the conversation up later with Resume.",
+  "이 세션의 프로세스를 끝냅니다. 하던 턴은 멈추고, 이 세션은 재개할 수 없어 되돌릴 수 없습니다.": "This ends the session's process. The current turn stops, and this session can't be resumed — this can't be undone.",
+  "{name} 제거": "Remove {name}",
+  "셸 프로세스가 종료되고 이 페인의 화면이 닫힙니다. 되돌릴 수 없습니다.": "The shell process ends and this pane closes. This can't be undone.",
+  "메시지 {n}건": "{n} messages",
+  "손으로 띄운 에이전트라 자동으로 넣지 않습니다": "Started by hand, so messages aren't typed in automatically",
+  "넣기": "Insert",
+  "✓ 턴 끝남 · 보고 전": "✓ Turn ended · no report yet",
+  "맡은 handoff·ask에 아직 report --done이 없습니다": "No report --done yet for the handoff or ask it received",
+  "보고 요청": "Ask for report",
+  "이 세션에 결과를 report --done으로 알려 달라는 ask를 보냅니다": "Sends this session an ask to report its result with report --done",
+  "맡은 일의 결과를 eqmux report --done 으로 알려 주세요": "Please report the result of your task with eqmux report --done",
+  "✓ 완료 보고": "✓ Reported done",
+  "✓ 턴 끝남": "✓ Turn ended",
+  "나머지 신호 보기": "Show other signals",
+  "작업 폴더 열기": "Open working folder",
+  "폴더를 열 수 없습니다": "Couldn't open the folder",
+  "{engine} 기동": "Start {engine}",
+  "다음 미확인으로 (Ctrl+Shift+U) — 누를 때마다 기다리는 페인을 차례로 잡습니다. 답은 터미널에 직접 입력합니다": "Next unseen (Ctrl+Shift+U) — each press moves to the next waiting pane. Answer directly in the terminal",
+  "비우면 {auto} · 역할 세션은 페르소나 이름": "Leave empty for {auto} · role sessions use the persona name",
+  "{name} 쓰기": "Use {name}",
+  "PATH에 {cmd}가 없습니다 — 아래 명령으로 설치한 뒤 다시 감지하세요": "{cmd} isn't on PATH — install it with the command below, then detect again",
+  "다시 감지": "Detect again",
+  "쌓인 메시지 {n}건": "{n} queued messages",
+  "승인 창이 떠 있으면 먼저 답하세요. 넣으면 본문과 Enter가 그 페인에 들어갑니다.": "If an approval prompt is open, answer it first. Inserting types the text and Enter into that pane.",
+  "페인에 치던 줄이 있어 넣지 않았습니다 — 줄을 비우고 다시 누르세요": "Not inserted — there's a half-typed line in the pane. Clear it and try again",
+  "재개 실패": "Resume failed",
+  "24자까지 쓸 수 있습니다": "Up to 24 characters",
+  "공백과 @는 쓸 수 없습니다": "Spaces and @ aren't allowed",
+  "이 워크스페이스에서 이미 쓰는 이름입니다": "This name is already used in this workspace",
+
+  // ── 0.5 W3 · 상주 상태 줄·새로 시작 ──
+  "새로 시작 (요약만 넘김 · 이전 대화는 잇지 않음)": "Start fresh (carry summary only · doesn't continue the old conversation)",
+  "{agent} 실행 중 — 손으로 띄워 역할·훅이 붙지 않았습니다": "{agent} running — started by hand, so no role or hooks are attached",
+  "에이전트 없음 — 직무 권한을 찾을 수 없어 기동할 수 없습니다. 역할을 다시 지정하세요": "No agent — can't start because the job's permissions weren't found. Reassign the role",
+  "에이전트 없음 — PATH에 {cmd}가 없어 기동할 수 없습니다": "No agent — can't start because {cmd} isn't on PATH",
+  "에이전트 없음": "No agent",
+  "직무 권한을 찾을 수 없습니다 — 역할을 다시 지정하세요": "Job permissions not found — reassign the role",
 };

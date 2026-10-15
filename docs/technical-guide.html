@@ -1414,7 +1414,7 @@ node docs/tools/build-guide.mjs          # docs/technical-guide.html 생성</cod
 <p>외부 편집 충돌(P-7): 읽을 때의 <code>mtime_ms</code>를 저장 시 <code>expected_mtime_ms</code>로 넘긴다. 다르면 <code>CONFLICT — 파일이 밖에서 바뀌었습니다</code>. <code>fsx::write_file</code>도 같은 규칙이다.</p>
 <h3 id="310-messagesrs--메시지-원장"><a class="anchor" href="#310-messagesrs--메시지-원장" aria-hidden="true">#</a>3.10 <code>messages.rs</code> — 메시지 원장</h3>
 <ul>
-<li><code>TYPES = [ask, handoff, report, review, escalate]</code>, <code>MAX_BODY_CHARS = 2000</code>(문자 수), <code>RATE_PER_MIN = 10</code>(워크스페이스×발신자, 60초 슬라이딩 창).</li>
+<li><code>TYPES = [ask, handoff, report, review, escalate]</code>, <code>MAX_BODY_CHARS = 800</code>(문자 수 · 에이전트 발신만, 사람이 대화 탭에서 보내는 메시지는 제외 · 넘으면 <code>send --file</code>), <code>RATE_PER_MIN = 10</code>(워크스페이스×발신자, 60초 슬라이딩 창).</li>
 <li>Rust는 <strong>검증·속도 제한·원장</strong>만 맡는다. 전달(주입) 결정은 프런트 <code>conversation.ts</code>가 한다 (§6.3).</li>
 <li><code>send</code>는 <code>read = (from == &quot;나&quot;)</code>로 저장한다. 사람이 보낸 행은 태어날 때부터 읽음 상태고, 미읽음은 사람의 배지일 뿐 전달 플래그가 아니다.</li>
 <li>두 발신 경로(<code>msg_send</code> 커맨드, 파이프 <code>send/report</code>)가 모두 <code>messages::send</code> + <code>app.emit(&quot;message-new&quot;)</code>로 끝나므로 <strong>수신 경로는 하나</strong>다.</li>
@@ -3108,7 +3108,11 @@ node docs/tools/build-guide.mjs          # docs/technical-guide.html 생성</cod
     TEXT sender &quot;세션 id 또는 나&quot;
     TEXT recipient &quot;@all 또는 세션 id&quot;
     TEXT kind &quot;ask|handoff|report|review|escalate&quot;
-    TEXT body &quot;≤2000자&quot;
+    TEXT body &quot;≤800자 (에이전트)&quot;
+    INTEGER done &quot;report --done (0/1)&quot;
+    TEXT file_path &quot;send --file 첨부 (선택)&quot;
+    INTEGER file_size
+    TEXT project &quot;프로젝트 간 메시지의 상대 프로젝트 (선택)&quot;
     INTEGER read
   }
   meta {

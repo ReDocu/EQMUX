@@ -20,8 +20,8 @@ export const dict: Record<string, string> = {
 
   // 화면
   화면: "Display",
-  "테마는 디자인 토큰만 바꿉니다 (M29). 터미널 페인은 TUI·ANSI 가독성을 위해 항상 다크입니다.":
-    "Theme swaps design tokens only (M29). Terminal panes stay dark for TUI/ANSI legibility.",
+  "테마는 디자인 토큰만 바꿉니다. 터미널 페인은 TUI·ANSI 가독성을 위해 항상 다크입니다.":
+    "Theme swaps design tokens only. Terminal panes stay dark for TUI/ANSI legibility.",
   "다크 (기본)": "Dark (default)",
   라이트: "Light",
   "시스템 따름": "Follow system",
@@ -32,6 +32,9 @@ export const dict: Record<string, string> = {
   고대비: "High contrast",
   중성: "Neutral",
   따뜻함: "Warm",
+  "터미널 렌더러": "Terminal renderer",
+  "WebGL (기본 — 빠름)": "WebGL (default — fast)",
+  "DOM — 잔상이 보일 때": "DOM — when you see stale glyphs",
   강조색: "Accent colors",
   "팔레트 공통 — 배경 명도·색온도만 바뀝니다": "Shared across palettes — only surface lightness and warmth change",
 
@@ -48,8 +51,8 @@ export const dict: Record<string, string> = {
 
   // 시작과 복원
   "시작과 복원": "Startup & restore",
-  "자동 실행 없이 화면 상태만 복원합니다 (FR-G-02 · FR-C-30).":
-    "Restores screen state only — nothing auto-runs (FR-G-02 · FR-C-30).",
+  "자동 실행 없이 화면 상태만 복원합니다.":
+    "Restores screen state only — nothing auto-runs.",
   "시작 화면": "Start view",
   "관제 대시보드": "Control dashboard",
   "마지막 워크스페이스": "Last workspace",
@@ -58,8 +61,8 @@ export const dict: Record<string, string> = {
   "항상 (layout.json)": "Always (layout.json)",
 
   // 알림
-  "사람의 행동이 필요한 상태만 알립니다 (G3). 꺼도 인앱 미확인은 유지됩니다 (FR-G-37).":
-    "Notifies only states that need a human (G3). In-app unseen markers persist even when off (FR-G-37).",
+  "사람의 행동이 필요한 상태만 알립니다. 꺼도 인앱 미확인은 유지됩니다.":
+    "Notifies only states that need a human. In-app unseen markers persist even when off.",
   "OS 알림": "OS notifications",
   "waiting만": "waiting only",
   꺼짐: "Off",
@@ -71,12 +74,12 @@ export const dict: Record<string, string> = {
   "세션 4 GB↑": "Session over 4 GB",
   "세션 8 GB↑": "Session over 8 GB",
   "창 포커스 시": "When window focused",
-  "억제 (FR-G-31)": "Suppressed (FR-G-31)",
+  "억제": "Suppressed",
 
   // 저장소와 보존
   "저장소와 보존": "Storage & retention",
-  "워크스페이스별 SQLite WAL — 보존 상한은 고정 정책 (C4). SGR 저장은 끌 수 있습니다 (FR-C-15).":
-    "Per-workspace SQLite WAL — retention caps are fixed policy (C4). SGR storage can be turned off (FR-C-15).",
+  "워크스페이스별 SQLite WAL — 보존 상한은 고정 정책. SGR 저장은 끌 수 있습니다.":
+    "Per-workspace SQLite WAL — retention caps are fixed policy. SGR storage can be turned off.",
   "SGR 색 저장": "SGR color storage",
   "켜짐 (기본)": "On (default)",
   "꺼짐 — 용량 절감": "Off — saves space",
@@ -86,8 +89,8 @@ export const dict: Record<string, string> = {
 
   // Claude Code 런타임
   "Claude Code 런타임": "Claude Code runtime",
-  "검증된 CLI와 관측 어댑터 — 고정 정책 (D2). 상태 줄 표시만 고를 수 있습니다 (FR-D-19).":
-    "Verified CLI and observation adapter — fixed policy (D2). Only the status line display is configurable (FR-D-19).",
+  "검증된 CLI와 관측 어댑터 — 고정 정책. 상태 줄 표시만 고를 수 있습니다.":
+    "Verified CLI and observation adapter — fixed policy. Only the status line display is configurable.",
   "세션 상태 줄": "Session status line",
   "모델 · 비용 (기본)": "Model · cost (default)",
   "모델만 — 비용 숨김": "Model only — hide cost",
@@ -103,13 +106,13 @@ export const dict: Record<string, string> = {
   "권한 정책": "Permission policy",
   "bypassPermissions는 앱에서 제공하지 않습니다.": "bypassPermissions is not offered by this app.",
   "권한 원천": "Permission source",
-  "역할 파일 frontmatter (D5)": "Role file frontmatter (D5)",
+  "역할 파일 frontmatter": "Role file frontmatter",
   "권한 변경": "Permission change",
-  "재개 기반 재시작 (E11′)": "Resume-based restart (E11′)",
+  "재개 기반 재시작": "Resume-based restart",
 
   // 사용자 파일 불가침
   "사용자 파일 불가침": "User files untouched",
-  "개인 Claude 설정은 수정하지 않습니다 (D3 · FR-E-70).": "Personal Claude settings are never modified (D3 · FR-E-70).",
+  "개인 Claude 설정은 수정하지 않습니다.": "Personal Claude settings are never modified.",
   "수정 안 함": "Never modified",
   "수정 안 함 (읽기만)": "Never modified (read-only)",
 
@@ -129,4 +132,26 @@ export const dict: Record<string, string> = {
   "EQMUX — 멀티 에이전트 관제 MUX": "EQMUX — multi-agent mission-control MUX",
   버전: "Version",
   라이선스: "License",
+  // ── 0.5 — 세그먼트·드롭다운 · 완료 알림 · 낡은 문구 · 단축키 ──
+  "바뀔 때마다 저장": "Saved on every change",
+  "완료 OS 알림": "Completion OS notifications",
+  "완료 보고만 (기본)": "Completion reports only (default)",
+  "턴 끝날 때마다": "Every finished turn",
+  끔: "Off",
+  "waiting 알림 소리": "Waiting sound",
+  "켜짐 — 창이 포커스가 아닐 때": "On — when the window is not focused",
+  "Stop · Notification 훅으로 idle·waiting 판정": "Stop · Notification hooks decide idle and waiting",
+  단축키: "Shortcuts",
+  "읽기 전용입니다. xterm은 Ctrl+Shift+글자를 터미널로 보내지 않아 셸 단축키와 겹치지 않습니다.":
+    "Read-only. xterm does not pass Ctrl+Shift+letter to the terminal, so these never clash with shell keys.",
+  "다음 미확인으로 (= ⛶ 응답 대기 칩)": "Next unseen (= ⛶ Waiting chip)",
+  "N번 슬롯 페인에 키보드 포커스": "Keyboard focus to slot N's pane",
+  "관제 토글": "Toggle control",
+  "복사 · 붙여넣기": "Copy · paste",
+  "확인창에서 둘 다 취소": "Both cancel in confirm dialogs",
+  // ── 0.5 카테고리 내비 ──
+  일반: "General",
+  "에이전트 런타임": "Agent runtime",
+  저장소: "Storage",
+  보안: "Security",
 };

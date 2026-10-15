@@ -1,7 +1,9 @@
 // eqmux CLI (PRD I) — 에이전트가 앱과 대화하는 표면. 같은 바이너리의 CLI 모드로 동작한다
 // (main.rs가 argv로 분기). 전송은 명명 파이프(ipc.rs) 한 줄 요청/한 줄 응답.
 //   eqmux send --type ask|handoff|report|review|escalate [--to @이름] "내용"
-//   eqmux report "진척 한 줄"          (V4 자기 보고)
+//   eqmux send --file <경로> [--to @이름] --type <타입> "요약"   (긴 내용은 파일로 — 0.5)
+//   eqmux report [--done] "진척 한 줄"   (V4 자기 보고 · --done은 완료 보고)
+//   eqmux who                         (열린 프로젝트의 세션과 주소)
 //   eqmux browser <동작> …            (브라우저 패널 조종 — browser.rs가 동작을 소유한다)
 //   eqmux _hook <Event>               (Claude Code 훅이 부른다 — stdin JSON, 항상 exit 0)
 //   eqmux ping
@@ -12,8 +14,12 @@ use std::io::Read;
 #[derive(Debug, PartialEq)]
 pub enum Req {
     Ping,
-    Send { session: String, to: String, kind: String, body: String },
-    Report { session: String, body: String },
+    Send { session: String, to: String, kind: String, body: String, file: Option<String> },
+    Report { session: String, body: String, done: bool },
+    /// 열린 프로젝트의 세션 명단 (0.5 프로젝트 간 통신)
+    Who { session: String },
+    /// 인자 없는 `eqmux browser` — 사용법을 stdout으로 내고 정상 종료한다 (안내문에서 뺀 사용법의 자리)
+    Help(&'static str),
     Hook { session: String, event: String },
     /// statusLine 채널 (FR-D-19 · §10.4) — Claude Code가 주기 호출, stdin JSON에 비용이 온다
     StatusLine { session: String },
@@ -27,13 +33,13 @@ const BROWSER_USAGE: &str = "사용법:\n  eqmux browser open <주소>\n  eqmux 
 // PowerShell에서 @는 스플래팅 기호다 — 따옴표 없는 `--to @all`은 인자째 사라지고
 // 그 자리를 본문이 메워 "내용이 비어 있습니다"로 떨어진다. 기본 셸이 pwsh이므로
 // 사용법은 처음부터 따옴표를 씌운 형태로 안내한다 (cmd·bash에서도 그대로 유효하다).
-const USAGE: &str = "사용법:\n  eqmux send --type <ask|handoff|report|review|escalate> [--to \"@이름\"] \"내용\"\n  eqmux report \"진척 한 줄\"\n  eqmux browser <open|snapshot|click|type|get-text|eval|back|forward|reload> …\n  eqmux ping\n\nPowerShell에서 --to 값은 따옴표로 감싸세요 — @는 스플래팅 기호라 그냥 쓰면 사라집니다.";
+const USAGE: &str = "사용법:\n  eqmux send --type <ask|handoff|report|review|escalate> [--to \"@이름\"] \"내용\"\n  eqmux send --type <타입> [--to \"@이름\"] --file <경로> \"요약\"   (800자 넘는 내용 — 파일은 .eqmux/notes/에)\n  eqmux report [--done] \"진척 한 줄\"   (--done: 맡은 일 완료 — 일을 맡긴 팀원에게도 간다)\n  eqmux who   (열린 프로젝트의 세션과 주소)\n  eqmux browser <open|snapshot|click|type|get-text|eval|back|forward|reload> …\n  eqmux ping\n\nPowerShell에서 --to 값은 따옴표로 감싸세요 — @는 스플래팅 기호라 그냥 쓰면 사라집니다.";
 
 /// main.rs의 CLI/GUI 분기 판별 — parse가 아는 서브커맨드 전부와 같이 움직여야 한다.
 /// 여기 빠진 커맨드도 이제는 GUI로 흐르지 않는다 (main.rs 게이트가 사용법으로 받는다) —
 /// 다만 파이프로 가야 할 커맨드가 사용법으로 떨어지므로 목록은 여전히 정확해야 한다.
 pub fn is_cli_command(cmd: &str) -> bool {
-    matches!(cmd, "ping" | "send" | "report" | "browser" | "_hook" | "_statusline")
+    matches!(cmd, "ping" | "send" | "report" | "who" | "browser" | "_hook" | "_statusline")
 }
 
 /// 모르는 인자로 불렸을 때 (main.rs 게이트) — 사용법만 내고 끝낸다. GUI는 뜨지 않는다.
@@ -67,6 +73,7 @@ pub fn parse(args: &[String], session: Option<&str>) -> Result<Req, String> {
         "send" => {
             let mut kind = None;
             let mut to = "@all".to_string();
+            let mut file = None;
             let mut body: Vec<&str> = Vec::new();
             let mut i = 1;
             while i < args.len() {
@@ -79,6 +86,10 @@ pub fn parse(args: &[String], session: Option<&str>) -> Result<Req, String> {
                         if let Some(t) = args.get(i + 1) {
                             to = t.clone();
                         }
+                        i += 2;
+                    }
+                    "--file" => {
+                        file = Some(args.get(i + 1).cloned().ok_or(format!("--file <경로>가 필요합니다\n{USAGE}"))?);
                         i += 2;
                     }
                     a => {
@@ -98,21 +109,32 @@ pub fn parse(args: &[String], session: Option<&str>) -> Result<Req, String> {
                 }
                 return Err(format!("내용이 비어 있습니다\n{USAGE}"));
             }
-            Ok(Req::Send { session: need_session()?, to, kind, body: body.join(" ") })
+            // 경로는 CLI의 현재 폴더 기준 — 앱은 에이전트가 cd한 위치를 모른다. 저장소 안인지는 앱이 본다
+            let file = file.map(|f| {
+                let p = std::path::Path::new(&f);
+                if p.is_absolute() {
+                    f
+                } else {
+                    std::env::current_dir().map(|d| d.join(p).to_string_lossy().into_owned()).unwrap_or(f)
+                }
+            });
+            Ok(Req::Send { session: need_session()?, to, kind, body: body.join(" "), file })
         }
         "report" => {
-            let body = args[1..].join(" ");
+            let done = args[1..].iter().any(|a| a == "--done");
+            let body = args[1..].iter().filter(|a| *a != "--done").cloned().collect::<Vec<_>>().join(" ");
             if body.trim().is_empty() {
                 return Err(format!("내용이 비어 있습니다\n{USAGE}"));
             }
-            Ok(Req::Report { session: need_session()?, body })
+            Ok(Req::Report { session: need_session()?, body, done })
         }
+        "who" => Ok(Req::Who { session: need_session()? }),
         "_hook" => {
             let event = args.get(1).cloned().ok_or("_hook <Event>가 필요합니다")?;
             Ok(Req::Hook { session: need_session()?, event })
         }
         "browser" => {
-            let action = args.get(1).cloned().ok_or_else(|| BROWSER_USAGE.to_string())?;
+            let Some(action) = args.get(1).cloned() else { return Ok(Req::Help(BROWSER_USAGE)) };
             Ok(Req::Browser { session: need_session()?, action, args: args[2..].to_vec() })
         }
         "_statusline" => Ok(Req::StatusLine { session: need_session()? }),
@@ -131,12 +153,18 @@ fn to_line(req: &Req, token: Option<&str>) -> String {
     };
     match req {
         Req::Ping => serde_json::json!({"cmd": "ping"}).to_string(),
-        Req::Send { session, to, kind, body } => with_token(serde_json::json!({
-            "cmd": "send", "session": session, "to": to, "type": kind, "body": body
+        Req::Send { session, to, kind, body, file } => {
+            let mut v = serde_json::json!({ "cmd": "send", "session": session, "to": to, "type": kind, "body": body });
+            if let Some(f) = file {
+                v["file"] = serde_json::json!(f);
+            }
+            with_token(v)
+        }
+        Req::Report { session, body, done } => with_token(serde_json::json!({
+            "cmd": "report", "session": session, "body": body, "done": done
         })),
-        Req::Report { session, body } => with_token(serde_json::json!({
-            "cmd": "report", "session": session, "body": body
-        })),
+        Req::Who { session } => with_token(serde_json::json!({ "cmd": "who", "session": session })),
+        Req::Help(text) => text.to_string(), // run이 파이프 전에 처리한다 — 여기 오지 않는다
         Req::Hook { session, event } => {
             // 훅 입력(JSON)은 stdin으로 온다 — 64KB 상한으로 읽어 payload로 동봉
             let payload = read_stdin_json();
@@ -210,9 +238,16 @@ fn read_stdin_json() -> serde_json::Value {
 fn friendly(err: &str) -> String {
     match err {
         e if e.contains("RATE_LIMIT") => "분당 발신 상한(10건)에 닿았습니다 — 잠시 후 다시".into(),
-        e if e.contains("TOO_LONG") => "본문이 너무 깁니다 (2,000자 상한)".into(),
+        e if e.contains("TOO_LONG") => "본문이 800자를 넘습니다 — 긴 내용은 .eqmux/notes/에 파일로 쓰고 eqmux send --file <경로> \"요약\"으로 보내세요".into(),
+        e if e.contains("FILE_OUTSIDE_REPO") => "--file은 이 저장소 안의 파일만 보낼 수 있습니다 (.eqmux/notes/ 권장)".into(),
+        e if e.contains("FILE_NOT_FOUND") => "--file 경로에 파일이 없습니다".into(),
+        e if e.contains("CROSS_PROJECT_OFF") => "받는 프로젝트가 다른 프로젝트 메시지 받기를 꺼 두었습니다".into(),
+        e if e.starts_with("AMBIGUOUS:") => format!(
+            "같은 이름이 여러 프로젝트에 있습니다 — 주소를 골라 --to에 쓰세요: {}",
+            &e["AMBIGUOUS:".len()..]
+        ),
         e if e.contains("BAD_TYPE") => "타입은 ask·handoff·report·review·escalate 5종뿐입니다".into(),
-        e if e.contains("UNKNOWN_RECIPIENT") => "수신자를 찾지 못했습니다 — 페르소나 이름으로 지정하세요".into(),
+        e if e.contains("UNKNOWN_RECIPIENT") => "수신자를 찾지 못했습니다 (없거나 닫힌 프로젝트) — eqmux who로 주소를 확인하세요".into(),
         e if e.contains("UNKNOWN_SESSION") => "이 세션을 앱이 추적하고 있지 않습니다".into(),
         e if e.contains("BAD_TOKEN") => "세션 토큰이 일치하지 않습니다 — EQMUX가 시작한 에이전트 세션 안에서만 쓸 수 있습니다".into(),
         e => e.into(),
@@ -235,7 +270,8 @@ fn session_start_context() -> Option<String> {
 }
 
 /// 캐릭터 시트 인라인 상한 — 시트는 사용자가 직접 쓰는 파일이라 크기를 앱이 통제하지 않는다.
-const MAX_SHEET_CHARS: usize = 20_000;
+/// 0.5 토큰 #1 — 2만 자는 매 세션 컨텍스트를 너무 먹는다. 정체성·말투 규칙·대사 예시가 앞에 온다
+const MAX_SHEET_CHARS: usize = 4_000;
 
 /// 역할 파일의 캐릭터 블록이 가리키는 시트 경로 (고급 단계에만 있다).
 /// roles.rs가 경로를 한 줄로 쓰므로 `.character.md`로 끝나는 줄이 곧 포인터다.
@@ -301,6 +337,10 @@ pub fn run(args: Vec<String>) -> i32 {
     let token = std::env::var("EQMUX_TOKEN").ok().filter(|s| !s.is_empty());
     let silent = matches!(args.first().map(String::as_str), Some("_hook") | Some("_statusline"));
     let req = match parse(&args, session.as_deref()) {
+        Ok(Req::Help(text)) => {
+            println!("{text}");
+            return 0;
+        }
         Ok(r) => r,
         Err(e) => {
             if silent {
@@ -326,12 +366,13 @@ pub fn run(args: Vec<String>) -> i32 {
                 if !silent {
                     match &req {
                         Req::Ping => println!("EQMUX 응답 · v{}", v["version"].as_str().unwrap_or("?")),
-                        Req::Send { .. } => println!("전송됨"),
+                        Req::Send { .. } => println!("{}", v["delivery"].as_str().unwrap_or("전송됨")),
                         Req::Report { .. } => println!("보고됨"),
+                        Req::Who { .. } => println!("{}", v["result"].as_str().unwrap_or("")),
                         // 브라우저는 결과가 곧 답이다 — 페이지가 만든 문자열이므로
                         // 지시가 아니라 자료로 읽어야 한다 (프롬프트 주입면)
                         Req::Browser { .. } => println!("{}", v["result"].as_str().unwrap_or("")),
-                        Req::Hook { .. } | Req::StatusLine { .. } => {}
+                        Req::Hook { .. } | Req::StatusLine { .. } | Req::Help(_) => {}
                     }
                 }
                 0
@@ -422,7 +463,7 @@ mod tests {
     /// 하나라도 빠지면 그 채널은 사용법으로 떨어진다 (예전에는 앱 창이 새로 떴다).
     #[test]
     fn cli_branch_covers_every_subcommand() {
-        for cmd in ["ping", "send", "report", "browser", "_hook", "_statusline"] {
+        for cmd in ["ping", "send", "report", "who", "browser", "_hook", "_statusline"] {
             assert!(is_cli_command(cmd), "{cmd}가 main.rs CLI 분기에서 빠졌다");
         }
         // 미지의 토큰은 CLI 커맨드가 아니다 — main.rs 게이트가 사용법(exit 2)으로 받는다.
@@ -504,18 +545,53 @@ mod tests {
                 session: "noel@ws".into(),
                 to: "@카이".into(),
                 kind: "ask".into(),
-                body: "범위 질문".into()
+                body: "범위 질문".into(),
+                file: None,
             }
         );
         // --to 없으면 @all, 플래그가 본문 뒤에 와도 된다
         let r = parse(&s(&["send", "한 줄", "--type", "report"]), Some("noel@ws")).unwrap();
-        assert_eq!(r, Req::Send { session: "noel@ws".into(), to: "@all".into(), kind: "report".into(), body: "한 줄".into() });
+        assert_eq!(
+            r,
+            Req::Send { session: "noel@ws".into(), to: "@all".into(), kind: "report".into(), body: "한 줄".into(), file: None }
+        );
+    }
+
+    /// --file (0.5) — 상대 경로는 CLI의 현재 폴더 기준 절대 경로로 바뀌어 앱에 간다
+    #[test]
+    fn parses_send_file() {
+        let r = parse(&s(&["send", "--type", "handoff", "--file", ".eqmux/notes/a.md", "요약"]), Some("kai@ws")).unwrap();
+        let Req::Send { file: Some(f), body, .. } = &r else { panic!("{r:?}") };
+        assert!(std::path::Path::new(f).is_absolute() && f.ends_with("a.md"));
+        assert_eq!(body, "요약");
+        let v: serde_json::Value = serde_json::from_str(&to_line(&r, None)).unwrap();
+        assert_eq!(v["file"].as_str(), Some(f.as_str()));
+        assert!(parse(&s(&["send", "--type", "ask", "x", "--file"]), Some("kai@ws")).is_err()); // 경로 없음
+    }
+
+    /// report --done · who · 인자 없는 browser (0.5)
+    #[test]
+    fn parses_done_who_and_browser_help() {
+        assert_eq!(
+            parse(&s(&["report", "--done", "로그인", "완료"]), Some("kai@ws")).unwrap(),
+            Req::Report { session: "kai@ws".into(), body: "로그인 완료".into(), done: true }
+        );
+        assert_eq!(
+            parse(&s(&["report", "절반"]), Some("kai@ws")).unwrap(),
+            Req::Report { session: "kai@ws".into(), body: "절반".into(), done: false }
+        );
+        assert!(parse(&s(&["report", "--done"]), Some("kai@ws")).is_err()); // 본문 필요
+        let line = to_line(&Req::Report { session: "kai@ws".into(), body: "x".into(), done: true }, None);
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&line).unwrap()["done"], true);
+        assert_eq!(parse(&s(&["who"]), Some("kai@ws")).unwrap(), Req::Who { session: "kai@ws".into() });
+        assert!(parse(&s(&["who"]), None).is_err());
+        assert_eq!(parse(&s(&["browser"]), None).unwrap(), Req::Help(BROWSER_USAGE)); // 세션 밖에서도 사용법
     }
 
     /// 세션 토큰 동봉 (P-1) — 세션이 필요한 요청에는 token이 실리고 ping에는 없다
     #[test]
     fn to_line_carries_token() {
-        let line = to_line(&Req::Report { session: "kai@ws".into(), body: "진척".into() }, Some("nonce-1"));
+        let line = to_line(&Req::Report { session: "kai@ws".into(), body: "진척".into(), done: false }, Some("nonce-1"));
         let v: serde_json::Value = serde_json::from_str(&line).unwrap();
         assert_eq!(v["token"].as_str(), Some("nonce-1"));
         assert_eq!(v["session"].as_str(), Some("kai@ws"));

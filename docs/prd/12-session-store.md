@@ -6,7 +6,7 @@
 | **상태** | 초안 (2026-08-10) · **워크스페이스 모델 재정의 반영** · 개정 1 (2026-08-11) — **C11 세션 메모리 계측 추가** |
 | **선행 결정** | C1~C10 확정 · W0 · B2 · B9 · [00-index.md §4](00-index.md) |
 | **인접 PRD** | A 터미널 코어 · B 워크스페이스 셸 · D 에이전트 런타임 · E 팀·역할·임무 · I 외부 인터페이스 · J 설정·보안 |
-| **근거 문서** | [features-comparison.html](../features-comparison.html) §4~§6 |
+| **근거 문서** | [features-comparison.html](../archive/features-comparison.html) §4~§6 |
 
 ---
 
@@ -172,7 +172,7 @@ GUI를 켜둔 채로도 동작한다.
 | 종료 flush | ≤ 2s | 종료 계측 |
 | DB 크기 | 상한 준수, 정리 후 실제 파일 축소 | 30일 시뮬레이션 |
 
-> 이 수치는 [features-comparison.html §6](../features-comparison.html)의 설계 예산에서 파생됐다.
+> 이 수치는 [features-comparison.html §6](../archive/features-comparison.html)의 설계 예산에서 파생됐다.
 > M1 스파이크에서 실측해 교정한다.
 
 ## 6. 결정 기록

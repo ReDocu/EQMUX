@@ -2,7 +2,9 @@
 // Tauri에서는 workspaces.json 실물 레지스트리가 목 목록을 대체(hydrate)하고,
 // 브라우저 dev에서는 기존 목 데이터가 그대로 남는다.
 import { invoke } from "@tauri-apps/api/core";
+import { createSignal } from "solid-js";
 import { refreshConversation } from "./conversation";
+import { invalidateGitLists } from "./git";
 import { restoreUnseen, startUnseenSync } from "./flags";
 import { restoreRecaps } from "./recap";
 import { restoreLayout, startLayoutSync } from "./layout";
@@ -22,12 +24,27 @@ export interface WsEntry {
   remote: string | null;
   branch: string | null;
   last_used: number;
+  /** 다른 프로젝트 메시지 받기 (0.5, W2) — 없으면 받는다 */
+  cross_project?: boolean;
 }
 
 export interface WsInfo {
   entry: WsEntry;
   exists: boolean;
   is_repo: boolean;
+}
+
+// 다른 프로젝트 메시지 받기 — 끈 워크스페이스만 기억한다(기본 켬). Workspace 타입을 넓히지 않고 여기 둔다
+const [crossOff, setCrossOff] = createSignal<ReadonlySet<string>>(new Set());
+export const crossProjectOn = (id: string): boolean => !crossOff().has(id);
+
+/** 받기 토글 — Rust 레코드가 원본이다. 실패는 그대로 던져 호출부가 notify()로 보인다 */
+export async function setCrossProject(id: string, on: boolean): Promise<void> {
+  if (isTauri()) await invoke("ws_set_cross_project", { id, on });
+  const next = new Set(crossOff());
+  if (on) next.delete(id);
+  else next.add(id);
+  setCrossOff(next);
 }
 
 const pad = (n: number) => String(n).padStart(2, "0");
@@ -62,6 +79,7 @@ export async function refreshWorkspaces(): Promise<void> {
   await loadSettings();
   const list = await invoke<WsInfo[]>("ws_registry").catch(() => [] as WsInfo[]);
   backend.hydrateWorkspaces(list.map(toWorkspace));
+  setCrossOff(new Set(list.filter((w) => w.entry.cross_project === false).map((w) => w.entry.id)));
   // 유령 뷰 정규화 — 현재 탭의 워크스페이스가 레지스트리에서 사라졌으면 관제로 돌아간다.
   // 방치하면 본문은 Dashboard 폴백인데 앱 바는 어떤 탭도 활성이 아닌 충돌 상태가 되고,
   // layout.json에 존재하지 않는 lastWorkspace가 계속 저장된다.
@@ -128,5 +146,5 @@ export function touchWorkspace(id: string): void {
 /** 임무-브랜치 체크아웃 (FR-E-52) — 있으면 checkout, 없으면 -b 생성. 공유 repo 전체에
  *  영향이 있으므로(E1′ 공유 기본) 호출부는 반드시 2단 확인을 거친다. */
 export function checkoutBranch(wsPath: string, branch: string): Promise<string> {
-  return invoke<string>("ws_checkout", { wsPath, branch });
+  return invoke<string>("ws_checkout", { wsPath, branch }).finally(invalidateGitLists);
 }

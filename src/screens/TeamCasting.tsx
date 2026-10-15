@@ -12,10 +12,10 @@ import { maxSlots } from "../backend/settings";
 import { t, tf } from "../i18n";
 import { jobMeta } from "../jobs";
 import type { JobBadgeColor } from "../jobs";
-import { setView } from "../state";
+import { setView, tick } from "../state";
 import { ContextMenu } from "../components/ui";
 import type { MenuGroup } from "../components/ui";
-import { personaTagline } from "../types";
+import { personaTagline, slotNo } from "../types";
 import type { Permissions } from "../types";
 
 type Slot = { badge: string; badgeColor: JobBadgeColor; personaId: string; jobId: string };
@@ -61,6 +61,11 @@ export function TeamCasting(props: { wsId: string }) {
   const [preset, setPreset] = createSignal(FALLBACK_PRESETS[0].id);
   const [slots, setSlots] = createSignal<Slot[]>(slotsFromPreset(FALLBACK_PRESETS[0]));
   const [saved, setSaved] = createSignal(false);
+  // 슬롯 번호 계획 — applyCasting과 같은 계산 (tick: 세션 목록이 바뀌면 다시)
+  const plan = () => {
+    tick();
+    return backend.planCasting(props.wsId, slots().map((sl) => sl.personaId));
+  };
 
   // 프리셋 실측 (FR-E-26) — 파일이 원본. 깨졌거나 비어 있으면 폴백 목록이 남는다.
   onMount(() => {
@@ -125,6 +130,20 @@ export function TeamCasting(props: { wsId: string }) {
     ];
   };
 
+  // 슬롯별 직무 변경 (P1) — 툴팁이 약속하던 "추가 후 변경". 배지도 함께 바뀐다
+  const [jobMenu, setJobMenu] = createSignal<{ x: number; y: number; slot: number } | undefined>(undefined);
+  const jobGroups = (i: number): MenuGroup[] => [
+    backend.listJobs().map((j) => ({
+      label: j.name,
+      checked: slots()[i].jobId === j.id,
+      action: () => {
+        const b = badgeFor(j.id);
+        setSlots(slots().map((sl, k) => (k === i ? { ...sl, jobId: j.id, badge: b.badge, badgeColor: b.color } : sl)));
+        setSaved(false);
+      },
+    })),
+  ];
+
   // 저장과 "편성 선택 →"이 같은 적용 경로를 탄다 — 선택으로 바로 넘어가도
   // 기본 임무 자동 배정(FR-E-56)이 빠지지 않는다 (autoAssignDefault는 임무 있으면 건너뛴다)
   const apply = () => {
@@ -163,7 +182,8 @@ export function TeamCasting(props: { wsId: string }) {
             {(slot, i) => (
               <div class="card cast-slot">
                 <div class="cast-slot-head">
-                  <span class="eyebrow">SLOT {String(i() + 1).padStart(2, "0")}</span>
+                  {/* 적용될 실제 슬롯 번호 — 남는 세션은 지금 번호, 새 페르소나는 들어갈 빈 슬롯 (0.5) */}
+                  <span class="eyebrow">SLOT {plan()[i()] ? slotNo(plan()[i()]!) : "—"}</span>
                   <span style={{ display: "inline-flex", "align-items": "center", gap: "6px" }}>
                     <span class={`badge ${slot.badgeColor}`}>{slot.badge}</span>
                     {/* 추가된 슬롯(프리셋 구성 밖)만 제거 가능 — 프리셋 슬롯은 프리셋 전환으로 되돌린다 */}
@@ -180,7 +200,13 @@ export function TeamCasting(props: { wsId: string }) {
                   </span>
                   <div>
                     <div style={{ "font-weight": 800, "font-size": "15px" }}>{persona(slot.personaId)?.name}</div>
-                    <div class="muted">{job(slot.jobId)?.name ?? `${slot.jobId} ${t("(라이브러리에 없음)")}`}</div>
+                    {/* 직함 (0.5) — 페르소나 직함. 슬롯 덮어쓰기는 세션 상세에서 */}
+                    <div class="muted">
+                      <Show when={persona(slot.personaId)?.title}>
+                        <span style={{ color: "var(--eq-text)" }}>{persona(slot.personaId)!.title}</span> ·{" "}
+                      </Show>
+                      {job(slot.jobId)?.name ?? `${slot.jobId} ${t("(라이브러리에 없음)")}`}
+                    </div>
                   </div>
                 </div>
                 <div class="muted" style={{ "font-size": "11px" }}>
@@ -209,6 +235,17 @@ export function TeamCasting(props: { wsId: string }) {
                 >
                   {t("캐스팅 변경 ▾")}
                 </button>
+                <button
+                  class="btn ghost"
+                  style={{ "align-self": "start" }}
+                  title={t("이 슬롯의 직무를 바꿉니다 — 실행 권한이 따라 바뀝니다")}
+                  onClick={(e) => {
+                    const r = e.currentTarget.getBoundingClientRect();
+                    setJobMenu({ x: r.left, y: r.bottom + 4, slot: i() });
+                  }}
+                >
+                  {t("직무 변경 ▾")}
+                </button>
               </div>
             )}
           </For>
@@ -225,9 +262,21 @@ export function TeamCasting(props: { wsId: string }) {
             <ContextMenu
               x={m().x}
               y={m().y}
-              header={`SLOT ${String(m().slot + 1).padStart(2, "0")} · ${t("페르소나 선택")}`}
+              header={`SLOT ${plan()[m().slot] ? slotNo(plan()[m().slot]!) : "—"} · ${t("페르소나 선택")}`}
               onClose={() => setCastMenu(undefined)}
               groups={personaGroups(m().slot)}
+            />
+          )}
+        </Show>
+
+        <Show when={jobMenu()}>
+          {(m) => (
+            <ContextMenu
+              x={m().x}
+              y={m().y}
+              header={`SLOT ${plan()[m().slot] ? slotNo(plan()[m().slot]!) : "—"} · ${t("직무 선택")}`}
+              onClose={() => setJobMenu(undefined)}
+              groups={jobGroups(m().slot)}
             />
           )}
         </Show>

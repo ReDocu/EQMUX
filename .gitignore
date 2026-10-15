@@ -3,3 +3,9 @@ dist/
 src-tauri/target/
 *.local
 .eqmux/
+
+# --- workspace 공통 ---
+_local/
+*.bak
+Thumbs.db
+.DS_Store

@@ -47,10 +47,6 @@ export async function diagGeometry(): Promise<DiagGeometry | undefined> {
   return invoke<DiagGeometry>("diag_geometry").catch(() => undefined);
 }
 
-export async function diagLogPath(): Promise<string | undefined> {
-  if (!isTauri()) return undefined;
-  return invoke<string>("diag_log_path").catch(() => undefined);
-}
 
 // ── 브라우저 패널이 "의도한" 좌표 ─────────────────────────────────────────
 // BrowserPanelTab이 browser_bounds로 보내는 바로 그 논리 픽셀 값을 여기에도 남긴다.
@@ -188,7 +184,13 @@ export function startDiagnostics(): void {
   // Rust가 배율·모니터 변화를 잡은 순간 — 프런트가 볼 수 없는 유일한 사건이다
   void listen("diag-geometry", () => void sweep("window-geometry", true));
 
-  const timer = setInterval(() => void sweep("sweep", false), SWEEP_MS);
+  // 숨김 동안의 정기 점검은 건너뛴다 (최적화 D7) — 다시 보일 때 아래 visibilitychange가 한 번 돈다
+  const timer = setInterval(() => !document.hidden && void sweep("sweep", false), SWEEP_MS);
+  // 웹뷰 생사 (BR-18) — 끊기면 Rust가 진단 로그에 남긴다. 숨김 여부를 같이 보내 스로틀을 오탐하지 않게
+  const alive = () => void invoke("diag_alive", { hidden: document.hidden }).catch(() => undefined);
+  alive();
+  setInterval(alive, 10_000);
+  document.addEventListener("visibilitychange", alive);
   addEventListener("focus", () => void sweep("focus", false));
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) void sweep("visible", false);

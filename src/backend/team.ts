@@ -2,8 +2,11 @@
 // 저장: 백엔드 방송을 구독해 역할 슬롯이 바뀔 때마다 500ms 디바운스로 team.json/team.md를 갱신한다.
 // 로드: 워크스페이스 목록 갱신 시 슬롯을 복원한다 — 에이전트는 자동 실행하지 않는다 (C5 · FR-D-22).
 import { invoke } from "@tauri-apps/api/core";
+import { notify } from "../components/ui";
+import { tf } from "../i18n";
 import { applyAgentSnapshot } from "./agent";
-import { backend } from "./mock";
+import { backend, libraryRev } from "./mock";
+import { isServerTermId } from "./ports";
 import { isTauri, listAlivePty } from "./pty";
 import { buildRolePayload } from "./roles";
 
@@ -17,6 +20,7 @@ export interface TeamSlotInfo {
   worktree: boolean; // 격리 옵트인 (FR-E-62) — 경로가 아니라 플래그 (team.json은 커밋 대상)
   permissions?: { write: boolean; commit: boolean; push: boolean } | null; // 슬롯 권한 오버라이드 (FR-E-34)
   cli?: string | null; // 관리 기동 엔진 (M37) — "claude" | "codex", 없으면 claude
+  title?: string | null; // 직함 덮어쓰기 (0.5) — 없으면 생략
   agentSessionId: string | null;
   resumable: boolean;
   worktreePath: string | null; // 이 머신에 워크트리가 실재할 때만 — 없으면 repo 루트 폴백
@@ -50,6 +54,7 @@ function slotsOf(wsId: string) {
       worktree: !!s.worktree,
       permissions: s.permOverride ?? null, // 슬롯 권한 오버라이드 (FR-E-34) — 없으면 생략
       cli: s.cli ?? null, // 관리 기동 엔진 (M37) — claude면 생략 (옛 파일과 같은 모양)
+      title: s.title?.trim() || null, // 직함 덮어쓰기 (0.5) — 없으면 생략
     }));
 }
 
@@ -63,10 +68,30 @@ let timer: ReturnType<typeof setTimeout> | undefined;
 export function startTeamSync(): void {
   if (syncStarted || !isTauri()) return;
   syncStarted = true;
+  // 방송은 메모리 샘플·프로브·activity에도 온다 (D3) — 편성 키가 바뀐 때만 저장 판정을 예약한다
+  let lastKey = "";
   backend.subscribe(() => {
+    const key = compositionKey();
+    if (key === lastKey) return;
+    lastKey = key;
     clearTimeout(timer);
     timer = setTimeout(flushTeamNow, 500);
   });
+}
+
+/** team.json·역할 파일을 바꿀 수 있는 필드만 모은 키 — 상태·출력·메모리는 들어가지 않는다 */
+function compositionKey(): string {
+  const ws = backend
+    .listWorkspaces()
+    .map((w) => `${w.id}:${w.path}:${w.pathMissing}`)
+    .join(",");
+  const ss = backend
+    .listSessions()
+    .map((s) =>
+      [s.id, s.workspaceId, s.slot, s.personaId, s.jobId, s.name, s.title, s.cli, s.worktree, s.cwd, JSON.stringify(s.permOverride ?? null)].join("|"),
+    )
+    .join("\n");
+  return `${libraryRev()}\n${ws}\n${ss}`;
 }
 
 /** 디바운스 즉시 flush — 종료 시퀀스가 부른다. 대기 타이머만 믿으면 마지막 0.5초 변경이 유실된다.
@@ -82,7 +107,10 @@ export function flushTeamNow(): void {
     if (json !== "[]" || lastSaved.has(ws.id)) {
       if (lastSaved.get(ws.id) !== json) {
         lastSaved.set(ws.id, json);
-        void invoke("team_save", { wsPath: ws.path, slots }).catch(() => {});
+        // 실패를 삼키지 않는다 — 더 새 EQMUX가 쓴 team.json은 Rust가 덮어쓰기를 거부한다 (FR-E-75)
+        void invoke("team_save", { wsPath: ws.path, slots }).catch((e) =>
+          notify(tf("팀 편성 저장 실패 — {err}", { err: String(e) })),
+        );
       }
     }
     // 역할 파일 — 페르소나·직무·관계가 바뀐 워크스페이스만 다시 합성한다.
@@ -111,7 +139,7 @@ export async function restoreTeams(): Promise<void> {
     if (ws.pathMissing) continue;
     const slots = await loadTeam(ws.id, ws.path);
     if (slots.length > 0) {
-      lastSaved.set(ws.id, JSON.stringify(slots.map(({ slot, persona, personaName, job, jobName, name, worktree, permissions, cli }) => ({ slot, persona, personaName, job, jobName, name: name ?? null, worktree, permissions: permissions ?? null, cli: cli ?? null }))));
+      lastSaved.set(ws.id, JSON.stringify(slots.map(({ slot, persona, personaName, job, jobName, name, worktree, permissions, cli, title }) => ({ slot, persona, personaName, job, jobName, name: name ?? null, worktree, permissions: permissions ?? null, cli: cli ?? null, title: title ?? null }))));
       backend.hydrateTeam(ws.id, slots, alive);
     }
   }
@@ -119,7 +147,7 @@ export async function restoreTeams(): Promise<void> {
   // 워크스페이스 귀속을 id에서 푼다 (pty_spawn의 폴백과 같은 규칙).
   const known = new Set(backend.listSessions().map((x) => x.id));
   for (const id of alive) {
-    if (known.has(id)) continue;
+    if (known.has(id) || isServerTermId(id)) continue; // 서버 탭 PTY는 페인이 아니다 — 탭이 재부착한다
     const wsId = id.split("@")[1];
     if (wsId && backend.listWorkspaces().some((w) => w.id === wsId && !w.pathMissing)) {
       backend.reviveOrphan(id, wsId);
@@ -127,4 +155,11 @@ export async function restoreTeams(): Promise<void> {
   }
   // 생존 세션의 에이전트 상태 초기값 (FR-C-06) — 스트림은 다음 변화부터만 온다
   await applyAgentSnapshot();
+}
+
+/** 페르소나 직함이 바뀌었다 — 슬롯 직렬화는 그대로라 디바운스 저장이 건너뛴다. team.md의 직함 열은
+ *  Rust가 저장 때 페르소나 직함으로 채우므로 한 번 강제로 다시 저장한다 (W2 team_save) */
+export function resaveTeams(): void {
+  lastSaved.clear();
+  flushTeamNow();
 }

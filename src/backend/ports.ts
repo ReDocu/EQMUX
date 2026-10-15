@@ -10,7 +10,7 @@
 import { createSignal } from "solid-js";
 import { portsSnapshot } from "./panels";
 import type { PortRow } from "./panels";
-import { isTauri } from "./pty";
+import { forgetAgent, isTauri, killPty, onPtyExit, setUserInputHook } from "./pty";
 
 /** 패널이 보고 있을 때 / 아닐 때 주기. 뒤에서도 계속 보되 덜 자주 본다 —
  *  netstat는 프로세스 실행이라 공짜가 아니다 */
@@ -43,6 +43,96 @@ const [entries, setEntries] = createSignal<PortEntry[]>([]);
 const [live, setLive] = createSignal(false);
 /** 사용자가 이미 본 포트 — 탭 뱃지를 끄는 기준. Set은 통째로 갈아 끼워 반응성을 지킨다 */
 const [acked, setAcked] = createSignal<ReadonlySet<string>>(new Set());
+
+/** 서버 탭의 PTY id (ServerPanelTab) — `이름@wsId` 관례를 따르되 페르소나 id와 겹치지 않게 #을 붙인다 */
+export const serverTermId = (wsId: string): string => `#server@${wsId}`;
+export const isServerTermId = (id: string): boolean => id.startsWith("#server@");
+
+// 서버 PTY 종료 기억 (BR-03) — 탭 밖(모듈)에서 잡아 둔다. 탭 컴포넌트의 구독은 탭을 떠나면
+// 풀려서, 다른 탭에 있는 사이 끝난 셸은 돌아와도 `다시 열기`가 뜨지 않았다.
+// 값 = exit 코드, 키가 없으면 살아 있다(또는 아직 띄우지 않았다).
+const [serverExits, setServerExits] = createSignal<ReadonlyMap<string, number | null>>(new Map());
+const serverWatch = new Map<string, () => void>();
+
+/** 서버 PTY의 exit를 앱 수명 동안 잡는다 — 여러 번 불러도 구독은 하나다 */
+export function watchServerTerm(id: string): void {
+  if (serverWatch.has(id)) return;
+  serverWatch.set(
+    id,
+    onPtyExit(id, (code) => setServerExits((m) => new Map(m).set(id, code))),
+  );
+}
+
+/** 끝났으면 exit 코드(null = 알 수 없음), 살아 있으면 undefined */
+export const serverExit = (id: string): number | null | undefined => serverExits().get(id);
+export const serverExited = (id: string): boolean => serverExits().has(id);
+
+export function clearServerExit(id: string): void {
+  if (!serverExits().has(id)) return;
+  setServerExits((m) => {
+    const next = new Map(m);
+    next.delete(id);
+    return next;
+  });
+}
+
+// ── 마지막 서버 명령 (0.5 서버 탭 상태 저장, 1-7) — 사람이 친 줄을 기억했다가 버튼으로만 다시 친다 ──
+// ponytail: 셸의 줄 편집 상태를 모르니 키 입력으로 줄을 재구성한다. 화살표(히스토리)·Tab 완성·Ctrl+C가
+// 섞인 줄은 믿을 수 없어 기록하지 않는다 — 정확히 하려면 셸 통합(OSC 133)이 필요하다.
+
+export interface LineState {
+  buf: string;
+  broken: boolean;
+}
+
+/** 키 입력 한 덩이를 줄 상태에 먹인다. Enter로 끝난 믿을 만한 줄이 있으면 commit에 담는다. 순수 함수 */
+export function feedLine(st: LineState, data: string): { st: LineState; commit?: string } {
+  let { buf, broken } = st;
+  let commit: string | undefined;
+  for (const ch of data) {
+    if (ch === "\r" || ch === "\n") {
+      const line = buf.trim();
+      if (!broken && line) commit = line;
+      buf = "";
+      broken = false;
+    } else if (ch === "\x7f" || ch === "\b") buf = buf.slice(0, -1);
+    else if (ch === "\x1b" || ch === "\t" || ch === "\x03" || ch === "\x15") broken = true;
+    else if (ch >= " ") buf += ch;
+  }
+  return { st: { buf, broken }, commit };
+}
+
+/** 워크스페이스 id → 마지막 서버 명령. layout.json에 남는다 (기기별 — 명령은 그 PC의 셸 기준이다) */
+const [serverCommands, setServerCommands] = createSignal<Record<string, string>>({});
+export { serverCommands, setServerCommands };
+
+const lineState = new Map<string, LineState>();
+setUserInputHook((id, data) => {
+  if (!isServerTermId(id)) return;
+  const r = feedLine(lineState.get(id) ?? { buf: "", broken: false }, data);
+  lineState.set(id, r.st);
+  if (r.commit) {
+    const wsId = id.slice(id.indexOf("@") + 1);
+    const cmd = r.commit;
+    if (serverCommands()[wsId] !== cmd) setServerCommands((m) => ({ ...m, [wsId]: cmd }));
+  }
+});
+
+/** 워크스페이스 등록 해제 (BR-04) — 서버 PTY를 죽이고 화면 인스턴스·추적 상태까지 버린다.
+ *  구독을 먼저 풀어야 뒤늦은 pty-exit가 "종료됨"을 다시 심지 않는다 */
+export function killServerTerm(wsId: string): void {
+  const id = serverTermId(wsId);
+  serverWatch.get(id)?.();
+  serverWatch.delete(id);
+  clearServerExit(id);
+  lineState.delete(id);
+  if (wsId in serverCommands()) {
+    const { [wsId]: _gone, ...rest } = serverCommands();
+    setServerCommands(rest);
+  }
+  killPty(id);
+  forgetAgent(id);
+}
 
 export const portEntries = entries;
 export const portsLive = live;
@@ -181,7 +271,8 @@ async function poll(): Promise<void> {
   if (inflight) return; // 진행 중인 폴이 끝나면서 다음 차례를 잡는다 (여기서 잡으면 두 줄이 된다)
   inflight = true;
   try {
-    const snap = await portsSnapshot();
+    // 창이 숨겨진 동안은 netstat를 띄우지 않는다 (최적화 D7) — 느린 주기로 다시 보기만 한다
+    const snap = document.hidden ? undefined : await portsSnapshot();
     if (snap) apply(snap);
   } finally {
     inflight = false;
@@ -195,6 +286,7 @@ export function startPortWatch(): void {
   if (started || !isTauri()) return;
   started = true;
   void poll();
+  document.addEventListener("visibilitychange", () => !document.hidden && schedule(0)); // 다시 보이면 바로
 }
 
 /** 패널이 마운트되는 동안 빠른 주기로 올린다. 반환은 해제 함수 (onCleanup에 건다) */

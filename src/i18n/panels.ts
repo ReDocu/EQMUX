@@ -1,6 +1,24 @@
 // 패널 그룹 사전 — 대화·로그·포트·브라우저 패널 + 분할선 + 대화 브리지 오류 문구.
 // 공용 용어(세션·저장·미확인·기본 터미널 등)는 common.ts가 정본이라 여기 중복하지 않는다.
 export const dict: Record<string, string> = {
+  // ── 대화 탭 0.5 (W5) ──
+  "모든 프로젝트": "All projects",
+  "끄면 다른 프로젝트와 오간 메시지를 숨깁니다": "Turn off to hide messages exchanged with other projects",
+  "이전 200건": "Previous 200",
+  "완료 보고 — 에이전트가 맡은 일을 끝냈다고 밝혔습니다": "Done report — the agent says its assigned work is finished",
+  "대기 중 · 상대 작업 중": "Queued · recipient busy",
+  "전달됨": "Delivered",
+  "접기": "Collapse",
+  "펼치기": "Expand",
+  "파일을 열 수 없습니다 — {path}": "Cannot open file — {path}",
+  "답장 (@{name})": "Reply (@{name})",
+  "다른 프로젝트로 전달…": "Forward to another project…",
+  "다른 프로젝트로 전달": "Forward to another project",
+  "페인으로 점프": "Jump to pane",
+  "본문 복사": "Copy text",
+  "첨부 파일 열기": "Open attachment",
+  전달: "Forward",
+  "@이름 질문… (@ 없으면 @all)": "@name question… (no @ means @all)",
   // ── 대화 탭 (ConversationTab) ──
   "팀 대화": "Team chat",
   전체: "All",
@@ -20,12 +38,12 @@ export const dict: Record<string, string> = {
     "View cleared — new messages will appear here",
   "응답 대기 — 대화로는 답할 수 없습니다. 페인에서 직접 입력하세요":
     "Awaiting your answer — chat cannot reach it. Type in the pane itself",
-  "인박스 대기 (M3 — 턴 종료 시 전달)": "Inbox pending (M3 — delivered at turn end)",
+  "인박스 대기 (턴 종료 시 전달)": "Inbox pending (delivered at turn end)",
   "{n}건": "{n} msg(s)",
   "아직 메시지가 없습니다 — 아래에서 타입을 골라 팀에 보내보세요.":
     "No messages yet — pick a type below and send one to the team.",
-  "idle 세션에는 즉시, 작업 중이면 턴 종료 시 전달됩니다 (M3)":
-    "Delivered instantly to idle sessions; busy sessions receive at turn end (M3)",
+  "idle 세션에는 즉시, 작업 중이면 턴 종료 시 전달됩니다":
+    "Delivered instantly to idle sessions; busy sessions receive at turn end",
   나: "Me",
   "@카이 질문… (@ 없으면 @all)": "@Kai your question… (no @ = @all)",
   "워크스페이스 탭을 먼저 여세요": "Open a workspace tab first",
@@ -34,9 +52,9 @@ export const dict: Record<string, string> = {
     "No recipient: @{name} — use a persona or session name in this workspace",
 
   // ── 대화 브리지 오류 (conversation.ts) ──
-  "분당 발신 상한에 닿았습니다 (M6) — 잠시 후 다시": "Per-minute send limit reached (M6) — try again shortly",
-  "본문이 너무 깁니다 — {n}자 상한": "Body too long — {n} character limit",
-  "타입 5종과 본문이 필요합니다 (M2)": "One of the 5 types and a body are required (M2)",
+  "분당 발신 상한에 닿았습니다 — 잠시 후 다시": "Per-minute send limit reached — try again shortly",
+  "본문이 너무 깁니다": "Body too long",
+  "타입 5종과 본문이 필요합니다": "One of the 5 types and a body are required",
   "전송 실패 — 로그 패널을 확인하세요": "Send failed — check the logs panel",
 
   // ── 서버 로그 패널 (LogsPanelTab) ──

@@ -816,7 +816,7 @@ reader는 UTF-8 경계에서 잘린 꼬리(≤3 B)를 다음 read로 넘긴다(`
 
 ### 3.10 `messages.rs` — 메시지 원장
 
-- `TYPES = [ask, handoff, report, review, escalate]`, `MAX_BODY_CHARS = 2000`(문자 수), `RATE_PER_MIN = 10`(워크스페이스×발신자, 60초 슬라이딩 창).
+- `TYPES = [ask, handoff, report, review, escalate]`, `MAX_BODY_CHARS = 800`(문자 수 · 에이전트 발신만, 사람이 대화 탭에서 보내는 메시지는 제외 · 넘으면 `send --file`), `RATE_PER_MIN = 10`(워크스페이스×발신자, 60초 슬라이딩 창).
 - Rust는 **검증·속도 제한·원장**만 맡는다. 전달(주입) 결정은 프런트 `conversation.ts`가 한다 (§6.3).
 - `send`는 `read = (from == "나")`로 저장한다. 사람이 보낸 행은 태어날 때부터 읽음 상태고, 미읽음은 사람의 배지일 뿐 전달 플래그가 아니다.
 - 두 발신 경로(`msg_send` 커맨드, 파이프 `send/report`)가 모두 `messages::send` + `app.emit("message-new")`로 끝나므로 **수신 경로는 하나**다.
@@ -1708,7 +1708,11 @@ erDiagram
     TEXT sender "세션 id 또는 나"
     TEXT recipient "@all 또는 세션 id"
     TEXT kind "ask|handoff|report|review|escalate"
-    TEXT body "≤2000자"
+    TEXT body "≤800자 (에이전트)"
+    INTEGER done "report --done (0/1)"
+    TEXT file_path "send --file 첨부 (선택)"
+    INTEGER file_size
+    TEXT project "프로젝트 간 메시지의 상대 프로젝트 (선택)"
     INTEGER read
   }
   meta {

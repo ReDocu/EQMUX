@@ -9,8 +9,15 @@ use rusqlite::params;
 use serde::Serialize;
 
 pub const TYPES: [&str; 5] = ["ask", "handoff", "report", "review", "escalate"];
-pub const MAX_BODY_CHARS: usize = 2000; // M6 길이 상한
+pub const MAX_BODY_CHARS: usize = 800; // M6 길이 상한 (0.5 결정 8 — 긴 내용은 --file)
 pub const RATE_PER_MIN: usize = 10; // M6 세션(발신자)당 분당 상한
+
+/// --file 첨부 (0.5) — 본문 대신 저장소 안 파일을 가리킨다. 경로는 절대 경로
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct FileRef {
+    pub path: String,
+    pub size: u64,
+}
 
 #[derive(Serialize, Clone)]
 pub struct MsgRow {
@@ -22,21 +29,58 @@ pub struct MsgRow {
     pub kind: String,
     pub body: String,
     pub read: bool,
+    /// report --done (0.5) — 에이전트가 맡은 일을 끝냈다고 밝힌 보고
+    pub done: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<FileRef>,
+    /// 다른 프로젝트에서 온 메시지면 그 주소의 프로젝트 이름 (`카이@app-b`의 app-b)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+}
+
+/// 원장 행의 0.5 부가 정보 — 없으면 0.4.2 메시지와 같다
+#[derive(Default, Clone)]
+pub struct Extra {
+    pub done: bool,
+    pub file: Option<FileRef>,
+    pub project: Option<String>,
 }
 
 /// M2 — 자유 텍스트 금지. 타입은 5종뿐이고 본문은 비어 있을 수 없다.
+/// 길이 상한은 발신자를 알아야 해서 check_len이 따로 본다 (사람은 상한 밖 — 결정 18).
 pub fn validate(kind: &str, body: &str) -> Result<(), String> {
     if !TYPES.contains(&kind) {
         return Err("BAD_TYPE".into());
     }
-    let b = body.trim();
-    if b.is_empty() {
+    if body.trim().is_empty() {
         return Err("EMPTY".into());
     }
-    if b.chars().count() > MAX_BODY_CHARS {
+    Ok(())
+}
+
+/// M6 길이 상한 — 받는 에이전트의 컨텍스트를 아끼는 장치라 사람("나")의 글은 세지 않는다
+pub fn check_len(from: &str, body: &str) -> Result<(), String> {
+    if from != "나" && body.trim().chars().count() > MAX_BODY_CHARS {
         return Err("TOO_LONG".into());
     }
     Ok(())
+}
+
+/// --file 경로 검사 — 세션 작업 폴더(저장소) 안의 실재 파일만. 심볼릭 링크·`..`는 정규화로 푼다
+pub fn attach_file(repo: &str, path: &str) -> Result<FileRef, String> {
+    let canon = |p: &str| std::fs::canonicalize(p).map_err(|_| "FILE_NOT_FOUND".to_string());
+    let file = canon(path)?;
+    if !file.starts_with(canon(repo)?) {
+        return Err("FILE_OUTSIDE_REPO".into());
+    }
+    let meta = std::fs::metadata(&file).map_err(|_| "FILE_NOT_FOUND".to_string())?;
+    if !meta.is_file() {
+        return Err("FILE_NOT_FOUND".into());
+    }
+    // canonicalize는 Windows에서 \\?\ 접두를 붙인다 — 사람·에이전트가 여는 경로로 돌려 놓는다
+    let shown = file.to_string_lossy();
+    let shown = shown.strip_prefix(r"\\?\").unwrap_or(&shown).to_string();
+    Ok(FileRef { path: shown, size: meta.len() })
 }
 
 /// M6 분당 상한 — times는 이 발신자의 최근 전송 시각(ms). 허용되면 기록하고 true.
@@ -59,14 +103,33 @@ pub fn send(
     kind: &str,
     body: &str,
 ) -> Result<MsgRow, String> {
+    send_with(root, ws, from, to, kind, body, &Extra::default())
+}
+
+/// send + 0.5 부가 정보(완료 보고·첨부·다른 프로젝트)
+pub fn send_with(
+    root: &Path,
+    ws: &str,
+    from: &str,
+    to: &str,
+    kind: &str,
+    body: &str,
+    extra: &Extra,
+) -> Result<MsgRow, String> {
     validate(kind, body)?;
+    check_len(from, body)?;
     let conn = crate::store::open_db(root, ws).map_err(|e| e.to_string())?;
     let now = crate::workspace::now_ms() as i64;
     let body = body.trim();
     let read = from == "나";
+    let (fpath, fsize) = match &extra.file {
+        Some(f) => (Some(f.path.as_str()), Some(f.size as i64)),
+        None => (None, None),
+    };
     conn.execute(
-        "INSERT INTO message (ts, sender, recipient, kind, body, read) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![now, from, to, kind, body, read as i64],
+        "INSERT INTO message (ts, sender, recipient, kind, body, read, done, file_path, file_size, project)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![now, from, to, kind, body, read as i64, extra.done as i64, fpath, fsize, extra.project],
     )
     .map_err(|e| e.to_string())?;
     Ok(MsgRow {
@@ -77,7 +140,41 @@ pub fn send(
         kind: kind.into(),
         body: body.into(),
         read,
+        done: extra.done,
+        file: extra.file.clone(),
+        project: extra.project.clone(),
     })
+}
+
+/// 전달 대기 수 — 받는 세션이 지금 상태(작업 중)로 들어간 뒤 그 세션에게 직접 온 메시지
+pub fn count_to_since(root: &Path, ws: &str, to: &str, since_ms: i64) -> Result<i64, String> {
+    let conn = crate::store::open_db(root, ws).map_err(|e| e.to_string())?;
+    conn.query_row(
+        "SELECT COUNT(*) FROM message WHERE recipient = ?1 AND ts >= ?2",
+        params![to, since_ms],
+        |r| r.get(0),
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// 열린 handoff·ask를 준 발신자 (report --done 회신 대상) — 이 세션이 직접 받은 handoff·ask
+/// 가운데 마지막 report --done 뒤에 온 것. `@all`은 직접 받은 것이 아니라 빠진다.
+/// "나"는 빠진다 — report는 원래 "나"에게 간다.
+pub fn open_requesters(root: &Path, ws: &str, me: &str) -> Result<Vec<String>, String> {
+    if !crate::store::db_path(root, ws).exists() {
+        return Ok(Vec::new());
+    }
+    let conn = crate::store::open_db(root, ws).map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT sender FROM message
+             WHERE recipient = ?1 AND kind IN ('handoff', 'ask') AND sender NOT IN ('나', ?1)
+               AND id > (SELECT COALESCE(MAX(id), 0) FROM message WHERE sender = ?1 AND kind = 'report' AND done = 1)
+             GROUP BY sender ORDER BY MIN(id)",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt.query_map(params![me], |r| r.get::<_, String>(0)).map_err(|e| e.to_string())?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
 }
 
 /// before_id 커서로 최신 limit건을 골라 시간 오름차순으로 돌려준다 (대화는 위→아래로 흐른다).
@@ -93,13 +190,17 @@ pub fn list(
     let conn = crate::store::open_db(root, ws).map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(
-            "SELECT id, ts, sender, recipient, kind, body, read FROM
+            "SELECT id, ts, sender, recipient, kind, body, read, done, file_path, file_size, project FROM
                (SELECT * FROM message WHERE id < ?1 ORDER BY id DESC LIMIT ?2)
              ORDER BY id ASC",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map(params![before_id.unwrap_or(i64::MAX), limit.min(500) as i64], |r| {
+            let file = r.get::<_, Option<String>>(8)?.map(|path| FileRef {
+                path,
+                size: r.get::<_, Option<i64>>(9).ok().flatten().unwrap_or(0) as u64,
+            });
             Ok(MsgRow {
                 id: r.get(0)?,
                 ts: r.get(1)?,
@@ -108,6 +209,9 @@ pub fn list(
                 kind: r.get(4)?,
                 body: r.get(5)?,
                 read: r.get::<_, i64>(6)? != 0,
+                done: r.get::<_, i64>(7)? != 0,
+                file,
+                project: r.get(10)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -202,7 +306,65 @@ mod tests {
         assert_eq!(validate("chat", "x"), Err("BAD_TYPE".into()));
         assert_eq!(validate("ask", "  "), Err("EMPTY".into()));
         let long = "a".repeat(MAX_BODY_CHARS + 1);
-        assert_eq!(validate("ask", &long), Err("TOO_LONG".into()));
+        assert_eq!(check_len("kai@ws", &long), Err("TOO_LONG".into()));
+        assert!(check_len("kai@ws", &"a".repeat(MAX_BODY_CHARS)).is_ok());
+        assert!(check_len("나", &long).is_ok()); // 사람의 글은 상한 밖 (결정 18)
+    }
+
+    #[test]
+    fn attach_file_only_inside_repo() {
+        let dir = std::env::temp_dir().join(format!("eqmux-attach-{}", crate::workspace::now_ms()));
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(repo.join(".eqmux").join("notes")).unwrap();
+        let note = repo.join(".eqmux").join("notes").join("n.md");
+        std::fs::write(&note, "12345").unwrap();
+        std::fs::write(dir.join("outside.md"), "x").unwrap();
+        let r = repo.to_string_lossy();
+        let f = attach_file(&r, &note.to_string_lossy()).unwrap();
+        assert_eq!(f.size, 5);
+        assert!(f.path.ends_with("n.md") && !f.path.starts_with(r"\\?\"));
+        let up = repo.join("..").join("outside.md");
+        assert_eq!(attach_file(&r, &up.to_string_lossy()), Err("FILE_OUTSIDE_REPO".into()));
+        assert_eq!(attach_file(&r, &repo.join("none.md").to_string_lossy()), Err("FILE_NOT_FOUND".into()));
+        assert_eq!(attach_file(&r, &r), Err("FILE_NOT_FOUND".into())); // 폴더는 첨부가 아니다
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 열린 handoff·ask — 보고 뒤에는 닫히고, @all·"나"는 회신 대상이 아니다
+    #[test]
+    fn open_requesters_close_after_done_report() {
+        let dir = std::env::temp_dir().join(format!("eqmux-open-{}", crate::workspace::now_ms()));
+        let me = "kai@ws1";
+        assert!(open_requesters(&dir, "ws1", me).unwrap().is_empty()); // DB 없음
+        send(&dir, "ws1", "lin@ws1", me, "handoff", "로그인 API").unwrap();
+        send(&dir, "ws1", "noel@ws2", me, "ask", "스키마?").unwrap();
+        send(&dir, "ws1", "lin@ws1", me, "ask", "진척?").unwrap();
+        send(&dir, "ws1", "나", me, "handoff", "사람이 맡김").unwrap();
+        send(&dir, "ws1", "rin@ws1", "@all", "handoff", "모두에게").unwrap();
+        send(&dir, "ws1", "rin@ws1", me, "review", "리뷰는 맡긴 일이 아님").unwrap();
+        assert_eq!(open_requesters(&dir, "ws1", me).unwrap(), vec!["lin@ws1", "noel@ws2"]);
+        // 진척 보고(--done 아님)로는 닫히지 않는다
+        send(&dir, "ws1", me, "나", "report", "절반").unwrap();
+        assert_eq!(open_requesters(&dir, "ws1", me).unwrap().len(), 2);
+        let done = Extra { done: true, ..Default::default() };
+        let row = send_with(&dir, "ws1", me, "나", "report", "완료", &done).unwrap();
+        assert!(row.done);
+        assert!(open_requesters(&dir, "ws1", me).unwrap().is_empty());
+        send(&dir, "ws1", "lin@ws1", me, "handoff", "다음 일").unwrap();
+        assert_eq!(open_requesters(&dir, "ws1", me).unwrap(), vec!["lin@ws1"]);
+        // 원장 왕복 — done·file·project가 그대로 읽힌다
+        let extra = Extra {
+            done: false,
+            file: Some(FileRef { path: "D:/r/.eqmux/notes/a.md".into(), size: 42 }),
+            project: Some("app-2".into()),
+        };
+        send_with(&dir, "ws1", "x@ws9", me, "ask", "첨부", &extra).unwrap();
+        let rows = list(&dir, "ws1", None, 50).unwrap();
+        assert!(rows.iter().any(|m| m.done && m.body == "완료"));
+        let last = rows.last().unwrap();
+        assert_eq!(last.file, extra.file);
+        assert_eq!(last.project.as_deref(), Some("app-2"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

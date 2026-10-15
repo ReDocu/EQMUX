@@ -107,7 +107,7 @@ const EVAL_SECS: u64 = 10;
 /// 로딩 안정화 대기 상한 — 넘으면 오류가 아니라 "현재 상태"를 낸다
 const SETTLE_SECS: u64 = 20;
 /// 응답 상한 — 에이전트 컨텍스트를 한 번에 태우지 않게 자른다
-const MAX_RESULT: usize = 30_000;
+const MAX_RESULT: usize = 10_000;
 
 /// 결과를 문자열로 뽑는 공통 도우미(`__s`)를 얹은 IIFE 래퍼.
 /// 페이지 CSP와 무관하게 돌도록 eval·new Function을 쓰지 않고 본문을 그대로 심는다.
@@ -249,7 +249,7 @@ pub fn cli(app: &AppHandle, action: &str, args: &[String]) -> Result<String, Str
             // 열기는 프런트를 거친다 — 웹뷰 바운드는 패널의 DOM 자리에서만 읽을 수 있고
             // (browser_open 주석), 패널이 닫혀 있으면 열어 주기까지 해야 사람이 본다.
             let _ = eval_text(app, MARK); // 패널이 없으면 실패가 정상 — 표식은 최선 노력
-            app.emit("browser-request", serde_json::json!({ "url": url }))
+            app.emit_to("main", "browser-request", serde_json::json!({ "url": url }))
                 .map_err(|e| format!("패널에 요청하지 못했습니다: {e}"))?;
             settle(app)?
         }
