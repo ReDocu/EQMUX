@@ -56,7 +56,7 @@ import { t, tf } from "../i18n";
 import { SessionDetailPanel } from "./SessionDetailPanel";
 import { TranscriptPane } from "./TranscriptPane";
 import type { AgentCliId, Session, Workspace } from "../types";
-import { AGENT_CLI_LABEL, agentAttached, cliOf, effectivePermissions, effectiveTitle, SESSION_NAME_MAX, sessionDisplayName, sessionName, slotNo } from "../types";
+import { AGENT_CLI_LABEL, agentAttached, cliOf, effectivePermissions, effectiveTitle, SESSION_NAME_MAX, sessionDisplayName, sessionName, nameBesideNo, slotNo } from "../types";
 
 /** 셸에 에이전트 명령을 쳐 넣는다 — claude 말고는 EQMUX가 관리하는 스폰 경로가 없다
  *  (역할 주입·훅·재개는 agent.rs의 ClaudeCodeAdapter 전용). 사람이 터미널에 직접 치는 것과
@@ -191,7 +191,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
       <span class={attnChips(s)[0] ? `rail-attn ${attnChips(s)[0]!.tone}` : `sdot ${s.status}`} />
       {/* 번호는 헤더와 같은 두 자리 슬롯 번호 — 헤더와 레일을 번호로 맞춰 본다 */}
       <span class="rail-no mono">{slotNo(s.slot)}</span>
-      <span class="rail-nm mono">{sessionName(s, persona(s.personaId))}</span>
+      <span class="rail-nm mono">{nameBesideNo(s.slot, sessionName(s, persona(s.personaId)))}</span>
       <Show when={s.personaId}>
         <span class="rail-jobb mono">{jobMeta(s.jobId, jobName(s.jobId)).badge}</span>
       </Show>

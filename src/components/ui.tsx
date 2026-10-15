@@ -3,7 +3,7 @@ import { createEffect, createSignal, For, onCleanup, onMount, Show } from "solid
 import type { JSX } from "solid-js";
 import { t, tf } from "../i18n";
 import type { AgentCliId, AgentStatus, Session } from "../types";
-import { AGENT_CLI_LABEL, fmtSince, slotNo } from "../types";
+import { AGENT_CLI_LABEL, fmtSince, nameBesideNo, slotNo } from "../types";
 
 export function statusClass(st: AgentStatus): string {
   return `st-${st}`;
@@ -352,7 +352,7 @@ export function Identity(props: {
         <span class="eq-id-no mono">{slotNo(props.slot!)}</span>
       </Show>
       <span class="eq-id-nm">
-        {props.name}
+        {props.slot !== undefined ? nameBesideNo(props.slot, props.name) : props.name}
         <Show when={showPersona()}> ({props.persona})</Show>
       </span>
       <Show when={props.title}>

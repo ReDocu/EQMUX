@@ -2,7 +2,7 @@
 // 번역이어야 한다. 화면(세션 상세 "실제/예상 실행 플래그")이 이 문자열을 그대로 보여주므로,
 // 여기가 틀리면 사람은 막혀 있지 않은 것을 막혀 있다고 믿는다.
 import { describe, expect, test } from "vitest";
-import { agentFlagsToString, codexFlagsToString, flagsToString, translatePermissions } from "./types";
+import { agentFlagsToString, codexFlagsToString, flagsToString, nameBesideNo, translatePermissions } from "./types";
 
 describe("codexFlagsToString", () => {
   test("write:false는 읽기 전용 샌드박스, 승인은 언제나 on-request — bypass는 없다", () => {
@@ -77,5 +77,21 @@ describe("planCastingSlots", () => {
   });
   test("빈 슬롯이 모자라면 undefined", () => {
     expect(planCastingSlots(cur, ["lin@w", "kai@w", "noel@w", "rin@w"], 4)).toEqual([1, 2, 3, undefined]);
+  });
+});
+
+// 번호 칸 옆 이름 — `03 EQMUX03`처럼 번호가 두 번 보이지 않게, 이름 끝 숫자가 슬롯과 같을 때만 뗀다
+describe("nameBesideNo", () => {
+  test("자동 이름과 직접 쓴 구분자 이름의 끝 번호를 뗀다", () => {
+    expect(nameBesideNo(3, "EQMUX03")).toBe("EQMUX");
+    expect(nameBesideNo(3, "app-03")).toBe("app");
+    expect(nameBesideNo(12, "my_proj_12")).toBe("my_proj");
+  });
+
+  test("슬롯과 다른 번호·숫자로 끝나지 않는 이름·숫자만인 이름은 그대로", () => {
+    expect(nameBesideNo(3, "EQMUX04")).toBe("EQMUX04");
+    expect(nameBesideNo(4, "카이")).toBe("카이");
+    expect(nameBesideNo(3, "03")).toBe("03");
+    expect(nameBesideNo(3, "R2D203")).toBe("R2D203");
   });
 });

@@ -231,6 +231,15 @@ export const cleanTitle = (v: string): string => v.replace(/[\r\n]+/g, " ").slic
 /** 세션 번호 — 슬롯을 두 자리로 (헤더·레일 공통) */
 export const slotNo = (slot: number): string => String(slot).padStart(2, "0");
 
+/** 번호 칸 옆에 보일 이름 — 이름 끝 두 자리가 슬롯 번호와 같으면(자동 이름 `EQMUX03`, 직접 쓴 `app-03`)
+ *  번호 칸이 이미 그 숫자를 보이므로 뗀다: `03 EQMUX03` → `03 EQMUX`. 표시만 바꾼다 — 저장된 이름과
+ *  `@EQMUX03` 호출은 그대로이고, 툴팁에는 전체 이름을 둔다. 끝 숫자가 슬롯과 다르면(이름이 겹쳐
+ *  다른 번호를 받은 경우) 그대로 둔다 — 번호 칸은 슬롯이고, 둘이 어긋나면 이름이 그 사실을 말해야 한다 */
+export function nameBesideNo(slot: number, name: string): string {
+  const m = name.match(/^(.*?\D)[-_]?(\d{2})$/u);
+  return m && m[2] === slotNo(slot) ? m[1].replace(/[-_]$/, "") : name;
+}
+
 /** 자동 이름의 프로젝트명 — 워크스페이스 표시 이름에서 글자·숫자·-·_만, 16자까지. 대소문자는 그대로 */
 export const projectStem = (wsName: string): string =>
   wsName.replace(/[^\p{L}\p{N}_-]/gu, "").slice(0, 16) || "session";
