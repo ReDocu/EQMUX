@@ -3,14 +3,9 @@
 export const dict: Record<string, string> = {
   // ── ControlCenter — 헬퍼·에러 ──
   셸: "Shell",
-  "브라우저 dev — 실제 생성 없음": "Browser dev — nothing actually created",
-  "브랜치 부여 실패": "Branch assignment failed",
 
   // ── 세션 메뉴 ──
-  "브랜치 부여": "Assign branch",
-  "로컬 브랜치 없음": "No local branches",
   "브라우저 dev — 실측 없음": "Browser dev — no live data",
-  "새 워크트리": "new worktree",
   "세션 상세": "Session details",
   "트랜스크립트 열기": "Open transcript",
   "역할 세션 제거…": "Remove role session…",
@@ -64,16 +59,9 @@ export const dict: Record<string, string> = {
   "팀 편성…": "Team composition…",
   "전체 화면 종료": "Exit fullscreen",
 
-  // ── 워크트리 레일 ──
-  외부: "external",
-  "이 워크트리에서 셸 열기": "Open a shell in this worktree",
-  "세션 슬롯이 가득 찼습니다 — 하나를 제거하거나 설정에서 슬롯 수를 늘리세요":
-    "All session slots are in use — remove one or raise the slot count in settings",
+  // ── 워크스페이스·슬롯 한도 ──
   "동시에 열 수 있는 워크스페이스는 {n}개입니다 — 하나를 닫고 다시 시도하세요":
     "You can keep {n} workspaces open at once — close one and try again",
-  "선택 터미널에 브랜치 부여": "Assign branch to selected terminal",
-  "경로 복사": "Copy path",
-  "여기서는 삭제하지 않습니다 — git worktree remove로 지우세요": "Not deleted here — remove it with git worktree remove",
   "빈 슬롯에 세션 추가 — 클로드코드 · 코덱스 · 기본 터미널":
     "Add a session to an empty slot — Claude Code · Codex · default terminal",
   // ── 에이전트 기동 ──
@@ -87,30 +75,6 @@ export const dict: Record<string, string> = {
   "남긴 출력 보기": "View what it left behind",
   "로컬 폴더": "Local folder",
   "앱 내 파일 탐색기에서 열기": "Open in the in-app file explorer",
-  "워크트리 생성 — 새 브랜치(eqmux/<이름>) 또는 기존 브랜치 연결":
-    "Create worktree — new branch (eqmux/<name>) or attach an existing branch",
-  "새 브랜치": "New branch",
-  "기존 브랜치": "Existing branch",
-  "이 브랜치를 체크아웃하는 워크트리를 만든다 — 새 브랜치 없음":
-    "Creates a worktree that checks out this branch — no new branch",
-  "연결 가능한 로컬 브랜치 없음": "No attachable local branches",
-  "체크아웃 중인 브랜치는 목록에서 빠집니다 — 같은 브랜치는 한 트리에만 (git)":
-    "Checked-out branches are excluded — one tree per branch (git)",
-  "이름 → .eqmux/worktrees/<이름>": "name → .eqmux/worktrees/<name>",
-  "분기 기준 ref (start-from)": "Base ref (start-from)",
-  "HEAD (현재)": "HEAD (current)",
-  "생성 후 이 트리에서 셸 열기": "Open a shell in this tree after creating",
-  "연결 중…": "Attaching…",
-  "생성 중…": "Creating…",
-  연결: "Attach",
-  생성: "Create",
-  "메인 작업 트리": "Main working tree",
-  "앱이 만든 워크트리 (.eqmux/worktrees/)": "Worktree created by the app (.eqmux/worktrees/)",
-  "외부에서 만든 워크트리 — 순수 git 호환": "Externally created worktree — plain git compatible",
-  "이 워크트리에서 기본 터미널 열기 — 역할 부여는 세션 상세에서":
-    "Open a default terminal in this worktree — assign roles from session details",
-  "실측 대기 — git 저장소가 아니면 비어 있습니다": "Awaiting live data — empty unless this is a git repository",
-  "워크트리 없음": "No worktrees",
   "레일 접기": "Collapse rail",
   "레일 펼치기": "Expand rail",
   "닫기 (ESC)": "Close (ESC)",
@@ -288,7 +252,6 @@ export const dict: Record<string, string> = {
   미확인: "Unseen",
   // ── 0.5.x QA eqmux-08 2차 (U29) — 영어 화면은 예전 모노 대문자 표기 그대로 ──
   "슬롯 목록": "SLOTS",
-  메인: "MAIN",
   "세션 1개": "1 SESSION",
   "세션 {n}개": "{n} SESSIONS",
   "엔진 1종": "1 ENGINE",

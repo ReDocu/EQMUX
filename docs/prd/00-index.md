@@ -21,7 +21,7 @@
   따라서 앱은 API 키를 보유하지 않는다
 - **에이전트 간 대화는 부가 기능이다.** 사이드 패널 탭에서 채팅처럼 읽는다. 메인이 아니다
 
-레퍼런스 5종(Ghostty · Orca · bbarit · Terax · AgentCommender) 중 **팀·직책·관계를 가진 것은
+레퍼런스 4종(Ghostty · bbarit · Terax · AgentCommender) 중 **팀·직책·관계를 가진 것은
 AgentCommender뿐**이고, 그것이 EQMUX의 직계 선행 제품이자 차별 축이다.
 
 ## 2. 도메인 모델

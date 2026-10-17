@@ -5,7 +5,7 @@
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { queryGlobalEvents } from "../backend/events";
 import type { FeedEvent } from "../backend/events";
-import { backend, LOG_METRICS, SERVER_LOGS } from "../backend/mock";
+import { backend, LOG_METRICS, onEventLog, SERVER_LOGS } from "../backend/mock";
 import type { ServerLog } from "../backend/mock";
 import { pageScrollback, searchScrollback } from "../backend/panels";
 import type { ScrollbackHit } from "../backend/panels";
@@ -77,14 +77,15 @@ export function LogsPanelTab() {
     if (older.length > 0) setCtx({ ...c, lines: [...older, ...c.lines] });
   };
 
-  // 실스트림 — 상태 방송에 붙어 디바운스 갱신 (폴링 없음)
+  // 실스트림 — 이벤트 로그가 바뀐 때만 디바운스 갱신 (폴링 없음). 모든 방송(메모리 샘플·감지 등)에
+  // 붙으면 버스트마다 200행 조회·전체 재렌더가 돌았다 (CPU·RAM C4 — Dashboard와 같은 신호)
   const [realLogs, setRealLogs] = createSignal<ServerLog[]>([]);
   onMount(() => {
     if (!isTauri()) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const load = () => void queryGlobalEvents(200).then((es) => setRealLogs(es.map(toLog)));
     load();
-    const unsub = backend.subscribe(() => {
+    const unsub = onEventLog(() => {
       clearTimeout(timer);
       timer = setTimeout(load, 500);
     });

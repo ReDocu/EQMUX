@@ -127,6 +127,42 @@ fn log_file_name(id: &str) -> String {
     format!("{safe}.log")
 }
 
+/// 세션 로그 상한 — 넘으면 `<이름>.log.old` 하나로 돌린다 (세션당 최대 약 2배). 원시 PTY 바이트라
+/// 대부분이 TUI 다시 그리기이고, 세션 id가 고정이라 상한이 없으면 실행마다 같은 파일이 끝없이 자란다
+const SESSION_LOG_CAP: u64 = 10 * 1024 * 1024;
+/// 이 기간 쓰이지 않은 세션 로그는 시작 때 지운다 — id에 워크스페이스 해시가 붙어 지난 워크스페이스 로그가 남는다
+const SESSION_LOG_KEEP: std::time::Duration = std::time::Duration::from_secs(30 * 24 * 3600);
+
+/// 세션 로그 열기 — 이미 상한을 넘었으면 먼저 돌린다. 반환은 (writer, 현재 크기)
+fn open_session_log(path: &Path, cap: u64) -> Option<(std::io::BufWriter<std::fs::File>, u64)> {
+    if std::fs::metadata(path).map(|m| m.len() > cap).unwrap_or(false) {
+        let _ = std::fs::rename(path, path.with_extension("log.old")); // Windows에서도 기존 .old를 덮는다
+    }
+    let f = OpenOptions::new().create(true).append(true).open(path).ok()?;
+    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+    Some((std::io::BufWriter::with_capacity(64 * 1024, f), len))
+}
+
+/// 오래된 세션 로그 정리 — diagnostics.log는 자체 상한이 있어 건드리지 않는다
+fn prune_session_logs(dir: &Path, keep: std::time::Duration) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for e in entries.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if name == "diagnostics.log" || !(name.ends_with(".log") || name.ends_with(".log.old")) {
+            continue;
+        }
+        let stale = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age > keep);
+        if stale {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+}
+
 /// 이월 버퍼에서 완전한 UTF-8 접두사만 떼어 낸다 — PTY 읽기 경계는 다중바이트 문자
 /// (한글 3B·이모지 4B) 중간에 떨어질 수 있어, 잘린 꼬리(≤3바이트)는 남겨 다음 읽기와
 /// 이어 붙인다. 청크마다 곧장 from_utf8_lossy를 부르면 잘린 글자가 U+FFFD 2~3개로 굳고,
@@ -349,19 +385,15 @@ fn spawn_pty_session(
 
     // 출력 중계 스레드 — 로그 파일 append + VT 통과 줄을 스토어로 스필 + EOF 정리
     std::thread::spawn(move || {
-        let mut log_file = {
+        let log_path = {
             let dir = log_dir();
             let _ = create_dir_all(&dir);
-            // 최적화 A10 — 8KB 읽기마다 write syscall이던 것을 버퍼로. 아래에서 짧은 읽기(출력 덩어리 끝)마다
-            // 비우므로 로그가 한 덩어리 이상 뒤처지지 않는다. 스레드가 끝나면 drop이 마저 비운다
-            OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(dir.join(log_file_name(&id)))
-                .ok()
-                .map(|f| std::io::BufWriter::with_capacity(64 * 1024, f))
+            dir.join(log_file_name(&id))
         };
-        if let Some(f) = log_file.as_mut() {
+        // 최적화 A10 — 8KB 읽기마다 write syscall이던 것을 버퍼로. 아래에서 짧은 읽기(출력 덩어리 끝)마다
+        // 비우므로 로그가 한 덩어리 이상 뒤처지지 않는다. 스레드가 끝나면 drop이 마저 비운다
+        let mut log_file = open_session_log(&log_path, SESSION_LOG_CAP);
+        if let Some((f, _)) = log_file.as_mut() {
             let _ = writeln!(f, "\n=== EQMUX session start · {} · epoch {} ===", id, epoch_secs());
         }
         let mut assembler = LineAssembler::new();
@@ -376,11 +408,19 @@ fn spawn_pty_session(
             match reader.read(&mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
-                    if let Some(f) = log_file.as_mut() {
+                    let mut over_cap = false;
+                    if let Some((f, len)) = log_file.as_mut() {
                         let _ = f.write_all(&buf[..n]);
                         if n < buf.len() {
                             let _ = f.flush();
                         }
+                        *len += n as u64;
+                        over_cap = *len > SESSION_LOG_CAP;
+                    }
+                    if over_cap {
+                        // 오래 도는 세션도 상한을 지킨다 — 닫아서(drop이 비운다) 돌리고 새로 연다
+                        drop(log_file.take());
+                        log_file = open_session_log(&log_path, SESSION_LOG_CAP);
                     }
                     pending.extend_from_slice(&buf[..n]);
                     let data = take_complete_utf8(&mut pending);
@@ -426,7 +466,7 @@ fn spawn_pty_session(
             })
         };
         let code = owned.and_then(|mut s| s.child.wait().ok()).map(|st| st.exit_code());
-        if let Some(f) = log_file.as_mut() {
+        if let Some((f, _)) = log_file.as_mut() {
             let _ = writeln!(f, "\n=== session exit · {} · code {:?} · epoch {} ===", id, code, epoch_secs());
         }
         assembler.finish(|line, styled| {
@@ -1615,52 +1655,6 @@ async fn ws_checkout(ws_path: String, branch: String) -> Result<String, String> 
     .map_err(|e| e.to_string())?
 }
 
-// ── git 패널 워크트리·브랜치 (M36 — orca식 안전 범위) — 커밋 이력을 바꾸지 않는
-// 작업 트리 조작만 개방한다: 목록·생성·체크아웃·열기. 삭제(FR-E-64)와
-// commit·push·stage(G7 — 실행은 터미널에서 사람이)는 계속 제공하지 않는다.
-
-// 둘 다 git CLI를 띄우므로 blocking 스레드에서 돈다 (git_overview와 같은 이유) — 동기 커맨드는
-// 메인 스레드에서 실행되고, 이 둘은 10초 폴링이라 UI 스레드가 매 주기 git을 기다리게 된다.
-#[tauri::command]
-async fn git_worktrees(ws_path: String) -> Result<Vec<workspace::WorktreeInfo>, String> {
-    tauri::async_runtime::spawn_blocking(move || workspace::worktree_list(&ws_path))
-        .await
-        .map_err(|e| e.to_string())?
-}
-
-#[tauri::command]
-async fn git_worktree_graph(ws_path: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || workspace::worktree_graph(&ws_path))
-        .await
-        .map_err(|e| e.to_string())?
-}
-
-#[tauri::command]
-async fn git_branches(ws_path: String) -> Result<Vec<workspace::BranchInfo>, String> {
-    tauri::async_runtime::spawn_blocking(move || workspace::branch_list(&ws_path))
-        .await
-        .map_err(|e| e.to_string())?
-}
-
-/// 이름 있는 워크트리 생성 — base ref(브랜치·커밋)에서 분기. 큰 저장소의 체크아웃이
-/// 느릴 수 있어 blocking 스레드에서 돈다. 반환은 절대 경로.
-#[tauri::command]
-async fn worktree_add(ws_path: String, name: String, base: Option<String>) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        workspace::worktree_create(&ws_path, &name, base.as_deref())
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-/// 기존 브랜치를 워크트리로 연결 (레일 §워크트리) — 새 브랜치 없이 그 브랜치를 체크아웃
-#[tauri::command]
-async fn worktree_attach(ws_path: String, branch: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || workspace::worktree_attach(&ws_path, &branch))
-        .await
-        .map_err(|e| e.to_string())?
-}
-
 // ── 경량 KV (assignment_cache 테이블, FR-C-23) — 미확인·인박스 같은 파생 상태의 영속 캐시.
 // 파일이 원본인 것(팀·역할·임무)은 여기 넣지 않는다 — DB는 어디까지나 캐시다.
 
@@ -2579,6 +2573,7 @@ pub fn run() {
             agent::start_registry_watch(app.handle().clone());
             ipc::start_server(app.handle().clone()); // eqmux CLI 파이프 (PRD I)
             diag::start_alive_watch(); // 웹뷰 생사 감시 (BR-18)
+            std::thread::spawn(|| prune_session_logs(&log_dir(), SESSION_LOG_KEEP)); // 시작을 막지 않게
             // 웹뷰 렌더러 크래시 생존 (FR-C-06) — ProcessFailed → Reload. PTY는 Rust가
             // 소유하므로 세션은 죽지 않고, 리로드된 프런트가 pty_list·agent_snapshot으로
             // 재부착한다 (restoreTeams). 실패해도 앱은 정상 — 등록은 최선 노력이다.
@@ -2618,11 +2613,6 @@ pub fn run() {
             events_log,
             session_recaps,
             worktree_ensure,
-            worktree_add,
-            worktree_attach,
-            git_worktrees,
-            git_worktree_graph,
-            git_branches,
             ws_checkout,
             cache_get,
             cache_set,
@@ -2711,7 +2701,39 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{backup_session_dbs, resize_is_current, restart_cli, session_prompt, take_complete_utf8, workspace};
+    use super::{
+        backup_session_dbs, open_session_log, prune_session_logs, resize_is_current, restart_cli, session_prompt,
+        take_complete_utf8, workspace,
+    };
+
+    /// M1 — 상한을 넘은 세션 로그는 열 때 `.log.old`로 돌고(기존 .old를 덮는다), 오래된 로그만 정리된다
+    #[test]
+    fn session_log_rotates_and_prunes() {
+        use std::io::Write;
+        let dir = std::env::temp_dir().join(format!("eqmux-log-{}", workspace::now_ms()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("s@ws.log");
+        std::fs::write(&log, vec![b'x'; 20]).unwrap();
+        std::fs::write(dir.join("s@ws.log.old"), b"older").unwrap();
+
+        let (mut f, len) = open_session_log(&log, 10).unwrap();
+        assert_eq!(len, 0, "상한을 넘은 파일은 돌리고 빈 파일로 시작한다");
+        assert_eq!(std::fs::read(dir.join("s@ws.log.old")).unwrap().len(), 20);
+        f.write_all(b"new").unwrap();
+        drop(f);
+        assert_eq!(open_session_log(&log, 10).unwrap().1, 3, "상한 아래면 이어 쓴다");
+
+        // 정리 — 보존 0이면 세션 로그는 지우고 diagnostics.log·다른 파일은 남긴다
+        std::fs::write(dir.join("diagnostics.log"), b"d").unwrap();
+        std::fs::write(dir.join("note.txt"), b"n").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        prune_session_logs(&dir, std::time::Duration::from_millis(1));
+        assert!(!log.exists() && !dir.join("s@ws.log.old").exists());
+        assert!(dir.join("diagnostics.log").exists() && dir.join("note.txt").exists());
+        prune_session_logs(&dir, std::time::Duration::from_secs(3600)); // 새 파일은 남는다
+        assert!(dir.join("diagnostics.log").exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     /// 엔진이 바뀐 재시작 (B82) — 보낸 엔진이 돌던 엔진과 다를 때만 전환, 안 보내면 돌던 엔진 그대로
     #[test]

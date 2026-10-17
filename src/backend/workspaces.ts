@@ -4,7 +4,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { createSignal } from "solid-js";
 import { refreshConversation } from "./conversation";
-import { invalidateGitLists } from "./git";
 import { restoreUnseen, startUnseenSync } from "./flags";
 import { restoreRecaps } from "./recap";
 import { restoreLayout, startLayoutSync } from "./layout";
@@ -146,5 +145,5 @@ export function touchWorkspace(id: string): void {
 /** 임무-브랜치 체크아웃 (FR-E-52) — 있으면 checkout, 없으면 -b 생성. 공유 repo 전체에
  *  영향이 있으므로(E1′ 공유 기본) 호출부는 반드시 2단 확인을 거친다. */
 export function checkoutBranch(wsPath: string, branch: string): Promise<string> {
-  return invoke<string>("ws_checkout", { wsPath, branch }).finally(invalidateGitLists);
+  return invoke<string>("ws_checkout", { wsPath, branch });
 }

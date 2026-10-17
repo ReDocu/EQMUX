@@ -89,10 +89,10 @@ mod win {
         /// 손으로 띄운 claude가 감지·포트·메모리·종료에서 통째로 빠지던 자리다.
         /// 잡 안에만 있는 세션은 pids()와 같은 목록이다
         pub fn tree_pids(&self) -> Vec<u32> {
-            super::tree_pids(&self.pids(), &process_table(), start_time)
+            super::tree_pids(&self.pids(), &process_table_shared(), start_time)
         }
 
-        /// 잡을 벗어난 자손만
+        /// 잡을 벗어난 자손만 — 종료 경로라 공유 표가 아니라 새 스냅숏을 쓴다 (방금 뜬 자식을 놓치면 남는다)
         pub fn escaped(&self) -> Vec<u32> {
             let job = self.pids();
             super::tree_pids(&job, &process_table(), start_time).split_off(job.len())
@@ -191,6 +191,37 @@ mod win {
             CloseHandle(snap);
         }
         out
+    }
+
+    /// 스냅숏 공유 기간 (CPU·RAM C1)
+    const TABLE_TTL: std::time::Duration = std::time::Duration::from_secs(1);
+
+    /// 공유 스냅숏 (CPU·RAM C1) — 에이전트 scan(2초)·감지(5초)·메모리(10초)가 세션마다 시스템 전체
+    /// 스냅숏을 찍던 자리다 (세션 10개면 초당 약 8회). TABLE_TTL 안의 호출은 같은 표를 쓴다.
+    /// 잠금을 쥔 채 찍는다 — 동시에 온 호출은 기다렸다가 그 표를 받는다
+    fn process_table_shared() -> std::sync::Arc<Vec<(u32, u32)>> {
+        type Shared = Option<(std::time::Instant, std::sync::Arc<Vec<(u32, u32)>>)>;
+        static SHARED: std::sync::Mutex<Shared> = std::sync::Mutex::new(None);
+        let mut c = SHARED.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((at, t)) = c.as_ref() {
+            if at.elapsed() < TABLE_TTL {
+                return t.clone();
+            }
+        }
+        let t = std::sync::Arc::new(process_table());
+        *c = Some((std::time::Instant::now(), t.clone()));
+        t
+    }
+
+    #[cfg(test)]
+    #[test]
+    fn process_table_is_shared_within_ttl() {
+        let a = process_table_shared();
+        let b = process_table_shared();
+        assert!(std::sync::Arc::ptr_eq(&a, &b), "TTL 안에서는 같은 스냅숏");
+        assert!(a.iter().any(|&(pid, _)| pid == std::process::id()), "자기 자신이 표에 있다");
+        std::thread::sleep(TABLE_TTL + std::time::Duration::from_millis(50));
+        assert!(!std::sync::Arc::ptr_eq(&a, &process_table_shared()), "지나면 새로 찍는다");
     }
 
     /// 프로세스 시작 시각 (FILETIME 100ns) — pid 재사용을 가르는 근거

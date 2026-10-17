@@ -11,7 +11,7 @@ import { HARD_MAX_SLOTS, maxSlots } from "./settings";
 /** 동시에 열어 둘 수 있는 워크스페이스 수 (B9) — 등록은 무제한이고 오픈만 제한된다.
  *  화면(대시보드 "열기")이 상한을 미리 알아야 조용한 no-op이 되지 않는다 */
 export const MAX_OPEN_WORKSPACES = 10;
-import { AGENT_CLI_LABEL, agentAttached, cliOf, handoffReport, pickAutoName, planCastingSlots, projectStem, sessionName, sessionNameError } from "../types";
+import { AGENT_CLI_LABEL, agentAttached, cliOf, handoffReport, MESSAGES_PER_WS, pickAutoName, planCastingSlots, projectStem, sessionName, sessionNameError, trimStream } from "../types";
 import type { AgentCliId } from "../types";
 import type {
   AgentStateApply,
@@ -46,8 +46,8 @@ export interface Backend {
   markAllRead(wsId?: string): void;
   /** 메시지 원장 실측으로 그 워크스페이스 스트림을 교체 (PRD F) — Tauri에서만 호출된다 */
   hydrateMessages(wsId: string, list: ConversationMessage[]): void;
-  /** message-new 이벤트 1건 반영 — 이미 있는 id는 무시한다 */
-  appendMessage(m: ConversationMessage): void;
+  /** message-new 이벤트 1건 반영 — 이미 있는 id는 무시한다. 상한으로 옛 메시지를 걷어냈으면 true */
+  appendMessage(m: ConversationMessage): boolean;
   /** 미확인 해제 (FR-G-44) — 그 세션의 페인을 보거나 상세를 열면 해제된다 */
   markSeen(sessionId: string): void;
   /** 모두 확인 (FR-G-47) */
@@ -612,7 +612,12 @@ export class MockBackend implements Backend {
     this.broadcast();
   }
 
+  /** 워크스페이스별 메시지 상한 (M3) — `▲ 이전`으로 불러온 옛 페이지가 다음 도착 한 건에 바로
+   *  밀려나지 않게, 교체할 때 받은 양 + 100건까지는 둔다 */
+  private msgCap = new Map<string, number>();
+
   hydrateMessages(wsId: string, list: ConversationMessage[]) {
+    this.msgCap.set(wsId, Math.max(MESSAGES_PER_WS, list.length + 100));
     // 그 워크스페이스의 기존 스트림과 워크스페이스 없는 목 시드를 걷어내고 실측으로 교체
     for (let i = MESSAGES.length - 1; i >= 0; i--) {
       const w = MESSAGES[i].workspaceId;
@@ -624,8 +629,11 @@ export class MockBackend implements Backend {
   }
 
   appendMessage(m: ConversationMessage) {
-    if (MESSAGES.some((x) => x.id === m.id)) return;
+    if (MESSAGES.some((x) => x.id === m.id)) return false;
     MESSAGES.push(m);
+    // 상한 (M3) — 앱을 오래 켜 두면 대화가 끝없이 쌓여 위 중복 검사·대화 탭 렌더·앱 바 미확인 훑기가 같이 무거워진다
+    const trimmed =
+      trimStream(MESSAGES, m.workspaceId, this.msgCap.get(m.workspaceId ?? "") ?? MESSAGES_PER_WS) > 0;
     // 완료 보고 (0.5) — 실시간 도착분만. 원장 다시 읽기(hydrateMessages)는 지난 보고라 칩을 켜지 않는다.
     // 프로젝트 간 보고는 두 원장에 한 번씩 오지만 같은 세션에 같은 값을 쓰므로 무해하다
     if (m.type === "report" && m.done) {
@@ -641,7 +649,11 @@ export class MockBackend implements Backend {
       const sess = SESSIONS.find((x) => x.id === m.from);
       if (sess?.reportPending) sess.reportProgress = true;
     }
+    // 보고는 Rust(ipc report)가 event 테이블에 직접 적는다 — 프런트 logEvent를 지나지 않으므로
+    // 이벤트 로그 구독자(대시보드·로그 탭·이벤트 띠)에게 여기서 알린다 (C4)
+    if (m.type === "report") eventLogged();
     this.broadcast();
+    return trimmed;
   }
 
   markSeen(sessionId: string) {

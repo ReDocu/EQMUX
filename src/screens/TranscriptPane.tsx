@@ -27,8 +27,13 @@ export function TranscriptPane(props: { session: Session; onJump?: () => void })
   onMount(() => {
     if (!isTauri()) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    // 같은 내용이면 setData를 건너뛴다 (CPU·RAM C3) — Rust 캐시가 그대로여도 매번 새 객체가 와서
+    // <For>가 턴·개요 DOM 전부를 다시 만들던 자리다. 로그는 append-only라 끝 턴과 개수로 가른다
+    const sig = (d?: TranscriptData) =>
+      d && `${d.file}|${d.turns.length}|${d.skipped}|${JSON.stringify(d.turns[d.turns.length - 1])}`;
     const load = async () => {
       const d = await readTranscript(props.session);
+      if (d && sig(d) === sig(data())) return;
       setData(d);
       if (!d) {
         // 스크롤백 폴백 (FR-G-86) — 로그가 없거나 스키마 인식 불가. 여기는 평문만 쓴다.
@@ -48,8 +53,9 @@ export function TranscriptPane(props: { session: Session; onJump?: () => void })
     const unlisten = listen<AgentStateEvt>("agent-state", (e) => {
       if (e.payload.session === props.session.id) later();
     });
+    // 숨김 중에는 쉰다 (CPU·RAM C3) — 다시 보이면 다음 틱(10초 안)에 따라잡는다
     const poll = setInterval(() => {
-      if (data()?.guessed) void load();
+      if (data()?.guessed && !document.hidden) void load();
     }, 10_000);
     onCleanup(() => {
       clearTimeout(timer);

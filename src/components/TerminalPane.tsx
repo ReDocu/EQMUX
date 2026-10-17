@@ -684,10 +684,12 @@ async function initSession(
         term.write(`\r\n\x1b[31m${t("프로세스 종료")} · exit ${code ?? "?"}\x1b[0m\r\n`);
       }),
     ];
-    term.onData((data) => {
+    // 해제 목록에 넣는다 — 스폰 실패 후 재시도마다 리스너가 쌓이면 키 입력이 N번 간다
+    const input = term.onData((data) => {
       noteUserInput(props.sessionId, data); // 주입이 이 줄과 합쳐지지 않게 (B20)
       writePty(props.sessionId, data);
     });
+    entry.unsubs.push(() => input.dispose());
 
     // 앱 재시작 복구 (FR-C-31·32) — 스토어의 확정 줄을 흐리게 재생하고 경계를 긋는다.
     // 기존 DB에 남은 TUI 잔해(프레임 조각·연속 중복)는 재생에서 걸러낸다 — 판정은 공용(cleanScrollback)
@@ -966,7 +968,9 @@ export function TerminalPane(props: {
     onCleanup(() => {
       cancelled = true;
       e.mounted = false; // 컨텍스트는 그대로 쥔 채 회수 1순위가 된다 (리마운트 히치 회피)
-      park(e); // 1분 넘게 안 돌아오면 그때 놓는다 (C2·C3)
+      // 1분 넘게 안 돌아오면 그때 놓는다 (C2·C3). 세션 제거로 이미 폐기된 엔트리는 걸지 않는다 —
+      // 걸면 폐기된 터미널을 60초 쥐고 있다가 그 옵션을 건드린다
+      if (REGISTRY.get(props.sessionId) === e) park(e);
       if (e.sync === syncSize) e.sync = undefined;
       if (e.onRevealFail === showRevealFail) e.onRevealFail = undefined;
       scrollDisp?.dispose();

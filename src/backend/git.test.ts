@@ -1,22 +1,5 @@
-// 워크트리 트리 파서 — git log --graph 출력을 커밋 줄과 연결선 줄로 나누는지만 본다
 import { expect, test } from "vitest";
-import { commitWebUrl, parseGraph, remoteWebUrl } from "./git";
-
-test("커밋 줄과 연결선 줄을 나눈다", () => {
-  const out = [
-    "* \x1fa1b2c3d\x1fHEAD -> main\x1f둘째",
-    "| * \x1fe4f5a6b\x1feqmux/ui\x1f갈래",
-    "|/  ",
-    "* \x1f0c0ffee\x1f\x1f첫째",
-    "",
-  ].join("\r\n");
-  expect(parseGraph(out)).toEqual([
-    { graph: "* ", hash: "a1b2c3d", refs: "HEAD -> main", message: "둘째" },
-    { graph: "| * ", hash: "e4f5a6b", refs: "eqmux/ui", message: "갈래" },
-    { graph: "|/  " },
-    { graph: "* ", hash: "0c0ffee", refs: "", message: "첫째" },
-  ]);
-});
+import { commitWebUrl, remoteWebUrl } from "./git";
 
 test("원격 주소 → 웹 주소 (토큰·포트·.git 제거, 로컬은 없음)", () => {
   const cases: [string | undefined, string | undefined][] = [

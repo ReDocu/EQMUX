@@ -737,7 +737,8 @@ export function startMessageBus(): Promise<void> {
     busReady = listen<{ workspace: string; message: MsgRow }>("message-new", (e) => {
       const { workspace, message } = e.payload;
       const m = toMsg(workspace, message);
-      backend.appendMessage(m);
+      // 상한으로 옛 메시지를 걷어냈으면 `▲ 이전`으로 다시 볼 수 있게 한다 (M3)
+      if (backend.appendMessage(m)) setOlderLeft((o) => ({ ...o, [workspace]: true }));
       deliver(workspace, m);
     }).then(() => {});
     backend.subscribe(releaseOrphans); // 에이전트 감지(applyAgents)가 agent를 지우면 방송이 온다

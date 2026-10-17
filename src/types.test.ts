@@ -2,7 +2,7 @@
 // 번역이어야 한다. 화면(세션 상세 "실제/예상 실행 플래그")이 이 문자열을 그대로 보여주므로,
 // 여기가 틀리면 사람은 막혀 있지 않은 것을 막혀 있다고 믿는다.
 import { describe, expect, test } from "vitest";
-import { agentFlagsToString, codexFlagsToString, detectedCli, engineSwitched, flagsToString, handoffReport, nameBesideNo, paneNo, slotBesideNo, statusText, translatePermissions } from "./types";
+import { agentFlagsToString, codexFlagsToString, detectedCli, engineSwitched, flagsToString, handoffReport, nameBesideNo, paneNo, slotBesideNo, statusText, translatePermissions, trimStream } from "./types";
 import type { ConversationMessage } from "./types";
 
 describe("codexFlagsToString", () => {
@@ -181,5 +181,17 @@ describe("statusText", () => {
   test("한국어 기본 설정에서 상태를 한국어로", () => {
     expect(statusText("waiting")).toBe("응답 대기");
     expect(statusText("idle")).toBe("유휴");
+  });
+});
+
+describe("trimStream (CPU·RAM M3)", () => {
+  const msg = (id: string, ws?: string): ConversationMessage => ({ id, time: "", from: "a", to: "b", type: "ask", body: "", unread: false, workspaceId: ws });
+  test("그 워크스페이스의 가장 오래된 것부터 상한까지만 걷어내고, 다른 워크스페이스는 건드리지 않는다", () => {
+    const list = [msg("1", "A"), msg("x", "B"), msg("2", "A"), msg("3", "A")];
+    expect(trimStream(list, "A", 2)).toBe(1);
+    expect(list.map((m) => m.id)).toEqual(["x", "2", "3"]);
+    expect(trimStream(list, "A", 2)).toBe(0);
+    expect(trimStream(list, "B", 0)).toBe(1);
+    expect(list.map((m) => m.id)).toEqual(["2", "3"]);
   });
 });

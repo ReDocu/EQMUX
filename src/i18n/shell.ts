@@ -143,7 +143,6 @@ export const dict: Record<string, string> = {
   '등록된 저장소가 없습니다. "+ 로컬 저장소 연결"로 시작하세요.':
     'No repositories registered. Start with "+ Connect local repository".',
   "저장소를 선택하세요": "Select a repository",
-  원격: "Remote",
   "팀 편성": "Team composition",
   "마지막 사용": "Last used",
   "파일이 원본입니다": "Files are the source of truth",

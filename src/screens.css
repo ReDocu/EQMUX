@@ -443,142 +443,6 @@
   color: var(--eq-bg);
   background: var(--eq-amber);
 }
-/* 워크트리 레일 (orca식) — 임무 아래. 행 = 브랜치 + 귀속 세션, 생성은 팝오버 */
-.rail-wt-head {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 2px 10px 0;
-}
-.rail-wt-head .eyebrow {
-  flex: 1;
-}
-.rail-wt-head b {
-  font-size: 12px;
-}
-.rail-wt-add {
-  flex-shrink: 0;
-  padding: 0 6px;
-  font-size: 13px;
-  color: var(--eq-dim);
-  border-radius: var(--eq-r-sm);
-  cursor: pointer;
-}
-.rail-wt-add:hover {
-  color: var(--eq-text);
-  background: var(--eq-surface-2);
-}
-.rail-wt-pop {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 4px;
-  right: 4px;
-  z-index: 30;
-  border-color: var(--eq-line);
-  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.45);
-  padding: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.rail-wt-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.rail-wt {
-  padding: 5px 8px;
-  border: 1px solid transparent;
-  border-radius: var(--eq-r-sm);
-}
-.rail-wt:hover {
-  border-color: var(--eq-line);
-  background: var(--eq-surface);
-}
-.rail-wt-top {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.rail-wt-name {
-  flex: 1;
-  min-width: 0;
-  font-size: 11px;
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.rail-wt-tag {
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  color: var(--eq-dim);
-  flex-shrink: 0;
-}
-.rail-wt-tag.main {
-  color: var(--eq-blue);
-}
-.rail-wt-open {
-  opacity: 0;
-  flex-shrink: 0;
-  padding: 0 5px;
-  font-size: 10px;
-  color: var(--eq-dim);
-  border-radius: var(--eq-r-sm);
-  cursor: pointer;
-}
-.rail-wt:hover .rail-wt-open {
-  opacity: 1;
-}
-.rail-wt-open:hover {
-  color: var(--eq-text);
-  background: var(--eq-surface-2);
-}
-.rail-wt-path {
-  font-size: 9px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.rail-wt-agents {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin-top: 4px;
-}
-.rail-wt-agent {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  font-size: 10px;
-  padding: 2px 4px;
-  border-radius: var(--eq-r-sm);
-  text-align: left;
-  cursor: pointer;
-}
-.rail-wt-agent:hover,
-.rail-wt-agent.sel {
-  background: var(--eq-surface-2);
-}
-.rail-wt-agent .sdot {
-  width: 7px;
-  height: 7px;
-  flex-shrink: 0;
-}
-.rail-wt-agent-nm {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.rail-wt-empty {
-  font-size: 10px;
-  padding: 2px 10px;
-}
 
 .terminal-slot {
   background: var(--eq-terminal);
@@ -1614,11 +1478,10 @@
   font-size: 11px;
   text-align: left;
 }
-.gitp-repo:hover,
-.gitp-branch:hover {
+.gitp-repo:hover {
   border-color: var(--eq-muted);
 }
-/* 한 줄 툴바 — 브랜치 ▾ · ↑↓ · diff · pull · commit · push. 좁으면 줄바꿈 */
+/* 한 줄 툴바 — 브랜치 · ↑↓ · diff · pull · commit · push. 좁으면 줄바꿈 */
 .gitp-toolbar {
   display: flex;
   align-items: center;
@@ -1666,27 +1529,7 @@
   color: var(--eq-blue);
   font-weight: 700;
 }
-/* 워크트리 생성 모드 토글 (레일 §워크트리) — 새 브랜치 / 기존 브랜치 연결. 레일·git 패널 공용 */
-.wt-mode-toggle {
-  display: flex;
-  gap: 4px;
-}
-.wt-mode-toggle button {
-  flex: 1;
-  font-size: 10px;
-  padding: 2px 6px;
-  background: none;
-  border: 1px solid var(--eq-line);
-  border-radius: var(--eq-r-sm);
-  color: var(--eq-muted);
-  cursor: pointer;
-}
-.wt-mode-toggle button.on {
-  color: var(--eq-blue);
-  border-color: var(--eq-blue-mid);
-  background: var(--eq-blue-soft);
-}
-/* 팝오버 (시안 §05) — 브랜치 체크아웃·워크트리 생성 폼. 내용을 밀지 않고 위에 뜬다 */
+/* 팝오버 (시안 §05) — 저장소 선택. 내용을 밀지 않고 위에 뜬다 */
 .gitp-pop {
   position: absolute;
   top: calc(100% + 4px);
@@ -1699,74 +1542,6 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
-}
-/* 워크트리 스트립 (UI 리파인 §git) — 한 줄. 경로·head·정책은 툴팁 */
-.gitp-wt-head {
-  position: relative;
-}
-.gitp-wt-list {
-  display: flex;
-  flex-direction: column;
-}
-.gitp-wt {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 3px 2px;
-  border-top: 1px solid var(--eq-line);
-}
-.gitp-wt:first-child {
-  border-top: none;
-}
-.gitp-wt-name {
-  font-size: 11px;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.gitp-wt-path {
-  font-size: 9px;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.gitp-wt-tag {
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  color: var(--eq-dim);
-  flex-shrink: 0;
-}
-.gitp-wt-tag.main {
-  color: var(--eq-blue);
-}
-/* 워크트리 트리 — git log --graph 문자 레인. 가로로 길면 스크롤, 세로는 상한 */
-.gitp-wt-graph {
-  max-height: 240px;
-  overflow: auto;
-  font-size: 11px;
-  border-top: 1px solid var(--eq-line);
-  padding-top: 4px;
-}
-.gitp-wt-graph-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  line-height: 18px;
-  white-space: nowrap;
-}
-.gitp-wt-graph-row.link {
-  cursor: pointer;
-}
-.gitp-wt-graph-row.link:hover {
-  background: var(--eq-surface-2);
-}
-.gitp-wt-lanes {
-  white-space: pre;
-  color: var(--eq-blue-mid);
-  flex-shrink: 0;
 }
 .gitp-foot {
   font-size: 10px;
