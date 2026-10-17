@@ -68,7 +68,7 @@ struct PtySession {
     /// 세션별 쓰기 스레드의 입구 (최적화 A1) — 블로킹 파이프 쓰기는 그 스레드만 한다.
     /// 한 세션의 stdin이 막혀도(먹통 TUI 등) 메인 스레드·다른 세션의 write/resize와 pty_kill이
     /// 살아 있어야 한다. 채널이라 키 입력 순서도 그대로 지켜진다. 세션이 버려지면 스레드도 끝난다.
-    writer: std::sync::mpsc::Sender<Vec<u8>>,
+    writer: std::sync::mpsc::SyncSender<Vec<u8>>,
     child: Box<dyn Child + Send + Sync>,
     gen: u64, // 같은 id로 재기동 시 이전 리더 스레드의 정리를 무효화하는 세대 표식
     /// FR-C-05 — 자식 트리 정리. 마지막 Arc drop = KILL_ON_JOB_CLOSE. Arc인 이유: 관측(메모리·pid)이
@@ -303,7 +303,9 @@ fn spawn_pty_session(
 
     let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
     let mut pipe = pair.master.take_writer().map_err(|e| e.to_string())?;
-    let (writer, write_rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    // 상한 (CPU·RAM M8) — 셸이 입력을 읽지 않으면(막힌 파이프) 덩어리가 끝없이 쌓였다.
+    // 보내는 쪽(pty_write)은 메인 스레드에서 잠금을 쥐고 있어 막히면 안 되므로 try_send로 넣는다
+    let (writer, write_rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(1024);
     std::thread::spawn(move || {
         // 막힌 파이프에서 write_all이 블록해도 이 스레드만 선다. ConPTY가 닫히면 쓰기가 실패해 끝난다
         while let Ok(data) = write_rx.recv() {
@@ -353,7 +355,8 @@ fn spawn_pty_session(
     // 조각을 묶어 최종 상태만 화면 이벤트로 보낸다. 25ms 시한·256KB 상한으로 지연을 막는다.
     // 리사이즈 직후 400ms는 ConPTY 전체 리페인트가 띄엄띄엄 몰려오므로 25ms/250ms로 길게 묶는다
     // (줌·분할·전체 화면 전환 깜빡임 방지 — 그 동안은 타이핑 지연이 문제되지 않는다).
-    let (out_tx, out_rx) = std::sync::mpsc::channel::<String>();
+    // 상한 (CPU·RAM M8) — 코얼레서가 밀리면 리더가 잠시 기다린다(ConPTY까지 배압). 무한 큐로 쌓지 않는다
+    let (out_tx, out_rx) = std::sync::mpsc::sync_channel::<String>(1024);
     let emit_hint = resize_hint.clone();
     let emit_app = app.clone();
     let emit_id = id.clone();
@@ -553,7 +556,10 @@ fn pty_write(state: State<PtyState>, id: String, data: String) -> Result<(), Str
     // async로 옮기면 호출 순서대로 실행된다는 보장이 없어 키 입력이 뒤섞인다
     let sessions = state.0.lock().map_err(|e| e.to_string())?;
     let writer = &sessions.get(&id).ok_or("세션 없음")?.writer;
-    writer.send(data.into_bytes()).map_err(|_| "세션 입력이 닫혔습니다".to_string())
+    writer.try_send(data.into_bytes()).map_err(|e| match e {
+        std::sync::mpsc::TrySendError::Full(_) => "입력 대기열이 가득 찼습니다 — 셸이 입력을 읽지 않고 있습니다".to_string(),
+        std::sync::mpsc::TrySendError::Disconnected(_) => "세션 입력이 닫혔습니다".to_string(),
+    })
 }
 
 /// 이 리사이즈 요청이 아직 최신인가 — 전역 잠금 밖에서 돌기 때문에 두 요청이 겹칠 수 있고,
@@ -2175,7 +2181,7 @@ async fn app_exit(app: AppHandle) {
     // 세션별 쓰기 스레드에 넘기기만 한다 — 막힌 파이프가 종료를 못 멈추게 (B14)
     if let Ok(sessions) = state.0.lock() {
         for s in sessions.values() {
-            let _ = s.writer.send(b"\x03".to_vec());
+            let _ = s.writer.try_send(b"\x03".to_vec()); // 가득 찼으면 넘긴다 — 뒤의 kill이 끝낸다
         }
     }
     tokio_sleep(std::time::Duration::from_millis(500)).await; // ④ 유예

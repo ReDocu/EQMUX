@@ -8,7 +8,7 @@ import { listen } from "@tauri-apps/api/event";
 import { createSignal } from "solid-js";
 import { t, tf } from "../i18n";
 import { backend } from "./mock";
-import { echoPty, humanTyping, isTauri, writePty } from "./pty";
+import { echoPty, humanTyping, isTauri, onForgetSession, writePty } from "./pty";
 import { canInject, effectiveTitle, sessionName } from "../types";
 import { settings } from "./settings";
 import { notifyLocal } from "./attention";
@@ -180,6 +180,22 @@ export function markConversationRead(wsId: string | undefined): void {
 const inbox = new Map<string, ConversationMessage[]>(); // 세션 id → 대기 메시지
 const [inboxTick, setInboxTick] = createSignal(0);
 
+/** 세션당 대기 상한 (CPU·RAM M6) — 죽은 세션에도 @all이 계속 쌓이고, 바뀔 때마다 인박스 전체를
+ *  직렬화해 저장한다. 넘치면 오래된 것부터 버린다 — 원문은 원장(message 테이블)에 그대로 있다 */
+const INBOX_MAX = 50;
+export const capQueue = <T>(q: T[], max: number): T[] => (q.length > max ? q.slice(-max) : q);
+function enqueue(id: string, msgs: ConversationMessage[]): void {
+  inbox.set(id, capQueue([...(inbox.get(id) ?? []), ...msgs], INBOX_MAX));
+}
+
+// 세션을 지우면 그 대기분도 지운다 (M6) — 남기면 저장 때마다 다시 직렬화되고, 같은 id로 다시 생긴
+// 슬롯(세션 id는 결정적이다)이 지난 세션의 대기분을 물려받는다
+onForgetSession((id) => {
+  if (!inbox.delete(id)) return;
+  setInboxTick((t) => t + 1);
+  scheduleInboxSave();
+});
+
 // 인박스 영속 (F 잔여) — 재시작해도 대기분이 남게 워크스페이스 KV에 캐시한다.
 // 저장 형태: { [세션id]: ConversationMessage[] } — 복원 시 세션이 살아 있는 것만 되살린다.
 const INBOX_KEY = "inbox";
@@ -230,7 +246,7 @@ async function restoreInbox(wsId: string): Promise<void> {
     let changed = false;
     for (const [sid, msgs] of Object.entries(saved)) {
       if (!alive.has(sid) || msgs.length === 0) continue;
-      inbox.set(sid, [...(inbox.get(sid) ?? []), ...msgs]);
+      enqueue(sid, msgs);
       changed = true;
     }
     if (changed) {
@@ -609,7 +625,7 @@ function gather(sessionId: string, m: ConversationMessage): void {
       for (const b of batches(msgs)) injectMessages(sessionId, b);
       return;
     }
-    inbox.set(sessionId, [...(inbox.get(sessionId) ?? []), ...msgs]);
+    enqueue(sessionId, msgs);
     setInboxTick((t) => t + 1);
     scheduleInboxSave();
     // 유휴인데 사람이 치는 중이라 못 넣었다 — 유휴 세션에는 다음 전이가 오지 않으니 직접 다시 본다
@@ -636,9 +652,7 @@ function deliver(wsId: string, m: ConversationMessage): void {
   let queued = false;
   let reached = false;
   const park = (id: string) => {
-    const q = inbox.get(id) ?? [];
-    q.push(m);
-    inbox.set(id, q);
+    enqueue(id, [m]);
     setInboxTick((t) => t + 1);
     scheduleInboxSave(); // 인박스 영속 — 대기분은 재시작을 넘긴다
     queued = true;

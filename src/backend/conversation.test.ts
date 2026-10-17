@@ -1,7 +1,7 @@
 // 주입 본문 단위 테스트 — 전달 경로(PTY·인박스)는 통합의 몫이고, 여기서는 "여러 건을 어떻게
 // 한 줄로 접는가"만 본다: 단건/묶음 접두 · 개행 평탄화 · 상한에서 덩어리 갈리기.
 import { describe, expect, test } from "vitest";
-import { batches, cancelBrief, deliveredIds, flushInboxOnState, fmt, fmtEcho, goneName, orphanedInbox, pendingBrief, queueBrief, pendingReason, prependOlder, splitPending, unmanagedAgent } from "./conversation";
+import { batches, cancelBrief, capQueue, deliveredIds, flushInboxOnState, fmt, fmtEcho, goneName, orphanedInbox, pendingBrief, queueBrief, pendingReason, prependOlder, splitPending, unmanagedAgent } from "./conversation";
 import { typedText } from "./pty";
 import type { ConversationMessage } from "../types";
 
@@ -192,5 +192,13 @@ describe("queueBrief (B93)", () => {
     queueBrief("y@w", "[EQ] 임무 배정: C");
     cancelBrief("y@w");
     expect(pendingBrief("y@w")).toBeUndefined();
+  });
+});
+
+describe("capQueue (CPU·RAM M6)", () => {
+  test("상한 안이면 그대로, 넘치면 최근 것만 남긴다", () => {
+    const q = [1, 2, 3];
+    expect(capQueue(q, 5)).toBe(q);
+    expect(capQueue([1, 2, 3, 4, 5, 6], 4)).toEqual([3, 4, 5, 6]);
   });
 });

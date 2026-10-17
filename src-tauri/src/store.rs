@@ -106,6 +106,24 @@ const SCROLLBACK_CAP_PER_SESSION: i64 = 1_000; // FR-C-50 — 0.3.7에서 10만 
 const CAP_CHECK_EVERY: i64 = 200; // 상한의 1/5마다 점검 — 실보관량이 상한을 크게 넘지 않게
 const RETENTION_DAYS_MS: i64 = 30 * 86_400_000;
 const BATCH_MAX: usize = 200; // FR-C-21 — 100ms 창 또는 누적 N줄 중 먼저
+/// 쓰기 실패로 다시 쌓인 대기분의 상한 (CPU·RAM M4) — 채널 상한과 같은 값. DB를 못 여는 동안에도
+/// 채널은 계속 비워져 pending으로 들어오므로, 이 상한이 없으면 그 워크스페이스의 출력 전부가 힙에 쌓인다
+const PENDING_MAX: usize = 50_000;
+
+/// 상한을 넘은 대기분에서 오래된 출력 줄(Line)부터 버린다 — 이벤트·세션 시작/종료·재개 매핑은
+/// 작고 다시 만들 수 없으니 남긴다. 버린 줄 수를 돌려준다. 버린 줄은 세션 로그 파일에 그대로 있다
+fn cap_pending(pending: &mut Vec<StoreMsg>, max: usize) -> usize {
+    let mut over = pending.len().saturating_sub(max);
+    let before = pending.len();
+    pending.retain(|m| {
+        if over > 0 && matches!(m, StoreMsg::Line { .. }) {
+            over -= 1;
+            return false;
+        }
+        true
+    });
+    before - pending.len()
+}
 
 fn now_ms() -> i64 {
     SystemTime::now()
@@ -270,6 +288,9 @@ fn run(root: PathBuf, rx: Receiver<StoreMsg>) {
     let mut dbs: HashMap<String, Connection> = HashMap::new();
     let mut cursors: HashMap<String, SessionCursor> = HashMap::new();
     let mut pending: Vec<StoreMsg> = Vec::new();
+    // 마지막 flush 뒤 새로 들어온 수 (M4) — pending 길이로 재면 쓰기 실패로 남은 대기분이 BATCH_MAX를
+    // 넘는 순간부터 줄 하나마다 flush(= DB 열기 재시도)가 돈다
+    let mut fresh = 0usize;
 
     loop {
         match rx.recv_timeout(Duration::from_millis(100)) {
@@ -281,7 +302,8 @@ fn run(root: PathBuf, rx: Receiver<StoreMsg>) {
             }
             Ok(msg) => {
                 pending.push(msg);
-                if pending.len() < BATCH_MAX {
+                fresh += 1;
+                if fresh < BATCH_MAX {
                     continue;
                 }
             }
@@ -294,6 +316,7 @@ fn run(root: PathBuf, rx: Receiver<StoreMsg>) {
         if !pending.is_empty() {
             flush(&root, &mut dbs, &mut cursors, &mut pending);
         }
+        fresh = 0;
     }
 }
 
@@ -328,8 +351,9 @@ fn flush(
                     dbs.insert(ws.clone(), c);
                 }
                 Err(_) => {
-                    // 일시 오류(잠금·디스크)로 배치를 무음 폐기하지 않는다 — 다음 tick에 재시도.
-                    // ponytail: 영구 장애면 pending이 계속 자란다, 재시도 상한이 필요해지면 그때 단다
+                    // 일시 오류(잠금·디스크)로 배치를 바로 버리지 않는다 — 다음 tick에 재시도.
+                    // 영구 장애면 flush 끝의 cap_pending이 오래된 출력 줄부터 버려 상한을 지킨다 (M4).
+                    // ponytail: 실패한 열기를 100ms 또는 BATCH_MAX줄마다 다시 시도한다, 비용이 보이면 백오프를 단다
                     pending.extend(msgs);
                     continue;
                 }
@@ -451,6 +475,10 @@ fn flush(
                 }
             }
         }
+    }
+    let dropped = cap_pending(pending, PENDING_MAX);
+    if dropped > 0 {
+        crate::diag::write(&format!("store: 쓰기 실패가 이어져 대기 중인 출력 {dropped}줄을 버림 (상한 {PENDING_MAX})"));
     }
 }
 
@@ -836,6 +864,24 @@ impl LineAssembler {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// M4 — 상한을 넘으면 오래된 Line부터 버리고, 이벤트는 남긴다
+    #[test]
+    fn cap_pending_drops_oldest_lines_only() {
+        let line = |t: &str| StoreMsg::Line { ws: "w".into(), id: "s".into(), text: t.into(), styled: None };
+        let event = || StoreMsg::Event { ws: "w".into(), id: None, kind: "k".into(), message: "m".into() };
+        let mut p = vec![line("1"), event(), line("2"), line("3")];
+        assert_eq!(cap_pending(&mut p, 2), 2);
+        let kept: Vec<String> = p
+            .iter()
+            .map(|m| match m {
+                StoreMsg::Line { text, .. } => text.clone(),
+                _ => "E".into(),
+            })
+            .collect();
+        assert_eq!(kept, ["E", "3"]);
+        assert_eq!(cap_pending(&mut p, 2), 0, "상한 안이면 그대로");
+    }
 
     #[test]
     fn fts_query_is_escaped_per_token() {

@@ -223,6 +223,7 @@ pub fn forget_session(app: &AppHandle, id: &str) {
     }
     if let Ok(mut gates) = rt.notify_gate.lock() {
         gates.remove(id);
+        gates.remove(&done_key(id)); // 완료 알림 게이트도 같은 세션 것이다 (CPU·RAM L4)
     }
     if let Ok(mut tokens) = rt.session_tokens.lock() {
         tokens.remove(id);

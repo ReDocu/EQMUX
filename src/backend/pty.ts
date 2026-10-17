@@ -184,8 +184,15 @@ export function setTerminalDisposer(fn: (id: string) => void): void {
  *  터미널 인스턴스도 여기서 함께 폐기한다 (B44) — 남겨 두면 같은 세션 id로 슬롯이 다시 생겨도
  *  REGISTRY 항목의 initialized가 참이라 spawnPty가 영영 안 돌고, 죽은 세션의 마지막 화면이
  *  '실행 중'인 척 그대로 재부착된다. 세션 id는 `페르소나@워크스페이스` 결정적 관례라 반드시 충돌한다. */
+const forgetHooks: ((id: string) => void)[] = [];
+/** 세션 영구 제거 때 함께 정리할 것 (CPU·RAM M6 — 대화 인박스) */
+export function onForgetSession(cb: (id: string) => void): void {
+  forgetHooks.push(cb);
+}
+
 export function forgetAgent(id: string): void {
   disposeTerm?.(id); // 브라우저 목에서도 화면 인스턴스는 폐기해야 한다 — isTauri 가드 앞에 둔다
+  forgetHooks.forEach((cb) => cb(id));
   if (!isTauri()) return;
   void invoke("agent_forget", { id }).catch(() => {});
 }

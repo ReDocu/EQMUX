@@ -13,6 +13,24 @@ use serde::Serialize;
 use crate::workspace::git;
 
 const MAX_LINES_PER_SIDE: usize = 3000;
+/// 추적 안 되는 파일을 읽는 상한 (CPU·RAM O2) — 화면은 3000줄까지라 그보다 훨씬 넉넉하다.
+/// 넘으면 줄 수는 "+?"로, diff는 앞부분만 보이고 잘림 표시를 한다
+const MAX_READ_BYTES: u64 = 2 * 1024 * 1024;
+
+/// 앞 MAX_READ_BYTES만 읽는다. NUL이 있으면 바이너리로 본다. 반환은 (본문, 잘렸는가)
+fn read_capped(path: &Path) -> Result<(String, bool), String> {
+    use std::io::Read;
+    let mut raw = Vec::new();
+    std::fs::File::open(path)
+        .and_then(|f| f.take(MAX_READ_BYTES + 1).read_to_end(&mut raw))
+        .map_err(|_| "파일을 읽을 수 없습니다 (없음)".to_string())?;
+    if raw.contains(&0) {
+        return Err("파일을 읽을 수 없습니다 (바이너리)".into());
+    }
+    let cut = raw.len() as u64 > MAX_READ_BYTES;
+    raw.truncate(MAX_READ_BYTES as usize);
+    Ok((String::from_utf8_lossy(&raw).into_owned(), cut))
+}
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -102,10 +120,13 @@ pub fn changed_files(ws_path: &str) -> Result<Vec<ChangedFile>, String> {
             "M"
         };
         let stat = if code.contains('?') {
-            let lines = std::fs::read_to_string(Path::new(ws_path).join(&path))
-                .map(|s| s.lines().count())
-                .unwrap_or(0);
-            format!("+{lines}")
+            let file = Path::new(ws_path).join(&path);
+            if std::fs::metadata(&file).map(|m| m.len() > MAX_READ_BYTES).unwrap_or(false) {
+                "+?".to_string() // 큰 파일은 줄 수를 세지 않는다 (O2)
+            } else {
+                let lines = std::fs::read_to_string(&file).map(|s| s.lines().count()).unwrap_or(0);
+                format!("+{lines}")
+            }
         } else {
             match stats.get(&path) {
                 Some((a, d)) if a == "-" => "바이너리".into(),
@@ -247,10 +268,9 @@ pub fn file_diff(ws_path: &str, path: &str, known_from: Option<&str>) -> Result<
         if !target.starts_with(&base) {
             return Err("워크스페이스 밖 경로".into());
         }
-        let text = std::fs::read_to_string(&target)
-            .map_err(|_| "파일을 읽을 수 없습니다 (바이너리 또는 없음)".to_string())?;
+        let (text, cut) = read_capped(&target)?;
         let current = all_lines(&text, "add");
-        let truncated = text.lines().count() > MAX_LINES_PER_SIDE;
+        let truncated = cut || text.lines().count() > MAX_LINES_PER_SIDE;
         return Ok(FileDiff { base_label, base: Vec::new(), current, truncated });
     }
 
@@ -391,6 +411,24 @@ mod tests {
         git(&["config", "user.email", "t@t"], &path).unwrap();
         git(&["config", "user.name", "t"], &path).unwrap();
         (dir, path)
+    }
+
+    /// O2 — 상한을 넘는 추적 안 되는 파일: 줄 수는 "+?", diff는 앞부분만 + 잘림 표시
+    #[test]
+    fn large_untracked_file_is_read_capped() {
+        let (dir, ws) = temp_repo("big");
+        fs::write(dir.join("seed.txt"), "x\n").unwrap();
+        git(&["add", "."], &ws).unwrap();
+        git(&["commit", "-m", "seed"], &ws).unwrap();
+        let line = "0123456789".repeat(10) + "\n";
+        fs::write(dir.join("big.log"), line.repeat((MAX_READ_BYTES as usize / line.len()) + 10)).unwrap();
+        let files = changed_files(&ws).unwrap();
+        assert_eq!(files.iter().find(|f| f.path == "big.log").unwrap().stat, "+?");
+        let d = file_diff(&ws, "big.log", None).unwrap();
+        assert!(d.truncated && d.current.len() <= MAX_LINES_PER_SIDE);
+        fs::write(dir.join("bin.dat"), [1u8, 0, 2]).unwrap();
+        assert!(file_diff(&ws, "bin.dat", None).is_err(), "NUL이 있으면 바이너리");
+        fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

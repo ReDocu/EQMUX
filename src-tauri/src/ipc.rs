@@ -112,13 +112,15 @@ fn server_loop(app: AppHandle) {
 
 #[cfg(windows)]
 fn handle_conn(app: &AppHandle, file: std::fs::File) {
-    use std::io::{BufRead, BufReader, Write};
+    use std::io::{BufRead, BufReader, Read, Write};
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Storage::FileSystem::FlushFileBuffers;
     use windows_sys::Win32::System::Pipes::DisconnectNamedPipe;
 
     let mut line = String::new();
-    if BufReader::new(&file).read_line(&mut line).is_err() {
+    // 요청 한 줄 상한 1MB (CPU·RAM O5) — 개행을 안 보내는 클라이언트가 연결마다(최대 32개) 끝없이
+    // 버퍼를 키우지 않게. 잘린 줄은 JSON 해석에서 실패해 오류 응답이 나간다
+    if BufReader::new(&file).take(1 << 20).read_line(&mut line).is_err() {
         return;
     }
     let resp = match handle(app, line.trim()) {

@@ -316,6 +316,8 @@ export async function launchAgentInSession(
 
 /** 세션 제거 시 호출 — PTY와 함께 터미널 인스턴스도 폐기한다 */
 export function disposeSessionTerminal(id: string) {
+  // 스폰 실패·첫 마운트 전 제거로 한 번도 불리지 않은 예약이 남지 않게 (CPU·RAM L3)
+  pendingReady.delete(id);
   const e = REGISTRY.get(id);
   if (e) {
     clearTimeout(e.parkTimer);

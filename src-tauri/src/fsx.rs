@@ -102,7 +102,13 @@ pub fn preview(ws_path: &str, rel: &str) -> Result<String, String> {
     if !target.starts_with(&base) {
         return Err("워크스페이스 밖 경로".into());
     }
-    let data = fs::read(&target).map_err(|e| e.to_string())?;
+    // 앞 64KB+1바이트만 읽는다 (CPU·RAM O1) — 전체를 읽으면 큰 로그·덤프 하나에 그 크기만큼 메모리를 쓴다
+    let mut data = Vec::new();
+    std::io::Read::read_to_end(
+        &mut std::io::Read::take(fs::File::open(&target).map_err(|e| e.to_string())?, PREVIEW_BYTES as u64 + 1),
+        &mut data,
+    )
+    .map_err(|e| e.to_string())?;
     let truncated = data.len() > PREVIEW_BYTES;
     let slice = &data[..data.len().min(PREVIEW_BYTES)];
     let mut text = String::from_utf8_lossy(slice).into_owned();
