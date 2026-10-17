@@ -115,6 +115,13 @@
   - ResizeObserver와 effect는 `queueEqualize`(rAF로 프레임당 1회)를 지난다. 정리할 때 대기 중인 프레임도 취소한다.
   - 검증은 `tsc` 통과와 `vitest` 135건 통과다. 줄바꿈 모드 diff 화면을 직접 띄워 보지는 않았다.
 - **C11은 하지 않는다.** `startDirectorySync`(`conversation.ts`)와 `startTeamSync`(`team.ts`)는 이미 "바뀐 때만 보낸다·저장한다"로 막혀 있다. 방송마다 남는 일은 세션 수십 개 크기의 문자열 비교다. 유휴 실측도 측정 하한이고, 다른 세션의 `broadcastSoon`이 방송 횟수 자체를 묶었다. 효과에 비해 손댈 가치가 없다.
+- **M7**: `store.rs`
+  - 메시지 인덱스 2개를 더했다. `message_sender_kind(sender, kind)`는 `open_requesters`의 "내 마지막 완료 보고" 하위 쿼리용이다. `message_unread(id) WHERE read = 0`은 모두 읽음 UPDATE용 부분 인덱스다. 테스트 `message_queries_use_indexes`가 쿼리 계획에서 두 인덱스를 타는 것을 확인한다.
+  - 저장 스레드가 쉬는 틈(100ms 무입력)에 24시간(`MAINTAIN_EVERY`)마다 열린 DB 전부에 `maintain`(30일 보존·세션 상한·FTS 시드)을 다시 돌린다. 출력이 쉬지 않고 이어지는 동안에는 돌지 않는다.
+  - **메시지 보존 기간은 넣지 않았다.** message 테이블은 대화 원장이라 30일 지난 대화를 지울지는 제품 결정이다.
+  - 검증: `cargo test --lib` 150건 통과(경고 없음).
+- **O3·O4는 하지 않는다.** O3("더 보기")는 디스크 스크롤백에서 페이지를 가져오는데, 스크롤백이 세션당 1,000줄(`SCROLLBACK_CAP_PER_SESSION`)이라 이미 상한이 있다. O4(diff)는 한쪽 3,000줄(`MAX_LINES_PER_SIDE`)에서 잘린다. 최악이 6,000행을 잠깐 그리는 정도라 가상화를 새로 만들 값이 없다.
+- **C6은 아직이다.** `BrowserPanelTab.tsx`를 다른 세션이 고치는 중(커밋 안 됨)이라 미룬다.
 - (L1·L2) `tsc --noEmit` 통과, `vitest` 133건 통과. 두 경로 모두 DOM과 xterm이 있어야 해서 단위 테스트는 추가하지 않았다. 앱에서 확인하는 법은 다음과 같다. L1: 잘못된 cwd로 세션을 만들고 탭을 몇 번 오간 뒤 cwd를 고쳐 다시 띄우면, 글자가 한 번씩만 들어가야 한다. L2: 레지스트리 수(`terminals`)는 고치기 전에도 바로 줄었으므로 증거가 되지 않는다. 세션을 여러 개 지운 뒤 60초 안에 DevTools 힙 스냅샷에서 `Terminal` 인스턴스 수가 남은 세션 수와 같으면 된다.
 
 ## 실측 (2026-10-17 17:29~17:52)

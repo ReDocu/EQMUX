@@ -100,12 +100,18 @@ CREATE TABLE IF NOT EXISTS message (
   recipient_name TEXT
 );
 CREATE INDEX IF NOT EXISTS message_recipient_kind ON message(recipient, kind);
+-- CPU·RAM M7 — open_requesters의 '내 마지막 완료 보고' 하위 쿼리(sender = ? AND kind = 'report')와
+-- 모두 읽음(UPDATE … WHERE read = 0)이 원장 전체를 훑지 않게 한다. 미확인은 부분 인덱스라 작다
+CREATE INDEX IF NOT EXISTS message_sender_kind ON message(sender, kind);
+CREATE INDEX IF NOT EXISTS message_unread ON message(id) WHERE read = 0;
 ";
 
 const SCROLLBACK_CAP_PER_SESSION: i64 = 1_000; // FR-C-50 — 0.3.7에서 10만 → 1,000줄
 const CAP_CHECK_EVERY: i64 = 200; // 상한의 1/5마다 점검 — 실보관량이 상한을 크게 넘지 않게
 const RETENTION_DAYS_MS: i64 = 30 * 86_400_000;
 const BATCH_MAX: usize = 200; // FR-C-21 — 100ms 창 또는 누적 N줄 중 먼저
+/// 열린 DB의 보존 정리 주기 (CPU·RAM M7) — 첫 열기에서만 돌면 앱을 며칠 켜 두는 동안 30일이 지나도 지워지지 않는다
+const MAINTAIN_EVERY: Duration = Duration::from_secs(24 * 3600);
 /// 쓰기 실패로 다시 쌓인 대기분의 상한 (CPU·RAM M4) — 채널 상한과 같은 값. DB를 못 여는 동안에도
 /// 채널은 계속 비워져 pending으로 들어오므로, 이 상한이 없으면 그 워크스페이스의 출력 전부가 힙에 쌓인다
 const PENDING_MAX: usize = 50_000;
@@ -303,6 +309,7 @@ fn run(root: PathBuf, rx: Receiver<StoreMsg>) {
     // 마지막 flush 뒤 새로 들어온 수 (M4) — pending 길이로 재면 쓰기 실패로 남은 대기분이 BATCH_MAX를
     // 넘는 순간부터 줄 하나마다 flush(= DB 열기 재시도)가 돈다
     let mut fresh = 0usize;
+    let mut last_maintain = std::time::Instant::now(); // 첫 열기(open_writer)가 이미 한 번 돈다
 
     loop {
         match rx.recv_timeout(Duration::from_millis(100)) {
@@ -319,7 +326,15 @@ fn run(root: PathBuf, rx: Receiver<StoreMsg>) {
                     continue;
                 }
             }
-            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Timeout) => {
+                // 쉬는 틈에만 — 적재 중에는 배치를 늦추지 않는다
+                if last_maintain.elapsed() >= MAINTAIN_EVERY {
+                    last_maintain = std::time::Instant::now();
+                    for conn in dbs.values() {
+                        maintain(conn);
+                    }
+                }
+            }
             Err(RecvTimeoutError::Disconnected) => {
                 flush(&root, &mut dbs, &mut cursors, &mut pending);
                 return;
@@ -926,6 +941,24 @@ mod tests {
         let text = |v: &Vec<(String, Option<String>)>| v.iter().map(|x| x.0.clone()).collect::<Vec<_>>();
         assert_eq!(text(&on), text(&off));
         assert!(on[0].1.is_some() && off.iter().all(|x| x.1.is_none()));
+    }
+
+    /// M7 — 모두 읽음과 '내 마지막 완료 보고' 하위 쿼리가 원장 전체가 아니라 인덱스를 탄다
+    #[test]
+    fn message_queries_use_indexes() {
+        let dir = std::env::temp_dir().join(format!("eqmux-idx-{}", crate::workspace::now_ms()));
+        let conn = open_db(&dir, "ws").unwrap();
+        let plan = |sql: &str| -> String {
+            let mut st = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+            let rows = st.query_map([], |r| r.get::<_, String>(3)).unwrap();
+            rows.map(|r| r.unwrap()).collect::<Vec<_>>().join(" / ")
+        };
+        let unread = plan("UPDATE message SET read = 1 WHERE read = 0");
+        assert!(unread.contains("message_unread"), "{unread}");
+        let done = plan("SELECT MAX(id) FROM message WHERE sender = 'a' AND kind = 'report' AND done = 1");
+        assert!(done.contains("message_sender_kind"), "{done}");
+        drop(conn);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// C8 — 같은 DB를 다시 열어도 동작하고, 스키마는 첫 열기에서 맞춘 것으로 기억된다
