@@ -107,6 +107,20 @@ struct PtyOutput {
     data: String,
 }
 
+/// PTY 출력 채널 (CPU·RAM — cpu-optimization 후보 5) — 웹뷰가 시작할 때 하나 등록한다.
+/// emit은 덩어리마다 페이로드를 스크립트 문자열로 만들어 웹뷰에서 eval한다. Channel은 8KB 이상을
+/// fetch로 넘겨 그 문자열을 만들지 않는다. 등록 전(또는 보내기 실패)에는 지금처럼 emit한다
+#[derive(Default)]
+struct PtyOutChannel(Mutex<Option<tauri::ipc::Channel<PtyOutput>>>);
+
+/// 웹뷰가 다시 뜨면(FR-C-06) 새 채널로 바꿔 끼운다 — 옛 채널은 그 웹뷰와 함께 죽었다
+#[tauri::command]
+fn pty_output_channel(state: State<PtyOutChannel>, channel: tauri::ipc::Channel<PtyOutput>) {
+    if let Ok(mut c) = state.0.lock() {
+        *c = Some(channel);
+    }
+}
+
 #[derive(Clone, Serialize)]
 struct PtyExit {
     id: String,
@@ -382,7 +396,18 @@ fn spawn_pty_session(
                     Err(_) => break, // 조용/끊김 → 프레임 완성으로 보고 방출
                 }
             }
-            let _ = emit_app.emit_to("main", "pty-output", PtyOutput { id: emit_id.clone(), data: batch });
+            let out = PtyOutput { id: emit_id.clone(), data: batch };
+            let ch = emit_app.state::<PtyOutChannel>().0.lock().ok().and_then(|c| c.clone());
+            match ch {
+                Some(ch) => {
+                    if ch.send(out.clone()).is_err() {
+                        let _ = emit_app.emit_to("main", "pty-output", out);
+                    }
+                }
+                None => {
+                    let _ = emit_app.emit_to("main", "pty-output", out);
+                }
+            }
         }
     });
 
@@ -2527,6 +2552,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .manage(PtyState::default())
+        .manage(PtyOutChannel::default())
         // 화면 손상 진단 (임시 계측, diag.rs) — 배율·모니터가 바뀌는 순간을 남긴다.
         // 프런트는 이 순간을 볼 수 없다: 창을 배율이 다른 모니터로 옮겨도 CSS 크기는
         // 그대로라 ResizeObserver도 resize 이벤트도 울리지 않는다. 여기서만 잡힌다.
@@ -2604,6 +2630,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            pty_output_channel,
             pty_spawn,
             pty_write,
             pty_resize,

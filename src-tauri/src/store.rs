@@ -754,6 +754,7 @@ fn csi_rewrites_line(final_byte: char, params: &str) -> bool {
 }
 
 impl LineAssembler {
+    #[cfg(test)]
     pub fn new() -> Self {
         Self::with_sgr(true)
     }

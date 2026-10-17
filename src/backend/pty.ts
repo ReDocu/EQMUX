@@ -1,6 +1,6 @@
 // PTY 브리지 — Rust pty_* 커맨드의 프런트 소비 표면.
 // Tauri 밖(순수 vite dev)에서는 모든 함수가 no-op이며, 화면은 목 폴백을 그린다.
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
 export const isTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -26,10 +26,11 @@ let listenerReady: Promise<void> | undefined;
 function ensureListeners(): Promise<void> {
   if (!listenerReady) {
     listenerReady = (async () => {
-      await listen<PtyOutput>("pty-output", (e) => {
-        const { id, data } = e.payload;
-        outputSubs.get(id)?.forEach((cb) => cb(data));
-      });
+      const dispatch = ({ id, data }: PtyOutput) => outputSubs.get(id)?.forEach((cb) => cb(data));
+      // 출력은 Channel로 받는다 (CPU·RAM — cpu-optimization 후보 5). emit은 덩어리마다 스크립트를
+      // eval해 웹뷰에 쓰레기를 남겼다. 등록이 실패하면 Rust가 emit으로 보내므로 listen도 남겨 둔다
+      await invoke("pty_output_channel", { channel: new Channel<PtyOutput>(dispatch) }).catch(() => {});
+      await listen<PtyOutput>("pty-output", (e) => dispatch(e.payload));
       await listen<PtyExit>("pty-exit", (e) => {
         spawned.delete(e.payload.id);
         exitHook?.(e.payload.id, e.payload.code);
