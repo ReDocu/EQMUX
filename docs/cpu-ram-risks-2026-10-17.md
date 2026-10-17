@@ -110,6 +110,11 @@
 - **C9**: `LineAssembler::with_sgr(bool)`을 추가했다. `sgrStore`가 꺼져 있으면 조립기가 색 사본(`styled`)을 아예 쌓지 않는다. `new()`는 지금처럼 켠 채로 둔다. 적재 경로의 `if sgr_on { styled } else { None }`은 필요 없어져 지웠다. 테스트는 `assembler_without_sgr_keeps_text_and_skips_styled`(평문 결과가 켠 쪽과 같은지 본다).
 - **C10**: `diag.rs` `note_window_event`는 500ms 안에서는 배율·모니터 이름만 확인한다. 둘 다 그대로면 시각만 갱신하고 끝낸다. 위치·크기·모니터 영역·브라우저 웹뷰 조회는 기록할 때만 한다. 배율·모니터가 바뀐 순간은 지금처럼 항상 남는다. 창이 있어야 해서 단위 테스트는 없다.
 - 검증: `cargo test --lib` 149건 통과(경고 없음). 앱 실측은 하지 않았다.
+- **C7**: `GitDiffEditor.tsx` `equalize`
+  - 좌우 행 높이를 모두 읽은 뒤 한꺼번에 쓴다. 지금까지는 읽기와 쓰기가 행마다 번갈아 일어나 행 수만큼 리플로가 돌았다.
+  - ResizeObserver와 effect는 `queueEqualize`(rAF로 프레임당 1회)를 지난다. 정리할 때 대기 중인 프레임도 취소한다.
+  - 검증은 `tsc` 통과와 `vitest` 135건 통과다. 줄바꿈 모드 diff 화면을 직접 띄워 보지는 않았다.
+- **C11은 하지 않는다.** `startDirectorySync`(`conversation.ts`)와 `startTeamSync`(`team.ts`)는 이미 "바뀐 때만 보낸다·저장한다"로 막혀 있다. 방송마다 남는 일은 세션 수십 개 크기의 문자열 비교다. 유휴 실측도 측정 하한이고, 다른 세션의 `broadcastSoon`이 방송 횟수 자체를 묶었다. 효과에 비해 손댈 가치가 없다.
 - (L1·L2) `tsc --noEmit` 통과, `vitest` 133건 통과. 두 경로 모두 DOM과 xterm이 있어야 해서 단위 테스트는 추가하지 않았다. 앱에서 확인하는 법은 다음과 같다. L1: 잘못된 cwd로 세션을 만들고 탭을 몇 번 오간 뒤 cwd를 고쳐 다시 띄우면, 글자가 한 번씩만 들어가야 한다. L2: 레지스트리 수(`terminals`)는 고치기 전에도 바로 줄었으므로 증거가 되지 않는다. 세션을 여러 개 지운 뒤 60초 안에 DevTools 힙 스냅샷에서 `Terminal` 인스턴스 수가 남은 세션 수와 같으면 된다.
 
 ## 실측 (2026-10-17 17:29~17:52)
