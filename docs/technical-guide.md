@@ -955,7 +955,7 @@ stateDiagram-v2
 | `diag.ts` | `startDiagnostics diagSnapshot computeDrift` | `diag_note diag_geometry diag_log_path` | `diag-geometry` |
 | `memory.ts` | `startMemorySampling` (10 s) | `sessions_memory` | — |
 | `agentprobe.ts` | `startAgentProbe` (5 s), `agentClis` | `sessions_agents agent_clis` | — |
-| `ports.ts` | `startPortWatch holdFastPoll sessionPorts systemPorts foldPortRows` | (panels 경유) | — |
+| `ports.ts` | `startPortWatch refreshPorts sessionPorts systemPorts foldPortRows` | (panels 경유) | — |
 | `recovery.ts` | `crashRecovery` | `crash_recovery` | — |
 | `shutdown.ts` | `performShutdown` | `shutdown_flush app_exit` | — |
 | `transcript.ts` | `readTranscript` | `transcript_read` | — |
@@ -1916,7 +1916,7 @@ updated: 2026-09-07 14:03
 1. `state.ts`의 `PanelTab` 유니언에 추가.
 2. `components/SidePanel.tsx`의 탭 목록과 렌더 스위치에 컴포넌트 연결.
 3. 새 `components/MyPanelTab.tsx`. 스코프는 반드시 `scopeWorkspace()`에서 받고, 없으면 빈 상태를 그린다(첫 워크스페이스 폴백 금지).
-4. 폴링이 필요하면 `ports.ts`처럼 **앱 전역 워처 하나** + 패널이 열려 있을 때만 빠른 주기(`holdFastPoll` 패턴).
+4. 실측을 앱 전체가 나눠 써야 하면 `ports.ts`처럼 **앱 전역 상태 하나**에 두고 패널은 읽기만 한다. `ports.ts`는 주기 폴링 없이 시작 때 한 번 + 사람이 [다시 실측]을 누를 때만 본다.
 
 ### 10.5 설정 항목 추가
 

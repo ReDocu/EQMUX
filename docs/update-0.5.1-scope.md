@@ -1,5 +1,7 @@
 # EQMUX 0.5.1 범위 정리 — 0.5.0에서 남은 것 · 0.6 이후 목록 재분류 · VT 서버 모델 검토
 
+> **2026-10-17:** 0.5.1은 안정화 패치로 나갔고 버전을 여기서 고정한다. 아래에서 0.5.1에 넣지 못한 항목은 `docs/update-0.6-scope.md`로 옮겼다.
+
 2026-10-15 · 근거 `docs/update-plan-0.5.0.md` · `docs/update-0.5.0-status.md` · `docs/fix-0.5.0-qa-status.md` · `docs/prd/12-session-store.md`
 
 ## 요약

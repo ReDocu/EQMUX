@@ -1670,6 +1670,14 @@ async fn worktree_ensure(ws_path: String, session: String) -> Result<String, Str
         .map_err(|e| e.to_string())?
 }
 
+/// 워크트리 목록 (관제 레일 표시 전용) — git CLI라 blocking 스레드에서 돈다 (git_overview와 같은 이유)
+#[tauri::command]
+async fn git_worktrees(ws_path: String) -> Result<Vec<workspace::WorktreeInfo>, String> {
+    tauri::async_runtime::spawn_blocking(move || workspace::worktree_list(&ws_path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 /// 임무-브랜치 체크아웃 (FR-E-52) — 있으면 checkout, 없으면 -b 생성. E1′ 공유 기본에서는
 /// repo 전체(모든 공유 세션)에 영향이 있으므로 호출은 화면의 2단 확인 뒤에만 온다.
 #[tauri::command]
@@ -2660,6 +2668,7 @@ pub fn run() {
             events_log,
             session_recaps,
             worktree_ensure,
+            git_worktrees,
             ws_checkout,
             cache_get,
             cache_set,

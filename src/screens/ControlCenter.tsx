@@ -8,6 +8,7 @@ import {
   detailRequest,
   setDetailRequest,
   focusSession as requestFocus,
+  openPanel,
   PANE_LAYOUTS,
   paneLayout,
   panelOpen,
@@ -35,6 +36,8 @@ import { attentionOrder, inboxWaiting, pickNext } from "../backend/attention";
 import { canStartFresh, resumeAgent, startFresh } from "../backend/agent";
 import { queryEvents } from "../backend/events";
 import type { FeedEvent } from "../backend/events";
+import { gitOverview, worktreeList } from "../backend/git";
+import type { GitOverview, WorktreeInfo } from "../backend/git";
 import { agentClis, agentClisReady, refreshAgentClis } from "../backend/agentprobe";
 import { autoAssignDefault, refreshMissions } from "../backend/missions";
 import { clipWriteText, isTauri, killPty, onPtyOutput, revealPath, storePurgeScrollback, storeUsageReal, writePty } from "../backend/pty";
@@ -270,9 +273,29 @@ export function ControlCenter(props: { workspace: Workspace }) {
     if (!isTauri()) return;
     void refreshMissions(props.workspace.id); // 임무 파일 실측 — 밖에서 편집됐어도 여기서 따라잡는다
     loadUsage();
-    const t = setInterval(loadUsage, 10_000);
+    const t = setInterval(() => !document.hidden && loadUsage(), 10_000); // 숨김 중 쉰다 (CPU 점검 2)
     onCleanup(() => clearInterval(t));
   });
+
+  // 브랜치 현황 (레일 §로컬 폴더 아래) — 읽기 전용. 3a33432에서 워크트리 레일과 함께 빠졌던 것을
+  // 표시만 되살린다 (생성·체크아웃 없음). git 패널과 같은 10초 실측, 숨김 중 쉰다
+  const [gitInfo, setGitInfo] = createSignal<GitOverview | undefined>(undefined);
+  const [worktrees, setWorktrees] = createSignal<WorktreeInfo[]>([]);
+  onMount(() => {
+    if (!isTauri() || props.workspace.pathMissing) return;
+    const load = () => {
+      void gitOverview(props.workspace.path).then(setGitInfo);
+      void worktreeList(props.workspace.path).then((w) => setWorktrees(w ?? []));
+    };
+    load();
+    const t = setInterval(() => !document.hidden && load(), 10_000);
+    onCleanup(() => clearInterval(t));
+  });
+  const gitBranch = () => gitInfo()?.branch ?? props.workspace.branch;
+  const normPath = (p: string) => p.replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase();
+  /** 이 워크트리에서 도는 세션들 — cwd 실측 일치 */
+  const wtMembers = (wt: WorktreeInfo) => sessions().filter((s) => normPath(s.cwd) === normPath(wt.path));
+  const wtTail = (p: string) => p.replace(/\\/g, "/").split("/").slice(-2).join("/");
 
   // 저장 기록 초기화 (FR-C-52 — 사용자 조작) — 상태바의 WAL·lines를 직접 0으로 되돌린다.
   // 되돌릴 수 없으므로 세션 제거와 같은 확인 한 단계를 둔다 (즉시 실행하지 않는다)
@@ -821,7 +844,17 @@ export function ControlCenter(props: { workspace: Workspace }) {
           >
             {/* 페인 헤더 문법 (0.5 §UX 기반) — 헤더는 div, 이름 영역이 줌 버튼, 칩 동작은 형제 버튼.
                 [정체성 │ 요약(칩 없을 때만) │ 주의 칩 1개 + N │ 상태]. 접는 순서: 요약 → 직함 → 엔진 */}
-            <div class="terminal-head pane-head mono" onContextMenu={(e) => openSessMenu(e, s)}>
+            <div
+              class="terminal-head pane-head mono"
+              title={t("더블클릭하면 줌 토글 · 우클릭 세션 메뉴")}
+              onContextMenu={(e) => openSessMenu(e, s)}
+              // 0.4.2까지는 헤더 전체가 줌 버튼이었다 — 0.5 헤더 문법으로 이름 영역만 남으면서
+              // 빈 자리를 눌러 줌하던 습관이 끊겼다. 빈 자리 더블클릭으로 되살린다(칩·버튼은 제 동작)
+              onDblClick={(e) => {
+                if ((e.target as HTMLElement).closest("button")) return;
+                applyZoom(zoomed() === s.id ? undefined : s.id);
+              }}
+            >
               <button
                 class="pane-head-id"
                 title={t("클릭하면 줌 토글 · 우클릭 세션 메뉴")}
@@ -1238,6 +1271,69 @@ export function ControlCenter(props: { workspace: Workspace }) {
               ▸
             </span>
           </button>
+          {/* 브랜치 현황 — 클릭은 git 패널. 비저장소면 행을 숨긴다 */}
+          <Show when={gitBranch()}>
+            <button class="rail-ms rail-folder" title={t("git 패널에서 보기")} onClick={() => openPanel("git")}>
+              <span class="rail-folder-txt">
+                <span class="eyebrow">{t("브랜치")}</span>
+                <span class="rail-folder-path mono">⎇ {gitBranch()}</span>
+                <Show when={gitInfo()}>
+                  {(g) => (
+                    <span class="rail-git-stat mono muted">
+                      ↑{g().ahead} ↓{g().behind} · {tf("변경 {n}", { n: g().changed })}
+                    </span>
+                  )}
+                </Show>
+              </span>
+              <span class="rail-folder-go mono" aria-hidden="true">
+                ▸
+              </span>
+            </button>
+          </Show>
+          {/* 워크트리 목록 — 표시 전용. 행 = 브랜치 + 귀속 세션(cwd 일치). 본체 하나뿐이면 숨긴다 */}
+          <Show when={worktrees().length > 1}>
+            <div class="rail-sep" />
+            <div class="rail-wt-head">
+              <span class="eyebrow">{t("워크트리")}</span>
+              <b class="mono">{worktrees().length}</b>
+            </div>
+            <div class="rail-wt-list">
+              <For each={worktrees()}>
+                {(wt) => (
+                  <div class="rail-wt">
+                    <div class="rail-wt-top">
+                      <span class="rail-wt-name mono" title={wt.path}>
+                        ⎇ {wt.branch ?? `detached @ ${wt.head}`}
+                      </span>
+                      <span class="rail-wt-tag mono" classList={{ main: wt.isMain }}>
+                        {t(wt.isMain ? "메인" : wt.isSession ? "세션" : "외부")}
+                      </span>
+                    </div>
+                    <div class="rail-wt-path mono muted" title={wt.path}>
+                      {wtTail(wt.path)}
+                    </div>
+                    <For each={wtMembers(wt)}>
+                      {(s) => (
+                        <button
+                          class="rail-wt-agent mono"
+                          classList={{ sel: selected()?.id === s.id }}
+                          title={statusText(s.status)}
+                          onClick={() => {
+                            setSelectedSession(s.id);
+                            backend.markSeen(s.id);
+                            setCenterTab("terminal");
+                          }}
+                        >
+                          <span class={`sdot ${s.status}`} />
+                          <span class="rail-wt-agent-nm">{sessionDisplayName(s, personaName(s.personaId))}</span>
+                        </button>
+                      )}
+                    </For>
+                  </div>
+                )}
+              </For>
+            </div>
+          </Show>
         </div>
         </Show>
 

@@ -2,11 +2,12 @@
 // (세션 = 에이전트 = 페인 규칙 밖이라 backend 세션 목록에 넣지 않는다). 화면은 TerminalPane을
 // 그대로 쓰고, REGISTRY가 id 단위로 살려 두므로 탭을 닫았다 열어도 서버는 계속 돈다.
 // 포트 귀속은 Rust ports_snapshot이 PTY Job pid로 하므로 여기서 연 포트는 포트 패널에 "서버"로 뜬다.
-import { createEffect, createMemo, createResource, onCleanup, Show } from "solid-js";
+import { createEffect, createMemo, createResource, createSignal, onCleanup, Show } from "solid-js";
 import {
   clearServerExit,
   isNewPort,
   portEntries,
+  refreshPorts,
   serverCommands,
   serverExit,
   serverExited,
@@ -20,6 +21,9 @@ import { t, tf } from "../i18n";
 import { sessionTermSize, TerminalPane } from "./TerminalPane";
 import { Icon } from "./icons";
 import { notify } from "./ui";
+
+// 사람이 [서버 터미널 만들기]를 누른 서버 셸 id — 탭을 닫았다 열어도 다시 묻지 않는다
+const [opened, setOpened] = createSignal<string[]>([]);
 
 export function ServerPanelTab() {
   // id 문자열로 키를 잡는다 — 워크스페이스가 바뀔 때만 페인을 갈아 끼운다
@@ -39,6 +43,8 @@ function ServerTerm(props: { wsId: string }) {
   // 웹뷰 재시작 뒤에는 PTY가 Rust에 살아 있다 — 새로 띄우지 않고 붙는다 (BR-06).
   // 이미 그려 둔 터미널(REGISTRY)이 있으면 TerminalPane이 revive를 보지 않으므로 탭 전환에는 영향이 없다
   const [alive] = createResource(() => listAlivePty());
+  // 셸은 바로 띄우지 않고 권한다 — 누르거나 이미 살아 있을 때만 터미널을 붙인다
+  const open = () => opened().includes(id) || !!alive()?.includes(id);
 
   const reopen = async () => {
     const size = sessionTermSize(id);
@@ -83,7 +89,7 @@ function ServerTerm(props: { wsId: string }) {
             >
               <button
                 class="btn primary"
-                disabled={!cmd()}
+                disabled={!cmd() || !open()}
                 title={t("셸에 마지막 서버 명령을 입력합니다")}
                 onClick={() => writePty(id, `${cmd()}\r`)}
               >
@@ -98,6 +104,10 @@ function ServerTerm(props: { wsId: string }) {
             {t("↻ 셸 다시 열기")}
           </button>
         </Show>
+        {/* 포트는 자동으로 다시 보지 않는다 — 서버를 띄우거나 멈춘 뒤 여기서 실측한다 */}
+        <button class="btn" onClick={refreshPorts} title={t("다시 실측")} aria-label={t("다시 실측")}>
+          <Icon name="refresh-cw" size={12} />
+        </button>
         <button class="btn" disabled={!path} onClick={() => void reveal()}>
           <Icon name="folder-open" size={12} />
           {t("탐색기")}
@@ -111,7 +121,20 @@ function ServerTerm(props: { wsId: string }) {
       </Show>
       <Show when={alive()}>
         {(list) => (
-          <TerminalPane sessionId={id} cwd={path} wsId={props.wsId} shell={shell} revive={list().includes(id)} />
+          <Show
+            when={open()}
+            fallback={
+              <div class="srvp-empty">
+                <span class="muted">{t("dev 서버를 띄울 셸이 아직 없습니다")}</span>
+                <button class="btn primary" onClick={() => setOpened((l) => [...l, id])}>
+                  <Icon name="play" size={12} />
+                  {t("서버 터미널 만들기")}
+                </button>
+              </div>
+            }
+          >
+            <TerminalPane sessionId={id} cwd={path} wsId={props.wsId} shell={shell} revive={list().includes(id)} />
+          </Show>
         )}
       </Show>
     </div>

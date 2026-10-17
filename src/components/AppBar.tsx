@@ -1,6 +1,6 @@
 // 앱 바 (DdrkL) — 관제 고정 탭(맨 왼쪽, G1) + 워크스페이스 탭(B3, 닫기/추가) + 전역 도구.
-// 대화는 전역 도구다 — 앱 바는 터미널 전체 화면에서도 보이므로 어느 모드에서든 접근된다 (M1).
-// 나머지 패널 도구(git·포트·로그·브라우저)는 [패널] 토글(마지막 탭으로 열기 · Ctrl+Shift+B)과 사이드 패널 탭으로 간다 (U33).
+// 사이드 패널(대화·git·포트·로그·브라우저)은 [패널] 토글(마지막 탭으로 열기 · Ctrl+Shift+B)과 패널 탭으로 간다 (U33).
+// 앱 바는 터미널 전체 화면에서도 보이므로 어느 모드에서든 열린다 (M1). [대화] 버튼은 [패널]과 겹쳐 지웠다.
 // 0.5 — "워크스페이스" 도구는 지웠다(탭 줄 "+"와 같은 동작이었다). 벨(알림 센터)과 탭 메뉴를 더했다.
 import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import {
@@ -24,10 +24,8 @@ import { settings, toggleMuted } from "../backend/settings";
 import { crossProjectOn, setCrossProject } from "../backend/workspaces";
 import {
   jumpToSession,
-  openPanel,
   overlay,
   panelOpen,
-  panelTab,
   pushLayer,
   setExitOpen,
   setFocusRequest,
@@ -76,11 +74,6 @@ export function AppBar() {
   const unreadMsgs = () => {
     tick();
     return backend.listMessages().some((m) => m.unread);
-  };
-  // 토글 — 이미 대화 탭이 열려 있으면 닫는다. 다른 탭이 열려 있으면 대화 탭으로 전환.
-  const toggleConversation = () => {
-    if (panelOpen() && panelTab() === "conversation") setPanelOpen(false);
-    else openPanel("conversation");
   };
   const closeWs = (id: string) => {
     backend.closeWorkspace(id);
@@ -293,16 +286,7 @@ export function AppBar() {
           <Show when={unseenPortCount() > 0}>
             <span class="bell-count">{unseenPortCount()}</span>
           </Show>
-        </button>
-        <button
-          class="tool"
-          aria-label={t("대화")}
-          classList={{ active: panelOpen() && panelTab() === "conversation" }}
-          title={t("대화 패널 토글 — 전체 화면에서도 열립니다")}
-          onClick={toggleConversation}
-        >
-          <Icon name="messages-square" size={13} />
-          <span class="tool-label">{t("대화")}</span>
+          {/* 대화 안 읽음 (M1) — [대화] 버튼을 패널 토글로 합친 뒤에도 신호는 앱 바에 남긴다 */}
           <Show when={unreadMsgs()}>
             <span class="unread-dot" />
           </Show>

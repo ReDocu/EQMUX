@@ -6,7 +6,6 @@ export const dict: Record<string, string> = {
   "워크스페이스 연결": "Workspace connection",
   "역할 라이브러리": "Role Library",
   "워크스페이스 닫기 (세션은 백그라운드 유지)": "Close workspace (sessions stay in the background)",
-  "대화 패널 토글 — 전체 화면에서도 열립니다": "Toggle conversation panel — opens even in fullscreen",
   "임무 배정 — 전체 화면 팝업 (헤더에서 파일 탐색기로 전환)":
     "Mission assignment — fullscreen popup (switch to the file explorer in the header)",
   "워크스페이스 연결 — 전체 화면 팝업": "Workspace connection — fullscreen popup",
@@ -82,6 +81,8 @@ export const dict: Record<string, string> = {
   서버: "Server",
   "종료됨 (exit {code})": "Exited (exit {code})",
   "↻ 셸 다시 열기": "↻ Reopen shell",
+  "dev 서버를 띄울 셸이 아직 없습니다": "No shell for the dev server yet",
+  "서버 터미널 만들기": "Create server terminal",
   "dev 서버도 종료됩니다": "The dev server stops too",
   "셸에 마지막 서버 명령을 입력합니다": "Types the last server command into the shell",
 

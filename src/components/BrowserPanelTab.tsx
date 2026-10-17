@@ -17,7 +17,7 @@ import {
   openLink,
 } from "../backend/browser";
 import { diagNote, reportBrowserRect } from "../backend/diag";
-import { holdFastPoll, portUrl, sessionPorts } from "../backend/ports";
+import { portUrl, sessionPorts } from "../backend/ports";
 import { isTauri } from "../backend/pty";
 import { browserRequest, panelSide, setBrowserRequest } from "../state";
 import { t } from "../i18n";
@@ -40,8 +40,6 @@ export function BrowserPanelTab() {
   const [mockUrl, setMockUrl] = createSignal<string | null>(null);
   const [nonce, setNonce] = createSignal(0);
   let viewEl: HTMLDivElement | undefined;
-
-  onMount(() => onCleanup(holdFastPoll()));
 
   const syncBounds = () => {
     if (!viewEl || !active()) return;

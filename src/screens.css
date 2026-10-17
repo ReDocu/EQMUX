@@ -429,6 +429,95 @@
 .rail-folder:hover .rail-folder-go {
   color: var(--eq-text);
 }
+.rail-git-stat {
+  font-size: 10px;
+}
+/* 워크트리 목록 — 표시 전용. 행 = 브랜치 + 귀속 세션 */
+.rail-wt-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px 0;
+}
+.rail-wt-head .eyebrow {
+  flex: 1;
+}
+.rail-wt-head b {
+  font-size: 12px;
+}
+.rail-wt-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.rail-wt {
+  padding: 5px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--eq-r-sm);
+}
+.rail-wt:hover {
+  border-color: var(--eq-line);
+  background: var(--eq-surface);
+}
+.rail-wt-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.rail-wt-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rail-wt-tag {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase; /* 영어 UI는 공용 사전의 "Session"을 대문자로 — 같은 키에 번역을 둘 두지 않는다 */
+  color: var(--eq-dim);
+  flex-shrink: 0;
+}
+.rail-wt-tag.main {
+  color: var(--eq-blue);
+}
+.rail-wt-path {
+  font-size: 9px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rail-wt-agent {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  margin-top: 2px;
+  font-size: 10px;
+  padding: 2px 4px;
+  border-radius: var(--eq-r-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.rail-wt-agent:hover,
+.rail-wt-agent.sel {
+  background: var(--eq-surface-2);
+}
+.rail-wt-agent .sdot {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+}
+.rail-wt-agent-nm {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 /* Focus 버튼 — 사람이 답해야 진행되는 행에만 상시로 뜬다 (ⓘ는 호버 때만) */
 .rail-focus {
   flex-shrink: 0;
@@ -3542,6 +3631,22 @@ button.eq-chip-tx,
   font-size: 11px;
   font-weight: 700;
 }
+.srvp-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  font-size: 11px;
+  border: 1px dashed var(--eq-line);
+  border-radius: var(--eq-r-sm);
+}
+.srvp-empty .btn {
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 700;
+}
 .srvp-state {
   display: flex;
   align-items: center;
@@ -5659,7 +5764,8 @@ button.eq-chip-tx,
   font-size: 9px;
 }
 .rl-persona {
-  height: 56px;
+  min-height: 56px;
+  padding-block: 8px;
 }
 .rl-avatar {
   width: 30px;
@@ -5675,15 +5781,18 @@ button.eq-chip-tx,
 }
 .rl-persona-line {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: 4px 6px;
 }
 .rl-persona-name {
+  overflow-wrap: anywhere;
   font-size: 12px;
   font-weight: 800;
   color: var(--eq-text);
 }
 .rl-persona-job {
+  white-space: nowrap;
   font-size: 9px;
 }
 .rl-persona-title {
@@ -5703,6 +5812,10 @@ button.eq-chip-tx,
   padding: 18px;
   overflow: auto;
 }
+/* 내용이 넘치면 줄이지 말고 편집 칸이 스크롤한다 — 안 그러면 textarea(캐릭터 시트)가 한 줄로 찌그러진다 */
+.rl-editor > * {
+  flex-shrink: 0;
+}
 .rl-scope {
   font-size: 9px;
   font-weight: 700;
@@ -5710,6 +5823,7 @@ button.eq-chip-tx,
 }
 .rl-name-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
 }
@@ -6252,3 +6366,9 @@ label.inbox-pop-row {
   font-weight: 400;
   opacity: 0.65;
 }
+
+/* 실행 › 환경변수 (.env) — 파일마다 카드 한 장, 행을 누르면 값 복사 */
+.env-file { margin-top: 8px; padding: 6px 10px; }
+.env-file .eyebrow { margin-bottom: 4px; }
+.env-file .kv { cursor: copy; }
+.env-file .kv .v { overflow-wrap: anywhere; }

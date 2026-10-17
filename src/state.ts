@@ -137,7 +137,7 @@ export function toggleExplorer(tab: ExplorerTab): void {
   setOverlay("explorer");
 }
 
-export type PanelTab = "conversation" | "git" | "ports" | "server" | "logs" | "browser" | "mdview";
+export type PanelTab = "conversation" | "git" | "ports" | "server" | "logs" | "browser" | "mdview" | "env";
 
 const [viewSig, setViewRaw] = createSignal<View>({ kind: "control" });
 export const view = viewSig;

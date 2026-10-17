@@ -549,8 +549,19 @@ export class MockBackend implements Backend {
   private listeners = new Set<() => void>();
   private timer: ReturnType<typeof setInterval> | undefined;
 
+  private soon: ReturnType<typeof setTimeout> | undefined;
+
   private broadcast() {
+    clearTimeout(this.soon); // 예약된 묶음 방송도 이 방송이 덮는다
+    this.soon = undefined;
     this.listeners.forEach((l) => l());
+  }
+
+  /** Rust 이벤트발 갱신(훅·샘플·감지) 전용 — 16ms 안의 방송을 한 번으로 묶는다 (CPU 점검 1).
+   *  바쁜 팀은 도구 호출마다 상태가 와서 tick 구독 전부가 매번 다시 돌던 자리다.
+   *  rAF가 아니라 타이머인 이유: 숨김 중에도 구독자(디렉터리 동기화·고아 해제)는 돌아야 한다 */
+  private broadcastSoon() {
+    this.soon ??= setTimeout(() => this.broadcast(), 16);
   }
 
   /** 인메모리 계측(브라우저 데모) + 실행 모드에서는 event 테이블에도 적재한다 (B63).
@@ -1103,7 +1114,7 @@ export class MockBackend implements Backend {
       sess.memoryPeakMb = m.peakMb;
       changed = true;
     }
-    if (changed) this.broadcast();
+    if (changed) this.broadcastSoon();
   }
 
   applyAgents(list: { id: string; agent: string; peer?: string }[]) {
@@ -1116,7 +1127,7 @@ export class MockBackend implements Backend {
       sess.peerName = next?.peer; // Claude Code 세션 이름 — 번호 칸이 끝 조각을 보인다
       changed = true;
     }
-    if (changed) this.broadcast();
+    if (changed) this.broadcastSoon();
   }
 
   applyAgentState(evt: AgentStateApply) {
@@ -1169,7 +1180,7 @@ export class MockBackend implements Backend {
     if (sess.status === "busy") {
       sess.lastOutput = sess.activity ? `작업 중 · ${sess.activity}` : "작업 중";
     }
-    this.broadcast();
+    this.broadcastSoon();
   }
 
   /** 한 줄 요약 반영 (M35) — 라이브(session-recap 이벤트)와 복원(session_recaps) 공용 */
@@ -1177,7 +1188,7 @@ export class MockBackend implements Backend {
     const sess = SESSIONS.find((x) => x.id === id);
     if (!sess || sess.lastRecap === text) return;
     sess.lastRecap = text;
-    this.broadcast();
+    this.broadcastSoon();
   }
 
   setPermissionOverride(id: string, perms?: Permissions) {

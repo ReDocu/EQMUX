@@ -63,7 +63,8 @@ export function GitPanelTab() {
   onMount(() => {
     if (!isTauri()) return;
     createEffect(on(() => ws()?.id, () => void load()));
-    const t = setInterval(() => void load(), 10_000);
+    // 숨김 중 쉰다 (CPU 점검 2) — 한 번에 git 5개를 띄우는 호출이다. 다시 보이면 다음 틱(≤10초)에 따라잡는다
+    const t = setInterval(() => !document.hidden && void load(), 10_000);
     onCleanup(() => clearInterval(t));
   });
 

@@ -14,6 +14,7 @@ export const dict: Record<string, string> = {
 
   // ── 페인 그리드 ──
   "클릭하면 줌 토글 · 우클릭 세션 메뉴": "Click to toggle zoom · right-click for session menu",
+  "더블클릭하면 줌 토글 · 우클릭 세션 메뉴": "Double-click to toggle zoom · right-click for session menu",
   "승인 대기 중인 도구 요청 — y/n은 이 페인에 입력": "Tool request awaiting approval — type y/n in this pane",
   "클릭하면 이 페인을 Focus로 잡습니다 — 답은 여기에 직접 입력합니다":
     "Click to grab this pane with Focus — the answer is typed here",
@@ -74,6 +75,12 @@ export const dict: Record<string, string> = {
   "트랜스크립트 없음": "no transcript",
   "남긴 출력 보기": "View what it left behind",
   "로컬 폴더": "Local folder",
+  "브랜치": "Branch",
+  "git 패널에서 보기": "View in git panel",
+  "변경 {n}": "{n} changed",
+  "워크트리": "Worktrees",
+  "메인": "MAIN",
+  "외부": "EXTERNAL",
   "앱 내 파일 탐색기에서 열기": "Open in the in-app file explorer",
   "레일 접기": "Collapse rail",
   "레일 펼치기": "Expand rail",

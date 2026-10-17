@@ -762,9 +762,9 @@ export function RoleLibrary() {
                 </div>
                 <Show when={sheetOpen()}>
                   <textarea
-                    rows={16}
+                    rows={28}
                     class="mono"
-                    style={{ "font-size": "11px" }}
+                    style={{ "font-size": "12px", "line-height": 1.5, resize: "vertical" }}
                     value={sheetText()}
                     onInput={(e) => {
                       setSheetText(e.currentTarget.value);

@@ -1,4 +1,4 @@
-// 포트 감시 (M31) — netstat 실측 스냅숏 하나를 앱 전체가 나눠 쓴다.
+// 포트 감시 (M31) — netstat 실측 스냅숏 하나를 앱 전체가 나눠 쓴다. 갱신은 수동이다 (poll 위 주석).
 //
 // 왜 패널 밖으로 꺼냈나. 폴링이 패널 안에 있으면 (1) 포트 패널과 브라우저 패널이 같은
 // netstat를 따로 돌리고, (2) 두 패널을 다 닫아 둔 동안에는 아무도 보지 않아 "세션이
@@ -12,12 +12,8 @@ import { portsSnapshot } from "./panels";
 import type { PortRow } from "./panels";
 import { forgetAgent, isTauri, killPty, onPtyExit, setUserInputHook } from "./pty";
 
-/** 패널이 보고 있을 때 / 아닐 때 주기. 뒤에서도 계속 보되 덜 자주 본다 —
- *  netstat는 프로세스 실행이라 공짜가 아니다 */
-const FAST_MS = 5_000;
-const SLOW_MS = 20_000;
 /** 최초 관측 뒤 이만큼은 NEW로 표시한다 — 사용자가 눈으로 집어내는 창.
- *  경과 판정은 폴 시점에만 다시 계산되므로 해상도는 폴 주기다 (정밀할 이유가 없다) */
+ *  경과 판정은 실측 시점에만 다시 계산된다 (정밀할 이유가 없다) */
 const NEW_WINDOW_MS = 60_000;
 
 /** 한 포트 = 한 항목. 같은 서버가 127.0.0.1과 [::1] 두 줄로 잡히는 일이 흔해서
@@ -284,51 +280,30 @@ function apply(snap: PortRow[]): void {
   noteServerPorts(folded);
 }
 
-let timer: ReturnType<typeof setTimeout> | undefined;
+// 주기 폴링은 없다 — netstat는 프로세스 실행이라 공짜가 아니다. 앱 시작 때 한 번(기준선),
+// 그 뒤로는 사람이 [다시 실측]을 누를 때만 본다. 그래서 포트·NEW·[실행] 상태는 누를 때까지 옛값이다
 let inflight = false;
-/** 패널이 보고 있다고 잡아 둔 수 — 0이면 느린 주기로 내려간다 */
-let fastHolders = 0;
-
-function schedule(ms: number): void {
-  if (timer !== undefined) clearTimeout(timer);
-  timer = setTimeout(() => void poll(), ms);
-}
 
 async function poll(): Promise<void> {
-  if (inflight) return; // 진행 중인 폴이 끝나면서 다음 차례를 잡는다 (여기서 잡으면 두 줄이 된다)
+  if (inflight) return; // 연타 — 진행 중인 실측 하나로 충분하다
   inflight = true;
   try {
-    // 창이 숨겨진 동안은 netstat를 띄우지 않는다 (최적화 D7) — 느린 주기로 다시 보기만 한다
-    const snap = document.hidden ? undefined : await portsSnapshot();
+    const snap = await portsSnapshot();
     if (snap) apply(snap);
   } finally {
     inflight = false;
-    schedule(fastHolders > 0 ? FAST_MS : SLOW_MS);
   }
 }
 
-/** 포트 패널 `다시 실측` — 다음 주기를 기다리지 않고 지금 한 번 본다 */
+/** `다시 실측` (포트 패널 · 서버 탭) — 실측은 이 버튼으로만 다시 한다 */
 export function refreshPorts(): void {
-  if (started) schedule(0);
+  if (started) void poll();
 }
 
-/** 앱 셸이 켠다 (App.tsx) — 패널 수명과 무관하게 계속 돈다 */
+/** 앱 셸이 켠다 (App.tsx) — 기준선 한 번만 뜬다 */
 let started = false;
 export function startPortWatch(): void {
   if (started || !isTauri()) return;
   started = true;
   void poll();
-  document.addEventListener("visibilitychange", () => !document.hidden && schedule(0)); // 다시 보이면 바로
-}
-
-/** 패널이 마운트되는 동안 빠른 주기로 올린다. 반환은 해제 함수 (onCleanup에 건다) */
-export function holdFastPoll(): () => void {
-  fastHolders += 1;
-  if (fastHolders === 1 && started) schedule(0); // 패널을 연 순간의 최신값부터
-  let released = false;
-  return () => {
-    if (released) return;
-    released = true;
-    fastHolders -= 1;
-  };
 }

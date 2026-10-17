@@ -270,6 +270,40 @@ pub fn worktree_ensure(ws_path: &str, session: &str) -> Result<String, String> {
     Ok(p)
 }
 
+/// 워크트리 목록 항목 — 외부에서 만든 워크트리도 잡힌다 (순수 git 호환). 레일 표시 전용
+#[derive(serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeInfo {
+    pub path: String,
+    pub branch: Option<String>, // detached HEAD면 None
+    pub head: String,           // 짧은 해시
+    pub is_main: bool,          // 저장소 본체 (porcelain 첫 항목)
+    pub is_session: bool,       // .eqmux/worktrees/ 아래 — 앱이 만든 것
+}
+
+/// `git worktree list --porcelain` 파싱 — 항목은 빈 줄로 구분되고
+/// worktree/HEAD/branch(또는 detached) 줄이 이어진다
+pub fn worktree_list(ws_path: &str) -> Result<Vec<WorktreeInfo>, String> {
+    let out = git(&["worktree", "list", "--porcelain"], ws_path)?;
+    let mut items: Vec<WorktreeInfo> = Vec::new();
+    for line in out.lines() {
+        if let Some(p) = line.strip_prefix("worktree ") {
+            items.push(WorktreeInfo {
+                path: p.to_string(),
+                branch: None,
+                head: String::new(),
+                is_main: items.is_empty(),
+                is_session: p.replace('\\', "/").contains("/.eqmux/worktrees/"),
+            });
+        } else if let (Some(h), Some(w)) = (line.strip_prefix("HEAD "), items.last_mut()) {
+            w.head = h.chars().take(8).collect();
+        } else if let (Some(b), Some(w)) = (line.strip_prefix("branch "), items.last_mut()) {
+            w.branch = Some(b.trim_start_matches("refs/heads/").to_string());
+        }
+    }
+    Ok(items)
+}
+
 /// 등록 항목의 현재 상태 실측 — 존재 여부·브랜치·원격 (FR-E-03·08)
 pub fn inspect(entry: &WsEntry) -> WsInfo {
     let exists = Path::new(&entry.path).is_dir();
@@ -525,6 +559,13 @@ mod tests {
         fs::remove_dir_all(&wt).unwrap();
         let again = worktree_ensure(&path, "kai@ws1").unwrap();
         assert!(Path::new(&again).join("a.txt").exists());
+        // 목록 — 본체 + 세션 워크트리, porcelain 파싱
+        let listed = worktree_list(&path).unwrap();
+        assert_eq!(listed.len(), 2);
+        assert!(listed[0].is_main && !listed[0].is_session);
+        assert!(!listed[1].is_main && listed[1].is_session);
+        assert_eq!(listed[1].branch.as_deref(), Some("eqmux/kai-ws1"));
+        assert!(!listed[1].head.is_empty());
         fs::remove_dir_all(&dir).ok();
     }
 }

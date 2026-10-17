@@ -191,6 +191,10 @@ export function Dashboard() {
             {tf("열린 워크스페이스 {m} · 주의 정렬: waiting › dead › 확인 필요 › busy › idle", { m: openWs().length })}
           </div>
         </div>
+        {/* 워크스페이스 관리를 관제에서 바로 연다 — 앱 바 + 와 같은 팝업 */}
+        <button class="btn" title={t("워크스페이스 열기·관리")} onClick={() => setOverlay("connect")}>
+          {t("워크스페이스")}
+        </button>
       </div>
       {/* 지표 타일 (시안 SgZhp Metric) — 색은 단계 색만: 행동 amber · 확인 blue · 실행 green */}
       <div class="dash-metrics" title={t("폴링 없음 · 상태 스트림 구독")}>

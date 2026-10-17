@@ -29,6 +29,21 @@ export async function gitOverview(wsPath: string): Promise<GitOverview | undefin
   return invoke<GitOverview>("git_overview", { wsPath }).catch(() => undefined);
 }
 
+// ── 워크트리 목록 (관제 레일 표시 전용) — 생성·삭제·체크아웃은 하지 않는다 ──
+
+export interface WorktreeInfo {
+  path: string;
+  branch: string | null; // detached HEAD면 null
+  head: string;
+  isMain: boolean;
+  isSession: boolean; // .eqmux/worktrees/ 아래 — 앱이 만든 것
+}
+
+export async function worktreeList(wsPath: string): Promise<WorktreeInfo[] | undefined> {
+  if (!isTauri()) return undefined;
+  return invoke<WorktreeInfo[]>("git_worktrees", { wsPath }).catch(() => undefined);
+}
+
 // ── diff 에디터 (PRD H) — HEAD ↔ 워크트리, 읽기 전용 ──
 
 export interface ChangedFile {
