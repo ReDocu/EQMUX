@@ -2361,7 +2361,9 @@ fn layout_save(store_state: State<StoreState>, data: serde_json::Value) -> Resul
     let root = store_state.0.root();
     std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
     let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
-    workspace::atomic_write(&root.join("layout.json"), json.as_bytes())
+    workspace::atomic_write(&root.join("layout.json"), json.as_bytes())?;
+    workspace::mirror(&root, "layout.json", json.as_bytes());
+    Ok(())
 }
 
 #[tauri::command]
@@ -2583,6 +2585,18 @@ pub fn run() {
                 && backup_session_dbs(&root)
             {
                 let _ = std::fs::write(&ver_file, &cur_ver);
+            }
+            // 데이터 소실 안전망 — 옛 버전이 비운 등록·배치를 앱 데이터 밖 사본에서 되살린다
+            let restored = workspace::restore_backup(&root);
+            if restored > 0 {
+                diag::write(&format!("REGISTRY-RESTORED {restored} from backup"));
+                use tauri_plugin_notification::NotificationExt;
+                let _ = app
+                    .notification()
+                    .builder()
+                    .title("EQMUX")
+                    .body(format!("사라진 워크스페이스 등록 {restored}개를 백업에서 되살렸습니다"))
+                    .show();
             }
             library::seed(&root); // 역할 라이브러리 시드 (FR-E-27) — 디렉터리가 없을 때만
             write_hook_settings(&root); // --settings 주입용 훅 합성 파일 (D3)

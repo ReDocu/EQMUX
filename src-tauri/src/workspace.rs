@@ -96,7 +96,54 @@ pub(crate) fn atomic_write(target: &Path, data: &[u8]) -> Result<(), String> {
 pub fn save(root: &Path, list: &[WsEntry]) -> Result<(), String> {
     let _ = fs::create_dir_all(root);
     let json = serde_json::to_string_pretty(list).map_err(|e| e.to_string())?;
-    atomic_write(&registry_path(root), json.as_bytes())
+    atomic_write(&registry_path(root), json.as_bytes())?;
+    mirror(root, "workspaces.json", json.as_bytes());
+    Ok(())
+}
+
+/// 앱 데이터 폴더 옆의 사본 폴더(`com.eqment.eqmux.backup`). 0.4.x 이하는 data.ver가 다르면
+/// 앱 데이터 폴더 안을 비운다 (docs/data-loss-investigation-2026-10-17.md) — 옆 폴더에는 닿지 않는다.
+fn backup_dir(root: &Path) -> PathBuf {
+    let name = root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    root.with_file_name(format!("{name}.backup"))
+}
+
+/// 저장한 내용을 사본 폴더에도 쓴다 — 최선 노력, 실패해도 본 저장은 성공이다
+pub(crate) fn mirror(root: &Path, name: &str, data: &[u8]) {
+    let dir = backup_dir(root);
+    if fs::create_dir_all(&dir).is_ok() {
+        let _ = atomic_write(&dir.join(name), data);
+    }
+}
+
+/// 시작 시 1회 — 사본에만 있는 등록을 되살린다. 되살린 것이 있으면 배치도 사본으로 돌린다
+/// (지금 배치는 wipe 뒤 빈 상태로 다시 쓰인 것이다). 배치 파일이 없을 때도 사본으로 채운다.
+/// 되살린 등록 수를 돌려준다. 등록 해제는 사본에도 같이 반영되므로 되살아나지 않는다.
+pub fn restore_backup(root: &Path) -> usize {
+    let Ok(mut list) = load_strict(root) else {
+        return 0; // 깨진 등록부를 사본으로 덮지 않는다 — 변경 경로가 오류로 알린다
+    };
+    let bak = backup_dir(root);
+    let saved: Vec<WsEntry> = fs::read_to_string(bak.join("workspaces.json"))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    let before = list.len();
+    for e in saved {
+        if !list.iter().any(|w| w.id == e.id) {
+            list.push(e);
+        }
+    }
+    let restored = list.len() - before;
+    let layout = root.join("layout.json");
+    if restored > 0 || !layout.exists() {
+        let _ = fs::copy(bak.join("layout.json"), &layout);
+    }
+    // 저장이 사본도 쓴다 — 0.5.1로 처음 올라온 실행에서 사본이 여기서 생긴다
+    if restored > 0 || registry_path(root).exists() {
+        let _ = save(root, &list);
+    }
+    restored
 }
 
 /// git CLI 실행 — GUI 앱이므로 콘솔 창을 띄우지 않는다.
@@ -389,6 +436,45 @@ mod tests {
         assert!(load_strict(&dir).is_err()); // 손상 = 변경 경로 차단 (빈 목록 덮어쓰기 방지)
         assert!(load(&dir).is_empty()); // 읽기 전용 폴백은 빈 목록
         let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(backup_dir(&dir));
+    }
+
+    /// 데이터 소실 안전망 — 옛 버전의 wipe(등록부·배치 삭제) 뒤 새 등록 하나가 생긴 상태에서
+    /// 사본의 등록을 합치고 배치를 되돌린다. 등록 해제는 사본에도 반영돼 되살아나지 않는다.
+    #[test]
+    fn restore_backup_recovers_wiped_registry() {
+        let dir = std::env::temp_dir().join(format!("eqmux-bak-{}", now_ms()));
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(backup_dir(&dir));
+        let e = |id: &str| WsEntry {
+            id: id.into(),
+            name: id.into(),
+            path: "C:\\w".into(),
+            remote: None,
+            branch: None,
+            last_used: 1,
+            cross_project: true,
+        };
+        save(&dir, &[e("a"), e("b"), e("c")]).unwrap();
+        save(&dir, &[e("a"), e("b")]).unwrap(); // c 등록 해제
+        mirror(&dir, "layout.json", b"{\"open\":[\"a\"]}");
+        // wipe 흉내 — 등록부·배치가 지워지고 새 실행이 등록 하나를 다시 썼다
+        fs::remove_dir_all(&dir).unwrap();
+        fs::create_dir_all(&dir).unwrap();
+        let reg = dir.join("workspaces.json");
+        fs::write(&reg, serde_json::to_string(&[e("new")]).unwrap()).unwrap();
+        fs::write(dir.join("layout.json"), "{\"open\":[]}").unwrap();
+
+        assert_eq!(restore_backup(&dir), 2);
+        let ids: Vec<String> = load_strict(&dir).unwrap().into_iter().map(|w| w.id).collect();
+        assert_eq!(ids, ["new", "a", "b"]);
+        assert_eq!(fs::read_to_string(dir.join("layout.json")).unwrap(), "{\"open\":[\"a\"]}");
+        assert_eq!(restore_backup(&dir), 0); // 사본도 합친 목록으로 갱신됐다
+        fs::write(&reg, "{broken").unwrap();
+        assert_eq!(restore_backup(&dir), 0); // 깨진 등록부는 손대지 않는다
+        assert_eq!(fs::read_to_string(&reg).unwrap(), "{broken");
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(backup_dir(&dir));
     }
 
     #[test]

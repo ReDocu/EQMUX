@@ -61,4 +61,10 @@
 
 1. **지금 바로 (사용자):** `Downloads\EQMUX_0.4.2_x64_portable`을 지우거나 이름을 바꿔, 실수로 다시 실행하지 않게 한다. 다른 옛 버전 바로가기도 같다.
 2. **0.5.1 코드 — 안전망:** 0.5.x가 `workspaces.json`·`layout.json`을 저장할 때 같은 내용을 앱 데이터 폴더 밖(`~/.eqmux/backup/`)에도 둔다. 시작할 때 등록부가 없거나 비었는데 백업이 있으면 되살리고 알린다. 옛 버전의 wipe는 앱 데이터 폴더 안만 지우므로 이 백업은 남는다. 세션 DB(대화·스크롤백)는 크기 때문에 대상에서 뺀다.
+   - **반영(2026-10-17):** 사본 위치는 `~/.eqmux/backup/` 대신 앱 데이터 폴더 옆 `%APPDATA%\com.eqment.eqmux.backup\`으로 정했다. 앱 데이터 루트에서 바로 계산되어 테스트가 임시 폴더 옆에 따로 쓰고 실제 사본을 건드리지 않는다.
+     - `workspace::save`·`layout_save`가 저장할 때마다 사본에도 쓴다(`workspace::mirror`).
+     - 시작 때 `workspace::restore_backup`이 사본에만 있는 등록을 합친다. 합친 것이 있으면 배치도 사본으로 돌린다. 배치 파일이 없을 때도 사본으로 채운다.
+     - 되살렸으면 `diagnostics.log`에 `REGISTRY-RESTORED`를 남기고 OS 알림을 띄운다.
+     - 등록부가 깨져 있으면 손대지 않는다. 등록 해제는 사본에도 반영되므로 해제한 항목은 되살아나지 않는다.
+     - 테스트: `restore_backup_recovers_wiped_registry`.
 3. **릴리스 안내:** 0.5.x 릴리스 노트와 README에 "0.4.x 이하를 다시 실행하면 등록·배치가 지워진다"를 적는다.
