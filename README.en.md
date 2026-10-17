@@ -57,6 +57,7 @@ Auxiliary panes (editor, diff, browser) do not consume session slots.
 - **Attention loop** — the app-bar bell (notification center) and `Ctrl+Shift+U` take you straight to the pane that needs you
 - **Tidier menus** — the side panel is now four groups: conversation · code · run · browser. New shortcuts open folders in Explorer and the remote repository in your browser, and a server tab runs dev servers
 - **Confirmations and data kept** — stopping a session or removing a basic terminal asks first. Updates keep your workspace registrations and layout (the session history DB is moved to `session.db.bak`)
+- **Don't run an older version again** — 0.4.x and earlier empty the app data folder on startup when the version differs. Launching an old executable (portable builds included) once after using 0.5 wipes your workspace registrations and layout, so delete old executables. From 0.5.1 a copy of the registrations and layout is kept in `%APPDATA%\com.eqment.eqmux.backup` and restored on startup if they are gone
 
 ## Screens
 
