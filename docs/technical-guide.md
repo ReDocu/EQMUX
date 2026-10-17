@@ -1009,7 +1009,7 @@ sequenceDiagram
 ```mermaid
 stateDiagram-v2
   [*] --> Created : createEntry(sessionId)
-  Created : Terminal 생성 (scrollback 5000, allowProposedApi)
+  Created : Terminal 생성 (scrollback 3000, allowProposedApi)
   Created : 애드온 unicode-graphemes → fit → search → web-links
   Created --> Opened : attach(host) — term.open, WebglAddon(try)
   Opened --> Initialized : initSession (1회, entry.initialized)
@@ -2079,7 +2079,7 @@ updated: 2026-09-07 14:03
 | 훅 | Claude Code가 이벤트마다 실행하는 명령 `eqmux _hook <Event>`. 2차 상태 소스 |
 | statusLine | Claude Code가 상태줄을 그릴 때마다 실행하는 `eqmux _statusline`. 비용 수집 |
 | 트랜스크립트 | `~/.claude/projects/<cwd>/<uuid>.jsonl`. 참조만 하고 복사하지 않는다 |
-| 스크롤백 | 확정된 터미널 줄. 메모리 5,000줄(xterm) + 디스크 1,000줄/세션(SQLite) |
+| 스크롤백 | 확정된 터미널 줄. 메모리 3,000줄(xterm) + 디스크 1,000줄/세션(SQLite) |
 | 재생(replay) | 재시작 시 디스크 스크롤백 마지막 N줄을 페인에 흐리게 다시 쓰는 것 |
 | 원장(ledger) | `message` 테이블. 편집·삭제되지 않는다 |
 | 이벤트 피드 | `event` 테이블. 상태 전이·세션 시작/종료·보고·프런트 조작 |

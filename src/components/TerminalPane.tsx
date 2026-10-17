@@ -105,7 +105,7 @@ let attachSeq = 0;
 // 메모리 상한 (최적화 C2·C3) — 화면에서 내려간 지 1분이 지난 페인은 WebGL 컨텍스트를 놓고
 // 링버퍼를 줄인다. 탭 전환·줌 같은 잠깐의 리마운트는 건드리지 않는다 — 그때마다 놓으면 컨텍스트
 // 재생성 히치가 나고 위로 올려 보던 기록이 사라진다. 줄인 만큼의 옛 줄은 디스크 기록(FR-C-13)에 있다.
-const SCROLLBACK_LIVE = 5000; // FR-C-10 — 인메모리 링버퍼, 초과분은 스토어가 갖고 있다
+const SCROLLBACK_LIVE = 3000; // FR-C-10 — 인메모리 링버퍼. 5000에서 내렸다(페인당 최대 약 7MB → 4MB, RAM 후속 R3)
 const SCROLLBACK_PARKED = 1000;
 const PARK_AFTER_MS = 60_000;
 
@@ -849,7 +849,7 @@ export function TerminalPane(props: {
     e.onRevealFail = showRevealFail;
     void ensureDragDrop();
 
-    // 위로 스크롤 최상단 감지 (FR-C-13) — 인메모리 5,000줄의 꼭대기 = 디스크 기록의 입구
+    // 위로 스크롤 최상단 감지 (FR-C-13) — 인메모리 3,000줄의 꼭대기 = 디스크 기록의 입구
     const scrollDisp = isTauri()
       ? e.term.onScroll((y) => setAtTop(y === 0 && e.term.buffer.active.baseY > 0))
       : undefined;
@@ -1003,7 +1003,7 @@ export function TerminalPane(props: {
   return (
     <>
       <div class="xterm-host" data-session-id={props.sessionId} ref={host}>
-        {/* 터미널 내 검색 (M30) — Ctrl+F. 링버퍼(5,000줄) 범위 검색, 디스크 기록은 로그 패널 FTS가 담당 */}
+        {/* 터미널 내 검색 (M30) — Ctrl+F. 링버퍼(3,000줄) 범위 검색, 디스크 기록은 로그 패널 FTS가 담당 */}
         <Show when={searchOpen()}>
           <div class="card term-search mono" onMouseDown={(ev) => ev.stopPropagation()}>
             <input
@@ -1120,7 +1120,7 @@ export function TerminalPane(props: {
                 },
                 { label: t("검색"), kbd: "Ctrl+F", action: () => menuAction(() => setSearchSession(props.sessionId)) },
                 {
-                  // 이름은 '화면'인데 실제로는 링버퍼 5,000줄을 통째로 버린다 — 이름을 사실에
+                  // 이름은 '화면'인데 실제로는 링버퍼 3,000줄을 통째로 버린다 — 이름을 사실에
                   // 맞추고 danger로 내린다. 대체 화면(TUI)에서는 커서 줄만 남기고 화면이
                   // 어긋난 채 굳으므로 아예 막는다 (B47)
                   label: altBuffer()
