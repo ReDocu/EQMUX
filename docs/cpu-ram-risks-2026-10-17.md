@@ -106,6 +106,10 @@
 - **O5**: `ipc.rs` 파이프 요청 한 줄을 `take(1MB)`로 묶는다. 잘린 줄은 JSON 해석에서 실패해 오류 응답이 나간다.
 - 검증: `cargo test --lib` 147건 통과(경고 없음). 프런트는 `stat`을 문자열로만 보여 주므로 `+?`의 영향이 없다.
 - 남은 것: O3(디스크 기록·로그 문맥 "더 보기" 상한)와 O4(큰 diff 가상화)는 프런트 작업이라 이번에 하지 않았다.
+- **C8**: `store.rs` `open_db`는 이 프로세스에서 이미 스키마를 맞춘 DB 파일(`MIGRATED`)이면 연결·pragma·busy_timeout만 하고 돌아온다. 스키마 전체·ALTER 9개·FTS 생성은 파일당 첫 열기에서 한 번만 돈다. 실행 중에 session.db가 지워지는 경로는 지금 없다(`ponytail:`로 표시). 테스트는 `open_db_migrates_once_per_file`.
+- **C9**: `LineAssembler::with_sgr(bool)`을 추가했다. `sgrStore`가 꺼져 있으면 조립기가 색 사본(`styled`)을 아예 쌓지 않는다. `new()`는 지금처럼 켠 채로 둔다. 적재 경로의 `if sgr_on { styled } else { None }`은 필요 없어져 지웠다. 테스트는 `assembler_without_sgr_keeps_text_and_skips_styled`(평문 결과가 켠 쪽과 같은지 본다).
+- **C10**: `diag.rs` `note_window_event`는 500ms 안에서는 배율·모니터 이름만 확인한다. 둘 다 그대로면 시각만 갱신하고 끝낸다. 위치·크기·모니터 영역·브라우저 웹뷰 조회는 기록할 때만 한다. 배율·모니터가 바뀐 순간은 지금처럼 항상 남는다. 창이 있어야 해서 단위 테스트는 없다.
+- 검증: `cargo test --lib` 149건 통과(경고 없음). 앱 실측은 하지 않았다.
 - (L1·L2) `tsc --noEmit` 통과, `vitest` 133건 통과. 두 경로 모두 DOM과 xterm이 있어야 해서 단위 테스트는 추가하지 않았다. 앱에서 확인하는 법은 다음과 같다. L1: 잘못된 cwd로 세션을 만들고 탭을 몇 번 오간 뒤 cwd를 고쳐 다시 띄우면, 글자가 한 번씩만 들어가야 한다. L2: 레지스트리 수(`terminals`)는 고치기 전에도 바로 줄었으므로 증거가 되지 않는다. 세션을 여러 개 지운 뒤 60초 안에 DevTools 힙 스냅샷에서 `Terminal` 인스턴스 수가 남은 세션 수와 같으면 된다.
 
 ## 실측 (2026-10-17 17:29~17:52)

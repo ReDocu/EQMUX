@@ -399,11 +399,11 @@ fn spawn_pty_session(
         if let Some((f, _)) = log_file.as_mut() {
             let _ = writeln!(f, "\n=== EQMUX session start · {} · epoch {} ===", id, epoch_secs());
         }
-        let mut assembler = LineAssembler::new();
         // SGR 저장 (FR-C-15) — 설정으로 끌 수 있다 (용량 절감). 평문 적재는 계속된다.
         // 스폰 때 한 번만 읽는다 (최적화 A7) — 8KB마다 읽으면 모든 세션이 설정 잠금을 다툰다.
-        // 바꾼 설정은 다음에 뜨는 세션부터 먹는다
+        // 바꾼 설정은 다음에 뜨는 세션부터 먹는다. 꺼져 있으면 조립기가 색 사본 자체를 만들지 않는다 (C9)
         let sgr_on = setting_bool(&app, "sgrStore", true);
+        let mut assembler = LineAssembler::with_sgr(sgr_on);
         let mut last_spilled = String::new();
         let mut buf = [0u8; 8192];
         let mut pending: Vec<u8> = Vec::new(); // 읽기 경계에서 잘린 UTF-8 꼬리 이월 (≤3바이트)
@@ -440,7 +440,7 @@ fn spawn_pty_session(
                             ws: ws.clone(),
                             id: id.clone(),
                             text: line,
-                            styled: if sgr_on { styled } else { None },
+                            styled,
                         });
                     });
                     let _ = out_tx.send(data);

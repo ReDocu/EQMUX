@@ -142,17 +142,26 @@ pub fn db_path(root: &Path, ws: &str) -> PathBuf {
     root.join("workspaces").join(sanitize(ws)).join("session.db")
 }
 
+/// 이 프로세스에서 스키마를 이미 맞춘 DB 파일 (CPU·RAM C8) — 메시지 송수신·cache_set·report마다
+/// 스키마 전체·ALTER 9개·FTS 생성을 다시 돌며 쓰기 스레드와 잠금을 다투던 자리다.
+/// ponytail: 실행 중에 session.db가 지워지면(지금은 그런 경로가 없다) 다시 맞추지 않는다
+static MIGRATED: std::sync::Mutex<Option<std::collections::HashSet<PathBuf>>> = std::sync::Mutex::new(None);
+
 /// 쓰기 열림 — 스키마 보장까지만 하는 가벼운 열기. 메시지 버스(messages.rs)도 이 경로로 연다.
 pub(crate) fn open_db(root: &Path, ws: &str) -> rusqlite::Result<Connection> {
     let path = db_path(root, ws);
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    let conn = Connection::open(path)?;
+    let conn = Connection::open(&path)?;
     let _ = conn.pragma_update(None, "journal_mode", "WAL");
     let _ = conn.pragma_update(None, "synchronous", "NORMAL");
     // 이중 쓰기 연결 경합 (store 배치 커밋 vs msg_send·IPC publish) — 즉시 실패 대신 대기
     let _ = conn.busy_timeout(Duration::from_millis(500));
+    let done = MIGRATED.lock().map(|m| m.as_ref().is_some_and(|s| s.contains(&path))).unwrap_or(false);
+    if done {
+        return Ok(conn);
+    }
     conn.execute_batch(SCHEMA)?;
     // SGR 보존 컬럼 (FR-C-15, M32) — 기존 DB 마이그레이션. 이미 있으면 조용히 실패한다
     let _ = conn.execute("ALTER TABLE scrollback ADD COLUMN styled TEXT", []);
@@ -177,6 +186,9 @@ pub(crate) fn open_db(root: &Path, ws: &str) -> rusqlite::Result<Connection> {
     let _ = conn.execute_batch(
         "CREATE VIRTUAL TABLE IF NOT EXISTS scrollback_fts USING fts5(text, session_id UNINDEXED, seq UNINDEXED, ts UNINDEXED)",
     );
+    if let Ok(mut m) = MIGRATED.lock() {
+        m.get_or_insert_with(Default::default).insert(path);
+    }
     Ok(conn)
 }
 
@@ -693,6 +705,8 @@ pub fn is_tui_noise(line: &str) -> bool {
 /// emit은 (평문, styled)를 받고 SGR이 없던 줄의 styled는 None이다.
 /// 완전한 VT 파서(PRD A)가 오면 그 확정 줄로 교체한다.
 pub struct LineAssembler {
+    /// 색(SGR) 보존본을 만드는가 — 설정 sgrStore가 꺼져 있으면 styled를 쌓지 않는다 (CPU·RAM C9)
+    sgr: bool,
     partial: String,
     /// SGR 보존 빌더 — 문자와 SGR 시퀀스를 순서대로 쌓는다. 백스페이스는 마지막 문자만 지운다
     styled: Vec<StyledChunk>,
@@ -741,7 +755,12 @@ fn csi_rewrites_line(final_byte: char, params: &str) -> bool {
 
 impl LineAssembler {
     pub fn new() -> Self {
+        Self::with_sgr(true)
+    }
+
+    pub fn with_sgr(sgr: bool) -> Self {
         LineAssembler {
+            sgr,
             partial: String::new(),
             styled: Vec::new(),
             has_sgr: false,
@@ -800,12 +819,16 @@ impl LineAssembler {
                         }
                         '\t' => {
                             self.partial.push('\t');
-                            self.styled.push(StyledChunk::Ch('\t'));
+                            if self.sgr {
+                                self.styled.push(StyledChunk::Ch('\t'));
+                            }
                         }
                         c if c.is_control() => {}
                         c => {
                             self.partial.push(c);
-                            self.styled.push(StyledChunk::Ch(c));
+                            if self.sgr {
+                                self.styled.push(StyledChunk::Ch(c));
+                            }
                         }
                     }
                 }
@@ -823,9 +846,11 @@ impl LineAssembler {
                         // 단 "버린다"와 "무시한다"는 다르다 — 제자리 갱신 시퀀스를 그냥 무시하면
                         // 프레임이 줄에 계속 쌓인다 (스피너 300프레임 = 한 줄 6.5KB).
                         if c == 'm' {
-                            self.styled
-                                .push(StyledChunk::Sgr(format!("\u{1b}[{}m", self.csi_buf)));
-                            self.has_sgr = true;
+                            if self.sgr {
+                                self.styled
+                                    .push(StyledChunk::Sgr(format!("\u{1b}[{}m", self.csi_buf)));
+                                self.has_sgr = true;
+                            }
                         } else if csi_rewrites_line(c, &self.csi_buf) {
                             self.partial.clear();
                             self.styled.clear();
@@ -890,6 +915,33 @@ mod tests {
 
     /// SGR 보존 (FR-C-15, M32) — 색 시퀀스만 styled에 남고 평문은 그대로,
     /// 색 없는 줄은 styled가 None, 커서 이동류(CSI K 등)는 보존하지 않는다
+    #[test]
+    fn assembler_without_sgr_keeps_text_and_skips_styled() {
+        // C9 — 색 저장이 꺼져 있으면 평문은 같고 색 사본은 만들지 않는다
+        let input = "\u{1b}[31mred\u{1b}[0m pl\u{8}lain\n\u{1b}[2Kmoved\n";
+        let (mut on, mut off) = (Vec::new(), Vec::new());
+        LineAssembler::new().push(input, |t, s| on.push((t, s)));
+        LineAssembler::with_sgr(false).push(input, |t, s| off.push((t, s)));
+        let text = |v: &Vec<(String, Option<String>)>| v.iter().map(|x| x.0.clone()).collect::<Vec<_>>();
+        assert_eq!(text(&on), text(&off));
+        assert!(on[0].1.is_some() && off.iter().all(|x| x.1.is_none()));
+    }
+
+    /// C8 — 같은 DB를 다시 열어도 동작하고, 스키마는 첫 열기에서 맞춘 것으로 기억된다
+    #[test]
+    fn open_db_migrates_once_per_file() {
+        let dir = std::env::temp_dir().join(format!("eqmux-mig-{}", crate::workspace::now_ms()));
+        let first = open_db(&dir, "ws").unwrap();
+        first.execute("INSERT OR REPLACE INTO meta VALUES ('k', 'v')", []).unwrap();
+        drop(first);
+        assert!(MIGRATED.lock().unwrap().as_ref().unwrap().contains(&db_path(&dir, "ws")));
+        let again = open_db(&dir, "ws").unwrap();
+        let v: String = again.query_row("SELECT value FROM meta WHERE key = 'k'", [], |r| r.get(0)).unwrap();
+        assert_eq!(v, "v");
+        drop(again);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn assembler_preserves_sgr_only() {
         let mut a = LineAssembler::new();
