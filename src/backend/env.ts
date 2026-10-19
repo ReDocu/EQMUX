@@ -1,6 +1,8 @@
 // 환경변수 보기 (실행 › 환경변수) — 워크스페이스 루트의 .env 계열 파일을 읽어 KEY=VALUE로 보인다.
 // 읽기 전용이다. 값은 비밀이 많아 화면이 기본으로 가린다 (EnvPanelTab).
+import { MOCK_ENV } from "./mock";
 import { fsRead } from "./panels";
+import { isTauri } from "./pty";
 
 /** 살펴보는 파일 — 흔한 dotenv 이름들. ponytail: 고정 목록, 다른 이름이 필요하면 여기에 더한다 */
 export const ENV_FILES = [
@@ -48,6 +50,7 @@ export function parseDotenv(text: string): EnvVar[] {
 
 /** 워크스페이스 루트의 .env 계열 중 있는 것만 — 없거나 못 읽는 파일은 조용히 건너뛴다 */
 export async function loadEnvFiles(wsPath: string): Promise<EnvFile[]> {
+  if (!isTauri()) return MOCK_ENV; // 브라우저 dev — 파일 시스템이 없다
   const read = await Promise.all(
     ENV_FILES.map((file) =>
       fsRead(wsPath, file).then(

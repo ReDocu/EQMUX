@@ -282,7 +282,9 @@ export function ControlCenter(props: { workspace: Workspace }) {
   const [gitInfo, setGitInfo] = createSignal<GitOverview | undefined>(undefined);
   const [worktrees, setWorktrees] = createSignal<WorktreeInfo[]>([]);
   onMount(() => {
-    if (!isTauri() || props.workspace.pathMissing) return;
+    if (props.workspace.pathMissing) return;
+    // 브라우저 dev — 목 워크트리를 한 번만 (실측·폴링 없음)
+    if (!isTauri()) return void worktreeList(props.workspace.path).then((w) => setWorktrees(w ?? []));
     const load = () => {
       void gitOverview(props.workspace.path).then(setGitInfo);
       void worktreeList(props.workspace.path).then((w) => setWorktrees(w ?? []));

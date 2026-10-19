@@ -2,6 +2,7 @@
 // 쓰기 작업(pull·push·commit)은 제공하지 않는다 — 실행은 터미널 페인에서 사람이 한다 (G7과 같은 원칙).
 import { invoke } from "@tauri-apps/api/core";
 import { t } from "../i18n";
+import { MOCK_WORKTREES } from "./mock";
 import { isTauri } from "./pty";
 
 export interface GitCommitInfo {
@@ -40,7 +41,7 @@ export interface WorktreeInfo {
 }
 
 export async function worktreeList(wsPath: string): Promise<WorktreeInfo[] | undefined> {
-  if (!isTauri()) return undefined;
+  if (!isTauri()) return MOCK_WORKTREES[wsPath];
   return invoke<WorktreeInfo[]>("git_worktrees", { wsPath }).catch(() => undefined);
 }
 
