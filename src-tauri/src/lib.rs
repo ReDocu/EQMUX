@@ -24,6 +24,8 @@ mod diff;
 mod fsx;
 pub(crate) mod ipc;
 mod job;
+#[cfg(target_os = "macos")]
+mod macproc;
 pub(crate) mod library;
 pub(crate) mod messages;
 mod missions;
@@ -129,8 +131,60 @@ struct PtyExit {
 
 /// 세션 로그 (1차 — 파일 append). PRD 12의 rusqlite WAL 스토어가 오면 그 뒤로 들어간다.
 pub(crate) fn log_dir() -> PathBuf {
+    home_dir().join(".eqmux").join("logs")
+}
+
+/// 사용자 홈 — Windows는 USERPROFILE, macOS는 HOME
+pub(crate) fn home_dir() -> PathBuf {
+    #[cfg(windows)]
     let home = std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\".into());
-    Path::new(&home).join(".eqmux").join("logs")
+    #[cfg(not(windows))]
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
+    PathBuf::from(home)
+}
+
+/// PATH 구분자 — 앱 폴더를 PATH 앞에 붙이는 스폰 경로들이 쓴다
+pub(crate) const PATH_SEP: &str = if cfg!(windows) { ";" } else { ":" };
+
+/// macOS GUI 앱은 로그인 셸의 PATH를 물려받지 못한다 (Finder 기동은 /usr/bin:/bin 정도뿐) —
+/// 그대로면 claude·codex·git(Homebrew)이 PTY에서도 on_path에서도 안 잡힌다. 기동 때 한 번
+/// 사용자 셸에 물어 PATH를 맞춘다. 대화형(-i)이어야 .zshrc까지 읽힌다 — 출력에 섞이는
+/// 잡음은 표식으로 걸러 내고, 셸 설정이 멈춰도 앱이 서지 않게 시한을 둔다
+#[cfg(target_os = "macos")]
+fn import_login_path() {
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let out = std::process::Command::new(shell)
+            .args(["-ilc", "printf '__EQPATH__%s__EQPATH__' \"$PATH\""])
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output();
+        let _ = tx.send(out);
+    });
+    let mut dirs: Vec<String> = Vec::new();
+    if let Ok(Ok(out)) = rx.recv_timeout(std::time::Duration::from_secs(5)) {
+        let text = String::from_utf8_lossy(&out.stdout);
+        if let Some(p) = text.split("__EQPATH__").nth(1) {
+            dirs.extend(p.split(':').filter(|d| !d.is_empty()).map(str::to_string));
+        }
+    }
+    // 셸이 답하지 않아도 흔한 설치 위치는 잡히게 — Claude 네이티브 설치·Homebrew
+    let home = home_dir();
+    let current = std::env::var("PATH").unwrap_or_default();
+    for d in [
+        home.join(".local/bin").to_string_lossy().into_owned(),
+        "/opt/homebrew/bin".into(),
+        "/usr/local/bin".into(),
+    ]
+    .into_iter()
+    .chain(current.split(':').map(str::to_string))
+    {
+        if !d.is_empty() && !dirs.contains(&d) {
+            dirs.push(d);
+        }
+    }
+    std::env::set_var("PATH", dirs.join(":"));
 }
 
 fn log_file_name(id: &str) -> String {
@@ -219,10 +273,10 @@ fn resolve_cwd(cwd: Option<String>) -> String {
             return dir;
         }
     }
-    std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\".into())
+    home_dir().to_string_lossy().into_owned()
 }
 
-/// 셸 후보를 순서대로 시도한다: 지정값 → pwsh → powershell → cmd
+/// 셸 후보를 순서대로 시도한다: 지정값 → pwsh → powershell → cmd (macOS: 지정값 → $SHELL → zsh → bash)
 fn shell_candidates(shell: Option<String>) -> Vec<String> {
     let mut v = Vec::new();
     if let Some(s) = shell {
@@ -230,8 +284,27 @@ fn shell_candidates(shell: Option<String>) -> Vec<String> {
             v.push(s);
         }
     }
+    #[cfg(windows)]
     v.extend(["pwsh.exe".into(), "powershell.exe".into(), "cmd.exe".into()]);
+    #[cfg(not(windows))]
+    {
+        if let Ok(s) = std::env::var("SHELL") {
+            v.push(s);
+        }
+        v.extend(["/bin/zsh".into(), "/bin/bash".into()]);
+    }
     v
+}
+
+/// 기본 셸 표시 이름 — 셸을 지정하지 않은 페인의 라벨
+fn default_shell_label() -> String {
+    #[cfg(windows)]
+    return "pwsh".into();
+    #[cfg(not(windows))]
+    std::env::var("SHELL")
+        .ok()
+        .and_then(|s| s.rsplit('/').next().map(str::to_string))
+        .unwrap_or_else(|| "zsh".into())
 }
 
 /// PTY 자식 환경 위생 — 모든 스폰(셸·에이전트)의 단일 관문에서 적용한다.
@@ -525,7 +598,7 @@ async fn pty_spawn(
 ) -> Result<(), String> {
     run_spawn(move || {
         let dir = resolve_cwd(cwd);
-        let label = shell.clone().unwrap_or_else(|| "pwsh".into());
+        let label = shell.clone().unwrap_or_else(default_shell_label);
         let exe_dir = std::env::current_exe()
             .ok()
             .and_then(|e| e.parent().map(|p| p.to_path_buf()));
@@ -551,11 +624,14 @@ async fn pty_spawn(
             .into_iter()
             .map(|c| {
                 let mut b = CommandBuilder::new(&c);
+                // macOS 터미널 관례 — 로그인 셸로 띄워 .zprofile까지 읽힌다
+                #[cfg(not(windows))]
+                b.arg("-l");
                 b.cwd(&dir);
                 // 일반 셸에서도 `eqmux ping` 같은 CLI(PRD I)가 잡히게 PATH 앞에 앱 폴더를 붙인다
                 if let Some(d) = &exe_dir {
                     let path = std::env::var("PATH").unwrap_or_default();
-                    b.env("PATH", format!("{};{}", d.display(), path));
+                    b.env("PATH", format!("{}{PATH_SEP}{}", d.display(), path));
                 }
                 b.env("EQMUX_SESSION", &id);
                 b.env("EQMUX_TOKEN", &token);
@@ -2398,23 +2474,40 @@ pub(crate) fn launch_web(url: &str, chrome: bool) -> Result<(), String> {
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return Err("http/https URL만 열 수 있습니다".into());
     }
-    use std::os::windows::process::CommandExt;
-    let mut cmd = match chrome.then(find_chrome).flatten() {
-        Some(exe) => std::process::Command::new(exe),
-        None => {
-            let mut c = std::process::Command::new("rundll32");
-            c.arg("url.dll,FileProtocolHandler");
-            c
+    // macOS — `open`이 기본 브라우저로, `-a`면 Chrome으로 연다 (없으면 기본 브라우저로 물러선다)
+    #[cfg(not(windows))]
+    {
+        let ok = chrome
+            && std::process::Command::new("open")
+                .args(["-a", "Google Chrome", url])
+                .status()
+                .is_ok_and(|s| s.success());
+        if !ok {
+            std::process::Command::new("open").arg(url).spawn().map_err(|e| e.to_string())?;
         }
-    };
-    cmd.arg(url)
-        .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
-        .spawn()
-        .map_err(|e| e.to_string())?;
-    Ok(())
+        Ok(())
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let mut cmd = match chrome.then(find_chrome).flatten() {
+            Some(exe) => std::process::Command::new(exe),
+            None => {
+                let mut c = std::process::Command::new("rundll32");
+                c.arg("url.dll,FileProtocolHandler");
+                c
+            }
+        };
+        cmd.arg(url)
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
 }
 
 /// Chrome 설치 위치 — 시스템 설치(Program Files 두 곳)와 사용자 설치(LocalAppData)
+#[cfg(windows)]
 fn find_chrome() -> Option<std::path::PathBuf> {
     ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"]
         .iter()
@@ -2520,9 +2613,11 @@ fn another_instance_running() -> bool {
     true
 }
 
+/// macOS — 버스 소켓이 답하면 이미 하나 떠 있다. 그 창을 앞으로 부르고 물러난다
+/// (Finder 더블클릭은 LaunchServices가 막아 주지만, 실행 파일을 직접 띄우면 여기까지 온다)
 #[cfg(not(windows))]
 fn another_instance_running() -> bool {
-    false
+    ipc::focus_existing()
 }
 
 /// 버전 업 때 워크스페이스마다 session.db를 session.db.bak으로 옮긴다 (BR-09 · 결정 1b) —
@@ -2559,6 +2654,9 @@ pub fn run() {
     if another_instance_running() {
         return; // 창은 하나뿐이다 — 두 번째 프로세스는 조용히 물러난다
     }
+    // 스레드를 띄우기 전에 — set_var는 다른 스레드가 환경을 읽는 동안 부르면 안 된다
+    #[cfg(target_os = "macos")]
+    import_login_path();
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .manage(PtyState::default())

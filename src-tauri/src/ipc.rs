@@ -1,4 +1,4 @@
-// IPC (PRD C FR-C-40 계열 · PRD I 운반로) — Windows 명명 파이프 한 줄 요청 / 한 줄 응답.
+// IPC (PRD C FR-C-40 계열 · PRD I 운반로) — Windows 명명 파이프 / macOS 유닉스 소켓, 한 줄 요청 / 한 줄 응답.
 // 서버는 앱(GUI 1)이고 클라이언트는 eqmux CLI 다수(C7 — 같은 OS 사용자, 파이프 기본 DACL).
 // 프로토콜: JSON 한 줄 {"cmd":"ping"|"send"|"report"|"hook", ...} → {"ok":bool, ...} 한 줄.
 // send가 여기로 합류하면서 발신 경로는 msg_send 커맨드(사람)와 이 파이프(에이전트) 둘이지만
@@ -11,6 +11,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 const MAX_CONNS: usize = 32;
 static CONN_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
+#[cfg(windows)]
 fn pipe_path() -> String {
     let user: String = std::env::var("USERNAME")
         .unwrap_or_else(|_| "default".into())
@@ -43,9 +44,33 @@ pub fn request(line: &str) -> std::io::Result<String> {
     Err(last.unwrap_or_else(|| std::io::Error::other("pipe open failed")))
 }
 
+/// 소켓 경로 — 로그와 같은 ~/.eqmux 아래. 홈 디렉터리는 사용자 전용이라 파이프 기본 DACL과
+/// 같은 경계(같은 OS 사용자)가 된다. 경로 길이 상한(104B)도 홈 바로 아래라 넉넉하다
 #[cfg(not(windows))]
-pub fn request(_line: &str) -> std::io::Result<String> {
-    Err(std::io::Error::other("named pipe is windows-only"))
+fn socket_path() -> std::path::PathBuf {
+    crate::home_dir().join(".eqmux").join("bus.sock")
+}
+
+#[cfg(not(windows))]
+pub fn request(line: &str) -> std::io::Result<String> {
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixStream;
+    let mut last = None;
+    for _ in 0..3 {
+        match UnixStream::connect(socket_path()) {
+            Ok(mut s) => {
+                writeln!(s, "{line}")?;
+                let mut resp = String::new();
+                BufReader::new(s).read_line(&mut resp)?;
+                return Ok(resp.trim().to_string());
+            }
+            Err(e) => {
+                last = Some(e); // 앱 기동 직후 바인드 전의 짧은 창 — 잠깐 쉬고 재시도
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        }
+    }
+    Err(last.unwrap_or_else(|| std::io::Error::other("socket connect failed")))
 }
 
 // ── 서버 (앱) ──
@@ -55,8 +80,69 @@ pub fn start_server(app: AppHandle) {
     std::thread::spawn(move || server_loop(app));
 }
 
+/// 떠 있는 앱에 창을 앞으로 부르라고 한 번만 묻는다 — 재시도 없이 (기동을 늦추지 않게)
 #[cfg(not(windows))]
-pub fn start_server(_app: AppHandle) {}
+pub fn focus_existing() -> bool {
+    use std::io::{BufRead, BufReader, Write};
+    let Ok(mut s) = std::os::unix::net::UnixStream::connect(socket_path()) else { return false };
+    let _ = s.set_read_timeout(Some(std::time::Duration::from_secs(2)));
+    let mut resp = String::new();
+    writeln!(s, "{}", json!({"cmd": "focus"})).is_ok() && BufReader::new(s).read_line(&mut resp).is_ok() && !resp.is_empty()
+}
+
+#[cfg(not(windows))]
+pub fn start_server(app: AppHandle) {
+    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::net::{UnixListener, UnixStream};
+    let path = socket_path();
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    }
+    // 남은 소켓 파일 — 받는 쪽이 살아 있으면 다른 EQMUX가 떠 있는 것이니 빼앗지 않는다.
+    // 죽은 파일(비정상 종료의 잔재)만 지우고 다시 묶는다
+    if path.exists() {
+        if UnixStream::connect(&path).is_ok() {
+            return;
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+    let listener = match UnixListener::bind(&path) {
+        Ok(l) => l,
+        Err(_) => return,
+    };
+    let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(stream) = stream else { continue };
+            if CONN_COUNT.load(std::sync::atomic::Ordering::Relaxed) >= MAX_CONNS {
+                continue; // drop이 연결을 닫는다
+            }
+            CONN_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let app2 = app.clone();
+            std::thread::spawn(move || {
+                handle_conn(&app2, stream);
+                CONN_COUNT.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            });
+        }
+    });
+}
+
+#[cfg(not(windows))]
+fn handle_conn(app: &AppHandle, stream: std::os::unix::net::UnixStream) {
+    use std::io::{BufRead, BufReader, Write};
+    // 파이프 쪽과 달리 읽기 시한을 걸 수 있다 — 한 줄도 안 보내는 클라이언트가 스레드를 쥐지 않게
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(10)));
+    let mut line = String::new();
+    if BufReader::new(&stream).read_line(&mut line).is_err() {
+        return;
+    }
+    let resp = match handle(app, line.trim()) {
+        Ok(v) => v.to_string(),
+        Err(e) => json!({"ok": false, "error": e}).to_string(),
+    };
+    let _ = writeln!(&stream, "{resp}");
+}
 
 #[cfg(windows)]
 fn server_loop(app: AppHandle) {
@@ -138,7 +224,6 @@ fn handle_conn(app: &AppHandle, file: std::fs::File) {
 /// 세션 신원 검증 (P-1) — 세션 id는 공개 관례(`이름@ws`)라 추측 가능하다. 스폰 시 발급되어
 /// EQMUX_TOKEN으로 주입된 논스가 일치해야 그 세션의 발신으로 인정한다. 같은 OS 사용자는
 /// 수용 위협이지만(파이프 DACL), 에이전트가 다른 세션을 사칭하는 것은 여기서 막는다.
-#[cfg_attr(not(windows), allow(dead_code))]
 fn verify_session(app: &AppHandle, session: &str, req: &serde_json::Value) -> Result<(), String> {
     let claimed = req["token"].as_str().unwrap_or("");
     let rt: State<crate::agent::AgentRt> = app.state();
@@ -152,7 +237,6 @@ fn verify_session(app: &AppHandle, session: &str, req: &serde_json::Value) -> Re
 
 /// 요청 디스패치 — 발신자 신원은 EQMUX_SESSION(세션 id) + EQMUX_TOKEN(논스) 쌍이고,
 /// 워크스페이스·cwd는 앱의 추적 맵(AgentRt)에서 푼다.
-#[cfg_attr(not(windows), allow(dead_code))]
 fn handle(app: &AppHandle, line: &str) -> Result<serde_json::Value, String> {
     let req: serde_json::Value = serde_json::from_str(line).map_err(|_| "BAD_JSON".to_string())?;
     let cmd = req["cmd"].as_str().ok_or("BAD_CMD")?;
@@ -160,6 +244,15 @@ fn handle(app: &AppHandle, line: &str) -> Result<serde_json::Value, String> {
     let en = crate::setting_str(app, "language").as_deref() == Some("en");
     match cmd {
         "ping" => Ok(json!({"ok": true, "app": "eqmux", "version": env!("CARGO_PKG_VERSION")})),
+        // 두 번째 기동이 부른다 (macOS 단일 인스턴스) — 창을 앞으로 올리는 것뿐이라 신원을 묻지 않는다
+        "focus" => {
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.unminimize();
+                let _ = w.show();
+                let _ = w.set_focus();
+            }
+            Ok(json!({"ok": true}))
+        }
         "send" => {
             let session = req["session"].as_str().ok_or("NO_SESSION")?;
             verify_session(app, session, &req)?;
@@ -313,7 +406,6 @@ fn report_result(sent: &[String], missed: &[String], done: bool, open: &[String]
 }
 
 /// 원장 적재 + message-new 방송 — msg_send 커맨드(사람 발신)와 같은 경로
-#[cfg_attr(not(windows), allow(dead_code))]
 fn publish(
     app: &AppHandle,
     ws: &str,
@@ -390,7 +482,6 @@ fn directory() -> Vec<DirEntry> {
 /// 받는 쪽 — 팀 전체(@all, 자기 프로젝트만) 또는 세션 하나. 디렉터리 항목이 없으면(디렉터리를
 /// 아직 못 받았을 때의 team.json 폴백) 같은 워크스페이스 세션이다.
 #[derive(Debug)]
-#[cfg_attr(not(windows), allow(dead_code))]
 enum Target {
     All,
     One(String, Option<DirEntry>),
@@ -447,7 +538,6 @@ fn resolve_in(dir: &[DirEntry], my_ws: &str, raw: &str) -> Result<Option<DirEntr
     hit.map(Some).ok_or_else(|| "UNKNOWN_RECIPIENT".into())
 }
 
-#[cfg_attr(not(windows), allow(dead_code))]
 fn resolve_target(app: &AppHandle, ws: &str, cwd: &str, raw: &str) -> Result<Target, String> {
     let dir = directory();
     // 디렉터리를 아직 못 받았으면(앱 기동 직후) 자기 팀 로스터로만 푼다 — 0.4.2 경로
@@ -472,7 +562,6 @@ fn resolve_target(app: &AppHandle, ws: &str, cwd: &str, raw: &str) -> Result<Tar
 
 /// 발신 + 전달 결과. 다른 프로젝트로 가는 메시지는 두 원장에 적는다 — 각 줄의 project는
 /// 상대 쪽 프로젝트 이름이다. 전달(PTY 주입)은 받는 워크스페이스의 message-new가 맡는다.
-#[cfg_attr(not(windows), allow(dead_code))]
 fn send_to(
     app: &AppHandle,
     ws: &str,
@@ -544,7 +633,6 @@ fn hhmm(ts: i64) -> String {
 /// 전달 결과 — conversation.ts deliver()와 같은 규칙(idle이면 전달, 그 밖이면 대기).
 /// 상태는 agent.rs 실측이 우선, 맨 셸 세션은 디렉터리 상태. 사람이 그 페인에 치는 중이라
 /// 프런트가 미루는 경우는 여기서 모른다 — 메시지는 어쨌든 인박스에 남는다.
-#[cfg_attr(not(windows), allow(dead_code))]
 fn delivery(app: &AppHandle, ws: &str, session: &str, entry: Option<&DirEntry>, en: bool) -> String {
     let (status, since) = match crate::find_tracked(app, session) {
         Some((_, t)) => (t.last_status, t.status_ms),
@@ -673,7 +761,6 @@ fn who_text(dir: &[DirEntry], my_ws: &str, me: &str, en: bool) -> String {
 ///
 /// 0.5부터는 디렉터리(C4)를 아직 못 받았을 때의 폴백이다. `@`가 든 주소는 자기 워크스페이스
 /// 세션 id만 받는다 — 남의 id를 그냥 통과시키면 아무도 받지 않는데 "전송됨"이 찍혔다 (BR-01).
-#[cfg_attr(not(windows), allow(dead_code))]
 fn resolve_recipient(ws: &str, ws_path: &str, raw: &str) -> Result<String, String> {
     let m = raw.trim().trim_start_matches('@');
     if m.is_empty() || m == "all" {

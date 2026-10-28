@@ -44,6 +44,15 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_Threading",
 ] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# 세션 트리·포트 귀속·에이전트 감지 (macproc.rs) — libproc·sysctl
+libc = "0.2"
+# 브라우저 패널 조종 (browser.rs eval_text) — WKWebView evaluateJavaScript. wry가 쓰는 것과 같은 버전
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSString", "NSError"] }
+objc2-web-kit = { version = "0.3", features = ["WKWebView", "block2"] }
+block2 = "0.6"
+
 # 릴리스 빌드 (최적화 B11) — exe 크기·속도. panic = "abort"는 넣지 않는다: 연결·리더 스레드의
 # panic이 그 스레드에서 끝나야 앱이 산다 (크래시 생존 경로)
 [profile.release]

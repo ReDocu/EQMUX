@@ -446,9 +446,17 @@ pub fn reveal_path(path: String, cwd: Option<String>) -> Result<(), String> {
     if abs.contains('"') || abs.chars().any(|c| c.is_control()) {
         return Err("경로에 쓸 수 없는 문자가 있습니다".into());
     }
+    // macOS — Finder로 연다. 파일이면 `-R`로 그 파일을 선택해 보인다
+    #[cfg(not(windows))]
+    std::process::Command::new("open")
+        .args(if is_dir { vec![abs.as_str()] } else { vec!["-R", abs.as_str()] })
+        .spawn()
+        .map_err(|e| e.to_string())?;
     // raw_arg — 탐색기는 `/select,"경로"` 형태를 기대한다. std의 자동 인용은 인자 전체를
     // 감싸버려(`"/select,C:\a b\c.png"`) 공백 있는 경로에서 어긋난다.
+    #[cfg(windows)]
     use std::os::windows::process::CommandExt;
+    #[cfg(windows)]
     std::process::Command::new("explorer")
         .raw_arg(if is_dir { format!("\"{abs}\"") } else { format!("/select,\"{abs}\"") })
         .creation_flags(0x0800_0000) // CREATE_NO_WINDOW

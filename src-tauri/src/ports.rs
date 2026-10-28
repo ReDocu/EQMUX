@@ -48,13 +48,19 @@ pub(crate) fn process_name(pid: u32) -> String {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+pub(crate) fn process_name(pid: u32) -> String {
+    crate::macproc::name(pid).unwrap_or_else(|| "?".into())
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub(crate) fn process_name(_pid: u32) -> String {
     "?".into()
 }
 
 /// `netstat -ano -p TCP`의 LISTENING 줄 파싱 —
 /// "  TCP    127.0.0.1:5173    0.0.0.0:0    LISTENING    12345"
+#[cfg_attr(not(windows), allow(dead_code))]
 fn parse_netstat(out: &str) -> Vec<(String, u16, u32)> {
     let mut rows = Vec::new();
     for line in out.lines() {
@@ -71,20 +77,51 @@ fn parse_netstat(out: &str) -> Vec<(String, u16, u32)> {
     rows
 }
 
+/// macOS — macOS netstat은 pid를 내지 않는다. `lsof -F`의 필드 출력을 읽는다:
+/// "p12345" 줄이 프로세스를 열고, 이어지는 "n127.0.0.1:5173" · "n*:3000" · "n[::1]:5173" 줄이 그 소켓이다
+#[cfg_attr(windows, allow(dead_code))]
+fn parse_lsof(out: &str) -> Vec<(String, u16, u32)> {
+    let mut rows = Vec::new();
+    let mut pid = None;
+    for line in out.lines() {
+        if let Some(p) = line.strip_prefix('p') {
+            pid = p.parse::<u32>().ok();
+        } else if let (Some(n), Some(pid)) = (line.strip_prefix('n'), pid) {
+            let Some((host, port)) = n.rsplit_once(':') else { continue };
+            let Ok(port) = port.parse::<u16>() else { continue };
+            // netstat 표기에 맞춘다 — 와일드카드는 0.0.0.0, IPv6는 대괄호 그대로
+            let host = if host == "*" { "0.0.0.0".to_string() } else { host.to_string() };
+            rows.push((host, port, pid));
+        }
+    }
+    rows
+}
+
+/// LISTENING TCP 소켓 (host, port, pid) — Windows는 netstat, macOS는 lsof
+fn listening() -> Vec<(String, u16, u32)> {
+    #[cfg(windows)]
+    {
+        let mut cmd = Command::new("netstat");
+        cmd.args(["-ano", "-p", "TCP"]);
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW — GUI 앱에서 콘솔 창 억제
+        let Ok(out) = cmd.output() else { return Vec::new() };
+        parse_netstat(&String::from_utf8_lossy(&out.stdout))
+    }
+    #[cfg(not(windows))]
+    {
+        let Ok(out) = Command::new("lsof").args(["-nP", "-iTCP", "-sTCP:LISTEN", "-Fpn"]).output() else {
+            return Vec::new();
+        };
+        parse_lsof(&String::from_utf8_lossy(&out.stdout))
+    }
+}
+
 /// 현재 LISTENING TCP 포트 스냅숏 + 세션 귀속.
 /// session_pids: 세션 id → 그 세션 Job에 속한 pid들.
 pub fn snapshot(session_pids: &HashMap<String, Vec<u32>>) -> Vec<PortRow> {
-    let mut cmd = Command::new("netstat");
-    cmd.args(["-ano", "-p", "TCP"]);
-    #[cfg(windows)]
-    cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW — GUI 앱에서 콘솔 창 억제
-    let Ok(out) = cmd.output() else {
-        return Vec::new();
-    };
-    let text = String::from_utf8_lossy(&out.stdout);
     let mut seen = std::collections::HashSet::new();
     let mut names: HashMap<u32, String> = HashMap::new();
-    parse_netstat(&text)
+    listening()
         .into_iter()
         .filter(|(host, port, pid)| seen.insert((host.clone(), *port, *pid)))
         .map(|(host, port, pid)| {
@@ -161,5 +198,20 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0], ("127.0.0.1".into(), 5173, 4321));
         assert_eq!(rows[1], ("[::1]".into(), 1420, 99));
+    }
+
+    /// lsof 필드 출력 — pid 줄 아래의 소켓 줄들이 그 pid로 귀속되고, 표기는 netstat과 같다
+    #[test]
+    fn parses_lsof_fields() {
+        let out = "p4321\nn127.0.0.1:5173\nn[::1]:5173\np99\nn*:3000\n";
+        let rows = parse_lsof(out);
+        assert_eq!(
+            rows,
+            vec![
+                ("127.0.0.1".into(), 5173, 4321),
+                ("[::1]".into(), 5173, 4321),
+                ("0.0.0.0".into(), 3000, 99),
+            ]
+        );
     }
 }
