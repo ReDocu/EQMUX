@@ -14,6 +14,7 @@ import { isTauri, openLogDir } from "../backend/pty";
 import { setPanelNote } from "../state";
 import { Icon } from "./icons";
 import { t, tf } from "../i18n";
+import { isSubmitEnter } from "../platform"; // 한글 조합 중 Enter는 제출이 아니다 (B130)
 
 /** 세션 id의 표시 이름 — 서버 탭 PTY(`#server@ws`)는 내부 id 대신 "서버" (BR-17) */
 const shortId = (id: string) => (isServerTermId(id) ? t("서버") : id.split("@")[0]);
@@ -159,7 +160,7 @@ export function LogsPanelTab() {
             setCtx(null);
           }
         }}
-        onKeyDown={(e) => e.key === "Enter" && void runDiskSearch()}
+        onKeyDown={(e) => isSubmitEnter(e) && void runDiskSearch()}
       />
 
       <div class="logsp-metrics">

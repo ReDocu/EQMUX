@@ -22,6 +22,7 @@ import {
   setTerminalFull,
   setView,
   SHELLS,
+  ptyShells,
   terminalFull,
   tick,
   toggleExplorer,
@@ -63,6 +64,7 @@ import { TranscriptPane } from "./TranscriptPane";
 import type { AgentCliId, Session, Workspace } from "../types";
 import { AGENT_CLI_LABEL, agentAttached, cliOf, statusText, effectivePermissions, effectiveTitle, nameBesideNo, paneNo, SESSION_NAME_MAX, sessionDisplayName, sessionName, slotNo } from "../types";
 import { Icon } from "../components/icons";
+import { IS_MAC, keyLabel } from "../platform";
 
 /** 셸에 에이전트 명령을 쳐 넣는다 — claude 말고는 EQMUX가 관리하는 스폰 경로가 없다
  *  (역할 주입·훅·재개는 agent.rs의 ClaudeCodeAdapter 전용). 사람이 터미널에 직접 치는 것과
@@ -88,17 +90,20 @@ function shortPath(p: string): string {
 // 세션 상태별 목 터미널 출력 — 2×2 그리드 시각 검증용 (Tauri 밖 폴백 전용)
 function mockLines(s: Session, personaName: string): string[] {
   // 셸 우선 모델 — 역할 세션도 셸 프롬프트로 시작한다. 에이전트 출력은 직접 띄운 뒤의 모습.
-  if (!s.personaId || s.status === "shell") return ["PowerShell 7.6.4", `PS ${s.cwd}> _`];
-  const base = [`PS ${s.cwd}> claude`, `Claude Code ${s.agentVersion ?? "2.1.226"} · ${personaName}`];
+  // 프롬프트는 플랫폼 셸 모양으로 — macOS 화면 검토가 'PS C:\…>'로 Windows처럼 보였다 (U72)
+  const prompt = IS_MAC ? `${s.cwd} %` : `PS ${s.cwd}>`;
+  if (!s.personaId || s.status === "shell") return IS_MAC ? [`Last login: ttys000`, `${prompt} _`] : ["PowerShell 7.6.4", `${prompt} _`];
+  const base = [`${prompt} claude`, `Claude Code ${s.agentVersion ?? "2.1.226"} · ${personaName}`];
   if (s.status === "waiting") return [...base, "⏸ 승인 대기 — " + (s.waitingFor ?? ""), "y/n 을 입력하세요"];
   if (s.status === "dead") return [...base, `프로세스 종료 · exit ${s.exitCode ?? "?"}`, s.resumable ? "재개 가능 — --resume" : "재개 불가"];
   if (s.status === "busy") return [...base, `⚙ ${s.lastOutput}`, `서브에이전트 ${s.subagents} · ${(s.scrollbackLines / 1000).toFixed(1)}K lines`];
   return [...base, `● ${s.lastOutput || "대기 중"}`];
 }
 
-/** 엔진 공식 Windows 설치 명령 (P1 D6) — 복사만 한다. 실행은 사람이 터미널에서 */
+/** 엔진 공식 설치 명령 (P1 D6) — 복사만 한다. 실행은 사람이 터미널에서.
+ *  macOS zsh에 PowerShell 문법(irm … | iex)을 붙이면 'command not found: irm'으로 끝났다 (B128) */
 const INSTALL_CMD: Record<AgentCliId, string> = {
-  claude: "irm https://claude.ai/install.ps1 | iex",
+  claude: IS_MAC ? "curl -fsSL https://claude.ai/install.sh | bash" : "irm https://claude.ai/install.ps1 | iex",
   codex: "npm install -g @openai/codex",
 };
 
@@ -366,12 +371,16 @@ export function ControlCenter(props: { workspace: Workspace }) {
     onCleanup(() => window.removeEventListener("keydown", onKey));
   });
 
-  // Ctrl+Alt+1~8 — 이 워크스페이스의 N번 슬롯 페인에 키보드 포커스만 (줌·Focus 아님).
+  // Ctrl+Alt+1~8(macOS ⌘1~8) — 이 워크스페이스의 N번 슬롯 페인에 키보드 포커스만 (줌·Focus 아님).
   // 캡처 단계에서 받아야 xterm이 먼저 삼키지 않는다. 그 슬롯이 비어 있으면 그대로 흘려보낸다
   onMount(() => {
     const onSlotKey = (e: KeyboardEvent) => {
+      // macOS의 Ctrl+Option은 VoiceOver 수정자다 — ⌘숫자로 옮긴다 (U69)
+      if (IS_MAC) {
+        if (!e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+      }
       // AltGr는 Windows에서 Ctrl+Alt로 들어온다 — 독일어 자판 AltGr+7/8({ [) 같은 문자를 삼키지 않게 (B81)
-      if (!e.ctrlKey || !e.altKey || e.shiftKey || e.metaKey || e.getModifierState("AltGraph")) return;
+      else if (!e.ctrlKey || !e.altKey || e.shiftKey || e.metaKey || e.getModifierState("AltGraph")) return;
       const m = /^Digit([1-8])$/.exec(e.code);
       const s = m && sessions().find((x) => x.slot === Number(m[1]));
       if (!s) return;
@@ -626,7 +635,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
     [
       {
         label: t("페인으로 점프"),
-        kbd: `Ctrl+Alt+${s.slot}`,
+        kbd: keyLabel(`Ctrl+Alt+${s.slot}`),
         action: () => {
           setSelectedSession(s.id);
           backend.markSeen(s.id);
@@ -900,6 +909,10 @@ export function ControlCenter(props: { workspace: Workspace }) {
                 />
               </Show>
               <StatusLabel session={s} hideExit />
+              {/* macOS — 맨 셸이면 실제로 뜬 셸 이름을 붙인다. 고른 셸과 뜬 셸이 다르면 여기서 보인다 (B114) */}
+              <Show when={IS_MAC && s.status === "shell" && ptyShells()[s.id]}>
+                {(sh) => <span class="mono muted"> · {sh()}</span>}
+              </Show>
             </div>
             {/* 종료된 슬롯은 터미널 대신 다음 행동을 보여준다 — 재개 경로는 그 안에 있다 */}
             <Show when={s.status !== "dead" || isRespawning(s.id)} fallback={deadSlot(s)}>
@@ -1106,7 +1119,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
         {/* 셸 선택 — 새로 추가하는 터미널부터 적용된다 */}
         <div class="shell-picker">
           <button class="btn ghost mono" title={t("새 터미널 셸 선택")} onClick={() => setShellMenuOpen(!shellMenuOpen())}>
-            &gt;_ {defaultShell().name} ▾
+            &gt;_ <span class="cc-btn-label">{t(defaultShell().name)}</span> ▾
           </button>
           <Show when={shellMenuOpen()}>
             <div class="card shell-menu">
@@ -1120,9 +1133,9 @@ export function ControlCenter(props: { workspace: Workspace }) {
                       setShellMenuOpen(false);
                     }}
                   >
-                    <span style={{ "font-weight": 600 }}>{sh.name}</span>
+                    <span style={{ "font-weight": 600 }}>{t(sh.name)}</span>
                     <span class="mono muted" style={{ "font-size": "10px" }}>
-                      {sh.cmd}
+                      {sh.note ?? sh.cmd}
                     </span>
                   </button>
                 )}
@@ -1138,7 +1151,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
         </Show>
         <Show when={!zoomed()}>
           <button class="btn ghost mono" title={t("페인 배치")} onClick={() => setLayoutPickerOpen(true)}>
-            ▦ {t(PANE_LAYOUTS.find((l) => l.key === paneLayout())?.name ?? "")}
+            ▦ <span class="cc-btn-label">{t(PANE_LAYOUTS.find((l) => l.key === paneLayout())?.name ?? "")}</span>
           </button>
         </Show>
         <button class="btn ghost" title={t("터미널 전체 화면 — ESC로 종료")} onClick={() => setTerminalFull(true)}>
@@ -1528,7 +1541,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
                   <For each={SHELLS}>
                     {(sh) => (
                       <option value={sh.label} selected={sh.label === addShell()}>
-                        {sh.name}
+                        {t(sh.name)}
                         {sh.label === defaultShell().label ? ` (${t("기본 셸")})` : ""}
                       </option>
                     )}

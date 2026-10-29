@@ -216,4 +216,6 @@ export const dict: Record<string, string> = {
   "이 셸의 서버가 포트를 열고 있습니다 — 멈춘 뒤 다시 실행할 수 있습니다":
     "This shell's server has a port open — stop it before running again",
   "돌고 있음 · 포트 {ports}": "Running · port {ports}",
+  // ── 셸 목록 (macOS, B114) ──
+  "로그인 셸 ($SHELL)": "Login shell ($SHELL)",
 };

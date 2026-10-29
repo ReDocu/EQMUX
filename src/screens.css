@@ -193,20 +193,62 @@
   border-bottom: 1px solid var(--eq-line);
   flex-shrink: 0;
 }
+/* 좁은 가운데(최소 창 + 사이드 패널, 약 660px)에서도 한 줄 — 이름·세션 수가 먼저 말줄임으로 줄고,
+   세그먼트·버튼은 글자마다 쪼개지지 않는다 (B162) */
 .cc-title {
   display: flex;
   align-items: baseline;
   gap: 10px;
+  flex: 0 1 auto;
 }
 .cc-title h1 {
   font-size: 15px;
   font-weight: 800;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cc-title .cc-count {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.cc-top > * {
+  white-space: nowrap;
+}
+/* 좁으면 셸·배치 버튼이 먼저 이름을 접고(>_ ▾ · ▦만, 이름은 title에 남는다), 워크스페이스 이름은
+   몇 글자를 지킨다 (B162 실기: 이름이 'eqm'만 남아 세그먼트 밑으로 잘리고 세션 수가 사라졌다) */
+.cc-top {
+  container: cc-top / inline-size;
+}
+.cc-title h1 {
+  min-width: 7em;
+}
+.cc-top .shell-picker,
+.cc-top > .btn.mono {
+  min-width: 0;
+  flex-shrink: 1;
+}
+.cc-top .shell-picker > .btn,
+.cc-top > .btn.mono {
+  max-width: 100%;
+}
+.cc-btn-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@container cc-top (max-width: 760px) {
+  .cc-btn-label {
+    display: none;
+  }
 }
 .cc-title .mono {
   font-size: 11px;
 }
 .cc-seg {
   display: inline-flex;
+  flex-shrink: 0;
   background: var(--eq-surface);
   border-radius: var(--eq-r-sm);
   padding: 2px;
@@ -5640,13 +5682,25 @@ button.eq-chip-tx,
 .cell-state.st-busy {
   color: var(--eq-blue);
 }
+/* 4열 카드처럼 좁으면 칩 줄을 줄바꿈한다 — 한 줄에 몰면 행동 사유 칩('승인 대기 · …')이 글자 없는
+   상자로 찌그러지고 옆 엔진 배지는 카드 밖으로 잘렸다 (U111) */
 .cell-status {
   width: 100%;
   min-width: 0;
+  flex-wrap: wrap;
+  row-gap: 4px;
 }
 .cell-status .eq-chip {
   margin-left: 0;
   max-width: 100%;
+  flex-shrink: 0;
+}
+.cell-status .badge {
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .cell-summary {
   min-width: 0;
@@ -5985,6 +6039,10 @@ button.eq-chip-tx,
 }
 .gde-code {
   background: #070a0f;
+}
+/* 라이트 — diff는 터미널이 아니다. 글자·거터·빗금이 라이트 토큰을 따르니 배경도 표면으로 (B161) */
+:root[data-theme="light"] .gde-code {
+  background: var(--eq-surface);
 }
 .gde-gutter {
   background: transparent;

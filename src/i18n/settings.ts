@@ -163,6 +163,11 @@ export const dict: Record<string, string> = {
   "복사 · 붙여넣기": "Copy · paste",
   "사이드 패널 토글 (마지막 탭)": "Toggle side panel (last tab)",
   "선택이 있으면 복사 · 붙여넣기 (앱)": "Copy when text is selected · paste (app)",
+  // macOS 단축키 표 (U67·B126)
+  "복사 · 붙여넣기 (이미지는 파일 경로로)": "Copy · paste (images paste as a file path)",
+  "터미널 화면 · 스크롤백 비우기": "Clear terminal screen · scrollback",
+  "셸로 그대로 — 인터럽트 · 커서 이동 · 글자 그대로 넣기": "Passed to the shell — interrupt · cursor move · quoted insert",
+  "Meta 키 — Option+B/F 단어 이동 · Option+Enter 줄바꿈": "Meta key — Option+B/F word jump · Option+Enter newline",
   "맨 위 창·팝업·메뉴 하나만 닫기 · 입력칸에서는 칸 빠져나오기": "Closes only the topmost dialog/popup/menu · in a field, leaves the field",
   "확인창에서 취소 (위험 버튼은 Tab으로 옮겨 Enter)": "Cancels in confirm dialogs (Tab to the danger button, then Enter)",
   "화면이 깨졌을 때 진단 기록에 표시": "Marks the diagnostics log when the screen looks broken",

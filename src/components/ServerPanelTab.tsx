@@ -2,7 +2,7 @@
 // (세션 = 에이전트 = 페인 규칙 밖이라 backend 세션 목록에 넣지 않는다). 화면은 TerminalPane을
 // 그대로 쓰고, REGISTRY가 id 단위로 살려 두므로 탭을 닫았다 열어도 서버는 계속 돈다.
 // 포트 귀속은 Rust ports_snapshot이 PTY Job pid로 하므로 여기서 연 포트는 포트 패널에 "서버"로 뜬다.
-import { createEffect, createMemo, createResource, createSignal, onCleanup, Show } from "solid-js";
+import { createEffect, createMemo, createResource, createSignal, onCleanup, onMount, Show } from "solid-js";
 import {
   clearServerExit,
   isNewPort,
@@ -28,6 +28,8 @@ const [opened, setOpened] = createSignal<string[]>([]);
 export function ServerPanelTab() {
   // id 문자열로 키를 잡는다 — 워크스페이스가 바뀔 때만 페인을 갈아 끼운다
   const wsId = createMemo(() => scopeWorkspace()?.id);
+  // 탭을 열면 한 번 실측한다 (B145·U91) — 다른 곳에서 띄운 서버도 '실행 중 :포트'·[실행]에 반영되게
+  onMount(refreshPorts);
   return (
     <Show when={wsId()} keyed fallback={<div class="muted">{t("워크스페이스를 먼저 여세요")}</div>}>
       {(id) => <ServerTerm wsId={id} />}
@@ -104,8 +106,8 @@ function ServerTerm(props: { wsId: string }) {
             {t("↻ 셸 다시 열기")}
           </button>
         </Show>
-        {/* 포트는 자동으로 다시 보지 않는다 — 서버를 띄우거나 멈춘 뒤 여기서 실측한다 */}
-        <button class="btn" onClick={refreshPorts} title={t("다시 실측")} aria-label={t("다시 실측")}>
+        {/* 포트는 탭을 열 때와 서버 셸에 명령을 친 몇 초 뒤에 다시 본다 (B145) — 그 밖에는 여기서 실측한다 */}
+        <button class="btn" onClick={refreshPorts} title={t("포트 다시 실측")} aria-label={t("포트 다시 실측")}>
           <Icon name="refresh-cw" size={12} />
         </button>
         <button class="btn" disabled={!path} onClick={() => void reveal()}>

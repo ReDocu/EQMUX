@@ -12,6 +12,7 @@ import { t, tf } from "../i18n";
 import { openPanel, scopeWorkspace, selectedSession, setExplorerTab, setOverlay, tick } from "../state";
 import { Icon } from "./icons";
 import { ContextMenu, notify } from "./ui";
+import { isSubmitEnter } from "../platform"; // 한글 조합 중 Enter는 제출이 아니다 (B130)
 
 // 브라우저 dev 폴백 트리 (기존 목)
 const MOCK_TREE: FsNode[] = [
@@ -334,7 +335,7 @@ export function MissionExplorerTab() {
                 value={nameVal()}
                 onInput={(e) => setNameVal(e.currentTarget.value)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter") void submitName();
+                  if (isSubmitEnter(e)) void submitName();
                   if (e.key === "Escape") setNameMode(undefined);
                 }}
                 ref={(el) => setTimeout(() => el.focus())}

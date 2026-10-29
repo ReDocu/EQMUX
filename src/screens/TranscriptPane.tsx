@@ -15,6 +15,7 @@ import { tick } from "../state";
 import { effectiveTitle, paneNo, sessionName } from "../types";
 import type { Session } from "../types";
 import { Identity } from "../components/ui";
+import { isSubmitEnter } from "../platform"; // 한글 조합 중 Enter는 제출이 아니다 (B130)
 
 /** onJump — 페인(터미널 탭)으로 돌아가는 길. 화면을 소유한 쪽이 넘긴다 (시안 Yd4E5 "페인으로 점프") */
 export function TranscriptPane(props: { session: Session; onJump?: () => void }) {
@@ -316,7 +317,7 @@ export function TranscriptPane(props: { session: Session; onJump?: () => void })
           placeholder={tf("{name}의 PTY로 입력 전달 (V3)", { name: who() })}
           value={draft()}
           onInput={(e) => setDraft(e.currentTarget.value)}
-          onKeyDown={(e) => e.key === "Enter" && send()}
+          onKeyDown={(e) => isSubmitEnter(e) && send()}
           disabled={props.session.status === "dead"}
         />
         <button class="btn primary" onClick={send} disabled={props.session.status === "dead"}>

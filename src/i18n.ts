@@ -5,6 +5,7 @@
 //  - 사전 키는 코드의 한국어 문자열과 바이트 단위로 동일해야 한다 (중점 "·", 공백 포함)
 //  - 데이터는 번역하지 않는다 — 이벤트 로그 원장, 페르소나/직무 파일 내용, 터미널 출력, git 결과
 import { settings } from "./backend/settings";
+import { IS_MAC, keyLabel } from "./platform";
 import { dict as common } from "./i18n/common";
 import { dict as settingsDict } from "./i18n/settings";
 import { dict as control } from "./i18n/control";
@@ -28,9 +29,22 @@ const EN: Record<string, string> = Object.assign(
   panels,
 );
 
-/** 한국어 원문 → 현재 언어 문자열. 영어 사전에 없으면 한국어 폴백 (미번역이 깨짐이 되지 않게) */
+/** macOS에서만 문장째 바꾸는 원문 (U67) — 표기 치환(keyLabel)으로는 뜻이 맞지 않는 Windows 전제 설명.
+ *  값은 [한국어, 영어]. 키는 위 사전과 같은 한국어 원문이다 */
+const MAC: Record<string, [string, string]> = {
+  "읽기 전용입니다. xterm은 Ctrl+Shift+글자를 터미널로 보내지 않아 셸 단축키와 겹치지 않습니다.": [
+    "읽기 전용입니다. 앱 단축키는 ⌘ 계열이라 셸의 Ctrl 키(인터럽트·커서 이동)와 겹치지 않습니다.",
+    "Read-only. App shortcuts use ⌘, so they never clash with the shell's Ctrl keys (interrupt, cursor movement).",
+  ],
+};
+
+/** 한국어 원문 → 현재 언어 문자열. 영어 사전에 없으면 한국어 폴백 (미번역이 깨짐이 되지 않게).
+ *  단축키 표기는 macOS에서 ⌘⇧U처럼 바뀐다 (U67) — 원문·사전은 Windows 표기 하나로 둔다 */
 export function t(ko: string): string {
-  return settings().language === "en" ? (EN[ko] ?? ko) : ko;
+  const en = settings().language === "en";
+  const mac = IS_MAC ? MAC[ko] : undefined;
+  if (mac) return mac[en ? 1 : 0];
+  return keyLabel(en ? (EN[ko] ?? ko) : ko);
 }
 
 /** 자리표시자 치환 번역 — 키와 사전 값이 {name} 자리표시자를 공유한다.

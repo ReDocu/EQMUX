@@ -406,8 +406,14 @@ fn narrow(raw: &str) -> Vec<String> {
 }
 
 /// 후보 중 처음으로 실재하는 경로. 상대 경로는 세션 cwd 기준으로 푼다 (cwd가 없으면 건너뛴다).
+/// macOS — `~/…`는 홈으로 푼다 (B129). Path::new("~/x")는 상대 경로라 cwd에 붙어 실패했다
 pub fn resolve_reveal_target(raw: &str, cwd: Option<&str>) -> Option<PathBuf> {
     for cand in narrow(raw) {
+        #[cfg(not(windows))]
+        let cand = match cand.strip_prefix("~/") {
+            Some(rest) => crate::home_dir().join(rest).to_string_lossy().into_owned(),
+            None => cand,
+        };
         let p = Path::new(&cand);
         let full = if p.is_absolute() {
             p.to_path_buf()
@@ -619,5 +625,14 @@ mod tests {
         assert!(resolve_reveal_target("C:\\없는\\경로.png", None).is_none());
         assert!(resolve_reveal_target("그냥낱말", Some(&cwd)).is_none());
         fs::remove_dir_all(&dir).ok();
+    }
+
+    /// B129 — `~/`는 cwd가 아니라 홈 기준이다 (홈에 파일을 만들지 않으려고 홈 자체로 본다)
+    #[cfg(not(windows))]
+    #[test]
+    fn reveal_expands_tilde_to_home() {
+        let home = crate::home_dir();
+        assert_eq!(resolve_reveal_target("~/", Some("/tmp")), Some(home.join("")));
+        assert!(resolve_reveal_target("~/eqmux-없는-파일-1f3a.png", Some("/tmp")).is_none());
     }
 }

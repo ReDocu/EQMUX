@@ -181,7 +181,11 @@ export function AppBar() {
   const updateTabArrows = () => {
     const shown = tabsOverflow();
     // 화살표가 이미 있으면 그 폭까지 돌려받았을 때 들어맞는지 본다 — 넓혔는데 화살표가 남아 있지 않게
-    setTabsOverflow(tabsEl.scrollWidth - 1 > tabsEl.clientWidth + (shown ? arrowsWidth : 0));
+    const next = tabsEl.scrollWidth - 1 > tabsEl.clientWidth + (shown ? arrowsWidth : 0);
+    // 넘침이 풀려 화살표가 빠지기 전에, 거기 있던 키보드 포커스를 [+]로 옮긴다 — body로 떨어지지 않게 (B166)
+    if (shown && !next && document.activeElement?.classList.contains("tabs-arrow"))
+      tabsEl.parentElement?.querySelector<HTMLElement>(".tab-add")?.focus();
+    setTabsOverflow(next);
     setCanLeft(tabsEl.scrollLeft > 1);
     setCanRight(tabsEl.scrollLeft + tabsEl.clientWidth < tabsEl.scrollWidth - 1);
   };

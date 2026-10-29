@@ -63,10 +63,11 @@ export async function spawnPty(
   rows: number,
   workspace?: string,
   shell?: string,
-): Promise<void> {
-  if (!isTauri()) return;
+): Promise<string | undefined> {
+  if (!isTauri()) return undefined;
   await ensureListeners();
-  await invoke("pty_spawn", {
+  // 돌려받는 값은 실제로 뜬 셸의 이름이다 — 요청 셸이 없어 물러났으면 그 셸 (B114)
+  const label = await invoke<string | null>("pty_spawn", {
     id,
     cwd,
     shell: shell ?? null,
@@ -75,6 +76,7 @@ export async function spawnPty(
     workspace: workspace ?? null,
   });
   spawned.add(id);
+  return label ?? undefined;
 }
 
 /** 재생 줄 (FR-C-31) — text는 평문(필터·중복 판정), styled는 SGR 색 보존본 (FR-C-15, 있을 때만) */

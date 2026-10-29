@@ -38,11 +38,13 @@ import { spawnAgent } from "../backend/agent";
 import { backend } from "../backend/mock";
 import { settings } from "../backend/settings";
 import { t, tf } from "../i18n";
-import { selectedSession } from "../state";
+import { notePtyShell, selectedSession } from "../state";
 import { ContextMenu } from "./ui";
 import type { MenuGroup } from "./ui";
 import type { AgentCliId, Permissions } from "../types";
 import { Icon } from "./icons";
+import { IS_MAC, isImeEnter, keyLabel } from "../platform";
+import { findPathLinks, pathChunkAt } from "./termPaths";
 
 /** 터미널 색 — styles.css의 --eq-term-* 토큰이 원본이다 (설정 · 색 팔레트가 이 토큰을 고른다).
  *  여기에 hex를 두면 팔레트와 어긋나므로 두지 않는다. 터미널은 어느 테마에서도 다크로 남는다. */
@@ -274,7 +276,7 @@ export async function respawnSessionShell(id: string, cwd: string, wsId?: string
   e?.term.writeln(`\x1b[90m─── 브랜치 부여 → ${cwd} ───\x1b[0m`);
   const size = sessionTermSize(id); // 재개/재시작과 같은 크기 규약 — 미마운트면 기본값 폴백
   try {
-    await spawnPty(id, cwd, size.cols, size.rows, wsId, shell);
+    notePtyShell(id, await spawnPty(id, cwd, size.cols, size.rows, wsId, shell));
   } finally {
     doneRespawning(id);
   }
@@ -357,6 +359,9 @@ async function pasteFromClipboard(sessionId: string, term: Terminal): Promise<vo
   term.paste(body);
 }
 
+/** macOS 마지막 앱 붙여넣기 시각 — ⌘V keydown과 메뉴발 paste 이벤트가 둘 다 오면 한 번만 붙인다 (GRF-11) */
+let lastAppPaste = 0;
+
 /** 여러 줄 붙여넣기 확인 (B45) — 세션별 1건. 페인이 카드로 그린다 */
 const [pasteAsk, setPasteAsk] = createSignal<{ id: string; text: string } | undefined>(undefined);
 
@@ -369,9 +374,6 @@ function copySelection(term: Terminal): void {
 // "실재하는 경로인가"는 Rust가 판정하고(reveal_path), 여기서는 "어디부터 어디까지가
 // 경로인가"만 집는다. 더블클릭은 낱말 선택 제스처이기도 하므로, 아무 낱말에나 창이
 // 뜨지 않도록 구분자가 없는 덩어리는 애초에 후보로 올리지 않는다.
-
-/** 경로에 올 수 없는 글자 = 확실한 경계. 공백은 경로 안에 올 수 있으니 경계가 아니다 */
-const PATH_BREAK = /["'`<>|*?\t]/;
 
 /** 더블클릭한 셀이 놓인 논리 줄과 그 안의 문자 인덱스.
  *  줄바꿈으로 이어진 행(wrapped)은 한 줄로 잇는다 — 긴 경로는 행 끝에서 잘려 이어진다.
@@ -396,39 +398,6 @@ function logicalLineAt(term: Terminal, cellY: number, cellX: number): { line: st
   return index < 0 ? undefined : { line, index };
 }
 
-/** 줄 안에서 index를 품은 경로 후보. 뒤에 딸려온 군더더기는 Rust가 실재 확인으로 떼어 내므로
- *  여기서는 넉넉히 집는다. 절대 경로는 클릭 앞의 드라이브 문자·UNC까지 되짚어 시작을 잡는다
- *  (경로 안 공백을 낱말 경계로 자르면 "Program Files"가 통째로 날아간다). */
-function pathChunkAt(line: string, index: number): string | undefined {
-  const ch = line[index];
-  if (!ch || ch === " " || PATH_BREAK.test(ch)) return undefined;
-  let s = index;
-  while (s > 0 && !PATH_BREAK.test(line[s - 1])) s--;
-  let e = index;
-  while (e + 1 < line.length && !PATH_BREAK.test(line[e + 1])) e++;
-  const span = line.slice(s, e + 1);
-  const at = index - s;
-  let begin = -1;
-  const abs = /[A-Za-z]:[\\/]|\\\\[^\\/\s]/g;
-  for (let m = abs.exec(span); m; m = abs.exec(span)) {
-    if (m.index > at) break;
-    begin = m.index;
-  }
-  let chunk: string;
-  if (begin >= 0) {
-    chunk = span.slice(begin);
-  } else {
-    // 상대 경로 — 공백으로 끊은 낱말 하나 (cwd 기준 해석은 Rust가 한다)
-    let ws = at;
-    while (ws > 0 && span[ws - 1] !== " ") ws--;
-    let we = at;
-    while (we + 1 < span.length && span[we + 1] !== " ") we++;
-    chunk = span.slice(ws, we + 1);
-  }
-  chunk = chunk.trimEnd();
-  return /[\\/]/.test(chunk) ? chunk : undefined;
-}
-
 /** 선택(더블클릭 직후 = xterm이 고른 낱말)에서 경로를 뽑아 탐색기에서 연다.
  *  손으로 그은 선택이 이미 경로 모양이면 그 경계를 먼저 믿고, 아니면 줄에서 집어 온 덩어리를 쓴다. */
 async function revealFromTerminal(term: Terminal, cwd: string): Promise<boolean> {
@@ -444,13 +413,10 @@ async function revealFromTerminal(term: Terminal, cwd: string): Promise<boolean>
 }
 
 // ── 경로 클릭 → 탐색기 — 절대 경로를 URL처럼 링크로 만든다 ─────────────────
-// 붙여넣은 이미지 경로(`"%TEMP%\eqmux-pastes\*.png"`)처럼 화면에 찍힌 절대 경로는
+// 붙여넣은 이미지 경로(`"%TEMP%\eqmux-pastes\*.png"`, macOS `/var/folders/…`)처럼 화면에 찍힌 절대 경로는
 // 호버하면 밑줄이 생기고 클릭하면 탐색기가 뜬다 (URL 링크와 같은 제스처).
 // 감지는 모양만 본다 — 실재 여부는 클릭 시점에 Rust(reveal_path)가 판정하고,
 // 없으면 페인이 힌트로 알린다. 상대 경로는 cwd 해석이 필요해 더블클릭 제스처가 담당한다.
-
-/** 절대 경로 후보 — 따옴표로 감싼 것(공백 포함 가능)과 맨몸(공백에서 끊김). 드라이브 문자·UNC. */
-const PATH_LINK = /"((?:[A-Za-z]:[\\/]|\\\\)[^"]+)"|(?:[A-Za-z]:[\\/]|\\\\)[^\s"'`<>|*?]+/g;
 
 /** 화면 행(y)이 속한 논리 줄의 텍스트와, 문자열 인덱스 → 셀 좌표 매핑.
  *  전각 문자는 2칸(w=2)이고, 자소 군집은 한 셀에 여러 코드 유닛이 담기므로
@@ -488,10 +454,7 @@ function pathLinkProvider(term: Terminal, entry: TermEntry): ILinkProvider {
       const info = lineWithCells(term, lineNo - 1); // xterm의 줄 번호는 1부터
       if (!info) return cb(undefined);
       const links: ILink[] = [];
-      PATH_LINK.lastIndex = 0;
-      for (let m = PATH_LINK.exec(info.text); m; m = PATH_LINK.exec(info.text)) {
-        const text = m[1] ?? m[0];
-        const begin = m[1] ? m.index + 1 : m.index;
+      for (const { text, begin } of findPathLinks(info.text)) {
         const s = info.cells[begin];
         const e = info.cells[begin + text.length - 1];
         if (!s || !e) continue;
@@ -583,6 +546,11 @@ function createEntry(): TermEntry {
     // loadAddon이 던지고, 그 예외가 페인 생성 전체를 무너뜨린다 (터미널도 스폰도 없다).
     allowProposedApi: true,
     theme: readTermTheme(),
+    // macOS 터미널 관례 (U68) — Option을 Meta로: Option+B/F/D·Backspace가 단어 이동·삭제가 되고
+    // Option+Enter가 ESC+CR(Claude Code 입력란의 줄바꿈)로 간다. 끄면 ∫ƒ∂ 같은 특수 문자로 들어간다.
+    // Option+드래그는 마우스를 잡은 TUI 위에서도 글자를 고른다 (Terminal.app·iTerm2와 같다)
+    macOptionIsMeta: IS_MAC,
+    macOptionClickForcesSelection: IS_MAC,
   });
   // 문자 폭 (유니코드 15 + 자소 군집) — 반드시 첫 write 전에. 폭은 파싱 시점에 버퍼에 박힌다.
   // xterm 기본은 유니코드 6 테이블이라 ✅(U+2705)·⚙️(VS16) 같은 이모지를 1칸으로 센다.
@@ -633,7 +601,8 @@ async function initSession(
 ) {
   const term = entry.term;
 
-  // Ctrl+C = 선택 있으면 복사, 없으면 SIGINT (Windows Terminal 방식) · Ctrl+Shift+C = 항상 선택 복사.
+  // [Windows] Ctrl+C = 선택 있으면 복사, 없으면 SIGINT (Windows Terminal 방식) · Ctrl+Shift+C = 항상 선택 복사.
+  // [macOS] ⌘C 복사 · ⌘V 붙여넣기 · ⌘F 검색 · ⌘K 비우기 — Ctrl 계열은 모두 셸로 (Terminal.app 방식).
   // Ctrl(+Shift)+V = 붙여넣기(이미지 포함) — Tauri에서는 Ctrl+V도 네이티브 클립보드 경로로 가로챈다
   // (WebView2 웹 API 우회).
   //
@@ -646,6 +615,38 @@ async function initSession(
     return false; // xterm은 이 키를 처리하지 않는다
   };
   term.attachCustomKeyEventHandler((ev) => {
+    // macOS는 ⌘가 앱 키(복사·붙여넣기·찾기)이고 Ctrl은 셸 제어키다 (B126·B127). Ctrl+C는 선택이 있어도
+    // SIGINT, Ctrl+F는 forward-char, Ctrl+V는 quoted-insert로 그대로 PTY에 간다 — 아래 Ctrl 갈래는 Windows만 탄다
+    if (IS_MAC) {
+      if (ev.type !== "keydown" || !ev.metaKey || ev.ctrlKey || ev.altKey) return true;
+      const k = ev.key.toLowerCase();
+      if (k === "c" && !ev.shiftKey) {
+        // 선택이 없으면 아무 일도 하지 않는다 — ⌘C가 인터럽트가 되지는 않는다 (그건 Ctrl+C)
+        copySelection(term);
+        return handled(ev);
+      }
+      // 웹뷰 기본 paste가 아니라 앱 경로로 — 이미지 저장·여러 줄 확인(B45)을 같이 탄다.
+      // 메뉴가 keydown을 가져가는 빌드에서는 아래 paste 캡처가 대신 받는다 (GRF-11)
+      if (k === "v" && !ev.shiftKey) {
+        lastAppPaste = Date.now();
+        void pasteFromClipboard(props.sessionId, term);
+        return handled(ev);
+      }
+      if (k === "f" && !ev.shiftKey) {
+        setSearchSession(searchSession() === props.sessionId ? undefined : props.sessionId);
+        return handled(ev);
+      }
+      // Terminal.app 관례 — ⌘K는 화면과 스크롤백을 비운다(셸에는 아무것도 보내지 않는다), ⌘A는 전체 선택
+      if (k === "k" && !ev.shiftKey) {
+        term.clear();
+        return handled(ev);
+      }
+      if (k === "a" && !ev.shiftKey) {
+        term.selectAll();
+        return handled(ev);
+      }
+      return true;
+    }
     if (ev.type === "keydown" && ev.ctrlKey) {
       const k = ev.key.toLowerCase();
       if (ev.shiftKey && k === "c") {
@@ -724,7 +725,7 @@ async function initSession(
     // 셸 우선 모델 — 처음 켜는 세션은 역할이 있어도 전부 일반 셸이다. 여기는 유일한
     // 자동 스폰 게이트라, 이 자리에서 에이전트를 띄우지 않는 것이 "자동 실행 없음"의 구조적 보장이다.
     // 에이전트 기동은 명시 액션(재개 버튼·세션 상세)만 남는다.
-    await spawnPty(props.sessionId, props.cwd, term.cols, term.rows, props.wsId, props.shell);
+    notePtyShell(props.sessionId, await spawnPty(props.sessionId, props.cwd, term.cols, term.rows, props.wsId, props.shell));
     entry.lastCols = term.cols;
     entry.lastRows = term.rows;
     fireSessionReady(props.sessionId); // 세션 추가에서 고른 다음 행동 (에이전트 기동 · codex)
@@ -905,6 +906,23 @@ export function TerminalPane(props: {
       if (!e.opened) {
         e.term.open(host);
         e.opened = true;
+        // macOS ⌘V는 메뉴(Edit › Paste)가 keydown을 먼저 가져가 웹뷰에는 paste 이벤트만 온다 (GRF-11) —
+        // 그대로 두면 xterm이 텍스트만 받아 이미지 경로도, 여러 줄 확인(B45)도 빠진다. 캡처 단계에서 끊고
+        // 앱 붙여넣기 흐름으로 보낸다. 요소는 리마운트에도 같은 것이 옮겨 다니므로 한 번만 단다
+        if (IS_MAC && isTauri()) {
+          const sid = props.sessionId;
+          e.term.element?.addEventListener(
+            "paste",
+            (ev) => {
+              ev.preventDefault();
+              ev.stopImmediatePropagation();
+              if (Date.now() - lastAppPaste < 500) return; // keydown 갈래가 방금 붙였다 — 두 번 붙이지 않는다
+              lastAppPaste = Date.now();
+              void pasteFromClipboard(sid, e.term);
+            },
+            true,
+          );
+        }
       } else if (e.term.element && e.term.element.parentElement !== host) {
         host.appendChild(e.term.element); // 리마운트 = DOM 재부착만
       }
@@ -1019,6 +1037,7 @@ export function TerminalPane(props: {
               onKeyDown={(ev) => {
                 if (ev.key === "Enter") {
                   ev.preventDefault();
+                  if (isImeEnter(ev)) return; // 한글 조합을 끝내는 Enter — 다음 일치로 넘기지 않는다 (B130)
                   if (ev.shiftKey) findPrev();
                   else findNext();
                 } else if (ev.key === "Escape") {
@@ -1111,8 +1130,8 @@ export function TerminalPane(props: {
             groups={[
               // 주 동작 — 편집
               [
-                { label: t("복사"), kbd: "Ctrl+Shift+C", disabled: !m().hasSel, action: () => menuAction(copySelection) },
-                { label: t("붙여넣기"), kbd: "Ctrl+Shift+V", action: () => menuAction((term) => void pasteFromClipboard(props.sessionId, term)) },
+                { label: t("복사"), kbd: keyLabel(IS_MAC ? "Ctrl+C" : "Ctrl+Shift+C"), disabled: !m().hasSel, action: () => menuAction(copySelection) },
+                { label: t("붙여넣기"), kbd: keyLabel(IS_MAC ? "Ctrl+V" : "Ctrl+Shift+V"), action: () => menuAction((term) => void pasteFromClipboard(props.sessionId, term)) },
                 { label: t("모두 선택"), action: () => menuAction((term) => term.selectAll()) },
                 {
                   label: t("탐색기에서 열기"),
@@ -1120,7 +1139,7 @@ export function TerminalPane(props: {
                   disabled: !m().hasSel,
                   action: () => menuAction(() => void revealSelection(true)),
                 },
-                { label: t("검색"), kbd: "Ctrl+F", action: () => menuAction(() => setSearchSession(props.sessionId)) },
+                { label: t("검색"), kbd: keyLabel("Ctrl+F"), action: () => menuAction(() => setSearchSession(props.sessionId)) },
                 {
                   // 이름은 '화면'인데 실제로는 링버퍼 3,000줄을 통째로 버린다 — 이름을 사실에
                   // 맞추고 danger로 내린다. 대체 화면(TUI)에서는 커서 줄만 남기고 화면이
