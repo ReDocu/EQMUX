@@ -16,6 +16,9 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 pub(crate) mod agent;
 mod agentscan;
+// macOS 전용 기능의 순수 판정부 — 다른 플랫폼에서는 시험만 쓴다
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod appenv;
 mod browser;
 mod cli;
 mod clip;
@@ -24,15 +27,21 @@ mod diff;
 mod fsx;
 pub(crate) mod ipc;
 mod job;
+#[cfg(target_os = "macos")]
+mod macproc;
 pub(crate) mod library;
 pub(crate) mod messages;
 mod missions;
 mod ports;
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))] // macOS 전용 (appenv와 같다)
+mod quit;
 mod recovery;
 mod roles;
 pub(crate) mod store;
 mod team;
 mod transcript;
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))] // macOS 전용 (appenv와 같다)
+mod winstate;
 pub(crate) mod workspace;
 use store::{LineAssembler, Store, StoreMsg};
 use workspace::{WsEntry, WsInfo};
@@ -68,7 +77,7 @@ struct PtySession {
     /// 세션별 쓰기 스레드의 입구 (최적화 A1) — 블로킹 파이프 쓰기는 그 스레드만 한다.
     /// 한 세션의 stdin이 막혀도(먹통 TUI 등) 메인 스레드·다른 세션의 write/resize와 pty_kill이
     /// 살아 있어야 한다. 채널이라 키 입력 순서도 그대로 지켜진다. 세션이 버려지면 스레드도 끝난다.
-    writer: std::sync::mpsc::Sender<Vec<u8>>,
+    writer: std::sync::mpsc::SyncSender<Vec<u8>>,
     child: Box<dyn Child + Send + Sync>,
     gen: u64, // 같은 id로 재기동 시 이전 리더 스레드의 정리를 무효화하는 세대 표식
     /// FR-C-05 — 자식 트리 정리. 마지막 Arc drop = KILL_ON_JOB_CLOSE. Arc인 이유: 관측(메모리·pid)이
@@ -107,6 +116,20 @@ struct PtyOutput {
     data: String,
 }
 
+/// PTY 출력 채널 (CPU·RAM — cpu-optimization 후보 5) — 웹뷰가 시작할 때 하나 등록한다.
+/// emit은 덩어리마다 페이로드를 스크립트 문자열로 만들어 웹뷰에서 eval한다. Channel은 8KB 이상을
+/// fetch로 넘겨 그 문자열을 만들지 않는다. 등록 전(또는 보내기 실패)에는 지금처럼 emit한다
+#[derive(Default)]
+struct PtyOutChannel(Mutex<Option<tauri::ipc::Channel<PtyOutput>>>);
+
+/// 웹뷰가 다시 뜨면(FR-C-06) 새 채널로 바꿔 끼운다 — 옛 채널은 그 웹뷰와 함께 죽었다
+#[tauri::command]
+fn pty_output_channel(state: State<PtyOutChannel>, channel: tauri::ipc::Channel<PtyOutput>) {
+    if let Ok(mut c) = state.0.lock() {
+        *c = Some(channel);
+    }
+}
+
 #[derive(Clone, Serialize)]
 struct PtyExit {
     id: String,
@@ -115,8 +138,76 @@ struct PtyExit {
 
 /// 세션 로그 (1차 — 파일 append). PRD 12의 rusqlite WAL 스토어가 오면 그 뒤로 들어간다.
 pub(crate) fn log_dir() -> PathBuf {
+    home_dir().join(".eqmux").join("logs")
+}
+
+/// 사용자 홈 — Windows는 USERPROFILE, macOS는 HOME
+pub(crate) fn home_dir() -> PathBuf {
+    #[cfg(windows)]
     let home = std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\".into());
-    Path::new(&home).join(".eqmux").join("logs")
+    #[cfg(not(windows))]
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/".into());
+    PathBuf::from(home)
+}
+
+/// PATH 구분자 — 앱 폴더를 PATH 앞에 붙이는 스폰 경로들이 쓴다
+pub(crate) const PATH_SEP: &str = if cfg!(windows) { ";" } else { ":" };
+
+/// macOS GUI 앱은 로그인 셸의 PATH를 물려받지 못한다 (Finder 기동은 /usr/bin:/bin 정도뿐) —
+/// 그대로면 claude·codex·git(Homebrew)이 PTY에서도 on_path에서도 안 잡힌다. 기동 때 한 번
+/// 사용자 셸에 물어 PATH를 맞춘다. 대화형(-i)이어야 .zshrc까지 읽힌다 — 출력에 섞이는
+/// 잡음은 표식으로 걸러 내고, 셸 설정이 멈춰도 앱이 서지 않게 시한을 둔다.
+/// 시한을 넘긴 셸은 죽인다 (B120) — 대화형 셸이 남으면 기동할 때마다 하나씩 쌓였다.
+/// 부모 터미널의 shim·세션 변수는 그 전에 appenv가 걷어 둔다 (B136) — 이 셸도 깨끗한 환경에서 돈다
+#[cfg(target_os = "macos")]
+fn import_login_path() {
+    use std::io::Read;
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
+    let child = std::process::Command::new(shell)
+        .args(["-ilc", "printf '__EQPATH__%s__EQPATH__' \"$PATH\""])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    let mut dirs: Vec<String> = Vec::new();
+    if let Ok(mut child) = child {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut stdout = child.stdout.take();
+        std::thread::spawn(move || {
+            let mut text = String::new();
+            if let Some(s) = stdout.as_mut() {
+                let _ = s.read_to_string(&mut text);
+            }
+            let _ = tx.send(text);
+        });
+        match rx.recv_timeout(std::time::Duration::from_secs(5)) {
+            Ok(text) => {
+                if let Some(p) = text.split("__EQPATH__").nth(1) {
+                    dirs.extend(p.split(':').filter(|d| !d.is_empty()).map(str::to_string));
+                }
+            }
+            Err(_) => {
+                let _ = child.kill();
+            }
+        }
+        let _ = child.wait(); // 좀비로 남기지 않는다
+    }
+    // 셸이 답하지 않아도 흔한 설치 위치는 잡히게 — Claude 네이티브 설치·Homebrew
+    let home = home_dir();
+    let current = std::env::var("PATH").unwrap_or_default();
+    for d in [
+        home.join(".local/bin").to_string_lossy().into_owned(),
+        "/opt/homebrew/bin".into(),
+        "/usr/local/bin".into(),
+    ]
+    .into_iter()
+    .chain(current.split(':').map(str::to_string))
+    {
+        if !d.is_empty() && !dirs.contains(&d) {
+            dirs.push(d);
+        }
+    }
+    std::env::set_var("PATH", dirs.join(":"));
 }
 
 fn log_file_name(id: &str) -> String {
@@ -125,6 +216,42 @@ fn log_file_name(id: &str) -> String {
         .map(|c| if c.is_alphanumeric() || matches!(c, '@' | '-' | '_' | '.') { c } else { '_' })
         .collect();
     format!("{safe}.log")
+}
+
+/// 세션 로그 상한 — 넘으면 `<이름>.log.old` 하나로 돌린다 (세션당 최대 약 2배). 원시 PTY 바이트라
+/// 대부분이 TUI 다시 그리기이고, 세션 id가 고정이라 상한이 없으면 실행마다 같은 파일이 끝없이 자란다
+const SESSION_LOG_CAP: u64 = 10 * 1024 * 1024;
+/// 이 기간 쓰이지 않은 세션 로그는 시작 때 지운다 — id에 워크스페이스 해시가 붙어 지난 워크스페이스 로그가 남는다
+const SESSION_LOG_KEEP: std::time::Duration = std::time::Duration::from_secs(30 * 24 * 3600);
+
+/// 세션 로그 열기 — 이미 상한을 넘었으면 먼저 돌린다. 반환은 (writer, 현재 크기)
+fn open_session_log(path: &Path, cap: u64) -> Option<(std::io::BufWriter<std::fs::File>, u64)> {
+    if std::fs::metadata(path).map(|m| m.len() > cap).unwrap_or(false) {
+        let _ = std::fs::rename(path, path.with_extension("log.old")); // Windows에서도 기존 .old를 덮는다
+    }
+    let f = OpenOptions::new().create(true).append(true).open(path).ok()?;
+    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+    Some((std::io::BufWriter::with_capacity(64 * 1024, f), len))
+}
+
+/// 오래된 세션 로그 정리 — diagnostics.log는 자체 상한이 있어 건드리지 않는다
+fn prune_session_logs(dir: &Path, keep: std::time::Duration) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for e in entries.flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if name == "diagnostics.log" || !(name.ends_with(".log") || name.ends_with(".log.old")) {
+            continue;
+        }
+        let stale = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age > keep);
+        if stale {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
 }
 
 /// 이월 버퍼에서 완전한 UTF-8 접두사만 떼어 낸다 — PTY 읽기 경계는 다중바이트 문자
@@ -169,10 +296,10 @@ fn resolve_cwd(cwd: Option<String>) -> String {
             return dir;
         }
     }
-    std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\".into())
+    home_dir().to_string_lossy().into_owned()
 }
 
-/// 셸 후보를 순서대로 시도한다: 지정값 → pwsh → powershell → cmd
+/// 셸 후보를 순서대로 시도한다: 지정값 → pwsh → powershell → cmd (macOS: 지정값 → $SHELL → zsh → bash)
 fn shell_candidates(shell: Option<String>) -> Vec<String> {
     let mut v = Vec::new();
     if let Some(s) = shell {
@@ -180,8 +307,95 @@ fn shell_candidates(shell: Option<String>) -> Vec<String> {
             v.push(s);
         }
     }
+    #[cfg(windows)]
     v.extend(["pwsh.exe".into(), "powershell.exe".into(), "cmd.exe".into()]);
+    #[cfg(not(windows))]
+    {
+        if let Ok(s) = std::env::var("SHELL") {
+            v.push(s);
+        }
+        v.extend(["/bin/zsh".into(), "/bin/bash".into()]);
+    }
     v
+}
+
+/// 기본 셸 표시 이름 — 셸을 지정하지 않은 페인의 라벨
+fn default_shell_label() -> String {
+    #[cfg(windows)]
+    return "pwsh".into();
+    #[cfg(not(windows))]
+    std::env::var("SHELL")
+        .ok()
+        .and_then(|s| s.rsplit('/').next().map(str::to_string))
+        .unwrap_or_else(|| "zsh".into())
+}
+
+#[derive(Serialize, Debug, PartialEq)]
+struct ShellEntry {
+    label: String,
+    path: String,
+}
+
+#[derive(Serialize)]
+struct ShellList {
+    /// 셸을 지정하지 않은 페인이 뜨는 셸 — $SHELL의 파일 이름 (Windows는 pwsh)
+    default: String,
+    shells: Vec<ShellEntry>,
+}
+
+/// 셸 선택지로 내놓는 셸 — 사람이 페인 셸로 고를 만한 것만
+const SHELL_KINDS: [&str; 4] = ["zsh", "bash", "fish", "pwsh"];
+
+/// /etc/shells에서 고를 셸 (B114) — 실제로 있는 것만, 같은 실체(심볼릭 링크 포함)는 하나만.
+/// 파일 이름이 겹치면(/bin/bash와 Homebrew bash) 뒤의 것은 폴더를 붙여 구분한다
+#[cfg_attr(windows, allow(dead_code))]
+fn pick_shells(etc_shells: &str, exists: impl Fn(&str) -> bool, canon: impl Fn(&str) -> String) -> Vec<ShellEntry> {
+    let mut out: Vec<ShellEntry> = Vec::new();
+    let mut seen: Vec<String> = Vec::new();
+    for line in etc_shells.lines().map(str::trim) {
+        if line.is_empty() || line.starts_with('#') || !line.starts_with('/') {
+            continue;
+        }
+        let (dir, base) = line.rsplit_once('/').unwrap_or(("", line));
+        if !SHELL_KINDS.contains(&base) || !exists(line) {
+            continue;
+        }
+        let real = canon(line);
+        if seen.contains(&real) {
+            continue;
+        }
+        seen.push(real);
+        let label = if out.iter().any(|e| e.path.rsplit('/').next() == Some(base)) {
+            format!("{base} · {dir}")
+        } else {
+            base.to_string()
+        };
+        out.push(ShellEntry { label, path: line.to_string() });
+    }
+    out
+}
+
+/// 셸 선택지 (B114) — 프런트의 셸 목록이 Windows 것(pwsh·cmd)뿐이던 자리. 실패하면 프런트가
+/// 정적 목록으로 물러난다. Windows는 지금 후보(shell_candidates) 그대로다
+#[tauri::command]
+fn list_shells() -> ShellList {
+    #[cfg(windows)]
+    return ShellList {
+        default: default_shell_label(),
+        shells: ["pwsh.exe", "powershell.exe", "cmd.exe"]
+            .iter()
+            .map(|s| ShellEntry { label: s.trim_end_matches(".exe").to_string(), path: s.to_string() })
+            .collect(),
+    };
+    #[cfg(not(windows))]
+    ShellList {
+        default: default_shell_label(),
+        shells: pick_shells(
+            &std::fs::read_to_string("/etc/shells").unwrap_or_default(),
+            |p| std::path::Path::new(p).is_file(),
+            |p| std::fs::canonicalize(p).map(|c| c.to_string_lossy().into_owned()).unwrap_or_else(|_| p.to_string()),
+        ),
+    }
 }
 
 /// PTY 자식 환경 위생 — 모든 스폰(셸·에이전트)의 단일 관문에서 적용한다.
@@ -190,6 +404,8 @@ fn shell_candidates(shell: Option<String>) -> Vec<String> {
 /// ② 세션 정체: 부모의 Claude 세션 마커가 상속되면 여기서 켠 claude가 자식 세션으로
 ///    인식돼 트랜스크립트 저장을 꺼 버린다 — 페인은 1급 소스(JSONL, FR-G-80)를 잃고
 ///    스크롤백 폴백으로 떨어진다. 마커를 걷어내고 저장을 강제한다.
+/// macOS는 부모 터미널 도구(cmux·iTerm·VS Code·tmux…)의 세션 변수와 PATH shim을 기동 때
+/// 프로세스 환경에서 이미 걷었다 (appenv.rs, B136·B167) — 아래 목록은 Windows를 위해 남긴다.
 fn sanitize_pty_env(cmd: &mut CommandBuilder) {
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
@@ -214,23 +430,27 @@ fn sanitize_pty_env(cmd: &mut CommandBuilder) {
 }
 
 /// 공용 PTY 스폰 — 셸·에이전트가 같은 배관(로그·스토어 스필·수명 관리)을 탄다.
-/// 반환값은 이 PTY의 세대(gen) — 같은 id 재기동 시 이전 스레드의 정리를 무효화한다.
+/// 반환값은 이 PTY의 세대(gen) — 같은 id 재기동 시 이전 스레드의 정리를 무효화한다 — 와 실제 라벨.
+/// label_from_spawn이면(셸 페인, macOS) 라벨을 요청값이 아니라 실제로 뜬 후보의 파일 이름으로 정한다 (B114) —
+/// 'PowerShell 7'을 골랐는데 pwsh가 없어 zsh로 물러나도 라벨이 pwsh로 남던 자리다
+#[allow(clippy::too_many_arguments)]
 fn spawn_pty_session(
     app: AppHandle,
     id: String,
     ws: String,
     dir: String,
     shell_label: String,
+    label_from_spawn: bool,
     mut builders: Vec<CommandBuilder>,
     cols: u16,
     rows: u16,
-) -> Result<u64, String> {
+) -> Result<(u64, String), String> {
     let state: State<PtyState> = app.state();
     let store_state: State<StoreState> = app.state();
     // 스폰은 SPAWN_LOCK으로 한 줄로 선다 — 그래서 ConPTY 생성·프로세스 실행 동안 전역 잠금을
     // 쥐지 않아도 된다 (쥐고 있으면 그동안 모든 세션의 pty_write가 메인 스레드에서 기다린다)
     if let Some(existing) = state.0.lock().map_err(|e| e.to_string())?.get(&id) {
-        return Ok(existing.gen); // 이미 실행 중 — 재부착만 한다
+        return Ok((existing.gen, shell_label)); // 이미 실행 중 — 재부착만 한다
     }
 
     let pty = native_pty_system();
@@ -245,11 +465,18 @@ fn spawn_pty_session(
 
     let mut child = None;
     let mut last_err = String::new();
-    for mut cmd in builders.drain(..) {
+    let mut spawned = String::new(); // 실제로 뜬 후보의 argv0
+    for (i, mut cmd) in builders.drain(..).enumerate() {
         sanitize_pty_env(&mut cmd);
-        let label = format!("{:?}", cmd.get_argv().first().cloned().unwrap_or_default());
+        let argv0 = cmd.get_argv().first().map(|a| a.to_string_lossy().into_owned()).unwrap_or_default();
+        let label = format!("{argv0:?}");
         match pair.slave.spawn_command(cmd) {
             Ok(c) => {
+                if i > 0 && label_from_spawn {
+                    // 요청한 셸이 없어 다음 후보로 물러났다 — 라벨이 바뀌는 이유를 남긴다
+                    diag::write(&format!("SHELL-FALLBACK {id} requested={shell_label} spawned={argv0} ({last_err})"));
+                }
+                spawned = argv0;
                 child = Some(c);
                 break;
             }
@@ -258,6 +485,13 @@ fn spawn_pty_session(
     }
     let child = child.ok_or(format!("실행 실패 — {last_err}"))?;
     drop(pair.slave);
+    #[cfg(not(windows))]
+    let shell_label = match spawned.rsplit('/').next().filter(|b| label_from_spawn && !b.is_empty()) {
+        Some(base) => base.to_string(),
+        None => shell_label,
+    };
+    #[cfg(windows)]
+    let _ = &spawned;
 
     // FR-C-05 — 세션 트리를 Job Object로 묶는다. 실패해도 세션은 동작한다 (child.kill 폴백).
     let job = job::Job::new_kill_on_close().map(Arc::new);
@@ -267,7 +501,9 @@ fn spawn_pty_session(
 
     let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
     let mut pipe = pair.master.take_writer().map_err(|e| e.to_string())?;
-    let (writer, write_rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    // 상한 (CPU·RAM M8) — 셸이 입력을 읽지 않으면(막힌 파이프) 덩어리가 끝없이 쌓였다.
+    // 보내는 쪽(pty_write)은 메인 스레드에서 잠금을 쥐고 있어 막히면 안 되므로 try_send로 넣는다
+    let (writer, write_rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(1024);
     std::thread::spawn(move || {
         // 막힌 파이프에서 write_all이 블록해도 이 스레드만 선다. ConPTY가 닫히면 쓰기가 실패해 끝난다
         while let Ok(data) = write_rx.recv() {
@@ -309,7 +545,7 @@ fn spawn_pty_session(
         ws: ws.clone(),
         id: id.clone(),
         cwd: dir.clone(),
-        shell: shell_label,
+        shell: shell_label.clone(),
     });
 
     // 출력 더블 버퍼링 — 리더의 8KB 청크를 그대로 내보내면 TUI의 지우기+재출력 프레임이
@@ -317,7 +553,8 @@ fn spawn_pty_session(
     // 조각을 묶어 최종 상태만 화면 이벤트로 보낸다. 25ms 시한·256KB 상한으로 지연을 막는다.
     // 리사이즈 직후 400ms는 ConPTY 전체 리페인트가 띄엄띄엄 몰려오므로 25ms/250ms로 길게 묶는다
     // (줌·분할·전체 화면 전환 깜빡임 방지 — 그 동안은 타이핑 지연이 문제되지 않는다).
-    let (out_tx, out_rx) = std::sync::mpsc::channel::<String>();
+    // 상한 (CPU·RAM M8) — 코얼레서가 밀리면 리더가 잠시 기다린다(ConPTY까지 배압). 무한 큐로 쌓지 않는다
+    let (out_tx, out_rx) = std::sync::mpsc::sync_channel::<String>(1024);
     let emit_hint = resize_hint.clone();
     let emit_app = app.clone();
     let emit_id = id.clone();
@@ -343,32 +580,39 @@ fn spawn_pty_session(
                     Err(_) => break, // 조용/끊김 → 프레임 완성으로 보고 방출
                 }
             }
-            let _ = emit_app.emit_to("main", "pty-output", PtyOutput { id: emit_id.clone(), data: batch });
+            let out = PtyOutput { id: emit_id.clone(), data: batch };
+            let ch = emit_app.state::<PtyOutChannel>().0.lock().ok().and_then(|c| c.clone());
+            match ch {
+                Some(ch) => {
+                    if ch.send(out.clone()).is_err() {
+                        let _ = emit_app.emit_to("main", "pty-output", out);
+                    }
+                }
+                None => {
+                    let _ = emit_app.emit_to("main", "pty-output", out);
+                }
+            }
         }
     });
 
     // 출력 중계 스레드 — 로그 파일 append + VT 통과 줄을 스토어로 스필 + EOF 정리
     std::thread::spawn(move || {
-        let mut log_file = {
+        let log_path = {
             let dir = log_dir();
             let _ = create_dir_all(&dir);
-            // 최적화 A10 — 8KB 읽기마다 write syscall이던 것을 버퍼로. 아래에서 짧은 읽기(출력 덩어리 끝)마다
-            // 비우므로 로그가 한 덩어리 이상 뒤처지지 않는다. 스레드가 끝나면 drop이 마저 비운다
-            OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(dir.join(log_file_name(&id)))
-                .ok()
-                .map(|f| std::io::BufWriter::with_capacity(64 * 1024, f))
+            dir.join(log_file_name(&id))
         };
-        if let Some(f) = log_file.as_mut() {
+        // 최적화 A10 — 8KB 읽기마다 write syscall이던 것을 버퍼로. 아래에서 짧은 읽기(출력 덩어리 끝)마다
+        // 비우므로 로그가 한 덩어리 이상 뒤처지지 않는다. 스레드가 끝나면 drop이 마저 비운다
+        let mut log_file = open_session_log(&log_path, SESSION_LOG_CAP);
+        if let Some((f, _)) = log_file.as_mut() {
             let _ = writeln!(f, "\n=== EQMUX session start · {} · epoch {} ===", id, epoch_secs());
         }
-        let mut assembler = LineAssembler::new();
         // SGR 저장 (FR-C-15) — 설정으로 끌 수 있다 (용량 절감). 평문 적재는 계속된다.
         // 스폰 때 한 번만 읽는다 (최적화 A7) — 8KB마다 읽으면 모든 세션이 설정 잠금을 다툰다.
-        // 바꾼 설정은 다음에 뜨는 세션부터 먹는다
+        // 바꾼 설정은 다음에 뜨는 세션부터 먹는다. 꺼져 있으면 조립기가 색 사본 자체를 만들지 않는다 (C9)
         let sgr_on = setting_bool(&app, "sgrStore", true);
+        let mut assembler = LineAssembler::with_sgr(sgr_on);
         let mut last_spilled = String::new();
         let mut buf = [0u8; 8192];
         let mut pending: Vec<u8> = Vec::new(); // 읽기 경계에서 잘린 UTF-8 꼬리 이월 (≤3바이트)
@@ -376,11 +620,19 @@ fn spawn_pty_session(
             match reader.read(&mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
-                    if let Some(f) = log_file.as_mut() {
+                    let mut over_cap = false;
+                    if let Some((f, len)) = log_file.as_mut() {
                         let _ = f.write_all(&buf[..n]);
                         if n < buf.len() {
                             let _ = f.flush();
                         }
+                        *len += n as u64;
+                        over_cap = *len > SESSION_LOG_CAP;
+                    }
+                    if over_cap {
+                        // 오래 도는 세션도 상한을 지킨다 — 닫아서(drop이 비운다) 돌리고 새로 연다
+                        drop(log_file.take());
+                        log_file = open_session_log(&log_path, SESSION_LOG_CAP);
                     }
                     pending.extend_from_slice(&buf[..n]);
                     let data = take_complete_utf8(&mut pending);
@@ -397,7 +649,7 @@ fn spawn_pty_session(
                             ws: ws.clone(),
                             id: id.clone(),
                             text: line,
-                            styled: if sgr_on { styled } else { None },
+                            styled,
                         });
                     });
                     let _ = out_tx.send(data);
@@ -426,7 +678,7 @@ fn spawn_pty_session(
             })
         };
         let code = owned.and_then(|mut s| s.child.wait().ok()).map(|st| st.exit_code());
-        if let Some(f) = log_file.as_mut() {
+        if let Some((f, _)) = log_file.as_mut() {
             let _ = writeln!(f, "\n=== session exit · {} · code {:?} · epoch {} ===", id, code, epoch_secs());
         }
         assembler.finish(|line, styled| {
@@ -442,7 +694,7 @@ fn spawn_pty_session(
         agent::on_pty_exit(&app, &id, code, gen); // 에이전트면 dead 전이 (FR-D-50)
     });
 
-    Ok(gen)
+    Ok((gen, shell_label))
 }
 
 #[tauri::command]
@@ -454,10 +706,14 @@ async fn pty_spawn(
     cols: u16,
     rows: u16,
     workspace: Option<String>,
-) -> Result<(), String> {
+) -> Result<String, String> {
+    // 실제로 뜬 셸의 라벨을 돌려준다 (B114) — 요청한 셸이 없어 물러났으면 요청값과 다르다
     run_spawn(move || {
         let dir = resolve_cwd(cwd);
-        let label = shell.clone().unwrap_or_else(|| "pwsh".into());
+        // 빈 문자열은 '지정 안 함'이다 — 라벨이 빈칸이 되지 않게 (macOS 로그인 셸 선택이 null·""를 넘긴다)
+        #[cfg(not(windows))]
+        let shell = shell.filter(|s| !s.is_empty());
+        let label = shell.clone().unwrap_or_else(default_shell_label);
         let exe_dir = std::env::current_exe()
             .ok()
             .and_then(|e| e.parent().map(|p| p.to_path_buf()));
@@ -483,11 +739,14 @@ async fn pty_spawn(
             .into_iter()
             .map(|c| {
                 let mut b = CommandBuilder::new(&c);
+                // macOS 터미널 관례 — 로그인 셸로 띄워 .zprofile까지 읽힌다
+                #[cfg(not(windows))]
+                b.arg("-l");
                 b.cwd(&dir);
                 // 일반 셸에서도 `eqmux ping` 같은 CLI(PRD I)가 잡히게 PATH 앞에 앱 폴더를 붙인다
                 if let Some(d) = &exe_dir {
                     let path = std::env::var("PATH").unwrap_or_default();
-                    b.env("PATH", format!("{};{}", d.display(), path));
+                    b.env("PATH", format!("{}{PATH_SEP}{}", d.display(), path));
                 }
                 b.env("EQMUX_SESSION", &id);
                 b.env("EQMUX_TOKEN", &token);
@@ -502,7 +761,7 @@ async fn pty_spawn(
             })
             .collect();
         let ws = workspace.unwrap_or_else(|| id.split('@').nth(1).unwrap_or("default").to_string());
-        spawn_pty_session(app, id, ws, dir, label, builders, cols, rows).map(|_| ())
+        spawn_pty_session(app, id, ws, dir, label, true, builders, cols, rows).map(|(_, label)| label)
     })
     .await
 }
@@ -513,7 +772,10 @@ fn pty_write(state: State<PtyState>, id: String, data: String) -> Result<(), Str
     // async로 옮기면 호출 순서대로 실행된다는 보장이 없어 키 입력이 뒤섞인다
     let sessions = state.0.lock().map_err(|e| e.to_string())?;
     let writer = &sessions.get(&id).ok_or("세션 없음")?.writer;
-    writer.send(data.into_bytes()).map_err(|_| "세션 입력이 닫혔습니다".to_string())
+    writer.try_send(data.into_bytes()).map_err(|e| match e {
+        std::sync::mpsc::TrySendError::Full(_) => "입력 대기열이 가득 찼습니다 — 셸이 입력을 읽지 않고 있습니다".to_string(),
+        std::sync::mpsc::TrySendError::Disconnected(_) => "세션 입력이 닫혔습니다".to_string(),
+    })
 }
 
 /// 이 리사이즈 요청이 아직 최신인가 — 전역 잠금 밖에서 돌기 때문에 두 요청이 겹칠 수 있고,
@@ -1123,12 +1385,13 @@ fn agent_spawn_inner(
         settings_file.as_deref(),
         &token,
     );
-    let gen = spawn_pty_session(
+    let (gen, _) = spawn_pty_session(
         app.clone(),
         id.clone(),
         ws.clone(),
         cwd.clone(),
         cli.clone(),
+        false,
         builders,
         cols,
         rows,
@@ -1599,6 +1862,14 @@ async fn worktree_ensure(ws_path: String, session: String) -> Result<String, Str
         .map_err(|e| e.to_string())?
 }
 
+/// 워크트리 목록 (관제 레일 표시 전용) — git CLI라 blocking 스레드에서 돈다 (git_overview와 같은 이유)
+#[tauri::command]
+async fn git_worktrees(ws_path: String) -> Result<Vec<workspace::WorktreeInfo>, String> {
+    tauri::async_runtime::spawn_blocking(move || workspace::worktree_list(&ws_path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 /// 임무-브랜치 체크아웃 (FR-E-52) — 있으면 checkout, 없으면 -b 생성. E1′ 공유 기본에서는
 /// repo 전체(모든 공유 세션)에 영향이 있으므로 호출은 화면의 2단 확인 뒤에만 온다.
 #[tauri::command]
@@ -1613,52 +1884,6 @@ async fn ws_checkout(ws_path: String, branch: String) -> Result<String, String> 
     })
     .await
     .map_err(|e| e.to_string())?
-}
-
-// ── git 패널 워크트리·브랜치 (M36 — orca식 안전 범위) — 커밋 이력을 바꾸지 않는
-// 작업 트리 조작만 개방한다: 목록·생성·체크아웃·열기. 삭제(FR-E-64)와
-// commit·push·stage(G7 — 실행은 터미널에서 사람이)는 계속 제공하지 않는다.
-
-// 둘 다 git CLI를 띄우므로 blocking 스레드에서 돈다 (git_overview와 같은 이유) — 동기 커맨드는
-// 메인 스레드에서 실행되고, 이 둘은 10초 폴링이라 UI 스레드가 매 주기 git을 기다리게 된다.
-#[tauri::command]
-async fn git_worktrees(ws_path: String) -> Result<Vec<workspace::WorktreeInfo>, String> {
-    tauri::async_runtime::spawn_blocking(move || workspace::worktree_list(&ws_path))
-        .await
-        .map_err(|e| e.to_string())?
-}
-
-#[tauri::command]
-async fn git_worktree_graph(ws_path: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || workspace::worktree_graph(&ws_path))
-        .await
-        .map_err(|e| e.to_string())?
-}
-
-#[tauri::command]
-async fn git_branches(ws_path: String) -> Result<Vec<workspace::BranchInfo>, String> {
-    tauri::async_runtime::spawn_blocking(move || workspace::branch_list(&ws_path))
-        .await
-        .map_err(|e| e.to_string())?
-}
-
-/// 이름 있는 워크트리 생성 — base ref(브랜치·커밋)에서 분기. 큰 저장소의 체크아웃이
-/// 느릴 수 있어 blocking 스레드에서 돈다. 반환은 절대 경로.
-#[tauri::command]
-async fn worktree_add(ws_path: String, name: String, base: Option<String>) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        workspace::worktree_create(&ws_path, &name, base.as_deref())
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-/// 기존 브랜치를 워크트리로 연결 (레일 §워크트리) — 새 브랜치 없이 그 브랜치를 체크아웃
-#[tauri::command]
-async fn worktree_attach(ws_path: String, branch: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || workspace::worktree_attach(&ws_path, &branch))
-        .await
-        .map_err(|e| e.to_string())?
 }
 
 // ── 경량 KV (assignment_cache 테이블, FR-C-23) — 미확인·인박스 같은 파생 상태의 영속 캐시.
@@ -1914,12 +2139,77 @@ fn ws_unwatch(watch: State<WatchState>, workspace_id: String) {
 
 // ── 워크스페이스 레지스트리 (PRD E §4.1) ──
 
+/// 창을 맨 앞으로, 앱을 활성으로 — 시트를 열기 직전에 메인 스레드에서 바로 한다 (B135 · GRF-04).
+/// tauri set_focus는 이벤트 루프에 메시지로 넘겨 나중에 하는데, 이 커맨드는 곧바로 시트의 모달 루프로
+/// 들어가 그 메시지가 늦게(혹은 시트가 닫힌 뒤에) 돌았다 — 다른 앱이 앞이면 EQMUX가 안 올라왔다.
+/// macOS 14+의 활성화는 '협조형'이라 거절될 수 있다 — 그래도 창은 orderFrontRegardless로 올라간다
+#[cfg(target_os = "macos")]
+fn bring_window_front(win: &tauri::WebviewWindow) {
+    use objc2::runtime::AnyObject;
+    use objc2::{class, msg_send, sel};
+    let Ok(ns_window) = win.ns_window() else { return };
+    let ns_window = ns_window as usize; // 메인 스레드로 넘기려고 — 창은 앱 수명 동안 산다
+    let raise = move || unsafe {
+        let ns_window = ns_window as *mut AnyObject;
+        let ns_app: *mut AnyObject = msg_send![class!(NSApplication), sharedApplication];
+        let modern: bool = msg_send![ns_app, respondsToSelector: sel!(activate)];
+        if modern {
+            let () = msg_send![ns_app, activate]; // macOS 14+
+        } else {
+            let () = msg_send![ns_app, activateIgnoringOtherApps: true];
+        }
+        let () = msg_send![ns_window, makeKeyAndOrderFront: std::ptr::null_mut::<AnyObject>()];
+        let () = msg_send![ns_window, orderFrontRegardless];
+    };
+    if objc2::MainThreadMarker::new().is_some() {
+        raise();
+    } else {
+        // 동기 커맨드가 메인 스레드가 아닌 곳에서 불려도 시트보다 먼저 끝나게 기다린다
+        let (tx, rx) = std::sync::mpsc::channel();
+        if win
+            .run_on_main_thread(move || {
+                raise();
+                let _ = tx.send(());
+            })
+            .is_ok()
+        {
+            let _ = rx.recv_timeout(std::time::Duration::from_secs(1));
+        }
+    }
+}
+
+/// 동기 커맨드라 메인 스레드에서 돈다(rfd의 runModal). macOS (B135) — 앱이 뒤에 있으면 선택 창이
+/// 다른 앱 뒤에 열려 안 보였고, 그 사이 다시 누르면 모달 루프 안에서 하나가 더 열렸다.
+/// 그래서 창을 앞으로 부르고, 선택 창을 메인 창의 시트로 붙이고, 열려 있는 동안 다시 부르면 None
 #[tauri::command]
-fn ws_pick_folder() -> Option<String> {
-    rfd::FileDialog::new()
-        .set_title("워크스페이스로 등록할 폴더 선택")
-        .pick_folder()
-        .map(|p| p.to_string_lossy().into_owned())
+fn ws_pick_folder(app: AppHandle) -> Option<String> {
+    let dialog = rfd::FileDialog::new().set_title("워크스페이스로 등록할 폴더 선택");
+    #[cfg(target_os = "macos")]
+    let (dialog, _guard) = {
+        static PICKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        struct Guard;
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                PICKING.store(false, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+        if PICKING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            return None; // 이미 열려 있다 — 프런트도 버튼을 막지만 두 겹으로 막는다
+        }
+        let guard = Guard;
+        let dialog = match app.get_webview_window("main") {
+            Some(win) => {
+                let _ = win.unminimize();
+                bring_window_front(&win); // 앱을 앞으로 — 시트는 창과 함께 보인다
+                dialog.set_parent(&win)
+            }
+            None => dialog,
+        };
+        (dialog, guard)
+    };
+    #[cfg(not(target_os = "macos"))]
+    let _ = &app;
+    dialog.pick_folder().map(|p| p.to_string_lossy().into_owned())
 }
 
 /// 항목마다 git을 2번 부른다(inspect) — 등록 수만큼 늘어나므로 blocking 스레드에서 돈다.
@@ -2176,17 +2466,32 @@ fn shutdown_flush(store_state: State<StoreState>) -> bool {
 /// 종료 직전 마지막 flush를 한 번 더 시도한다 (세션 exit 이벤트까지 적재).
 #[tauri::command]
 async fn app_exit(app: AppHandle) {
+    quit::EXITING.store(true, std::sync::atomic::Ordering::SeqCst); // 이 뒤의 ⌘Q는 확인창을 다시 띄우지 않는다
+    signal_all_sessions(&app);
+    tokio_sleep(std::time::Duration::from_millis(500)).await; // ④ 유예
+    kill_all_sessions(&app);
+    // 리더들이 EOF 후 마지막 줄·SessionExit을 store 채널에 넣을 짧은 유예 —
+    // flush보다 늦게 도착하면 exit 기록이 유실돼 다음 dirty 시작에서 크래시 세션으로 오인된다
+    tokio_sleep(std::time::Duration::from_millis(200)).await;
+    finish_store_and_flag(&app);
+    app.exit(0);
+}
+
+/// ③ 정상 종료 신호 — TUI 에이전트가 스스로 정리할 기회.
+/// 세션별 쓰기 스레드에 넘기기만 한다 — 막힌 파이프가 종료를 못 멈추게 (B14)
+fn signal_all_sessions(app: &AppHandle) {
     let state: State<PtyState> = app.state();
-    // ③ 정상 종료 신호 — TUI 에이전트가 스스로 정리할 기회.
-    // 세션별 쓰기 스레드에 넘기기만 한다 — 막힌 파이프가 종료를 못 멈추게 (B14)
     if let Ok(sessions) = state.0.lock() {
         for s in sessions.values() {
-            let _ = s.writer.send(b"\x03".to_vec());
+            let _ = s.writer.try_send(b"\x03".to_vec()); // 가득 찼으면 넘긴다 — 뒤의 kill이 끝낸다
         }
-    }
-    tokio_sleep(std::time::Duration::from_millis(500)).await; // ④ 유예
-    // 잠금 안에서는 map을 비우기만 한다 (B14) — kill·ConPTY drop을 잠금 아래서 하면
-    // EOF를 맞은 리더 스레드(같은 잠금 대기)와 교착해 종료 시퀀스가 영영 멈춘다
+    };
+}
+
+/// ④ 전 세션 트리 종료. 잠금 안에서는 map을 비우기만 한다 (B14) — kill·ConPTY drop을 잠금 아래서 하면
+/// EOF를 맞은 리더 스레드(같은 잠금 대기)와 교착해 종료 시퀀스가 영영 멈춘다
+fn kill_all_sessions(app: &AppHandle) {
+    let state: State<PtyState> = app.state();
     let drained: Vec<(String, PtySession)> = match state.0.lock() {
         Ok(mut sessions) => sessions.drain().collect(),
         Err(_) => Vec::new(),
@@ -2199,15 +2504,35 @@ async fn app_exit(app: AppHandle) {
         let _ = child.kill();
         // 나머지 필드 drop = ConPTY 닫기. 리더가 잔여 출력을 비울 때까지 여기서(잠금 밖) 기다린다
     }
-    // 리더들이 EOF 후 마지막 줄·SessionExit을 store 채널에 넣을 짧은 유예 —
-    // flush보다 늦게 도착하면 exit 기록이 유실돼 다음 dirty 시작에서 크래시 세션으로 오인된다
-    tokio_sleep(std::time::Duration::from_millis(200)).await;
-    // 세션 exit 기록까지 flush (최대 1초 — 이미 ②를 거쳤으므로 잔량은 적다)
+}
+
+/// 세션 exit 기록까지 flush하고 클린 종료 표식을 지운다. macOS는 창 자리도 여기서 남긴다 (B141)
+fn finish_store_and_flag(app: &AppHandle) {
     let store: State<StoreState> = app.state();
+    #[cfg(target_os = "macos")]
+    if let Some(win) = app.get_webview_window("main") {
+        winstate::save(&win, &store.0.root());
+    }
+    // 최대 1초 — 이미 ②를 거쳤으므로 잔량은 적다
     let _ = flush_store(&store.0, std::time::Duration::from_secs(1));
     // 클린 종료 표식 제거 (FR-C-35) — 이 줄에 도달했다는 것이 곧 정상 종료의 정의다
     let _ = std::fs::remove_file(store.0.root().join("running.flag"));
-    app.exit(0);
+}
+
+/// 기다려 줄 수 없는 종료의 정리 (B112) — 로그아웃·시스템 종료·웹뷰가 답하지 못할 때, 그리고
+/// 어떤 이유로든 정리를 건너뛴 채 이벤트 루프가 끝날 때(RunEvent::Exit). 메인 스레드에서 막고 돈다.
+/// running.flag가 이미 없으면 app_exit가 끝낸 것이다 — 다시 하지 않는다
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn finish_exit_sync(app: &AppHandle) {
+    let store: State<StoreState> = app.state();
+    if !store.0.root().join("running.flag").exists() {
+        return;
+    }
+    signal_all_sessions(app);
+    std::thread::sleep(std::time::Duration::from_millis(300)); // 유예 — 시스템이 기다려 주는 동안만큼만
+    kill_all_sessions(app);
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    finish_store_and_flag(app);
 }
 
 /// 웹뷰 재시작 복구 (FR-C-06) — 추적 중인 에이전트 상태의 현재 스냅숏.
@@ -2282,6 +2607,7 @@ fn settings_load(settings: State<SettingsState>) -> serde_json::Value {
 
 #[tauri::command]
 fn settings_save(
+    app: AppHandle,
     store_state: State<StoreState>,
     settings: State<SettingsState>,
     data: serde_json::Value,
@@ -2294,9 +2620,34 @@ fn settings_save(
     if let Ok(mut v) = settings.0.lock() {
         *v = data;
     }
+    #[cfg(target_os = "macos")]
+    if let Ok(v) = settings.0.lock() {
+        apply_window_theme(&app, &v);
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = &app;
     std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
     workspace::atomic_write(&root.join("settings.json"), json.as_bytes())?;
     Ok(())
+}
+
+/// 설정의 테마 → 창 테마 (U105). None = 시스템을 따른다
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn window_theme(settings: &serde_json::Value) -> Option<tauri::Theme> {
+    match settings.get("theme").and_then(|t| t.as_str()) {
+        Some("light") => Some(tauri::Theme::Light),
+        Some("dark") => Some(tauri::Theme::Dark),
+        _ => None,
+    }
+}
+
+/// macOS 제목 막대는 웹 화면 밖이라 CSS 테마가 닿지 않는다 — 라이트 테마에서도 시스템 다크 막대가
+/// 남아 앱 바와 색이 끊겼다 (U105). 기동 때와 설정 저장 때 창 테마를 맞춘다
+#[cfg(target_os = "macos")]
+fn apply_window_theme(app: &AppHandle, settings: &serde_json::Value) {
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.set_theme(window_theme(settings));
+    }
 }
 
 /// 프런트 조작 기록 (B63) — 실행 모드의 이벤트 피드 원천은 event 테이블 하나다 (FR-G-40).
@@ -2336,7 +2687,9 @@ fn layout_save(store_state: State<StoreState>, data: serde_json::Value) -> Resul
     let root = store_state.0.root();
     std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
     let json = serde_json::to_string_pretty(&data).map_err(|e| e.to_string())?;
-    workspace::atomic_write(&root.join("layout.json"), json.as_bytes())
+    workspace::atomic_write(&root.join("layout.json"), json.as_bytes())?;
+    workspace::mirror(&root, "layout.json", json.as_bytes());
+    Ok(())
 }
 
 #[tauri::command]
@@ -2363,23 +2716,40 @@ pub(crate) fn launch_web(url: &str, chrome: bool) -> Result<(), String> {
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return Err("http/https URL만 열 수 있습니다".into());
     }
-    use std::os::windows::process::CommandExt;
-    let mut cmd = match chrome.then(find_chrome).flatten() {
-        Some(exe) => std::process::Command::new(exe),
-        None => {
-            let mut c = std::process::Command::new("rundll32");
-            c.arg("url.dll,FileProtocolHandler");
-            c
+    // macOS — `open`이 기본 브라우저로, `-a`면 Chrome으로 연다 (없으면 기본 브라우저로 물러선다)
+    #[cfg(not(windows))]
+    {
+        let ok = chrome
+            && std::process::Command::new("open")
+                .args(["-a", "Google Chrome", url])
+                .status()
+                .is_ok_and(|s| s.success());
+        if !ok {
+            std::process::Command::new("open").arg(url).spawn().map_err(|e| e.to_string())?;
         }
-    };
-    cmd.arg(url)
-        .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
-        .spawn()
-        .map_err(|e| e.to_string())?;
-    Ok(())
+        Ok(())
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let mut cmd = match chrome.then(find_chrome).flatten() {
+            Some(exe) => std::process::Command::new(exe),
+            None => {
+                let mut c = std::process::Command::new("rundll32");
+                c.arg("url.dll,FileProtocolHandler");
+                c
+            }
+        };
+        cmd.arg(url)
+            .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
 }
 
 /// Chrome 설치 위치 — 시스템 설치(Program Files 두 곳)와 사용자 설치(LocalAppData)
+#[cfg(windows)]
 fn find_chrome() -> Option<std::path::PathBuf> {
     ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"]
         .iter()
@@ -2485,9 +2855,11 @@ fn another_instance_running() -> bool {
     true
 }
 
+/// macOS — 버스 소켓이 답하면 이미 하나 떠 있다. 그 창을 앞으로 부르고 물러난다
+/// (Finder 더블클릭은 LaunchServices가 막아 주지만, 실행 파일을 직접 띄우면 여기까지 온다)
 #[cfg(not(windows))]
 fn another_instance_running() -> bool {
-    false
+    ipc::focus_existing()
 }
 
 /// 버전 업 때 워크스페이스마다 session.db를 session.db.bak으로 옮긴다 (BR-09 · 결정 1b) —
@@ -2524,9 +2896,17 @@ pub fn run() {
     if another_instance_running() {
         return; // 창은 하나뿐이다 — 두 번째 프로세스는 조용히 물러난다
     }
+    // 스레드를 띄우기 전에 — set_var는 다른 스레드가 환경을 읽는 동안 부르면 안 된다.
+    // 부모 터미널 도구의 세션 변수·shim을 먼저 걷고(B136), 깨끗한 환경에서 로그인 셸 PATH를 묻는다
+    #[cfg(target_os = "macos")]
+    {
+        appenv::scrub_process_env();
+        import_login_path();
+    }
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
         .manage(PtyState::default())
+        .manage(PtyOutChannel::default())
         // 화면 손상 진단 (임시 계측, diag.rs) — 배율·모니터가 바뀌는 순간을 남긴다.
         // 프런트는 이 순간을 볼 수 없다: 창을 배율이 다른 모니터로 옮겨도 CSS 크기는
         // 그대로라 ResizeObserver도 resize 이벤트도 울리지 않는다. 여기서만 잡힌다.
@@ -2558,6 +2938,18 @@ pub fn run() {
             {
                 let _ = std::fs::write(&ver_file, &cur_ver);
             }
+            // 데이터 소실 안전망 — 옛 버전이 비운 등록·배치를 앱 데이터 밖 사본에서 되살린다
+            let restored = workspace::restore_backup(&root);
+            if restored > 0 {
+                diag::write(&format!("REGISTRY-RESTORED {restored} from backup"));
+                use tauri_plugin_notification::NotificationExt;
+                let _ = app
+                    .notification()
+                    .builder()
+                    .title("EQMUX")
+                    .body(format!("사라진 워크스페이스 등록 {restored}개를 백업에서 되살렸습니다"))
+                    .show();
+            }
             library::seed(&root); // 역할 라이브러리 시드 (FR-E-27) — 디렉터리가 없을 때만
             write_hook_settings(&root); // --settings 주입용 훅 합성 파일 (D3)
             // 비정상 종료 감지 (FR-C-35) — 표식이 남아 있으면 직전 실행이 크래시였다.
@@ -2570,6 +2962,16 @@ pub fn run() {
                 .ok()
                 .and_then(|s| serde_json::from_str(&s).ok())
                 .unwrap_or(serde_json::Value::Null);
+            // macOS 창 — 숨긴 채 만들어졌다(tauri.macos.conf.json). 자리를 정하고 보인다 (B134·B141),
+            // 제목 막대 테마를 맞추고 (U105), ⌘Q·Dock·로그아웃을 종료 시퀀스로 돌린다 (B112)
+            #[cfg(target_os = "macos")]
+            {
+                if let Some(win) = app.get_webview_window("main") {
+                    winstate::restore(&win, &root);
+                }
+                apply_window_theme(app.handle(), &settings);
+                quit::install(app.handle());
+            }
             app.manage(SettingsState(Mutex::new(settings)));
             app.manage(StoreState(Store::new(root)));
             // 에이전트 런타임 (PRD D) — 세션 레지스트리 watch 시작 (FR-D-11)
@@ -2579,6 +2981,7 @@ pub fn run() {
             agent::start_registry_watch(app.handle().clone());
             ipc::start_server(app.handle().clone()); // eqmux CLI 파이프 (PRD I)
             diag::start_alive_watch(); // 웹뷰 생사 감시 (BR-18)
+            std::thread::spawn(|| prune_session_logs(&log_dir(), SESSION_LOG_KEEP)); // 시작을 막지 않게
             // 웹뷰 렌더러 크래시 생존 (FR-C-06) — ProcessFailed → Reload. PTY는 Rust가
             // 소유하므로 세션은 죽지 않고, 리로드된 프런트가 pty_list·agent_snapshot으로
             // 재부착한다 (restoreTeams). 실패해도 앱은 정상 — 등록은 최선 노력이다.
@@ -2603,11 +3006,13 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            pty_output_channel,
             pty_spawn,
             pty_write,
             pty_resize,
             pty_kill,
             pty_list,
+            list_shells,
             agent_spawn,
             agent_resume,
             agent_restart,
@@ -2618,11 +3023,7 @@ pub fn run() {
             events_log,
             session_recaps,
             worktree_ensure,
-            worktree_add,
-            worktree_attach,
             git_worktrees,
-            git_worktree_graph,
-            git_branches,
             ws_checkout,
             cache_get,
             cache_set,
@@ -2705,13 +3106,81 @@ pub fn run() {
             open_log_dir,
             open_external
         ])
-        .run(tauri::generate_context!())
-        .expect("EQMUX 실행 실패");
+        .build(tauri::generate_context!())
+        .expect("EQMUX 실행 실패")
+        .run(|app, event| {
+            // 마지막 안전망 (B112) — 종료 시퀀스를 건너뛴 채 루프가 끝나면(델리게이트 훅이 못 걸렸거나
+            // 다른 경로의 terminate) 여기서라도 세션 트리를 끄고 flush하고 running.flag를 지운다.
+            // 정상 종료(app_exit)는 표식을 이미 지웠으므로 아무것도 하지 않는다. Windows는 그대로 둔다 —
+            // 세션 잡(KILL_ON_JOB_CLOSE)이 트리를 거두고, 로그오프 뒤 복구 창도 지금처럼 뜬다
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Exit = event {
+                finish_exit_sync(app);
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (app, event);
+        });
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{backup_session_dbs, resize_is_current, restart_cli, session_prompt, take_complete_utf8, workspace};
+    use super::{
+        backup_session_dbs, open_session_log, prune_session_logs, resize_is_current, restart_cli, session_prompt,
+        pick_shells, take_complete_utf8, window_theme, workspace,
+    };
+
+    /// B114 — /etc/shells에서 고를 셸만, 없는 것·같은 실체는 빼고, 이름이 겹치면 폴더로 가른다
+    #[test]
+    fn shell_list_from_etc_shells() {
+        let etc = "# List of acceptable shells\n/bin/bash\n/bin/csh\n/bin/sh\n/bin/zsh\n/usr/bin/zsh\n\
+                   /opt/homebrew/bin/bash\n/opt/homebrew/bin/fish\n/usr/local/bin/pwsh\n";
+        let exists = |p: &str| p != "/usr/local/bin/pwsh";
+        // /usr/bin/zsh는 /bin/zsh와 같은 실체로 본다
+        let canon = |p: &str| p.replace("/usr/bin/zsh", "/bin/zsh");
+        let got = pick_shells(etc, exists, canon);
+        let labels: Vec<&str> = got.iter().map(|e| e.label.as_str()).collect();
+        assert_eq!(labels, ["bash", "zsh", "bash · /opt/homebrew/bin", "fish"]);
+        assert_eq!(got[1].path, "/bin/zsh");
+    }
+
+    /// U105 — 설정 테마가 제목 막대 테마가 된다. system·없음·손상은 OS를 따른다
+    #[test]
+    fn window_theme_follows_settings() {
+        use serde_json::json;
+        assert_eq!(window_theme(&json!({ "theme": "light" })), Some(tauri::Theme::Light));
+        assert_eq!(window_theme(&json!({ "theme": "dark" })), Some(tauri::Theme::Dark));
+        assert_eq!(window_theme(&json!({ "theme": "system" })), None);
+        assert_eq!(window_theme(&serde_json::Value::Null), None);
+    }
+
+    /// M1 — 상한을 넘은 세션 로그는 열 때 `.log.old`로 돌고(기존 .old를 덮는다), 오래된 로그만 정리된다
+    #[test]
+    fn session_log_rotates_and_prunes() {
+        use std::io::Write;
+        let dir = std::env::temp_dir().join(format!("eqmux-log-{}", workspace::now_ms()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("s@ws.log");
+        std::fs::write(&log, vec![b'x'; 20]).unwrap();
+        std::fs::write(dir.join("s@ws.log.old"), b"older").unwrap();
+
+        let (mut f, len) = open_session_log(&log, 10).unwrap();
+        assert_eq!(len, 0, "상한을 넘은 파일은 돌리고 빈 파일로 시작한다");
+        assert_eq!(std::fs::read(dir.join("s@ws.log.old")).unwrap().len(), 20);
+        f.write_all(b"new").unwrap();
+        drop(f);
+        assert_eq!(open_session_log(&log, 10).unwrap().1, 3, "상한 아래면 이어 쓴다");
+
+        // 정리 — 보존 0이면 세션 로그는 지우고 diagnostics.log·다른 파일은 남긴다
+        std::fs::write(dir.join("diagnostics.log"), b"d").unwrap();
+        std::fs::write(dir.join("note.txt"), b"n").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        prune_session_logs(&dir, std::time::Duration::from_millis(1));
+        assert!(!log.exists() && !dir.join("s@ws.log.old").exists());
+        assert!(dir.join("diagnostics.log").exists() && dir.join("note.txt").exists());
+        prune_session_logs(&dir, std::time::Duration::from_secs(3600)); // 새 파일은 남는다
+        assert!(dir.join("diagnostics.log").exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     /// 엔진이 바뀐 재시작 (B82) — 보낸 엔진이 돌던 엔진과 다를 때만 전환, 안 보내면 돌던 엔진 그대로
     #[test]

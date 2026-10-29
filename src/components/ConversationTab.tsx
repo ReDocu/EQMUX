@@ -2,7 +2,7 @@
 // 워크스페이스 = 팀 = 스트림 하나 (M5 평면). 원장은 message 테이블(PRD F)이고
 // 발신은 msg_send, 전달은 conversation.ts의 인박스 + 상태 기반 PTY 주입 (M3).
 // 사람도 같은 스트림의 참여자다 (M4) — "@카이 내용"이면 그 세션, 없으면 @all.
-import { createEffect, createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import {
   deliveryOf,
   ensureConversation,
@@ -83,17 +83,18 @@ export function ConversationTab() {
     return s ? effectiveTitle(s, personaOf(s)) : undefined;
   };
 
-  const messages = () => {
+  // 메모 (CPU·RAM C5) — messages·visible·shown이 tick마다 여러 번, shown은 O(메시지×세션)으로 다시 돌았다
+  const messages = createMemo(() => {
     tick();
     const id = ws()?.id;
     return backend.listMessages().filter((m) => m.workspaceId === id || m.workspaceId === undefined);
-  };
+  });
   const unread = () => messages().filter((m) => m.unread).length; // 원장 기준 — 화면을 지워도 줄지 않는다
   // 화면에 남길 것 — 지운 id를 뺀 나머지. 필터(전체·미확인)보다 앞선다
-  const visible = () => {
+  const visible = createMemo(() => {
     const c = ws() ? clearedIds()[ws()!.id] : undefined;
     return c ? messages().filter((m) => !c.has(m.id)) : messages();
-  };
+  });
   const hiddenCount = () => messages().length - visible().length;
   const clearScreen = () => {
     const w = ws();
@@ -125,11 +126,11 @@ export function ConversationTab() {
   let draftEl: HTMLInputElement | undefined;
   const [error, setError] = createSignal<string | null>(null);
 
-  const shown = () => {
+  const shown = createMemo(() => {
     tick();
     const v = allProjects() ? visible() : visible().filter((m) => !otherProject(m));
     return filter() === "미확인" ? v.filter((m) => m.unread) : v;
-  };
+  });
 
   // 메시지 메뉴 — 답장 · 다른 프로젝트로 전달 · 페인으로 점프 · 본문 복사 · 첨부 파일 열기
   const [msgMenu, setMsgMenu] = createSignal<{ x: number; y: number; m: ConversationMessage } | null>(null);

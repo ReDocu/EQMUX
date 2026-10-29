@@ -165,9 +165,43 @@ pub fn eval_text(app: &AppHandle, body: &str) -> Result<String, String> {
     })
 }
 
-#[cfg(not(windows))]
+/// macOS — WKWebView evaluateJavaScript. 완료 핸들러는 메인 스레드에서 오고 호출자는 소켓 워커
+/// 스레드라 채널로 받는다 (WebView2 쪽과 같은 모양). WebView2는 결과를 JSON 텍스트로 주지만
+/// WKWebView는 객체로 주므로, 페이지 쪽에서 문자열로 굳혀 같은 결과를 낸다
+#[cfg(target_os = "macos")]
+pub fn eval_text(app: &AppHandle, body: &str) -> Result<String, String> {
+    use objc2::runtime::AnyObject;
+    use objc2_foundation::{NSError, NSString};
+    use objc2_web_kit::WKWebView;
+
+    let wv = app.get_webview(LABEL).ok_or(NO_PANEL)?;
+    let js = format!(
+        "(function(){{const r={};return r===undefined?null:(typeof r==='string'?r:JSON.stringify(r))}})()",
+        wrap(body)
+    );
+    let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
+    wv.with_webview(move |pw| unsafe {
+        let view = &*(pw.inner() as *const WKWebView);
+        let handler = block2::RcBlock::new(move |res: *mut AnyObject, err: *mut NSError| {
+            let out = if let Some(err) = err.as_ref() {
+                Err(format!("스크립트 실행 실패: {}", err.localizedDescription()))
+            } else if let Some(s) = res.as_ref().and_then(|r| r.downcast_ref::<NSString>()) {
+                Ok(s.to_string())
+            } else {
+                Ok(String::new()) // null — undefined를 돌려준 스크립트
+            };
+            let _ = tx.send(out);
+        });
+        view.evaluateJavaScript_completionHandler(&NSString::from_str(&js), Some(&handler));
+    })
+    .map_err(|e| format!("웹뷰에 접근하지 못했습니다: {e}"))?;
+    rx.recv_timeout(std::time::Duration::from_secs(EVAL_SECS))
+        .map_err(|_| format!("브라우저가 {EVAL_SECS}초 안에 응답하지 않았습니다"))?
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn eval_text(_app: &AppHandle, _body: &str) -> Result<String, String> {
-    Err("브라우저 조종은 WebView2(Windows) 전용입니다".into())
+    Err("브라우저 조종은 WebView2(Windows)·WKWebView(macOS) 전용입니다".into())
 }
 
 /// 지금 페이지의 신원 — 모든 탐색 동작이 끝나고 돌려주는 두 줄

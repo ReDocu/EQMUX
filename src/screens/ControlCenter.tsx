@@ -1,13 +1,14 @@
 // 컨트롤 센터 (bi8Au) — 워크스페이스 탭의 기준 화면. 팀·세션 카드 / 터미널·저장·이벤트 / 인스펙터.
 // 터미널 텍스트는 목 출력이다 — M1에서 xterm.js + Rust PTY로 실물이 된다.
 import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
-import { backend } from "../backend/mock";
+import { backend, onEventLog } from "../backend/mock";
 import {
   defaultShell,
   focusRequest,
   detailRequest,
   setDetailRequest,
   focusSession as requestFocus,
+  openPanel,
   PANE_LAYOUTS,
   paneLayout,
   panelOpen,
@@ -21,6 +22,7 @@ import {
   setTerminalFull,
   setView,
   SHELLS,
+  ptyShells,
   terminalFull,
   tick,
   toggleExplorer,
@@ -35,11 +37,11 @@ import { attentionOrder, inboxWaiting, pickNext } from "../backend/attention";
 import { canStartFresh, resumeAgent, startFresh } from "../backend/agent";
 import { queryEvents } from "../backend/events";
 import type { FeedEvent } from "../backend/events";
-import { branchList, worktreeAdd, worktreeAttach, worktreeList } from "../backend/git";
-import type { BranchInfo, WorktreeInfo } from "../backend/git";
+import { gitOverview, worktreeList } from "../backend/git";
+import type { GitOverview, WorktreeInfo } from "../backend/git";
 import { agentClis, agentClisReady, refreshAgentClis } from "../backend/agentprobe";
 import { autoAssignDefault, refreshMissions } from "../backend/missions";
-import { clipWriteText, echoPty, isTauri, killPty, onPtyOutput, revealPath, storePurgeScrollback, storeUsageReal, writePty } from "../backend/pty";
+import { clipWriteText, isTauri, killPty, onPtyOutput, revealPath, storePurgeScrollback, storeUsageReal, writePty } from "../backend/pty";
 import type { StoreUsageReal } from "../backend/pty";
 import { removeRoleFile } from "../backend/roles";
 import { maxSlots, settings, toggleMuted } from "../backend/settings";
@@ -51,7 +53,6 @@ import {
   focusSessionTerminal,
   isRespawning,
   launchAgentInSession,
-  respawnSessionShell,
   sessionTermSize,
   syncSessionTerminal,
   TerminalPane,
@@ -62,6 +63,8 @@ import { SessionDetailPanel } from "./SessionDetailPanel";
 import { TranscriptPane } from "./TranscriptPane";
 import type { AgentCliId, Session, Workspace } from "../types";
 import { AGENT_CLI_LABEL, agentAttached, cliOf, statusText, effectivePermissions, effectiveTitle, nameBesideNo, paneNo, SESSION_NAME_MAX, sessionDisplayName, sessionName, slotNo } from "../types";
+import { Icon } from "../components/icons";
+import { IS_MAC, keyLabel } from "../platform";
 
 /** 셸에 에이전트 명령을 쳐 넣는다 — claude 말고는 EQMUX가 관리하는 스폰 경로가 없다
  *  (역할 주입·훅·재개는 agent.rs의 ClaudeCodeAdapter 전용). 사람이 터미널에 직접 치는 것과
@@ -87,17 +90,20 @@ function shortPath(p: string): string {
 // 세션 상태별 목 터미널 출력 — 2×2 그리드 시각 검증용 (Tauri 밖 폴백 전용)
 function mockLines(s: Session, personaName: string): string[] {
   // 셸 우선 모델 — 역할 세션도 셸 프롬프트로 시작한다. 에이전트 출력은 직접 띄운 뒤의 모습.
-  if (!s.personaId || s.status === "shell") return ["PowerShell 7.6.4", `PS ${s.cwd}> _`];
-  const base = [`PS ${s.cwd}> claude`, `Claude Code ${s.agentVersion ?? "2.1.226"} · ${personaName}`];
+  // 프롬프트는 플랫폼 셸 모양으로 — macOS 화면 검토가 'PS C:\…>'로 Windows처럼 보였다 (U72)
+  const prompt = IS_MAC ? `${s.cwd} %` : `PS ${s.cwd}>`;
+  if (!s.personaId || s.status === "shell") return IS_MAC ? [`Last login: ttys000`, `${prompt} _`] : ["PowerShell 7.6.4", `${prompt} _`];
+  const base = [`${prompt} claude`, `Claude Code ${s.agentVersion ?? "2.1.226"} · ${personaName}`];
   if (s.status === "waiting") return [...base, "⏸ 승인 대기 — " + (s.waitingFor ?? ""), "y/n 을 입력하세요"];
   if (s.status === "dead") return [...base, `프로세스 종료 · exit ${s.exitCode ?? "?"}`, s.resumable ? "재개 가능 — --resume" : "재개 불가"];
   if (s.status === "busy") return [...base, `⚙ ${s.lastOutput}`, `서브에이전트 ${s.subagents} · ${(s.scrollbackLines / 1000).toFixed(1)}K lines`];
   return [...base, `● ${s.lastOutput || "대기 중"}`];
 }
 
-/** 엔진 공식 Windows 설치 명령 (P1 D6) — 복사만 한다. 실행은 사람이 터미널에서 */
+/** 엔진 공식 설치 명령 (P1 D6) — 복사만 한다. 실행은 사람이 터미널에서.
+ *  macOS zsh에 PowerShell 문법(irm … | iex)을 붙이면 'command not found: irm'으로 끝났다 (B128) */
 const INSTALL_CMD: Record<AgentCliId, string> = {
-  claude: "irm https://claude.ai/install.ps1 | iex",
+  claude: IS_MAC ? "curl -fsSL https://claude.ai/install.sh | bash" : "irm https://claude.ai/install.ps1 | iex",
   codex: "npm install -g @openai/codex",
 };
 
@@ -273,9 +279,31 @@ export function ControlCenter(props: { workspace: Workspace }) {
     if (!isTauri()) return;
     void refreshMissions(props.workspace.id); // 임무 파일 실측 — 밖에서 편집됐어도 여기서 따라잡는다
     loadUsage();
-    const t = setInterval(loadUsage, 10_000);
+    const t = setInterval(() => !document.hidden && loadUsage(), 10_000); // 숨김 중 쉰다 (CPU 점검 2)
     onCleanup(() => clearInterval(t));
   });
+
+  // 브랜치 현황 (레일 §로컬 폴더 아래) — 읽기 전용. 3a33432에서 워크트리 레일과 함께 빠졌던 것을
+  // 표시만 되살린다 (생성·체크아웃 없음). git 패널과 같은 10초 실측, 숨김 중 쉰다
+  const [gitInfo, setGitInfo] = createSignal<GitOverview | undefined>(undefined);
+  const [worktrees, setWorktrees] = createSignal<WorktreeInfo[]>([]);
+  onMount(() => {
+    if (props.workspace.pathMissing) return;
+    // 브라우저 dev — 목 워크트리를 한 번만 (실측·폴링 없음)
+    if (!isTauri()) return void worktreeList(props.workspace.path).then((w) => setWorktrees(w ?? []));
+    const load = () => {
+      void gitOverview(props.workspace.path).then(setGitInfo);
+      void worktreeList(props.workspace.path).then((w) => setWorktrees(w ?? []));
+    };
+    load();
+    const t = setInterval(() => !document.hidden && load(), 10_000);
+    onCleanup(() => clearInterval(t));
+  });
+  const gitBranch = () => gitInfo()?.branch ?? props.workspace.branch;
+  const normPath = (p: string) => p.replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase();
+  /** 이 워크트리에서 도는 세션들 — cwd 실측 일치 */
+  const wtMembers = (wt: WorktreeInfo) => sessions().filter((s) => normPath(s.cwd) === normPath(wt.path));
+  const wtTail = (p: string) => p.replace(/\\/g, "/").split("/").slice(-2).join("/");
 
   // 저장 기록 초기화 (FR-C-52 — 사용자 조작) — 상태바의 WAL·lines를 직접 0으로 되돌린다.
   // 되돌릴 수 없으므로 세션 제거와 같은 확인 한 단계를 둔다 (즉시 실행하지 않는다)
@@ -303,7 +331,8 @@ export function ControlCenter(props: { workspace: Workspace }) {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const load = () => void queryEvents(props.workspace.id, { limit: 4 }).then(setWsFeed);
     load();
-    const unsub = backend.subscribe(() => {
+    // 이벤트 로그가 바뀐 때만 (CPU·RAM C4) — 모든 방송에 붙으면 버스트마다 events_query가 돌았다
+    const unsub = onEventLog(() => {
       clearTimeout(timer);
       timer = setTimeout(load, 500);
     });
@@ -342,12 +371,16 @@ export function ControlCenter(props: { workspace: Workspace }) {
     onCleanup(() => window.removeEventListener("keydown", onKey));
   });
 
-  // Ctrl+Alt+1~8 — 이 워크스페이스의 N번 슬롯 페인에 키보드 포커스만 (줌·Focus 아님).
+  // Ctrl+Alt+1~8(macOS ⌘1~8) — 이 워크스페이스의 N번 슬롯 페인에 키보드 포커스만 (줌·Focus 아님).
   // 캡처 단계에서 받아야 xterm이 먼저 삼키지 않는다. 그 슬롯이 비어 있으면 그대로 흘려보낸다
   onMount(() => {
     const onSlotKey = (e: KeyboardEvent) => {
+      // macOS의 Ctrl+Option은 VoiceOver 수정자다 — ⌘숫자로 옮긴다 (U69)
+      if (IS_MAC) {
+        if (!e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+      }
       // AltGr는 Windows에서 Ctrl+Alt로 들어온다 — 독일어 자판 AltGr+7/8({ [) 같은 문자를 삼키지 않게 (B81)
-      if (!e.ctrlKey || !e.altKey || e.shiftKey || e.metaKey || e.getModifierState("AltGraph")) return;
+      else if (!e.ctrlKey || !e.altKey || e.shiftKey || e.metaKey || e.getModifierState("AltGraph")) return;
       const m = /^Digit([1-8])$/.exec(e.code);
       const s = m && sessions().find((x) => x.slot === Number(m[1]));
       if (!s) return;
@@ -389,132 +422,6 @@ export function ControlCenter(props: { workspace: Workspace }) {
   // 역할 없는 셸 세션(기본 터미널)은 페르소나·직무 대신 고정 라벨을 쓴다
   const personaName = (id: string) => persona(id)?.name ?? t("기본 터미널");
   const jobName = (id: string) => job(id)?.name ?? t("셸");
-
-  // ── 워크트리 레일 (orca식) — 임무 아래에 작업 트리별 현황을 상주시킨다.
-  // 행 = 브랜치 + 귀속 세션(cwd 일치, 상태 점 포함) — orca의 worktree 카드 + agents 목록에 대응.
-  // 조작은 git 패널과 같은 안전 범위(M36): 목록·생성·셸 열기. 삭제는 없다 (FR-E-64 — 정리는 사람 몫).
-  const [worktrees, setWorktrees] = createSignal<WorktreeInfo[]>([]);
-  const [wtBranches, setWtBranches] = createSignal<BranchInfo[]>([]);
-  let wtReq = 0; // 폴링·생성 완료의 늦은 응답이 최신 목록을 덮지 않게 (D-12 패턴)
-  const loadWorktrees = async () => {
-    if (!isTauri() || props.workspace.pathMissing) return;
-    const req = ++wtReq;
-    const [wt, b] = await Promise.all([worktreeList(props.workspace.path), branchList(props.workspace.path)]);
-    if (req !== wtReq) return;
-    setWorktrees(wt ?? []);
-    setWtBranches(b ?? []);
-  };
-  onMount(() => {
-    if (!isTauri()) return;
-    void loadWorktrees();
-    const t = setInterval(() => void loadWorktrees(), 10_000); // git 패널과 같은 10초 실측 주기
-    onCleanup(() => clearInterval(t));
-  });
-  // 브라우저 dev 폴백 — 메인 + 워크트리 세션의 cwd로 시각 검증용 목록을 합성한다
-  const wtRows = (): WorktreeInfo[] =>
-    isTauri()
-      ? worktrees()
-      : [
-          { path: props.workspace.path, branch: props.workspace.branch ?? "main", head: "", isMain: true, isSession: false },
-          ...sessions()
-            .filter((s) => s.worktree && !s.worktreeMissing)
-            .map((s) => ({ path: s.cwd, branch: `eqmux/${s.id}`, head: "", isMain: false, isSession: true })),
-        ];
-  const normPath = (p: string) => p.replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase();
-  /** 이 워크트리에서 도는 세션들 — cwd 실측 일치. orca의 "N agents" 목록에 해당 */
-  const wtMembers = (wt: WorktreeInfo) => sessions().filter((s) => normPath(s.cwd) === normPath(wt.path));
-  const wtLabel = (wt: WorktreeInfo) => wt.branch ?? `detached @ ${wt.head}`;
-  const wtTail = (p: string) => p.replace(/\\/g, "/").split("/").slice(-2).join("/");
-  /** 빈 슬롯이 없다 — addTerminal은 이 상태에서 이벤트만 남기고 조용히 돌아간다.
-   *  그래서 부르는 쪽이 먼저 알고 진입점을 닫는다 ("+ 세션 추가"가 이미 쓰는 규칙과 같다) */
-  const slotsFull = () => sessions().length >= maxSlots();
-  const openWtShell = (wt: WorktreeInfo) => {
-    if (slotsFull()) return;
-    backend.addTerminal(props.workspace.id, defaultShell().label, wt.path);
-  };
-  // 생성 팝오버 — git 패널과 같은 계약: .eqmux/worktrees/<이름> + 브랜치 eqmux/<이름>.
-  // "기존 브랜치" 모드(레일 §워크트리)는 새 브랜치 없이 그 브랜치를 체크아웃해 연결한다
-  const [wtFormOpen, setWtFormOpen] = createSignal(false);
-  const [wtMode, setWtMode] = createSignal<"new" | "attach">("new");
-  const [wtName, setWtName] = createSignal("");
-  const [wtBase, setWtBase] = createSignal("");
-  const [wtAttachBranch, setWtAttachBranch] = createSignal("");
-  const [wtOpenShell, setWtOpenShell] = createSignal(true); // orca처럼 만든 트리에 바로 세션을 태우는 흐름
-  const [wtBusy, setWtBusy] = createSignal(false);
-  const [wtErr, setWtErr] = createSignal<string | undefined>(undefined);
-  /** 연결 가능한 브랜치 — 로컬이면서 어떤 워크트리에도 체크아웃돼 있지 않은 것 (git: 같은 브랜치는 한 트리에만) */
-  const attachable = () => wtBranches().filter((b) => !b.remote && !worktrees().some((wt) => wt.branch === b.name));
-  const createWt = async () => {
-    const attach = wtMode() === "attach";
-    if (wtBusy() || (attach ? !wtAttachBranch() : !wtName().trim())) return;
-    if (!isTauri()) {
-      setWtErr(t("브라우저 dev — 실제 생성 없음"));
-      return;
-    }
-    setWtErr(undefined);
-    setWtBusy(true);
-    try {
-      const path = attach
-        ? await worktreeAttach(props.workspace.path, wtAttachBranch())
-        : await worktreeAdd(props.workspace.path, wtName().trim(), wtBase() || undefined);
-      setWtFormOpen(false);
-      setWtName("");
-      setWtBase("");
-      setWtAttachBranch("");
-      if (wtOpenShell()) backend.addTerminal(props.workspace.id, defaultShell().label, path);
-      await loadWorktrees();
-    } catch (err) {
-      setWtErr(String(err));
-    } finally {
-      setWtBusy(false);
-    }
-  };
-  // 행 우클릭 메뉴 — 셸 열기·경로 복사. 없는 액션은 정책상 없는 것 (G7·FR-E-64)
-  const [wtMenu, setWtMenu] = createSignal<{ x: number; y: number; wt: WorktreeInfo } | undefined>(undefined);
-
-  // 브랜치 부여 (터미널 우클릭 §브랜치) — 셸 터미널을 그 브랜치의 워크트리로 옮긴다.
-  // 트리가 없으면 attach로 만들고(레일 §워크트리와 같은 계약), PTY는 같은 세션 id로 새 cwd에서 재스폰한다.
-  const assignBranch = async (s: Session, branch: string) => {
-    if (!isTauri()) return; // 브라우저 dev — 메뉴에 note로 명시된다
-    try {
-      const wt = worktrees().find((w) => w.branch === branch);
-      const path = wt ? wt.path : await worktreeAttach(props.workspace.path, branch);
-      if (normPath(path) === normPath(s.cwd)) return;
-      await respawnSessionShell(s.id, path, props.workspace.id, shellCmdFor(s));
-      backend.setSessionCwd(s.id, path);
-      await loadWorktrees();
-    } catch (err) {
-      // 실패는 그 페인에 정직하게 표시 (FR-D-08) — PTY 입력을 거치지 않는 표시 전용 에코
-      echoPty(s.id, `\r\n\x1b[31m${t("브랜치 부여 실패")} — ${String(err)}\x1b[0m\r\n`);
-    }
-  };
-  // 기본 터미널 전용 메뉴 그룹 — 역할 세션 cwd는 역할 파일·transcript와 묶여 있어 옮기지 않는다 (FR-E-63)
-  const branchAssignGroup = (s: Session): MenuGroup[] => {
-    if (s.personaId) return [];
-    const local = wtBranches().filter((b) => !b.remote);
-    const cwd = normPath(s.cwd); // 브랜치 × 워크트리 이중 순회 방지 — 한 번씩만 정규화·색인한다
-    const byBranch = new Map(worktrees().map((w) => [w.branch, w]));
-    return [
-      [
-        {
-          label: t("브랜치 부여"),
-          sub:
-            local.length === 0
-              ? [{ label: t(isTauri() ? "로컬 브랜치 없음" : "브라우저 dev — 실측 없음"), note: true }]
-              : local.map((b) => {
-                  const wt = byBranch.get(b.name);
-                  const cur = !!wt && normPath(wt.path) === cwd;
-                  return {
-                    label: wt ? `⎇ ${b.name}` : `⎇ ${b.name} · ${t("새 워크트리")}`,
-                    checked: cur,
-                    disabled: cur,
-                    action: () => void assignBranch(s, b.name),
-                  };
-                }),
-        },
-      ],
-    ];
-  };
 
   // 슬롯 단위 세션 추가 — 기본 터미널 / 역할 세션 2택 (C). 캐스팅은 팀 전체 프리셋 도구로 남는다.
   const [addOpen, setAddOpen] = createSignal(false);
@@ -728,7 +635,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
     [
       {
         label: t("페인으로 점프"),
-        kbd: `Ctrl+Alt+${s.slot}`,
+        kbd: keyLabel(`Ctrl+Alt+${s.slot}`),
         action: () => {
           setSelectedSession(s.id);
           backend.markSeen(s.id);
@@ -783,8 +690,6 @@ export function ControlCenter(props: { workspace: Workspace }) {
         action: () => setStopTarget(s), // BR-08 — 확인을 거친다
       },
     ],
-    // 브랜치 부여 (기본 터미널 전용) — 그 브랜치의 워크트리로 이동, 없으면 만들어 연결
-    ...branchAssignGroup(s),
     removeGroup(s),
   ];
   const doRemove = (s: Session) => {
@@ -951,7 +856,17 @@ export function ControlCenter(props: { workspace: Workspace }) {
           >
             {/* 페인 헤더 문법 (0.5 §UX 기반) — 헤더는 div, 이름 영역이 줌 버튼, 칩 동작은 형제 버튼.
                 [정체성 │ 요약(칩 없을 때만) │ 주의 칩 1개 + N │ 상태]. 접는 순서: 요약 → 직함 → 엔진 */}
-            <div class="terminal-head pane-head mono" onContextMenu={(e) => openSessMenu(e, s)}>
+            <div
+              class="terminal-head pane-head mono"
+              title={t("더블클릭하면 줌 토글 · 우클릭 세션 메뉴")}
+              onContextMenu={(e) => openSessMenu(e, s)}
+              // 0.4.2까지는 헤더 전체가 줌 버튼이었다 — 0.5 헤더 문법으로 이름 영역만 남으면서
+              // 빈 자리를 눌러 줌하던 습관이 끊겼다. 빈 자리 더블클릭으로 되살린다(칩·버튼은 제 동작)
+              onDblClick={(e) => {
+                if ((e.target as HTMLElement).closest("button")) return;
+                applyZoom(zoomed() === s.id ? undefined : s.id);
+              }}
+            >
               <button
                 class="pane-head-id"
                 title={t("클릭하면 줌 토글 · 우클릭 세션 메뉴")}
@@ -994,6 +909,10 @@ export function ControlCenter(props: { workspace: Workspace }) {
                 />
               </Show>
               <StatusLabel session={s} hideExit />
+              {/* macOS — 맨 셸이면 실제로 뜬 셸 이름을 붙인다. 고른 셸과 뜬 셸이 다르면 여기서 보인다 (B114) */}
+              <Show when={IS_MAC && s.status === "shell" && ptyShells()[s.id]}>
+                {(sh) => <span class="mono muted"> · {sh()}</span>}
+              </Show>
             </div>
             {/* 종료된 슬롯은 터미널 대신 다음 행동을 보여준다 — 재개 경로는 그 안에 있다 */}
             <Show when={s.status !== "dead" || isRespawning(s.id)} fallback={deadSlot(s)}>
@@ -1047,8 +966,6 @@ export function ControlCenter(props: { workspace: Workspace }) {
                   ],
                   // 이동 — 상세 팝업·트랜스크립트 (레일 메뉴와 공유)
                   [detailItem(s), transcriptItem(s)],
-                  // 브랜치 부여 (기본 터미널 전용) — 그 브랜치의 워크트리로 이동, 없으면 만들어 연결
-                  ...branchAssignGroup(s),
                   // 위험 — 컴포넌트가 마지막 그룹으로 강제한다
                   removeGroup(s),
                 ]}
@@ -1202,7 +1119,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
         {/* 셸 선택 — 새로 추가하는 터미널부터 적용된다 */}
         <div class="shell-picker">
           <button class="btn ghost mono" title={t("새 터미널 셸 선택")} onClick={() => setShellMenuOpen(!shellMenuOpen())}>
-            &gt;_ {defaultShell().name} ▾
+            &gt;_ <span class="cc-btn-label">{t(defaultShell().name)}</span> ▾
           </button>
           <Show when={shellMenuOpen()}>
             <div class="card shell-menu">
@@ -1216,9 +1133,9 @@ export function ControlCenter(props: { workspace: Workspace }) {
                       setShellMenuOpen(false);
                     }}
                   >
-                    <span style={{ "font-weight": 600 }}>{sh.name}</span>
+                    <span style={{ "font-weight": 600 }}>{t(sh.name)}</span>
                     <span class="mono muted" style={{ "font-size": "10px" }}>
-                      {sh.cmd}
+                      {sh.note ?? sh.cmd}
                     </span>
                   </button>
                 )}
@@ -1234,7 +1151,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
         </Show>
         <Show when={!zoomed()}>
           <button class="btn ghost mono" title={t("페인 배치")} onClick={() => setLayoutPickerOpen(true)}>
-            ▦ {t(PANE_LAYOUTS.find((l) => l.key === paneLayout())?.name ?? "")}
+            ▦ <span class="cc-btn-label">{t(PANE_LAYOUTS.find((l) => l.key === paneLayout())?.name ?? "")}</span>
           </button>
         </Show>
         <button class="btn ghost" title={t("터미널 전체 화면 — ESC로 종료")} onClick={() => setTerminalFull(true)}>
@@ -1278,40 +1195,6 @@ export function ControlCenter(props: { workspace: Workspace }) {
             header={`${sessionDisplayName(m().s, personaName(m().s.personaId))} · ${jobName(m().s.jobId)} — ${m().s.status}`}
             onClose={() => setSessMenu(undefined)}
             groups={sessMenuGroups(m().s)}
-          />
-        )}
-      </Show>
-
-      {/* 워크트리 행 우클릭 메뉴 — git 패널과 같은 안전 범위 (M36). 없는 액션은 정책상 없는 것 */}
-      <Show when={wtMenu()}>
-        {(m) => (
-          <ContextMenu
-            x={m().x}
-            y={m().y}
-            header={`⎇ ${wtLabel(m().wt)} · ${m().wt.isMain ? t("메인") : t(m().wt.isSession ? "세션" : "외부")}`}
-            onClose={() => setWtMenu(undefined)}
-            groups={[
-              [
-                {
-                  label: t("이 워크트리에서 셸 열기"),
-                  disabled: m().wt.isMain || slotsFull(),
-                  action: () => openWtShell(m().wt),
-                },
-                {
-                  // 브랜치 부여 역방향 진입점 — 선택 중인 기본 터미널을 이 트리의 브랜치로 옮긴다.
-                  // 역할 세션·detached 트리·이미 이 트리인 경우는 비활성 (터미널 메뉴와 같은 계약)
-                  label: `${t("선택 터미널에 브랜치 부여")}${selected() && !selected()!.personaId ? ` — ${sessionDisplayName(selected()!, personaName(selected()!.personaId))}` : ""}`,
-                  disabled:
-                    !m().wt.branch ||
-                    !selected() ||
-                    !!selected()!.personaId ||
-                    normPath(selected()!.cwd) === normPath(m().wt.path),
-                  action: () => void assignBranch(selected()!, m().wt.branch!),
-                },
-                { label: t("경로 복사"), action: () => clipWriteText(m().wt.path) },
-              ],
-              [{ label: t("여기서는 삭제하지 않습니다 — git worktree remove로 지우세요"), note: true }],
-            ]}
           />
         )}
       </Show>
@@ -1404,171 +1287,69 @@ export function ControlCenter(props: { workspace: Workspace }) {
               ▸
             </span>
           </button>
-          <div class="rail-sep" />
-          {/* 워크트리 (orca식) — 작업 트리별 브랜치·귀속 세션 현황. 생성은 팝오버, 삭제는 없다 (FR-E-64) */}
-          <div class="rail-wt-head">
-            <span class="eyebrow">{t("워크트리")}</span>
-            <b class="mono">{wtRows().length}</b>
-            <button
-              class="rail-wt-add mono"
-              title={t("워크트리 생성 — 새 브랜치(eqmux/<이름>) 또는 기존 브랜치 연결")}
-              onClick={() => {
-                setWtErr(undefined);
-                setWtFormOpen(!wtFormOpen());
-              }}
-            >
-              +
+          {/* 브랜치 현황 — 클릭은 git 패널. 비저장소면 행을 숨긴다 */}
+          <Show when={gitBranch()}>
+            <button class="rail-ms rail-folder" title={t("git 패널에서 보기")} onClick={() => openPanel("git")}>
+              <span class="rail-folder-txt">
+                <span class="eyebrow">{t("브랜치")}</span>
+                <span class="rail-folder-path mono">⎇ {gitBranch()}</span>
+                <Show when={gitInfo()}>
+                  {(g) => (
+                    <span class="rail-git-stat mono muted">
+                      ↑{g().ahead} ↓{g().behind} · {tf("변경 {n}", { n: g().changed })}
+                    </span>
+                  )}
+                </Show>
+              </span>
+              <span class="rail-folder-go mono" aria-hidden="true">
+                ▸
+              </span>
             </button>
-            <Show when={wtFormOpen()}>
-              <div class="card rail-wt-pop" onClick={(e) => e.stopPropagation()}>
-                {/* 모드 — 새 브랜치를 만들거나, 이미 있는 브랜치를 트리에 연결하거나 (레일 §워크트리) */}
-                <div class="wt-mode-toggle">
-                  <button classList={{ on: wtMode() === "new" }} onClick={() => setWtMode("new")}>
-                    {t("새 브랜치")}
-                  </button>
-                  <button
-                    classList={{ on: wtMode() === "attach" }}
-                    onClick={() => {
-                      setWtMode("attach");
-                      if (!wtAttachBranch()) setWtAttachBranch(attachable()[0]?.name ?? "");
-                    }}
-                  >
-                    {t("기존 브랜치")}
-                  </button>
-                </div>
-                <Show
-                  when={wtMode() === "new"}
-                  fallback={
-                    <>
-                      <select
-                        style={{ "font-size": "11px" }}
-                        title={t("이 브랜치를 체크아웃하는 워크트리를 만든다 — 새 브랜치 없음")}
-                        value={wtAttachBranch()}
-                        onChange={(e) => setWtAttachBranch(e.currentTarget.value)}
-                      >
-                        <Show when={attachable().length === 0}>
-                          <option value="">{t("연결 가능한 로컬 브랜치 없음")}</option>
-                        </Show>
-                        <For each={attachable()}>{(b) => <option value={b.name}>{b.name}</option>}</For>
-                      </select>
-                      <div class="mono muted" style={{ "font-size": "10px" }}>
-                        {t("체크아웃 중인 브랜치는 목록에서 빠집니다 — 같은 브랜치는 한 트리에만 (git)")}
-                      </div>
-                    </>
-                  }
-                >
-                  <input
-                    class="mono"
-                    style={{ "font-size": "11px", padding: "2px 6px" }}
-                    placeholder={t("이름 → .eqmux/worktrees/<이름>")}
-                    value={wtName()}
-                    onInput={(e) => setWtName(e.currentTarget.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") void createWt();
-                      if (e.key === "Escape") setWtFormOpen(false);
-                    }}
-                  />
-                  <select
-                    style={{ "font-size": "11px" }}
-                    title={t("분기 기준 ref (start-from)")}
-                    value={wtBase()}
-                    onChange={(e) => setWtBase(e.currentTarget.value)}
-                  >
-                    <option value="">{t("HEAD (현재)")}</option>
-                    <For each={wtBranches()}>{(b) => <option value={b.name}>{b.name}</option>}</For>
-                  </select>
-                </Show>
-                <label class="mono muted" style={{ "font-size": "10px", display: "flex", gap: "5px", "align-items": "center", cursor: "pointer" }}>
-                  <input type="checkbox" checked={wtOpenShell()} onChange={(e) => setWtOpenShell(e.currentTarget.checked)} />
-                  {t("생성 후 이 트리에서 셸 열기")}
-                </label>
-                <button
-                  class="btn primary"
-                  style={{ "font-size": "10px", "justify-content": "center" }}
-                  disabled={wtBusy() || (wtMode() === "attach" ? !wtAttachBranch() : !wtName().trim())}
-                  onClick={() => void createWt()}
-                >
-                  {t(wtBusy() ? (wtMode() === "attach" ? "연결 중…" : "생성 중…") : wtMode() === "attach" ? "연결" : "생성")}
-                </button>
-                <Show when={wtErr()}>
-                  <div class="mono st-dead" style={{ "font-size": "10px" }}>
-                    {wtErr()}
-                  </div>
-                </Show>
-              </div>
-            </Show>
-          </div>
-          <div class="rail-wt-list">
-            <For each={wtRows()}>
-              {(wt) => (
-                <div
-                  class="rail-wt"
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    setWtMenu({ x: e.clientX, y: e.clientY, wt });
-                  }}
-                >
-                  <div class="rail-wt-top">
-                    <span class="rail-wt-name mono" title={wt.path}>
-                      ⎇ {wtLabel(wt)}
-                    </span>
-                    <span
-                      class="rail-wt-tag mono"
-                      classList={{ main: wt.isMain }}
-                      title={t(wt.isMain ? "메인 작업 트리" : wt.isSession ? "앱이 만든 워크트리 (.eqmux/worktrees/)" : "외부에서 만든 워크트리 — 순수 git 호환")}
-                    >
-                      {wt.isMain ? t("메인") : t(wt.isSession ? "세션" : "외부")}
-                    </span>
-                    <Show when={!wt.isMain}>
-                      {/* 슬롯이 가득 차면 이 버튼은 아무 일도 하지 않는다 — 누르고 아무 반응이
-                          없으면 클릭 불량과 구별되지 않으므로, 못 한다는 사실을 미리 보인다 */}
-                      <button
-                        class="rail-wt-open mono"
-                        disabled={slotsFull()}
-                        title={t(
-                          slotsFull()
-                            ? "세션 슬롯이 가득 찼습니다 — 하나를 제거하거나 설정에서 슬롯 수를 늘리세요"
-                            : "이 워크트리에서 기본 터미널 열기 — 역할 부여는 세션 상세에서",
-                        )}
-                        onClick={() => openWtShell(wt)}
-                      >
-                        + {t("셸")}
-                      </button>
-                    </Show>
-                  </div>
-                  <div class="rail-wt-path mono muted" title={wt.path}>
-                    {wtTail(wt.path)}
-                  </div>
-                  {/* 귀속 세션 — cwd 실측 일치. 클릭 = 그 페인으로 (orca의 agents 목록) */}
-                  <Show when={wtMembers(wt).length > 0}>
-                    <div class="rail-wt-agents">
-                      <For each={wtMembers(wt)}>
-                        {(s) => (
-                          <button
-                            class="rail-wt-agent mono"
-                            classList={{ sel: selected()?.id === s.id }}
-                            title={`${sessionDisplayName(s, personaName(s.personaId))} · ${jobName(s.jobId)} — ${statusText(s.status)}`}
-                            onClick={() => {
-                              setSelectedSession(s.id);
-                              backend.markSeen(s.id);
-                              setCenterTab("terminal");
-                            }}
-                          >
-                            <span class={`sdot ${s.status}`} />
-                            <span class="rail-wt-agent-nm">{sessionDisplayName(s, personaName(s.personaId))}</span>
-                            <span class="muted">{statusText(s.status)}</span>
-                          </button>
-                        )}
-                      </For>
+          </Show>
+          {/* 워크트리 목록 — 표시 전용. 행 = 브랜치 + 귀속 세션(cwd 일치). 본체 하나뿐이면 숨긴다 */}
+          <Show when={worktrees().length > 1}>
+            <div class="rail-sep" />
+            <div class="rail-wt-head">
+              <span class="eyebrow">{t("워크트리")}</span>
+              <b class="mono">{worktrees().length}</b>
+            </div>
+            <div class="rail-wt-list">
+              <For each={worktrees()}>
+                {(wt) => (
+                  <div class="rail-wt">
+                    <div class="rail-wt-top">
+                      <span class="rail-wt-name mono" title={wt.path}>
+                        ⎇ {wt.branch ?? `detached @ ${wt.head}`}
+                      </span>
+                      <span class="rail-wt-tag mono" classList={{ main: wt.isMain }}>
+                        {t(wt.isMain ? "메인" : wt.isSession ? "세션" : "외부")}
+                      </span>
                     </div>
-                  </Show>
-                </div>
-              )}
-            </For>
-            <Show when={wtRows().length === 0}>
-              <div class="rail-wt-empty mono muted">{t(isTauri() ? "실측 대기 — git 저장소가 아니면 비어 있습니다" : "워크트리 없음")}</div>
-            </Show>
-          </div>
+                    <div class="rail-wt-path mono muted" title={wt.path}>
+                      {wtTail(wt.path)}
+                    </div>
+                    <For each={wtMembers(wt)}>
+                      {(s) => (
+                        <button
+                          class="rail-wt-agent mono"
+                          classList={{ sel: selected()?.id === s.id }}
+                          title={statusText(s.status)}
+                          onClick={() => {
+                            setSelectedSession(s.id);
+                            backend.markSeen(s.id);
+                            setCenterTab("terminal");
+                          }}
+                        >
+                          <span class={`sdot ${s.status}`} />
+                          <span class="rail-wt-agent-nm">{sessionDisplayName(s, personaName(s.personaId))}</span>
+                        </button>
+                      )}
+                    </For>
+                  </div>
+                )}
+              </For>
+            </div>
+          </Show>
         </div>
         </Show>
 
@@ -1594,7 +1375,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
           <div class="overlay detail-overlay" onClick={() => setDetailOpen(false)}>
             <div class="dialog detail-dialog" onClick={(e) => e.stopPropagation()}>
               <button class="detail-dialog-x" title={t("닫기 (ESC)")} onClick={() => setDetailOpen(false)}>
-                ✕
+                <Icon name="x" size={11} />
               </button>
               <SessionDetailPanel session={s()} onClose={() => setDetailOpen(false)} />
             </div>
@@ -1625,7 +1406,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
                 {t("ESC 종료")}
               </span>
               <button class="btn" onClick={() => setTerminalFull(false)}>
-                ✕ {t("전체 화면 종료")}
+                <Icon name="x" size={11} /> {t("전체 화면 종료")}
               </button>
             </div>
           </div>
@@ -1760,7 +1541,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
                   <For each={SHELLS}>
                     {(sh) => (
                       <option value={sh.label} selected={sh.label === addShell()}>
-                        {sh.name}
+                        {t(sh.name)}
                         {sh.label === defaultShell().label ? ` (${t("기본 셸")})` : ""}
                       </option>
                     )}

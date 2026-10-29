@@ -16,6 +16,7 @@ import { jumpToSession } from "../state";
 import { Eyebrow, FieldHint, Identity, KV, StatusLabel, StopConfirm } from "../components/ui";
 import type { AgentCliId, Permissions, Session } from "../types";
 import { AGENT_CLI_LABEL, agentAttached, agentFlagsToString, cleanTitle, cliOf, effectiveTitle, engineSwitched, paneNo, SESSION_NAME_MAX, sessionName, statusText, TITLE_MAX, translatePermissions } from "../types";
+import { isSubmitEnter } from "../platform"; // 한글 조합 중 Enter는 제출이 아니다 (B130)
 
 const PERM_KEYS: (keyof Permissions)[] = ["write", "commit", "push"];
 
@@ -345,7 +346,7 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
           value={nameDraft()}
           maxLength={SESSION_NAME_MAX}
           onInput={(e) => setNameDraft(e.currentTarget.value.replace(/[\r\n]/g, ""))}
-          onKeyDown={(e) => e.key === "Enter" && applyName()}
+          onKeyDown={(e) => isSubmitEnter(e) && applyName()}
         />
         <button class="btn" disabled={!!nameErr()} onClick={applyName}>
           {t("적용")}
@@ -382,7 +383,7 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
             value={titleDraft()}
             maxLength={TITLE_MAX}
             onInput={(e) => setTitleDraft(cleanTitle(e.currentTarget.value))}
-            onKeyDown={(e) => e.key === "Enter" && applyTitle(titleDraft())}
+            onKeyDown={(e) => isSubmitEnter(e) && applyTitle(titleDraft())}
           />
           <button class="btn" onClick={() => applyTitle(titleDraft())}>
             {t("적용")}

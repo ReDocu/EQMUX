@@ -36,7 +36,7 @@ import {
 import type { View } from "./state";
 import { t } from "./i18n";
 import { ScreenOverlay } from "./components/ScreenOverlay";
-import { blocksNavKey } from "./components/keynav";
+import { blocksNavKey, isNavChord } from "./components/keynav";
 import { notify } from "./components/ui";
 import { editorGuard, MissionExplorerTab } from "./components/MissionExplorerTab";
 import { ControlCenter } from "./screens/ControlCenter";
@@ -119,7 +119,8 @@ export function App() {
   const [diagMark, setDiagMark] = createSignal<string | undefined>(undefined);
   onMount(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!e.ctrlKey || !e.altKey || e.key.toLowerCase() !== "d") return;
+      // e.code로 본다 — macOS에서 Option이 눌리면 e.key가 'd'가 아니라 '∂'로 온다 (U69)
+      if (!e.ctrlKey || !e.altKey || e.code !== "KeyD") return;
       e.preventDefault();
       setDiagMark("진단 기록 중…");
       void diagSnapshot("USER-MARK 화면 손상 신고").then(() => {
@@ -137,19 +138,26 @@ export function App() {
 
   // 창 닫기 = 앱 완전 종료 (FR-C-60) — 실행 중 세션이 있으면 확인 다이얼로그 (FR-C-61),
   // 없으면 flush 시퀀스만 돌고 조용히 종료된다.
+  // macOS ⌘Q·Dock '종료'도 같은 길로 온다 (B112) — 창 닫기를 거치지 않으므로 Rust(quit.rs)가
+  // terminate를 취소하고 'app-quit-requested'를 보낸다. 로그아웃은 Rust가 직접 정리한다
   onMount(() => {
     if (!isTauri()) return;
+    const requestQuit = async () => {
+      // 서버 탭 PTY는 세션 목록 밖이다 — 그것만 돌 때도 dev 서버가 말없이 죽지 않게 묻는다 (BR-05)
+      const running =
+        backend.listSessions().some((s) => s.status !== "dead") ||
+        (await listAlivePty()).some(isServerTermId);
+      if (running) setExitOpen(true);
+      else void performShutdown();
+    };
     void import("@tauri-apps/api/window").then(({ getCurrentWindow }) =>
       getCurrentWindow().onCloseRequested(async (e) => {
         e.preventDefault();
-        // 서버 탭 PTY는 세션 목록 밖이다 — 그것만 돌 때도 dev 서버가 말없이 죽지 않게 묻는다 (BR-05)
-        const running =
-          backend.listSessions().some((s) => s.status !== "dead") ||
-          (await listAlivePty()).some(isServerTermId);
-        if (running) setExitOpen(true);
-        else void performShutdown();
+        await requestQuit();
       }),
     );
+    // 앱 수명 동안 듣는다 — 위 onCloseRequested와 같다
+    void import("@tauri-apps/api/event").then(({ listen }) => listen("app-quit-requested", () => void requestQuit()));
   });
 
   // 모달(종료·배치·복구·확인창)이 떠 있는 동안은 화면을 옮기는 단축키를 막는다 (B72) — 캡처 단계라
@@ -168,9 +176,10 @@ export function App() {
   // 페인 배치 단축키 (srpYm 푸터 명세) — CTRL + SHIFT + L. 배치는 워크스페이스별이라 워크스페이스
   // 탭에서만 연다 — 관제에서 고른 배치는 아무 워크스페이스에도 적용되지 않았다 (B76)
   // 사이드 패널 토글 (U33) — CTRL + SHIFT + B, 마지막으로 본 탭으로 연다
+  // macOS는 ⌘⇧L·⌘⇧B다 — Ctrl은 셸 제어키라 앱이 가져가지 않는다 (U67, 아래 U·D도 같다)
   onMount(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!e.ctrlKey || !e.shiftKey || e.altKey) return;
+      if (!isNavChord(e)) return;
       const k = e.key.toLowerCase();
       if (k === "l" && view().kind === "workspace") {
         e.preventDefault();
@@ -188,7 +197,7 @@ export function App() {
   // 터미널로 보내지 않으므로 셸의 Ctrl+U(줄 지우기)와 겹치지 않는다
   onMount(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.ctrlKey && e.shiftKey && !e.altKey && e.key.toLowerCase() === "u") {
+      if (isNavChord(e) && e.key.toLowerCase() === "u") {
         e.preventDefault();
         nextUnseen();
       }
@@ -205,7 +214,7 @@ export function App() {
       if (cur.kind === "workspace") lastWsTab = (cur as { id: string }).id;
     });
     const onKey = (e: KeyboardEvent) => {
-      if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "d") {
+      if (isNavChord(e) && e.key.toLowerCase() === "d") {
         e.preventDefault();
         if (view().kind === "control") {
           const all = backend.listWorkspaces();
@@ -287,7 +296,7 @@ export function App() {
       </Show>
       {/* 전체 화면 팝업 4종 — overlay 신호 하나라서 동시에 하나만 열린다 (M25 확장) */}
       <Show when={overlay() === "explorer"}>
-        <ScreenOverlay title={t("임무 · 파일 탐색기")} icon="≡" guard={editorGuard} nav={explorerNav()}>
+        <ScreenOverlay title={t("임무 · 파일 탐색기")} icon="briefcase-business" guard={editorGuard} nav={explorerNav()}>
           {/* 임무는 워크스페이스 문맥이 있어야 성립한다 — 없으면(첫 실행 관제) 탐색기로 남는다 */}
           <Show when={explorerTab() === "missions" && scopeWorkspace()} fallback={<MissionExplorerTab />}>
             {(w) => <Missions wsId={w().id} />}
@@ -295,17 +304,17 @@ export function App() {
         </ScreenOverlay>
       </Show>
       <Show when={overlay() === "connect"}>
-        <ScreenOverlay title={t("워크스페이스 열기 · 관리")} icon="⌂">
+        <ScreenOverlay title={t("워크스페이스 열기 · 관리")} icon="folder-open">
           <WorkspaceConnection />
         </ScreenOverlay>
       </Show>
       <Show when={overlay() === "roles"}>
-        <ScreenOverlay title={t("역할 라이브러리")} icon="◇">
+        <ScreenOverlay title={t("역할 라이브러리")} icon="id-card">
           <RoleLibrary />
         </ScreenOverlay>
       </Show>
       <Show when={overlay() === "settings"}>
-        <ScreenOverlay title={t("설정")} icon="⚙">
+        <ScreenOverlay title={t("설정")} icon="settings">
           <Settings />
         </ScreenOverlay>
       </Show>

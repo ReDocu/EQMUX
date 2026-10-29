@@ -14,6 +14,7 @@ import { isTauri } from "../backend/pty";
 import { t, tf } from "../i18n";
 import { openPanel, scopeWorkspace, setView, tick, view } from "../state";
 import { diffKeyAction } from "./diffKeys";
+import { Icon } from "../components/icons";
 
 const FOLD_CONTEXT = 3; // 변경 주변에 남기는 문맥 줄 수 (U10)
 
@@ -282,17 +283,30 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
       b[i].style.minHeight = "";
     }
     if (!wrap()) return;
+    // 높이를 모두 읽은 뒤 한꺼번에 쓴다 (CPU·RAM C7) — 읽기와 쓰기를 행마다 번갈아 하면
+    // 읽을 때마다 레이아웃을 다시 계산해 행 수만큼 리플로가 돈다
+    const hs = Array.from({ length: n }, (_, i) =>
+      Math.max(a[i].getBoundingClientRect().height, b[i].getBoundingClientRect().height),
+    );
     for (let i = 0; i < n; i++) {
-      const h = Math.max(a[i].getBoundingClientRect().height, b[i].getBoundingClientRect().height);
-      a[i].style.minHeight = `${h}px`;
-      b[i].style.minHeight = `${h}px`;
+      a[i].style.minHeight = `${hs[i]}px`;
+      b[i].style.minHeight = `${hs[i]}px`;
     }
   };
-  createEffect(on([wrap, () => display().rows.length, selected, real], () => requestAnimationFrame(equalize)));
+  // 프레임당 한 번 — 창 크기를 끄는 동안 ResizeObserver가 프레임마다 여러 번 불러도 한 번만 맞춘다
+  let eqFrame = 0;
+  const queueEqualize = () => {
+    cancelAnimationFrame(eqFrame);
+    eqFrame = requestAnimationFrame(equalize);
+  };
+  createEffect(on([wrap, () => display().rows.length, selected, real], queueEqualize));
   onMount(() => {
-    const ro = new ResizeObserver(() => equalize());
+    const ro = new ResizeObserver(queueEqualize);
     if (curEl) ro.observe(curEl);
-    onCleanup(() => ro.disconnect());
+    onCleanup(() => {
+      ro.disconnect();
+      cancelAnimationFrame(eqFrame);
+    });
   });
 
   /** 닫기 — 진입 시점 뷰로 복귀하고 git 패널 문맥도 되살린다 (U11) */
@@ -498,7 +512,7 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
                 ↩ {t("줄바꿈")}
               </button>
               <button class="btn ghost" title={t("닫기 (Esc) — 진입한 화면으로 복귀")} onClick={close}>
-                ✕
+                <Icon name="x" size={11} />
               </button>
             </div>
           </div>

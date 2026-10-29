@@ -141,7 +141,13 @@ fn cmdline(pid: u32) -> Option<String> {
     }
 }
 
-#[cfg(not(windows))]
+/// macOS — sysctl KERN_PROCARGS2의 argv를 공백으로 잇는다
+#[cfg(target_os = "macos")]
+fn cmdline(pid: u32) -> Option<String> {
+    crate::macproc::procargs(pid).map(|(_, argv)| argv.join(" "))
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 fn cmdline(_pid: u32) -> Option<String> {
     None
 }
@@ -163,9 +169,15 @@ pub fn on_path(name: &str) -> bool {
             .map(|o| o.status.success())
             .unwrap_or(false)
     }
+    // PATH 디렉터리에서 실행 파일을 직접 찾는다 (macOS는 기동 때 로그인 셸 PATH를 들여온다)
     #[cfg(not(windows))]
     {
-        false
+        use std::os::unix::fs::PermissionsExt;
+        std::env::var_os("PATH").is_some_and(|p| {
+            std::env::split_paths(&p).any(|d| {
+                std::fs::metadata(d.join(name)).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+            })
+        })
     }
 }
 

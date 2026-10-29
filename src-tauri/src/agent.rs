@@ -223,6 +223,7 @@ pub fn forget_session(app: &AppHandle, id: &str) {
     }
     if let Ok(mut gates) = rt.notify_gate.lock() {
         gates.remove(id);
+        gates.remove(&done_key(id)); // 완료 알림 게이트도 같은 세션 것이다 (CPU·RAM L4)
     }
     if let Ok(mut tokens) = rt.session_tokens.lock() {
         tokens.remove(id);
@@ -284,7 +285,7 @@ struct RegistryRecord {
 }
 
 fn home() -> PathBuf {
-    PathBuf::from(std::env::var("USERPROFILE").unwrap_or_else(|_| "C:\\".into()))
+    crate::home_dir()
 }
 
 /// Claude Code가 세션에 붙인 이름 (`redocu-92`) — 피어 메시지(`@redocu-92`)의 주소다. 레지스트리 파일은
@@ -385,7 +386,7 @@ pub fn agent_builders(
         // 훅 커맨드·에이전트의 send/report가 절대 경로 없이 성립한다
         if let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.to_path_buf())) {
             let path = std::env::var("PATH").unwrap_or_default();
-            b.env("PATH", format!("{};{}", dir.display(), path));
+            b.env("PATH", format!("{}{}{}", dir.display(), crate::PATH_SEP, path));
         }
         if let Some(rf) = role_file {
             b.env("EQMUX_ROLE_FILE", rf);
@@ -405,8 +406,19 @@ pub fn agent_builders(
         direct.arg(a);
     }
     apply(&mut direct);
-    let mut via_cmd = CommandBuilder::new("cmd.exe");
-    via_cmd.arg("/c");
+    #[cfg(windows)]
+    let mut via_cmd = {
+        let mut c = CommandBuilder::new("cmd.exe");
+        c.arg("/c");
+        c
+    };
+    // macOS — 로그인 셸 경유. 셸 함수·별칭이 아니라 PATH만 다시 읽히면 되므로 exec로 넘긴다
+    #[cfg(not(windows))]
+    let mut via_cmd = {
+        let mut c = CommandBuilder::new(std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into()));
+        c.args(["-lc", "exec \"$@\"", "eqmux-agent"]);
+        c
+    };
     via_cmd.arg(exe);
     for a in args {
         via_cmd.arg(a);

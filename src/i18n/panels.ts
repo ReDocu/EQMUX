@@ -92,7 +92,11 @@ export const dict: Record<string, string> = {
   "시스템 포트": "System ports",
   충돌: "Conflicts",
   "세션 외부 노출": "Session ports exposed",
-  "세션 포트 {n}개가 루프백 밖에 바인딩되어 있습니다.": "{n} session port(s) bound outside loopback.",
+  // 외부 노출 경고가 와일드카드·LAN 주소 둘로 갈렸다 (B139)
+  "세션 포트 {n}개가 모든 인터페이스에 열려 있습니다 — 같은 네트워크의 다른 기기가 접속할 수 있습니다.":
+    "{n} session port(s) are open on all interfaces — other devices on the same network can connect.",
+  "세션 포트 {n}개가 LAN 주소에 바인딩되어 있습니다.": "{n} session port(s) are bound to a LAN address.",
+  "포트 다시 실측": "Re-scan ports",
   "세션 포트가 루프백에만 바인딩되어 있습니다.": "Session ports are bound to loopback only.",
 
   // ── 브라우저 패널 (BrowserPanelTab) ──
@@ -139,4 +143,17 @@ export const dict: Record<string, string> = {
   "승인 대기이거나 상태를 몰라 쌓아 두었습니다 — idle이 되면 넣습니다": "Held because it's awaiting approval or its state is unknown — inserted once idle",
   "넣지 않고 치웁니다 — 원문은 대화 기록에 남습니다": "Clears without inserting — the original stays in the conversation log",
   "{n}건 버리기": "Discard {n}",
+
+  // 실행 › 환경변수 (.env)
+  "환경변수": "Env",
+  "환경변수 · .env 파일 (읽기 전용)": "Environment · .env files (read-only)",
+  "값 보기": "Show values",
+  "값 가리기": "Hide values",
+  "다시 읽기": "Reload",
+  "변수 이름 검색": "Search variable names",
+  "변수 {n}개": "{n} variables",
+  "이 파일에 변수가 없습니다": "No variables in this file",
+  "(빈 값)": "(empty)",
+  "클릭하면 값을 복사합니다": "Click to copy the value",
+  "{k} 값을 복사했습니다": "Copied {k}",
 };

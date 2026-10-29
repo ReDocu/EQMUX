@@ -425,6 +425,23 @@ export interface ConversationMessage {
   rowId?: number; // 원장 행 id — 이전 페이지(beforeId) 커서
 }
 
+/** 워크스페이스당 메모리에 두는 메시지 수 (CPU·RAM M3) — 원장 첫 페이지(200)보다 넉넉히.
+ *  걷어낸 옛 메시지는 원장에 있고 대화 탭 `▲ 이전`이 다시 불러온다 */
+export const MESSAGES_PER_WS = 300;
+
+/** wsId 스트림이 cap을 넘으면 가장 오래된 것부터 제자리에서 걷어낸다 (배열은 시간순). 걷어낸 수를 돌려준다 */
+export function trimStream(msgs: ConversationMessage[], wsId: string | undefined, cap: number): number {
+  let over = msgs.filter((m) => m.workspaceId === wsId).length - cap;
+  const removed = Math.max(0, over);
+  for (let i = 0; over > 0 && i < msgs.length; ) {
+    if (msgs[i].workspaceId === wsId) {
+      msgs.splice(i, 1);
+      over--;
+    } else i++;
+  }
+  return removed;
+}
+
 /** PRD D §4.5.1 번역표 */
 export function translatePermissions(p: Permissions): RuntimeFlags {
   if (!p.write) {

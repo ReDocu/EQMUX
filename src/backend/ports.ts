@@ -1,4 +1,4 @@
-// 포트 감시 (M31) — netstat 실측 스냅숏 하나를 앱 전체가 나눠 쓴다.
+// 포트 감시 (M31) — netstat 실측 스냅숏 하나를 앱 전체가 나눠 쓴다. 갱신은 수동이다 (poll 위 주석).
 //
 // 왜 패널 밖으로 꺼냈나. 폴링이 패널 안에 있으면 (1) 포트 패널과 브라우저 패널이 같은
 // netstat를 따로 돌리고, (2) 두 패널을 다 닫아 둔 동안에는 아무도 보지 않아 "세션이
@@ -12,12 +12,8 @@ import { portsSnapshot } from "./panels";
 import type { PortRow } from "./panels";
 import { forgetAgent, isTauri, killPty, onPtyExit, setUserInputHook } from "./pty";
 
-/** 패널이 보고 있을 때 / 아닐 때 주기. 뒤에서도 계속 보되 덜 자주 본다 —
- *  netstat는 프로세스 실행이라 공짜가 아니다 */
-const FAST_MS = 5_000;
-const SLOW_MS = 20_000;
 /** 최초 관측 뒤 이만큼은 NEW로 표시한다 — 사용자가 눈으로 집어내는 창.
- *  경과 판정은 폴 시점에만 다시 계산되므로 해상도는 폴 주기다 (정밀할 이유가 없다) */
+ *  경과 판정은 실측 시점에만 다시 계산된다 (정밀할 이유가 없다) */
 const NEW_WINDOW_MS = 60_000;
 
 /** 한 포트 = 한 항목. 같은 서버가 127.0.0.1과 [::1] 두 줄로 잡히는 일이 흔해서
@@ -115,8 +111,21 @@ setUserInputHook((id, data) => {
   if (!isServerTermId(id)) return;
   const r = feedLine(lineState.get(id) ?? { buf: "", broken: false }, data);
   lineState.set(id, r.st);
-  if (r.commit) candidates.set(id.slice(id.indexOf("@") + 1), r.commit);
+  if (r.commit) {
+    candidates.set(id.slice(id.indexOf("@") + 1), r.commit);
+    scheduleServerProbe();
+  }
 });
+
+/** 서버 셸에 명령이 들어가면 몇 초 뒤 실측한다 (B145·U91) — 주기 폴링은 여전히 없다.
+ *  수동 실측으로 바뀐 뒤 서버 명령 확정(B77)·[실행]·'실행 중 :포트'가 [다시 실측]을 눌러야만 움직였다.
+ *  dev 서버는 뜨는 데 몇 초가 걸려서 두 번 본다. Enter를 연달아 쳐도 마지막 것 기준으로 한 벌만 돈다 */
+export const SERVER_PROBE_DELAYS_MS = [3_000, 10_000] as const;
+let probeTimers: ReturnType<typeof setTimeout>[] = [];
+function scheduleServerProbe(): void {
+  for (const h of probeTimers) clearTimeout(h);
+  probeTimers = SERVER_PROBE_DELAYS_MS.map((ms) => setTimeout(refreshPorts, ms));
+}
 
 /** 서버 명령 확정 (B77) — 서버 셸이 포트를 새로 연 워크스페이스에서만 그 직전 줄(후보)을 서버 명령으로
  *  올린다. 예전엔 Enter로 끝난 줄을 무엇이든 기억해서, 서버를 멈추고 친 cls·git status가 [실행]에 걸렸다.
@@ -191,9 +200,22 @@ export function portUrl(p: { host: string; port: number }): string {
   return `http://${portAddress(p)}`;
 }
 
-/** 루프백 밖 바인딩인가 — 포트 패널의 "외부 노출" 집계가 쓴다 */
+const isLoopback = (h: string): boolean => h === "127.0.0.1" || h === "localhost" || h === "[::1]";
+const isWildcard = (h: string): boolean => h === "0.0.0.0" || h === "[::]";
+
+/** 루프백 밖 바인딩인가 — 포트 패널의 "외부 노출" 집계가 쓴다.
+ *  0.0.0.0·[::]는 모든 인터페이스에 열린 것이라 같은 네트워크의 다른 기기가 붙는다 — 노출이다 (B139).
+ *  예전엔 구체적인 LAN 주소만 셌다. vite --host·node 기본 listen이 '루프백에만'으로 보였다 */
 export function isExposed(e: PortEntry): boolean {
-  return e.hosts.some((h) => hostRank(h) === 4);
+  return e.hosts.some((h) => !isLoopback(h));
+}
+
+/** 노출 종류 — "all" = 모든 인터페이스(0.0.0.0·[::]), "lan" = 특정 LAN 주소. 경고 문구를 가른다.
+ *  둘 다면 넓은 쪽(all)이다 */
+export function exposureOf(e: PortEntry): "all" | "lan" | undefined {
+  if (e.hosts.some(isWildcard)) return "all";
+  if (e.hosts.some((h) => !isLoopback(h))) return "lan";
+  return undefined;
 }
 
 /** 방금 열린 포트인가 — 감시 시작 뒤 NEW_WINDOW_MS 안에 처음 보인 것 */
@@ -284,51 +306,31 @@ function apply(snap: PortRow[]): void {
   noteServerPorts(folded);
 }
 
-let timer: ReturnType<typeof setTimeout> | undefined;
+// 주기 폴링은 없다 — netstat는 프로세스 실행이라 공짜가 아니다. 앱 시작 때 한 번(기준선),
+// 그 뒤로는 [다시 실측]·서버 탭을 열 때·서버 셸에 명령을 친 몇 초 뒤에만 본다 (B145).
+// 그 밖에서 연 포트(세션 페인의 dev 서버 등)는 누를 때까지 옛값이다
 let inflight = false;
-/** 패널이 보고 있다고 잡아 둔 수 — 0이면 느린 주기로 내려간다 */
-let fastHolders = 0;
-
-function schedule(ms: number): void {
-  if (timer !== undefined) clearTimeout(timer);
-  timer = setTimeout(() => void poll(), ms);
-}
 
 async function poll(): Promise<void> {
-  if (inflight) return; // 진행 중인 폴이 끝나면서 다음 차례를 잡는다 (여기서 잡으면 두 줄이 된다)
+  if (inflight) return; // 연타 — 진행 중인 실측 하나로 충분하다
   inflight = true;
   try {
-    // 창이 숨겨진 동안은 netstat를 띄우지 않는다 (최적화 D7) — 느린 주기로 다시 보기만 한다
-    const snap = document.hidden ? undefined : await portsSnapshot();
+    const snap = await portsSnapshot();
     if (snap) apply(snap);
   } finally {
     inflight = false;
-    schedule(fastHolders > 0 ? FAST_MS : SLOW_MS);
   }
 }
 
-/** 포트 패널 `다시 실측` — 다음 주기를 기다리지 않고 지금 한 번 본다 */
+/** `다시 실측` (포트 패널 · 서버 탭) · 서버 탭 열기 · 서버 명령 뒤 자동 실측이 부른다 */
 export function refreshPorts(): void {
-  if (started) schedule(0);
+  if (started) void poll();
 }
 
-/** 앱 셸이 켠다 (App.tsx) — 패널 수명과 무관하게 계속 돈다 */
+/** 앱 셸이 켠다 (App.tsx) — 기준선 한 번만 뜬다 */
 let started = false;
 export function startPortWatch(): void {
   if (started || !isTauri()) return;
   started = true;
   void poll();
-  document.addEventListener("visibilitychange", () => !document.hidden && schedule(0)); // 다시 보이면 바로
-}
-
-/** 패널이 마운트되는 동안 빠른 주기로 올린다. 반환은 해제 함수 (onCleanup에 건다) */
-export function holdFastPoll(): () => void {
-  fastHolders += 1;
-  if (fastHolders === 1 && started) schedule(0); // 패널을 연 순간의 최신값부터
-  let released = false;
-  return () => {
-    if (released) return;
-    released = true;
-    fastHolders -= 1;
-  };
 }

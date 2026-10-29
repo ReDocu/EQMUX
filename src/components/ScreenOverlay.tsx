@@ -6,10 +6,13 @@ import type { JSX } from "solid-js";
 import { guardOverlay, pushLayer, setOverlay } from "../state";
 import { t } from "../i18n";
 import { notify } from "./ui";
+import { Icon } from "./icons";
+import type { IconName } from "./icons";
 
 export function ScreenOverlay(props: {
   title: string;
-  icon?: string;
+  /** 앱 바 버튼과 같은 아이콘 — 글자 기호(⌂·◇·⚙)는 mac에서 폴백 글꼴로 작게 그려졌다 (UC-B03) */
+  icon?: IconName;
   /** true를 돌려주면 닫기(ESC·✕·화면 이동)를 막는다 — 임무 탐색기의 미저장 편집 보호가 쓴다 */
   guard?: () => boolean;
   /** 헤더 아래 전환 줄 (0.3.7) — 팝업이 화면을 둘 이상 품을 때만 준다 (임무 탐색기) */
@@ -32,14 +35,14 @@ export function ScreenOverlay(props: {
     <div class="explorer-fullscreen">
       <div class="tf-head">
         <span class="mono tf-title">
-          {props.icon ?? "≡"} {props.title} <span class="muted">· {t("전체 화면")}</span>
+          <Icon name={props.icon ?? "file-text"} size={13} /> {props.title} <span class="muted">· {t("전체 화면")}</span>
         </span>
         <div style={{ display: "flex", gap: "6px", "align-items": "center" }}>
           <span class="mono muted" style={{ "font-size": "10px" }}>
             {t("ESC 닫기")}
           </span>
           <button class="btn" onClick={() => setOverlay(undefined)}>
-            ✕ {t("닫기")}
+            <Icon name="x" size={11} /> {t("닫기")}
           </button>
         </div>
       </div>

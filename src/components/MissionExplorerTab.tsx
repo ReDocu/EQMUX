@@ -12,6 +12,7 @@ import { t, tf } from "../i18n";
 import { openPanel, scopeWorkspace, selectedSession, setExplorerTab, setOverlay, tick } from "../state";
 import { Icon } from "./icons";
 import { ContextMenu, notify } from "./ui";
+import { isSubmitEnter } from "../platform"; // 한글 조합 중 Enter는 제출이 아니다 (B130)
 
 // 브라우저 dev 폴백 트리 (기존 목)
 const MOCK_TREE: FsNode[] = [
@@ -334,7 +335,7 @@ export function MissionExplorerTab() {
                 value={nameVal()}
                 onInput={(e) => setNameVal(e.currentTarget.value)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter") void submitName();
+                  if (isSubmitEnter(e)) void submitName();
                   if (e.key === "Escape") setNameMode(undefined);
                 }}
                 ref={(el) => setTimeout(() => el.focus())}
@@ -342,8 +343,8 @@ export function MissionExplorerTab() {
               <button class="btn primary" style={{ padding: "2px 8px" }} onClick={() => void submitName()}>
                 {t("확인")}
               </button>
-              <button class="btn ghost" style={{ padding: "2px 6px" }} onClick={() => setNameMode(undefined)}>
-                ✕
+              <button class="btn ghost" aria-label={t("취소")} style={{ padding: "2px 6px" }} onClick={() => setNameMode(undefined)}>
+                <Icon name="x" size={11} />
               </button>
             </div>
           </Show>

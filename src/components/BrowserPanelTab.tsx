@@ -17,11 +17,12 @@ import {
   openLink,
 } from "../backend/browser";
 import { diagNote, reportBrowserRect } from "../backend/diag";
-import { holdFastPoll, portUrl, sessionPorts } from "../backend/ports";
+import { portUrl, sessionPorts } from "../backend/ports";
 import { isTauri } from "../backend/pty";
 import { browserRequest, panelSide, setBrowserRequest } from "../state";
 import { t } from "../i18n";
 import { Icon } from "./icons";
+import { isSubmitEnter } from "../platform"; // 한글 조합 중 Enter는 제출이 아니다 (B130)
 
 const LOCAL_RE = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/i;
 
@@ -40,8 +41,6 @@ export function BrowserPanelTab() {
   const [mockUrl, setMockUrl] = createSignal<string | null>(null);
   const [nonce, setNonce] = createSignal(0);
   let viewEl: HTMLDivElement | undefined;
-
-  onMount(() => onCleanup(holdFastPoll()));
 
   const syncBounds = () => {
     if (!viewEl || !active()) return;
@@ -226,7 +225,7 @@ export function BrowserPanelTab() {
           placeholder={t("주소 입력 — Enter로 열기 (127.0.0.1:5173 · https://…)")}
           value={addr()}
           onInput={(e) => setAddr(e.currentTarget.value)}
-          onKeyDown={(e) => e.key === "Enter" && open(addr())}
+          onKeyDown={(e) => isSubmitEnter(e) && open(addr())}
         />
         <Show when={showing()}>
           <button class="browserp-navbtn" title={t("브라우저 닫기")} aria-label={t("브라우저 닫기")} onClick={close}>

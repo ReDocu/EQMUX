@@ -1,21 +1,17 @@
-// git 패널 (PAlmZ) — 타이틀바 + 저장소·브랜치 툴바 + 커밋 그래프 + 워크트리·체크아웃 (M36).
-// Tauri에서는 활성 워크스페이스의 저장소를 실측한다 (PRD H).
-// M36 개방 범위는 커밋 이력을 바꾸지 않는 작업 트리 조작뿐이다 — 브랜치 체크아웃(2단 확인,
-// FR-E-52와 같은 패턴)·워크트리 목록/생성/셸 열기. 워크트리 삭제(FR-E-64 — 정리는 사람 몫)는
-// 계속 두지 않는다. pull·push·commit 버튼(UI 리파인 §git)은 실행하지 않는다 — 명령을
+// git 패널 (PAlmZ) — 타이틀바 + 저장소·브랜치 툴바 + 커밋 그래프.
+// Tauri에서는 활성 워크스페이스의 저장소를 실측한다 (PRD H). 브랜치는 표시만 한다.
+// pull·push·commit 버튼(UI 리파인 §git)은 실행하지 않는다 — 명령을
 // 클립보드에 복사할 뿐, 실행은 터미널에서 사람이 한다 (G7 유지).
 // UI 리파인 §git: 카드 스택 → 한 줄 툴바 · 밀도 높은 커밋 행(뱃지 복수 + 우측 메타) ·
-// 커밋 행 클릭 = 부모 커밋 ↔ 이 커밋 diff · 워크트리는 한 줄 스트립.
-import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
-import { branchList, commitWebUrl, gitOverview, remoteWebUrl, worktreeAdd, worktreeAttach, worktreeGraph, worktreeList } from "../backend/git";
-import type { BranchInfo, GitOverview, GraphRow, WorktreeInfo } from "../backend/git";
+// 커밋 행 클릭 = 부모 커밋 ↔ 이 커밋 diff.
+import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
+import { commitWebUrl, gitOverview, remoteWebUrl } from "../backend/git";
+import type { GitOverview } from "../backend/git";
 import { GIT_STATE, backend } from "../backend/mock";
 import { clipWriteText, isTauri, revealPath } from "../backend/pty";
 import { openLink } from "../backend/browser";
-import { maxSlots } from "../backend/settings";
-import { checkoutBranch } from "../backend/workspaces";
 import { t, tf } from "../i18n";
-import { defaultShell, scopeWorkspace, setPanelNote, setPanelOpen, setView, tick, view } from "../state";
+import { scopeWorkspace, setPanelNote, setPanelOpen, setView, tick, view } from "../state";
 import { Icon } from "./icons";
 import { ContextMenu, Eyebrow, notify } from "./ui";
 
@@ -43,13 +39,11 @@ export function GitPanelTab() {
     return scoped && !scoped.pathMissing ? scoped : undefined;
   };
 
-  const [real, setReal] = createSignal<GitOverview | undefined>(undefined);
+  // 10초 폴링이 같은 값을 다시 주면 알리지 않는다 (CPU·RAM C5) — 새 객체마다 커밋 행이 전부 다시 만들어졌다
+  const [real, setReal] = createSignal<GitOverview | undefined>(undefined, {
+    equals: (a, b) => JSON.stringify(a) === JSON.stringify(b),
+  });
   const [failed, setFailed] = createSignal(false);
-  const [branches, setBranches] = createSignal<BranchInfo[]>([]);
-  const [worktrees, setWorktrees] = createSignal<WorktreeInfo[]>([]);
-  // 워크트리 트리 — 펼쳤을 때만 읽는다 (폴링 비용을 접힌 패널에 물리지 않는다)
-  const [graphOpen, setGraphOpen] = createSignal(false);
-  const [graph, setGraph] = createSignal<GraphRow[]>([]);
 
   let loadReq = 0; // 워크스페이스 전환·10초 폴링의 늦은 응답이 현재 저장소 표시를 덮지 않게
   const load = async () => {
@@ -64,100 +58,18 @@ export function GitPanelTab() {
     if (req !== loadReq) return; // 그새 워크스페이스가 바뀌었다
     setReal(o);
     setFailed(o === undefined);
-    const [b, wt] = await Promise.all([branchList(target.path), worktreeList(target.path)]);
-    if (req !== loadReq) return;
-    setBranches(b ?? []);
-    setWorktrees(wt ?? []);
-    if (!graphOpen()) return;
-    const gr = await worktreeGraph(target.path);
-    if (req !== loadReq) return;
-    setGraph(gr ?? []);
   };
 
   onMount(() => {
     if (!isTauri()) return;
     createEffect(on(() => ws()?.id, () => void load()));
-    const t = setInterval(() => void load(), 10_000);
+    // 숨김 중 쉰다 (CPU 점검 2) — 한 번에 git 5개를 띄우는 호출이다. 다시 보이면 다음 틱(≤10초)에 따라잡는다
+    const t = setInterval(() => !document.hidden && void load(), 10_000);
     onCleanup(() => clearInterval(t));
   });
 
-  // ── 브랜치 체크아웃 (M36) — 공유 repo 전체에 적용되므로 2단 확인 (FR-E-52 패턴) ──
-  const [branchMenu, setBranchMenu] = createSignal(false);
-  const [coArm, setCoArm] = createSignal<string | undefined>(undefined);
-  const [coNote, setCoNote] = createSignal<string | undefined>(undefined);
-  const [newBranch, setNewBranch] = createSignal("");
-  const doCheckout = async (branch: string) => {
-    if (coArm() !== branch) {
-      setCoArm(branch);
-      setCoNote(undefined);
-      return;
-    }
-    setCoArm(undefined);
-    const target = ws();
-    if (!isTauri() || !target) {
-      setCoNote(t("브라우저 dev — 실제 체크아웃 없음"));
-      return;
-    }
-    try {
-      await checkoutBranch(target.path, branch);
-      setCoNote(tf("⎇ {branch} 체크아웃 완료 — 공유 세션 전체에 적용됨", { branch }));
-      setBranchMenu(false);
-      setNewBranch("");
-      await load();
-    } catch (err) {
-      setCoNote(tf("체크아웃 실패 — {err}", { err: String(err) }));
-    }
-  };
-
-  // ── 워크트리 (M36) — 목록·생성·셸 열기. 삭제는 없다 (FR-E-64 — 정리는 사람 몫).
-  // "기존 브랜치" 모드(레일 §워크트리)는 새 브랜치 없이 그 브랜치를 체크아웃해 연결한다 ──
-  const [wtFormOpen, setWtFormOpen] = createSignal(false);
-  const [wtMode, setWtMode] = createSignal<"new" | "attach">("new");
-  const [wtName, setWtName] = createSignal("");
-  const [wtBase, setWtBase] = createSignal("");
-  const [wtAttachBranch, setWtAttachBranch] = createSignal("");
-  const [wtBusy, setWtBusy] = createSignal(false);
-  const [wtErr, setWtErr] = createSignal<string | undefined>(undefined);
-  /** 연결 가능한 브랜치 — 로컬이면서 어떤 워크트리에도 체크아웃돼 있지 않은 것 (git: 같은 브랜치는 한 트리에만) */
-  const attachable = () => branches().filter((b) => !b.remote && !worktrees().some((wt) => wt.branch === b.name));
-  const createWorktree = async () => {
-    const target = ws();
-    const attach = wtMode() === "attach";
-    if (!isTauri() || !target || (attach ? !wtAttachBranch() : !wtName().trim())) return;
-    setWtErr(undefined);
-    setWtBusy(true);
-    try {
-      if (attach) await worktreeAttach(target.path, wtAttachBranch());
-      else await worktreeAdd(target.path, wtName().trim(), wtBase() || undefined);
-      setWtFormOpen(false);
-      setWtName("");
-      setWtBase("");
-      setWtAttachBranch("");
-      await load();
-    } catch (err) {
-      setWtErr(String(err));
-    } finally {
-      setWtBusy(false);
-    }
-  };
-  /** 워크트리에서 기본 터미널 열기 — 셸로 시작, 역할 부여는 세션 상세에서 이어서 가능 */
-  const slotsFull = () => {
-    tick();
-    const id = ws()?.id;
-    return !!id && backend.listSessions().filter((s) => s.workspaceId === id).length >= maxSlots();
-  };
-  const openShell = (wt: WorktreeInfo) => {
-    const target = ws();
-    if (!target) return;
-    backend.addTerminal(target.id, defaultShell().label, wt.path);
-    setView({ kind: "workspace", id: target.id });
-    setPanelOpen(false);
-  };
-  const wtLabel = (wt: WorktreeInfo) => wt.branch ?? `detached @ ${wt.head}`;
-  const wtTail = (p: string) => p.replace(/\\/g, "/").split("/").slice(-2).join("/");
-
-  // 실측/목 폴백 공용 뷰모델 — 화면은 이것만 본다
-  const g = () => {
+  // 실측/목 폴백 공용 뷰모델 — 화면은 이것만 본다. 메모 (C5) — 렌더 한 번에 20여 곳·커밋 행마다 불린다
+  const g = createMemo(() => {
     const r = real();
     if (isTauri() && r) {
       return {
@@ -200,7 +112,7 @@ export function GitPanelTab() {
       commits: GIT_STATE.commits.map<CommitRow>((c) => ({ ...c, badges: c.tag ? [c.tag] : [] })),
       real: false,
     };
-  };
+  });
 
   // 세그먼트 줄 오른쪽 요약 (0.5 시안) — `sub_main · ↑2 ↓0`
   createEffect(() => {
@@ -319,22 +231,13 @@ export function GitPanelTab() {
         {(r) => <div class="gitp-remote-hint mono">origin: {remoteWebUrl(r()) ?? r()}</div>}
       </Show>
 
-      {/* 한 줄 툴바 (UI 리파인 §git) — 브랜치 ▾ · ↑↓ · diff · pull · commit · push.
-          브랜치 체크아웃(M36)은 팝오버, pull·push·commit은 명령 복사뿐 (G7 유지) */}
+      {/* 한 줄 툴바 (UI 리파인 §git) — 브랜치 · ↑↓ · pull · commit · push.
+          pull·push·commit은 명령 복사뿐 (G7 유지) */}
       <div class="gitp-toolbar">
         <div class="gitp-branch-wrap">
-          <button
-            class="card inset gitp-branch mono"
-            style={{ cursor: "pointer", "text-align": "left" }}
-            title={t("브랜치 체크아웃 — 공유 repo 전체에 적용, 2단 확인")}
-            onClick={() => {
-              setBranchMenu(!branchMenu());
-              setCoArm(undefined);
-            }}
-          >
+          <div class="card inset gitp-branch mono">
             <span class="gitp-branch-name">⎇ {g().branch}</span>
-            <span class="muted">▾</span>
-          </button>
+          </div>
         </div>
         <span class="mono gitp-sync" title={t("업스트림 대비 ahead / behind")}>
           <span class="st-waiting">↑{g().ahead}</span> <span class="muted">↓{g().behind}</span>
@@ -357,51 +260,6 @@ export function GitPanelTab() {
             <span class="n">{g().ahead}</span>
           </Show>
         </button>
-        <Show when={branchMenu()}>
-          <div class="card gitp-pop">
-            <For each={branches()}>
-              {(b) => (
-                <button
-                  class="btn ghost mono"
-                  classList={{ danger: coArm() === b.name }}
-                  style={{ "justify-content": "flex-start", "font-size": "11px", padding: "2px 6px", display: "flex", gap: "6px" }}
-                  disabled={b.current}
-                  title={b.remote ? t("원격 브랜치 — 체크아웃하면 추적 브랜치가 만들어집니다") : ""}
-                  onClick={() => void doCheckout(b.name)}
-                >
-                  <span>{b.current ? "●" : coArm() === b.name ? "⚠" : "○"}</span>
-                  <span style={{ flex: 1, "text-align": "left" }}>
-                    {coArm() === b.name ? tf("{name} — 공유 repo 전환 확정?", { name: b.name }) : b.name}
-                  </span>
-                  <Show when={b.remote}>
-                    <span class="badge">{t("원격")}</span>
-                  </Show>
-                </button>
-              )}
-            </For>
-            <div style={{ display: "flex", gap: "4px", "margin-top": "4px" }}>
-              <input
-                class="mono"
-                style={{ flex: 1, "font-size": "11px", padding: "2px 6px" }}
-                placeholder={t("새 브랜치 이름 — checkout -b")}
-                value={newBranch()}
-                onInput={(e) => setNewBranch(e.currentTarget.value)}
-              />
-              <button
-                class="btn ghost"
-                classList={{ danger: !!newBranch().trim() && coArm() === newBranch().trim() }}
-                style={{ "font-size": "10px", padding: "2px 8px" }}
-                disabled={!newBranch().trim()}
-                onClick={() => void doCheckout(newBranch().trim())}
-              >
-                {coArm() === newBranch().trim() && newBranch().trim() ? t("확정?") : t("생성·전환")}
-              </button>
-            </div>
-            <div class="muted" style={{ "font-size": "10px" }}>
-              {t("공유 repo의 현재 브랜치를 바꿉니다 — 워크트리 세션은 영향 없음")}
-            </div>
-          </div>
-        </Show>
       </div>
       {/* 변경 요약 (0.5 시안) — git_overview가 주는 값만: 변경 · 수정 · 추가 */}
       <div class="gitp-sum">
@@ -419,194 +277,11 @@ export function GitPanelTab() {
         </div>
       </div>
 
-      {/* 체크아웃 결과·명령 복사 안내 — 한 줄 공유 (최신 것 하나만) */}
-      <Show when={coNote() ?? actNote()}>
+      {/* 명령 복사 안내 — 한 줄 */}
+      <Show when={actNote()}>
         <div class="mono muted" style={{ "font-size": "10px" }}>
-          {coNote() ?? actNote()}
+          {actNote()}
         </div>
-      </Show>
-
-      {/* 워크트리 (M36 — orca식 안전 범위) — 생성 폼은 팝오버, 라벨은 텍스트 (시안 §05) */}
-      <Show when={isTauri() && worktrees().length > 0}>
-        <div class="gitp-wt-head">
-          <div class="panel-head-row" style={{ "margin-top": "4px" }}>
-            <span class="eyebrow">WORKTREES · {worktrees().length}</span>
-            <Show when={worktrees().length > 1}>
-              <button
-                class="btn ghost"
-                classList={{ active: graphOpen() }}
-                style={{ "font-size": "10px", padding: "1px 8px" }}
-                title={t("워크트리 브랜치가 갈라진 모양 — git log --graph")}
-                onClick={() => {
-                  setGraphOpen(!graphOpen());
-                  if (graphOpen()) void load();
-                }}
-              >
-                {t("트리")}
-              </button>
-            </Show>
-            <button
-              class="btn ghost"
-              style={{ "font-size": "10px", padding: "1px 8px" }}
-              onClick={() => {
-                setWtErr(undefined);
-                setWtBase(g().branch);
-                setWtFormOpen(!wtFormOpen());
-              }}
-            >
-              {t("+ 워크트리")}
-            </button>
-          </div>
-          <Show when={wtFormOpen()}>
-            <div class="card gitp-pop">
-              {/* 모드 — 새 브랜치를 만들거나, 이미 있는 브랜치를 트리에 연결하거나 (레일 §워크트리) */}
-              <div class="wt-mode-toggle">
-                <button classList={{ on: wtMode() === "new" }} onClick={() => setWtMode("new")}>
-                  {t("새 브랜치")}
-                </button>
-                <button
-                  classList={{ on: wtMode() === "attach" }}
-                  onClick={() => {
-                    setWtMode("attach");
-                    if (!wtAttachBranch()) setWtAttachBranch(attachable()[0]?.name ?? "");
-                  }}
-                >
-                  {t("기존 브랜치")}
-                </button>
-              </div>
-              <Show
-                when={wtMode() === "new"}
-                fallback={
-                  <>
-                    <div style={{ display: "flex", gap: "4px" }}>
-                      <select
-                        style={{ flex: 1, "font-size": "11px" }}
-                        title={t("이 브랜치를 체크아웃하는 워크트리를 만든다 — 새 브랜치 없음")}
-                        value={wtAttachBranch()}
-                        onChange={(e) => setWtAttachBranch(e.currentTarget.value)}
-                      >
-                        <Show when={attachable().length === 0}>
-                          <option value="">{t("연결 가능한 로컬 브랜치 없음")}</option>
-                        </Show>
-                        <For each={attachable()}>{(b) => <option value={b.name}>{b.name}</option>}</For>
-                      </select>
-                      <button class="btn primary" style={{ "font-size": "10px" }} disabled={!wtAttachBranch() || wtBusy()} onClick={() => void createWorktree()}>
-                        {wtBusy() ? t("연결 중…") : t("연결")}
-                      </button>
-                    </div>
-                    <div class="muted" style={{ "font-size": "10px" }}>
-                      {t("체크아웃 중인 브랜치는 목록에서 빠집니다 — 같은 브랜치는 한 트리에만 (git)")}
-                    </div>
-                  </>
-                }
-              >
-                <input
-                  class="mono"
-                  style={{ "font-size": "11px", padding: "2px 6px" }}
-                  placeholder={t("이름 → .eqmux/worktrees/<이름> · 브랜치 eqmux/<이름>")}
-                  value={wtName()}
-                  onInput={(e) => setWtName(e.currentTarget.value)}
-                />
-                <div style={{ display: "flex", gap: "4px" }}>
-                  <select
-                    style={{ flex: 1, "font-size": "11px" }}
-                    title={t("분기 기준 ref (start-from)")}
-                    value={wtBase()}
-                    onChange={(e) => setWtBase(e.currentTarget.value)}
-                  >
-                    <option value="">{t("HEAD (현재)")}</option>
-                    {/* 커밋 메뉴에서 열면 해시가 기준 ref로 잡힌다 */}
-                    <Show when={wtBase() && !branches().some((b) => b.name === wtBase())}>
-                      <option value={wtBase()}>{wtBase()} {t("(커밋)")}</option>
-                    </Show>
-                    {/* 체크아웃 팝오버와 같은 구분 — 원격 전용 이름은 로컬 브랜치와 다른 것이다 (B42) */}
-                    <For each={branches()}>
-                      {(b) => (
-                        <option value={b.name}>
-                          {b.name}
-                          {b.remote ? ` ${t("(원격)")}` : ""}
-                        </option>
-                      )}
-                    </For>
-                  </select>
-                  <button class="btn primary" style={{ "font-size": "10px" }} disabled={!wtName().trim() || wtBusy()} onClick={() => void createWorktree()}>
-                    {wtBusy() ? t("생성 중…") : t("생성")}
-                  </button>
-                </div>
-              </Show>
-              <Show when={wtErr()}>
-                <div class="mono st-dead" style={{ "font-size": "10px" }}>
-                  {wtErr()}
-                </div>
-              </Show>
-            </div>
-          </Show>
-        </div>
-        {/* 한 줄 스트립 (UI 리파인 §git) — 경로·head는 툴팁으로. 삭제 없음 정책도 툴팁에 담는다 (FR-E-64) */}
-        <div class="gitp-wt-list">
-          <For each={worktrees()}>
-            {(wt) => (
-              <div class="gitp-wt" title={tf("{path} · {head} — 삭제는 제공하지 않습니다 · git worktree remove", { path: wt.path, head: wt.head })}>
-                <span class="mono gitp-wt-name">{wtLabel(wt)}</span>
-                <span
-                  class="gitp-wt-tag mono"
-                  classList={{ main: wt.isMain }}
-                  title={t(wt.isMain ? "메인 작업 트리" : wt.isSession ? "앱이 만든 워크트리 (.eqmux/worktrees/)" : "외부에서 만든 워크트리 — 순수 git 호환")}
-                >
-                  {wt.isMain ? "MAIN" : t(wt.isSession ? "세션" : "외부")}
-                </span>
-                <span class="mono muted gitp-wt-path">{wtTail(wt.path)}</span>
-                <span style={{ flex: 1 }} />
-                <Show when={!wt.isMain}>
-                  <button
-                    class="btn ghost"
-                    style={{ "font-size": "10px", padding: "1px 8px" }}
-                    disabled={slotsFull()}
-                    title={
-                      slotsFull()
-                        ? tf("슬롯이 가득 찼습니다 ({n}개) — 세션을 하나 닫거나 설정에서 상한을 올리세요", { n: maxSlots() })
-                        : t("이 워크트리에서 기본 터미널 열기 — 역할 부여는 세션 상세에서")
-                    }
-                    onClick={() => openShell(wt)}
-                  >
-                    {t("셸 열기")}
-                  </button>
-                </Show>
-              </div>
-            )}
-          </For>
-        </div>
-        {/* 워크트리 트리 — 레인은 git이 그린 문자 그대로. 커밋 줄 클릭 = 부모 커밋 ↔ 이 커밋 diff */}
-        <Show when={graphOpen() && worktrees().length > 1}>
-          <div class="gitp-wt-graph mono">
-            <For each={graph()}>
-              {(r) => (
-                <div
-                  class="gitp-wt-graph-row"
-                  classList={{ link: !!r.hash }}
-                  title={r.hash ? tf("{msg} — 클릭: 부모 커밋과 나란히 비교(diff)", { msg: r.message ?? "" }) : undefined}
-                  onClick={() => r.hash && openCommitDiff({ hash: r.hash, message: r.message ?? "" })}
-                >
-                  <span class="gitp-wt-lanes">{r.graph}</span>
-                  <Show when={r.hash}>
-                    <span class="gitp-commit-hash">{r.hash}</span>
-                    <For each={refBadges(r.refs ?? "")}>
-                      {(b) => (
-                        <span class="gitp-ref" classList={{ remote: b.includes("/") }}>
-                          {b}
-                        </span>
-                      )}
-                    </For>
-                    <span class="gitp-commit-txt">{r.message}</span>
-                  </Show>
-                </div>
-              )}
-            </For>
-            <Show when={graph().length === 0}>
-              <div class="muted">{t("트리를 읽는 중…")}</div>
-            </Show>
-          </div>
-        </Show>
       </Show>
 
       <Eyebrow>COMMIT GRAPH</Eyebrow>
@@ -683,17 +358,6 @@ export function GitPanelTab() {
                 // 커밋 기준 diff (UI 리파인 §git) — 행 클릭과 같은 동작. B11의 "워크트리 비교만"은 여기서 풀렸다
                 { label: t("부모 커밋과 비교 (diff)"), action: () => openCommitDiff(m().c) },
                 { label: t("워크트리 diff 열기"), action: openDiff },
-                {
-                  label: t("이 커밋에서 워크트리 생성…"),
-                  disabled: !isTauri(),
-                  action: () => {
-                    setWtErr(undefined);
-                    setWtMode("new"); // 해시 기준 분기는 새 브랜치 흐름이다
-                    setWtBase(m().c.hash);
-                    setWtName("");
-                    setWtFormOpen(true);
-                  },
-                },
               ],
               // 메뉴에 없는 것 = 정책상 없는 것 (G7)
               [{ label: t("checkout · revert는 두지 않는다 — 터미널에서"), note: true }],

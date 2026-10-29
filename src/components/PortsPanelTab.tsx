@@ -1,12 +1,12 @@
 // 포트 패널 (rBkF0) — 세션 포트 + 시스템 포트. 실측은 공용 감시기(backend/ports)가 들고 있다 (M31).
 // 패널이 직접 폴링하지 않는 이유: 패널을 닫아 둔 동안 열린 포트를 놓치기 때문이다. 여기서는
-// 마운트 동안 주기만 빠르게 올리고(holdFastPoll) 결과를 그린다.
+// 결과를 그리기만 한다. 갱신은 [다시 실측]으로만 한다 (주기 폴링 없음).
 // 세션 귀속은 Job Object pid 대조 — 관측 전용이며 프로세스 종료는 제공하지 않는다 (git 패널과 같은 원칙).
 // "열기"는 자동이 아니다 — 새 포트는 NEW 칩과 탭 뱃지로 알리고, 여는 것은 언제나 이 클릭이다.
-import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show, untrack } from "solid-js";
+import { createEffect, createMemo, createSignal, For, onCleanup, Show, untrack } from "solid-js";
 import { backend, PORT_SUMMARY, SESSION_PORTS } from "../backend/mock";
 import {
-  holdFastPoll,
+  exposureOf,
   isExposed,
   isNewPort,
   isServerTermId,
@@ -37,6 +37,8 @@ interface Row {
   badge: "LISTENING" | "DEBUG";
   isNew: boolean;
   exposed: boolean;
+  /** 노출 종류 (B139) — all = 모든 인터페이스(0.0.0.0·[::]), lan = 특정 LAN 주소 */
+  exposure?: "all" | "lan";
   url: string;
 }
 
@@ -62,9 +64,6 @@ export function PortsPanelTab() {
   const [query, setQuery] = createSignal("");
   const [sysOpen, setSysOpen] = createSignal(false);
 
-  // 패널을 보고 있는 동안만 빠른 주기 — 닫으면 감시기가 알아서 느려진다
-  onMount(() => onCleanup(holdFastPoll()));
-
   const personaName = (sessionId: string) => {
     if (isServerTermId(sessionId)) return t("서버");
     const s = backend.listSessions().find((x) => x.id === sessionId);
@@ -83,6 +82,7 @@ export function PortsPanelTab() {
     badge: e.port === 9229 ? "DEBUG" : "LISTENING",
     isNew: isNewPort(e),
     exposed: isExposed(e),
+    exposure: exposureOf(e),
     url: portUrl(e),
   });
 
@@ -113,10 +113,10 @@ export function PortsPanelTab() {
   );
 
   // 요약 — 충돌 = 같은 포트 번호를 여러 프로세스가 리슨(시스템 포트 포함),
-  // 외부 노출 = 루프백 밖에 바인딩된 '세션' 포트. 시스템 포트를 함께 세면 Windows 파일공유
+  // 외부 노출 = 루프백 밖에 바인딩된 '세션' 포트 (0.0.0.0·[::] 포함, B139). 시스템 포트를 함께 세면 Windows 파일공유
   // (NetBIOS 139 등)만으로도 항상 ⚠가 켜져, 보안 성격의 경고가 상시 오탐이 된다 (B61)
   const summary = createMemo(() => {
-    if (!isTauri()) return PORT_SUMMARY;
+    if (!isTauri()) return { ...PORT_SUMMARY, exposedAll: 0, exposedLan: 0 };
     const all = [...rows().session, ...rows().system];
     const counts = new Map<number, number>();
     for (const p of all) counts.set(p.port, (counts.get(p.port) ?? 0) + 1);
@@ -125,6 +125,8 @@ export function PortsPanelTab() {
       system: rows().system.length,
       conflicts: [...counts.values()].filter((n) => n > 1).length,
       exposed: rows().session.filter((p) => p.exposed).length,
+      exposedAll: rows().session.filter((p) => p.exposure === "all").length,
+      exposedLan: rows().session.filter((p) => p.exposure === "lan").length,
     };
   });
 
@@ -292,8 +294,21 @@ export function PortsPanelTab() {
             when={summary().exposed === 0}
             fallback={
               <>
-                <span class="st-waiting">⚠</span>{" "}
-                {tf("세션 포트 {n}개가 루프백 밖에 바인딩되어 있습니다.", { n: String(summary().exposed) })}
+                {/* 모든 인터페이스와 특정 LAN 주소를 가른다 (B139) — 0.0.0.0은 '내 주소 하나'가 아니라 전부다 */}
+                <Show when={summary().exposedAll > 0}>
+                  <div>
+                    <span class="st-waiting">⚠</span>{" "}
+                    {tf("세션 포트 {n}개가 모든 인터페이스에 열려 있습니다 — 같은 네트워크의 다른 기기가 접속할 수 있습니다.", {
+                      n: String(summary().exposedAll),
+                    })}
+                  </div>
+                </Show>
+                <Show when={summary().exposedLan > 0}>
+                  <div>
+                    <span class="st-waiting">⚠</span>{" "}
+                    {tf("세션 포트 {n}개가 LAN 주소에 바인딩되어 있습니다.", { n: String(summary().exposedLan) })}
+                  </div>
+                </Show>
               </>
             }
           >

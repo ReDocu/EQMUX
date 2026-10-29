@@ -193,20 +193,62 @@
   border-bottom: 1px solid var(--eq-line);
   flex-shrink: 0;
 }
+/* 좁은 가운데(최소 창 + 사이드 패널, 약 660px)에서도 한 줄 — 이름·세션 수가 먼저 말줄임으로 줄고,
+   세그먼트·버튼은 글자마다 쪼개지지 않는다 (B162) */
 .cc-title {
   display: flex;
   align-items: baseline;
   gap: 10px;
+  flex: 0 1 auto;
 }
 .cc-title h1 {
   font-size: 15px;
   font-weight: 800;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cc-title .cc-count {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.cc-top > * {
+  white-space: nowrap;
+}
+/* 좁으면 셸·배치 버튼이 먼저 이름을 접고(>_ ▾ · ▦만, 이름은 title에 남는다), 워크스페이스 이름은
+   몇 글자를 지킨다 (B162 실기: 이름이 'eqm'만 남아 세그먼트 밑으로 잘리고 세션 수가 사라졌다) */
+.cc-top {
+  container: cc-top / inline-size;
+}
+.cc-title h1 {
+  min-width: 7em;
+}
+.cc-top .shell-picker,
+.cc-top > .btn.mono {
+  min-width: 0;
+  flex-shrink: 1;
+}
+.cc-top .shell-picker > .btn,
+.cc-top > .btn.mono {
+  max-width: 100%;
+}
+.cc-btn-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@container cc-top (max-width: 760px) {
+  .cc-btn-label {
+    display: none;
+  }
 }
 .cc-title .mono {
   font-size: 11px;
 }
 .cc-seg {
   display: inline-flex;
+  flex-shrink: 0;
   background: var(--eq-surface);
   border-radius: var(--eq-r-sm);
   padding: 2px;
@@ -281,7 +323,11 @@
   float: right;
   z-index: 3;
   margin: 10px -6px 0 0;
-  padding: 2px 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
   color: var(--eq-dim);
   border-radius: var(--eq-r-sm);
 }
@@ -429,23 +475,11 @@
 .rail-folder:hover .rail-folder-go {
   color: var(--eq-text);
 }
-/* Focus 버튼 — 사람이 답해야 진행되는 행에만 상시로 뜬다 (ⓘ는 호버 때만) */
-.rail-focus {
-  flex-shrink: 0;
-  padding: 1px 5px;
-  font-size: 11px;
-  color: var(--eq-amber);
-  border: 1px solid var(--eq-amber);
-  border-radius: var(--eq-r-sm);
-  background: none;
+.rail-git-stat {
+  font-size: 10px;
 }
-.rail-focus:hover {
-  color: var(--eq-bg);
-  background: var(--eq-amber);
-}
-/* 워크트리 레일 (orca식) — 임무 아래. 행 = 브랜치 + 귀속 세션, 생성은 팝오버 */
+/* 워크트리 목록 — 표시 전용. 행 = 브랜치 + 귀속 세션 */
 .rail-wt-head {
-  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -456,31 +490,6 @@
 }
 .rail-wt-head b {
   font-size: 12px;
-}
-.rail-wt-add {
-  flex-shrink: 0;
-  padding: 0 6px;
-  font-size: 13px;
-  color: var(--eq-dim);
-  border-radius: var(--eq-r-sm);
-  cursor: pointer;
-}
-.rail-wt-add:hover {
-  color: var(--eq-text);
-  background: var(--eq-surface-2);
-}
-.rail-wt-pop {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 4px;
-  right: 4px;
-  z-index: 30;
-  border-color: var(--eq-line);
-  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.45);
-  padding: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
 }
 .rail-wt-list {
   display: flex;
@@ -514,27 +523,12 @@
   font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.1em;
+  text-transform: uppercase; /* 영어 UI는 공용 사전의 "Session"을 대문자로 — 같은 키에 번역을 둘 두지 않는다 */
   color: var(--eq-dim);
   flex-shrink: 0;
 }
 .rail-wt-tag.main {
   color: var(--eq-blue);
-}
-.rail-wt-open {
-  opacity: 0;
-  flex-shrink: 0;
-  padding: 0 5px;
-  font-size: 10px;
-  color: var(--eq-dim);
-  border-radius: var(--eq-r-sm);
-  cursor: pointer;
-}
-.rail-wt:hover .rail-wt-open {
-  opacity: 1;
-}
-.rail-wt-open:hover {
-  color: var(--eq-text);
-  background: var(--eq-surface-2);
 }
 .rail-wt-path {
   font-size: 9px;
@@ -542,17 +536,12 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.rail-wt-agents {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin-top: 4px;
-}
 .rail-wt-agent {
   display: flex;
   align-items: center;
   gap: 6px;
   width: 100%;
+  margin-top: 2px;
   font-size: 10px;
   padding: 2px 4px;
   border-radius: var(--eq-r-sm);
@@ -575,9 +564,19 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.rail-wt-empty {
-  font-size: 10px;
-  padding: 2px 10px;
+/* Focus 버튼 — 사람이 답해야 진행되는 행에만 상시로 뜬다 (ⓘ는 호버 때만) */
+.rail-focus {
+  flex-shrink: 0;
+  padding: 1px 5px;
+  font-size: 11px;
+  color: var(--eq-amber);
+  border: 1px solid var(--eq-amber);
+  border-radius: var(--eq-r-sm);
+  background: none;
+}
+.rail-focus:hover {
+  color: var(--eq-bg);
+  background: var(--eq-amber);
 }
 
 .terminal-slot {
@@ -633,6 +632,7 @@
   padding: 8px 0 6px;
   cursor: pointer;
   list-style: none;
+  -webkit-user-select: none; /* WebKit(mac)은 접두어만 안다 (UC-B05) */
   user-select: none;
 }
 .acc summary::-webkit-details-marker {
@@ -1140,7 +1140,7 @@
   flex: 1;
   min-width: 0;
   font-size: 12px;
-  padding: 5px 6px;
+  padding: 5px 24px 5px 6px;
 }
 .pane-add {
   align-items: center;
@@ -1614,11 +1614,10 @@
   font-size: 11px;
   text-align: left;
 }
-.gitp-repo:hover,
-.gitp-branch:hover {
+.gitp-repo:hover {
   border-color: var(--eq-muted);
 }
-/* 한 줄 툴바 — 브랜치 ▾ · ↑↓ · diff · pull · commit · push. 좁으면 줄바꿈 */
+/* 한 줄 툴바 — 브랜치 · ↑↓ · diff · pull · commit · push. 좁으면 줄바꿈 */
 .gitp-toolbar {
   display: flex;
   align-items: center;
@@ -1666,27 +1665,7 @@
   color: var(--eq-blue);
   font-weight: 700;
 }
-/* 워크트리 생성 모드 토글 (레일 §워크트리) — 새 브랜치 / 기존 브랜치 연결. 레일·git 패널 공용 */
-.wt-mode-toggle {
-  display: flex;
-  gap: 4px;
-}
-.wt-mode-toggle button {
-  flex: 1;
-  font-size: 10px;
-  padding: 2px 6px;
-  background: none;
-  border: 1px solid var(--eq-line);
-  border-radius: var(--eq-r-sm);
-  color: var(--eq-muted);
-  cursor: pointer;
-}
-.wt-mode-toggle button.on {
-  color: var(--eq-blue);
-  border-color: var(--eq-blue-mid);
-  background: var(--eq-blue-soft);
-}
-/* 팝오버 (시안 §05) — 브랜치 체크아웃·워크트리 생성 폼. 내용을 밀지 않고 위에 뜬다 */
+/* 팝오버 (시안 §05) — 저장소 선택. 내용을 밀지 않고 위에 뜬다 */
 .gitp-pop {
   position: absolute;
   top: calc(100% + 4px);
@@ -1699,74 +1678,6 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
-}
-/* 워크트리 스트립 (UI 리파인 §git) — 한 줄. 경로·head·정책은 툴팁 */
-.gitp-wt-head {
-  position: relative;
-}
-.gitp-wt-list {
-  display: flex;
-  flex-direction: column;
-}
-.gitp-wt {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 3px 2px;
-  border-top: 1px solid var(--eq-line);
-}
-.gitp-wt:first-child {
-  border-top: none;
-}
-.gitp-wt-name {
-  font-size: 11px;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.gitp-wt-path {
-  font-size: 9px;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.gitp-wt-tag {
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  color: var(--eq-dim);
-  flex-shrink: 0;
-}
-.gitp-wt-tag.main {
-  color: var(--eq-blue);
-}
-/* 워크트리 트리 — git log --graph 문자 레인. 가로로 길면 스크롤, 세로는 상한 */
-.gitp-wt-graph {
-  max-height: 240px;
-  overflow: auto;
-  font-size: 11px;
-  border-top: 1px solid var(--eq-line);
-  padding-top: 4px;
-}
-.gitp-wt-graph-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  line-height: 18px;
-  white-space: nowrap;
-}
-.gitp-wt-graph-row.link {
-  cursor: pointer;
-}
-.gitp-wt-graph-row.link:hover {
-  background: var(--eq-surface-2);
-}
-.gitp-wt-lanes {
-  white-space: pre;
-  color: var(--eq-blue-mid);
-  flex-shrink: 0;
 }
 .gitp-foot {
   font-size: 10px;
@@ -2583,6 +2494,7 @@
   padding: 12px 14px;
   font-size: 12px;
   line-height: 1.6;
+  -webkit-user-select: text; /* WebKit(mac)은 접두어만 안다 (UC-B05) */
   user-select: text;
   overflow-wrap: anywhere;
 }
@@ -3113,6 +3025,7 @@
   padding-right: 12px;
   color: var(--eq-muted);
   background: var(--eq-gutter);
+  -webkit-user-select: none; /* WebKit(mac)은 접두어만 안다 (UC-B05) */
   user-select: none;
 }
 .gde-text {
@@ -3412,6 +3325,9 @@
   flex-shrink: 0;
 }
 .tf-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -3767,6 +3683,22 @@ button.eq-chip-tx,
   font-size: 11px;
   font-weight: 700;
 }
+.srvp-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  font-size: 11px;
+  border: 1px dashed var(--eq-line);
+  border-radius: var(--eq-r-sm);
+}
+.srvp-empty .btn {
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 700;
+}
 .srvp-state {
   display: flex;
   align-items: center;
@@ -4019,9 +3951,9 @@ button.eq-chip-tx,
 .setting-select {
   flex-shrink: 0;
   font-size: 11px;
-  padding: 4px 8px;
+  padding: 4px 24px 4px 8px;
   color: var(--eq-text);
-  background: var(--eq-bg);
+  background-color: var(--eq-bg);
   border: 1px solid var(--eq-line);
   border-radius: var(--eq-r-sm);
 }
@@ -4273,11 +4205,17 @@ button.eq-chip-tx,
   font-size: 12px;
   color: var(--eq-muted);
 }
+/* 아이콘만 있는 닫기 — 누를 자리를 24px 이상 남긴다 (U94) */
 .exit-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
   border: 0;
+  border-radius: var(--eq-r-sm);
   background: transparent;
   color: var(--eq-muted);
-  font-size: 14px;
   cursor: pointer;
 }
 .exit-close:hover {
@@ -5045,10 +4983,13 @@ button.eq-chip-tx,
 .create-f input {
   height: 32px;
   padding: 0 10px;
-  background: var(--eq-bg);
+  background-color: var(--eq-bg);
   border: 1px solid var(--eq-line);
   border-radius: var(--eq-r-sm);
   color: var(--eq-text);
+}
+.create-f select {
+  padding-right: 28px;
 }
 .create-f:has(+ .eq-fh.err) input {
   border-color: var(--eq-red);
@@ -5741,13 +5682,25 @@ button.eq-chip-tx,
 .cell-state.st-busy {
   color: var(--eq-blue);
 }
+/* 4열 카드처럼 좁으면 칩 줄을 줄바꿈한다 — 한 줄에 몰면 행동 사유 칩('승인 대기 · …')이 글자 없는
+   상자로 찌그러지고 옆 엔진 배지는 카드 밖으로 잘렸다 (U111) */
 .cell-status {
   width: 100%;
   min-width: 0;
+  flex-wrap: wrap;
+  row-gap: 4px;
 }
 .cell-status .eq-chip {
   margin-left: 0;
   max-width: 100%;
+  flex-shrink: 0;
+}
+.cell-status .badge {
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .cell-summary {
   min-width: 0;
@@ -5884,7 +5837,8 @@ button.eq-chip-tx,
   font-size: 9px;
 }
 .rl-persona {
-  height: 56px;
+  min-height: 56px;
+  padding-block: 8px;
 }
 .rl-avatar {
   width: 30px;
@@ -5900,15 +5854,18 @@ button.eq-chip-tx,
 }
 .rl-persona-line {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: 4px 6px;
 }
 .rl-persona-name {
+  overflow-wrap: anywhere;
   font-size: 12px;
   font-weight: 800;
   color: var(--eq-text);
 }
 .rl-persona-job {
+  white-space: nowrap;
   font-size: 9px;
 }
 .rl-persona-title {
@@ -5928,6 +5885,10 @@ button.eq-chip-tx,
   padding: 18px;
   overflow: auto;
 }
+/* 내용이 넘치면 줄이지 말고 편집 칸이 스크롤한다 — 안 그러면 textarea(캐릭터 시트)가 한 줄로 찌그러진다 */
+.rl-editor > * {
+  flex-shrink: 0;
+}
 .rl-scope {
   font-size: 9px;
   font-weight: 700;
@@ -5935,6 +5896,7 @@ button.eq-chip-tx,
 }
 .rl-name-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
 }
@@ -6077,6 +6039,10 @@ button.eq-chip-tx,
 }
 .gde-code {
   background: #070a0f;
+}
+/* 라이트 — diff는 터미널이 아니다. 글자·거터·빗금이 라이트 토큰을 따르니 배경도 표면으로 (B161) */
+:root[data-theme="light"] .gde-code {
+  background: var(--eq-surface);
 }
 .gde-gutter {
   background: transparent;
@@ -6477,3 +6443,9 @@ label.inbox-pop-row {
   font-weight: 400;
   opacity: 0.65;
 }
+
+/* 실행 › 환경변수 (.env) — 파일마다 카드 한 장, 행을 누르면 값 복사 */
+.env-file { margin-top: 8px; padding: 6px 10px; }
+.env-file .eyebrow { margin-bottom: 4px; }
+.env-file .kv { cursor: copy; }
+.env-file .kv .v { overflow-wrap: anywhere; }

@@ -119,8 +119,23 @@ static LAST: Mutex<Option<Last>> = Mutex::new(None);
 /// 창 이벤트 한 건 기록. 의미 있는 변화(배율·모니터)면 항상, 아니면 죄어서 남긴다.
 /// 반환값 = 프런트에도 알릴 만한 변화인가 (프런트가 같은 순간 자기 좌표를 남기도록)
 pub fn note_window_event(app: &AppHandle, kind: &str) -> bool {
-    let Ok(g) = diag_geometry(app.clone()) else { return false };
     let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+    // 죄는 구간(500ms) 안이면 배율·모니터만 싸게 확인하고 끝낸다 (CPU·RAM C10) — 드래그 중 초당
+    // 60~120회 메인 스레드에서 위치·크기·모니터·웹뷰를 다 읽던 자리다. 시각은 지금처럼 매번 갱신한다
+    if let Some(win) = app.get_window("main") {
+        let mut guard = LAST.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(l) = guard.as_mut() {
+            if now.saturating_sub(l.at_ms) < 500 {
+                let sf = win.scale_factor().unwrap_or(1.0);
+                let mon = win.current_monitor().ok().flatten().and_then(|m| m.name().cloned()).unwrap_or_default();
+                if (l.scale - sf).abs() <= f64::EPSILON && l.monitor == mon {
+                    l.at_ms = now;
+                    return false;
+                }
+            }
+        }
+    }
+    let Ok(g) = diag_geometry(app.clone()) else { return false };
     let monitor = g.monitor_name.clone().unwrap_or_default();
 
     let mut guard = LAST.lock().unwrap_or_else(|e| e.into_inner());
@@ -186,6 +201,13 @@ pub fn diag_alive(hidden: bool) {
         write(&format!("WEBVIEW-BACK silent {}ms hidden={hidden}", now.saturating_sub(b.at_ms)));
     }
     *guard = Some(Beat { at_ms: now, hidden, silent: false });
+}
+
+/// 웹뷰가 지금 끊긴 상태인가 — 종료 요청을 프런트에 물어도 답할 수 없을 때 (quit.rs, B112).
+/// 첫 박동 전(로딩 중)은 끊김이 아니다
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn webview_silent() -> bool {
+    BEAT.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|b| b.silent)
 }
 
 /// 감시 스레드 — 첫 박동 전에는 판정하지 않는다 (앱 시작·로딩 중은 끊김이 아니다)

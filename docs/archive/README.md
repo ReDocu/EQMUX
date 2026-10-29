@@ -12,8 +12,8 @@
 | `benchmark-comparison-2026-10-15.md` · `.html` | 2026-10-15 도구 50개 비교 종합 | 탐색. 결론은 `needed-features-2026-10-15.md`·`update-plan-0.5.0.md`에 반영 |
 | `benchmark-summary-2026-10-14.md` · `benchmark-oss-list-2026-10-14.md` | 2026-10-14 벤치마킹 요약 · 조사 대상 목록 | 탐색 |
 | `benchmark-desktop-apps-2026-10-14.md` · `benchmark-multiplexers-web-2026-10-14.md` · `benchmark-tui-managers-2026-10-14.md` · `multiplexer-tools-2026-10-14.md` | 분야별 벤치마킹 | 탐색 |
-| `agent-relay`·`emdash`·`gastown`·`herdr`·`oh-my-claudecode`·`orca` `-benchmark-2026-10-14.md` | 도구별 벤치마킹 | 탐색 |
-| `agentManager`·`bbarit-agent-oss`·`ghostty`·`orca`·`paseo`·`terax` `-features.md` | 다른 제품 기능 조사 | 탐색 |
+| `agent-relay`·`emdash`·`gastown`·`herdr`·`oh-my-claudecode` `-benchmark-2026-10-14.md` | 도구별 벤치마킹 | 탐색 |
+| `agentManager`·`bbarit-agent-oss`·`ghostty`·`paseo`·`terax` `-features.md` | 다른 제품 기능 조사 | 탐색 |
 | `features-tree.md` · `features-comparison.html` | 위 기능 조사 통합 트리 · 비교표 | 탐색. PRD 근거 링크는 이 경로로 바꿈 |
 | `market_spec.md` | 0.2.0 기준 홍보 사이트 카피 명세 | 쓰지 않음. 사이트 원고는 `docs/site/` |
 | `unimplemented-features-2026-10-14.md` | 0.4.2 기준 미구현 점검 77건 | 0.5.0 기획서 근거. 출처 열의 장 번호가 이 문서를 가리킴 |

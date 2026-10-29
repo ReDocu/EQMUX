@@ -2,6 +2,7 @@
 // 모든 쓰기는 읽기와 같은 경로 탈출 가드를 지나고, .git은 불가침이며, 삭제는 휴지통으로 보낸다.
 // (PRD H의 읽기 전용 선언은 M24에서 사용자 확정으로 개정 — git 쓰기·프로세스 kill은 여전히 없다)
 
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -47,51 +48,84 @@ fn has_visible_children(dir: &Path) -> bool {
     })
 }
 
-/// 한 폴더를 걷는다. 개수 상한에 걸려 멈췄으면 true — 호출자가 자기 폴더도 '더 있음'으로
-/// 표시하고 형제 걷기를 그만둔다 (상한 뒤에 남은 것을 없는 것처럼 보이지 않게).
-fn walk(base: &Path, dir: &Path, depth: u32, out: &mut Vec<FsNode>) -> bool {
-    let Ok(entries) = fs::read_dir(dir) else { return false };
-    let mut items: Vec<(bool, String, PathBuf)> = entries
+type Entry = (bool, String, PathBuf); // (폴더, 이름, 경로)
+
+/// 한 폴더의 직속 항목 — 스킵 대상 제외, 폴더 먼저 이름순 (트리 표시 관례)
+fn list_dir(dir: &Path) -> Vec<Entry> {
+    let Ok(entries) = fs::read_dir(dir) else { return Vec::new() };
+    let mut items: Vec<Entry> = entries
         .flatten()
         .map(|e| {
             let p = e.path();
             (p.is_dir(), e.file_name().to_string_lossy().into_owned(), p)
         })
+        .filter(|(is_dir, name, _)| !(*is_dir && SKIP_DIRS.contains(&name.as_str())))
         .collect();
-    // 폴더 먼저, 이름순 — 트리 표시 관례
     items.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.to_lowercase().cmp(&b.1.to_lowercase())));
+    items
+}
+
+/// 고른 항목을 트리 순서(깊이 우선)로 펼친다. 안을 다 담지 못한 폴더는 truncated (B15) —
+/// 일부만 담겼거나, 개수 상한으로 못 읽었거나, 깊이 상한에 닿은 자리.
+fn emit(base: &Path, dir: &Path, depth: u32, kids: &HashMap<PathBuf, (Vec<Entry>, bool)>, out: &mut Vec<FsNode>) {
+    let Some((items, _)) = kids.get(dir) else { return };
     for (is_dir, name, path) in items {
-        if is_dir && SKIP_DIRS.contains(&name.as_str()) {
-            continue;
-        }
-        if out.len() >= MAX_ENTRIES {
-            return true; // 이 폴더에 아직 남았다
-        }
         let rel = path
             .strip_prefix(base)
             .map(|r| r.to_string_lossy().replace('\\', "/"))
             .unwrap_or_else(|_| name.clone());
-        let at = out.len();
-        out.push(FsNode { name, rel, depth, dir: is_dir, truncated: false });
-        if !is_dir {
-            continue;
-        }
-        if depth + 1 > MAX_DEPTH {
-            out[at].truncated = has_visible_children(&path); // 깊이 상한 — 안을 안 걸었다
-        } else if walk(base, &path, depth + 1, out) {
-            out[at].truncated = true;
-            return true; // 개수 상한은 위로 전파된다 — 형제도 더 걷지 못한다
+        let truncated = *is_dir
+            && match kids.get(path) {
+                Some((_, cut)) => *cut,
+                None => has_visible_children(path),
+            };
+        out.push(FsNode { name: name.clone(), rel, depth, dir: *is_dir, truncated });
+        if *is_dir {
+            emit(base, path, depth + 1, kids, out);
         }
     }
-    false
 }
 
-/// 깊이·개수 상한이 있는 파일 트리 — 무거운 디렉터리(.git 등)는 걷지 않는다.
-/// 상한에 걸린 사실은 숨기지 않고 결과에 실어 보낸다 (B15).
+/// .gitignore로 무시된 폴더 — 이름은 보이되(…) 안은 걷지 않는다. build*/ 같은 산출물 폴더가
+/// 개수 상한을 먹어 docs·src 안이 안 보이던 문제. 무시된 파일(.env 등)은 그대로 보인다.
+/// git 저장소가 아니거나 git이 없으면 빈 집합 — 예전처럼 다 걷는다.
+fn ignored_dirs(base: &Path) -> HashSet<PathBuf> {
+    let Some(cwd) = base.to_str() else { return HashSet::new() };
+    crate::workspace::git(&["ls-files", "-o", "-i", "--exclude-standard", "--directory"], cwd)
+        .map(|out| out.lines().filter_map(|l| l.strip_suffix('/')).map(|l| base.join(l)).collect())
+        .unwrap_or_default()
+}
+
+/// 깊이·개수 상한이 있는 파일 트리 — 무거운 디렉터리(.git 등)·git 무시 폴더는 걷지 않는다.
+/// 개수 상한은 너비 우선으로 채운다 — 깊은 폴더 하나가 상한을 다 먹어 루트 파일이
+/// 안 보이던 문제. 상한에 걸린 사실은 숨기지 않고 결과에 실어 보낸다 (B15).
 pub fn tree(ws_path: &str) -> FsTree {
     let base = Path::new(ws_path);
+    let mut kids: HashMap<PathBuf, (Vec<Entry>, bool)> = HashMap::new();
+    let mut queue = VecDeque::from([(base.to_path_buf(), 0u32)]);
+    let mut count = 0;
+    let mut truncated = false;
+    let ignored = ignored_dirs(base);
+    while let Some((dir, depth)) = queue.pop_front() {
+        let mut items = list_dir(&dir);
+        let cut = items.len() > MAX_ENTRIES - count;
+        items.truncate(MAX_ENTRIES - count);
+        count += items.len();
+        truncated |= cut;
+        for (is_dir, _, p) in &items {
+            if *is_dir && depth + 1 <= MAX_DEPTH && !ignored.contains(p) {
+                queue.push_back((p.clone(), depth + 1));
+            }
+        }
+        kids.insert(dir, (items, cut));
+        if count >= MAX_ENTRIES {
+            // 못 읽은 폴더가 남았으면 그것도 개수 상한에 걸린 것이다
+            truncated |= queue.iter().any(|(d, _)| has_visible_children(d));
+            break;
+        }
+    }
     let mut nodes = Vec::new();
-    let truncated = walk(base, base, 0, &mut nodes);
+    emit(base, base, 0, &kids, &mut nodes);
     FsTree { nodes, truncated, max_entries: MAX_ENTRIES, max_depth: MAX_DEPTH }
 }
 
@@ -102,7 +136,13 @@ pub fn preview(ws_path: &str, rel: &str) -> Result<String, String> {
     if !target.starts_with(&base) {
         return Err("워크스페이스 밖 경로".into());
     }
-    let data = fs::read(&target).map_err(|e| e.to_string())?;
+    // 앞 64KB+1바이트만 읽는다 (CPU·RAM O1) — 전체를 읽으면 큰 로그·덤프 하나에 그 크기만큼 메모리를 쓴다
+    let mut data = Vec::new();
+    std::io::Read::read_to_end(
+        &mut std::io::Read::take(fs::File::open(&target).map_err(|e| e.to_string())?, PREVIEW_BYTES as u64 + 1),
+        &mut data,
+    )
+    .map_err(|e| e.to_string())?;
     let truncated = data.len() > PREVIEW_BYTES;
     let slice = &data[..data.len().min(PREVIEW_BYTES)];
     let mut text = String::from_utf8_lossy(slice).into_owned();
@@ -366,8 +406,14 @@ fn narrow(raw: &str) -> Vec<String> {
 }
 
 /// 후보 중 처음으로 실재하는 경로. 상대 경로는 세션 cwd 기준으로 푼다 (cwd가 없으면 건너뛴다).
+/// macOS — `~/…`는 홈으로 푼다 (B129). Path::new("~/x")는 상대 경로라 cwd에 붙어 실패했다
 pub fn resolve_reveal_target(raw: &str, cwd: Option<&str>) -> Option<PathBuf> {
     for cand in narrow(raw) {
+        #[cfg(not(windows))]
+        let cand = match cand.strip_prefix("~/") {
+            Some(rest) => crate::home_dir().join(rest).to_string_lossy().into_owned(),
+            None => cand,
+        };
         let p = Path::new(&cand);
         let full = if p.is_absolute() {
             p.to_path_buf()
@@ -406,9 +452,17 @@ pub fn reveal_path(path: String, cwd: Option<String>) -> Result<(), String> {
     if abs.contains('"') || abs.chars().any(|c| c.is_control()) {
         return Err("경로에 쓸 수 없는 문자가 있습니다".into());
     }
+    // macOS — Finder로 연다. 파일이면 `-R`로 그 파일을 선택해 보인다
+    #[cfg(not(windows))]
+    std::process::Command::new("open")
+        .args(if is_dir { vec![abs.as_str()] } else { vec!["-R", abs.as_str()] })
+        .spawn()
+        .map_err(|e| e.to_string())?;
     // raw_arg — 탐색기는 `/select,"경로"` 형태를 기대한다. std의 자동 인용은 인자 전체를
     // 감싸버려(`"/select,C:\a b\c.png"`) 공백 있는 경로에서 어긋난다.
+    #[cfg(windows)]
     use std::os::windows::process::CommandExt;
+    #[cfg(windows)]
     std::process::Command::new("explorer")
         .raw_arg(if is_dir { format!("\"{abs}\"") } else { format!("/select,\"{abs}\"") })
         .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
@@ -501,6 +555,51 @@ mod tests {
         fs::remove_dir_all(&dir).ok();
     }
 
+    /// 개수 상한은 얕은 쪽부터 채운다 — 이름이 앞선 깊은 폴더가 상한을 다 먹어도 루트 파일은 보인다
+    #[test]
+    fn tree_budget_fills_shallow_first() {
+        let dir = std::env::temp_dir().join(format!("eqmux-fsx-bfs-{}", crate::workspace::now_ms()));
+        let big = dir.join("a").join("big");
+        fs::create_dir_all(&big).unwrap();
+        for i in 0..MAX_ENTRIES {
+            fs::write(big.join(format!("f{i}.txt")), "x").unwrap();
+        }
+        fs::write(dir.join("root.md"), "x").unwrap();
+        let ws = dir.to_string_lossy().into_owned();
+
+        let t = tree(&ws);
+        assert!(t.nodes.iter().any(|n| n.rel == "root.md"), "루트 파일이 상한에 가려지면 안 된다");
+        assert!(t.truncated);
+        assert!(t.nodes.iter().find(|n| n.rel == "a/big").unwrap().truncated);
+        assert!(t.nodes.len() <= MAX_ENTRIES);
+        // 표시 순서는 그대로 트리 순서 — 폴더 a와 그 안이 root.md보다 앞선다
+        let pos = |rel: &str| t.nodes.iter().position(|n| n.rel == rel).unwrap();
+        assert!(pos("a") < pos("a/big") && pos("a/big") < pos("root.md"));
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// git 무시 폴더(build/)는 이름만 보이고 안을 걷지 않는다 — 상한을 docs가 쓴다. 무시된 파일(.env)은 보인다
+    #[test]
+    fn tree_does_not_walk_gitignored_dirs() {
+        let dir = std::env::temp_dir().join(format!("eqmux-fsx-ign-{}", crate::workspace::now_ms()));
+        fs::create_dir_all(dir.join("build")).unwrap();
+        fs::create_dir_all(dir.join("docs")).unwrap();
+        fs::write(dir.join("build").join("out.o"), "x").unwrap();
+        fs::write(dir.join("docs").join("a.md"), "x").unwrap();
+        fs::write(dir.join(".env"), "x").unwrap();
+        fs::write(dir.join(".gitignore"), "build/\n.env\n").unwrap();
+        let ws = dir.to_string_lossy().into_owned();
+        crate::workspace::git(&["init", "-q"], &ws).unwrap();
+
+        let t = tree(&ws);
+        let build = t.nodes.iter().find(|n| n.rel == "build").unwrap();
+        assert!(build.truncated, "무시 폴더는 '더 있음'으로 남는다");
+        assert!(t.nodes.iter().all(|n| n.rel != "build/out.o"));
+        assert!(t.nodes.iter().any(|n| n.rel == "docs/a.md"));
+        assert!(t.nodes.iter().any(|n| n.rel == ".env"), "무시된 파일은 숨기지 않는다");
+        fs::remove_dir_all(&dir).ok();
+    }
+
     /// 터미널에서 집은 덩어리 좁히기 — 감싼 따옴표·위치 꼬리·뒤에 딸려온 낱말을 떼어 내고
     /// 공백이 든 경로를 살려 낸다. 못 찾으면 아무것도 고르지 않는다 (조용한 무시의 근거).
     #[test]
@@ -526,5 +625,14 @@ mod tests {
         assert!(resolve_reveal_target("C:\\없는\\경로.png", None).is_none());
         assert!(resolve_reveal_target("그냥낱말", Some(&cwd)).is_none());
         fs::remove_dir_all(&dir).ok();
+    }
+
+    /// B129 — `~/`는 cwd가 아니라 홈 기준이다 (홈에 파일을 만들지 않으려고 홈 자체로 본다)
+    #[cfg(not(windows))]
+    #[test]
+    fn reveal_expands_tilde_to_home() {
+        let home = crate::home_dir();
+        assert_eq!(resolve_reveal_target("~/", Some("/tmp")), Some(home.join("")));
+        assert!(resolve_reveal_target("~/eqmux-없는-파일-1f3a.png", Some("/tmp")).is_none());
     }
 }

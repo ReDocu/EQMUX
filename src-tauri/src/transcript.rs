@@ -316,9 +316,12 @@ struct Parsed {
 /// 상태에 남기는 턴 상한 — 화면 상한(200)의 두 배. 그보다 앞 턴은 보이지도 짝지어지지도 않는다
 const KEEP_TURNS: usize = 400;
 
+/// 캐시에 두는 파일 수 — 턴이 끝날 때마다(recap) 대화 파일이 하나씩 들어오므로 상한이 없으면
+/// 앱이 켜져 있는 동안 대화마다 수 MB씩 쌓인다. 쓴 순서대로 두고 가장 오래 안 쓴 것부터 버린다
+const CACHE_FILES: usize = 8;
+
 // ponytail: 전역 잠금 하나 — 파싱은 잠금 밖에서 하므로 열린 창 몇 개로는 경합이 없다
-static CACHE: std::sync::Mutex<Option<std::collections::HashMap<std::path::PathBuf, Parsed>>> =
-    std::sync::Mutex::new(None);
+static CACHE: std::sync::Mutex<Vec<(std::path::PathBuf, Parsed)>> = std::sync::Mutex::new(Vec::new());
 
 /// lossy 읽기 — 2MB 창 경계가 멀티바이트(한글) 문자 중간을 자르면 read_to_string은
 /// 파일 전체를 Err로 버린다. 바이트로 읽고 손상 바이트만 대체해, 깨진 줄은 파서가
@@ -355,7 +358,10 @@ fn feed(p: &mut Parsed, raw: &[u8], start: u64, skip_first: bool) {
 pub fn read(path: &std::path::Path, limit: usize) -> Result<TranscriptData, String> {
     let meta = std::fs::metadata(path).map_err(|_| "트랜스크립트 파일이 없습니다".to_string())?;
     let (len, mtime) = (meta.len(), meta.modified().ok());
-    let prev = CACHE.lock().ok().and_then(|mut c| c.get_or_insert_with(Default::default).remove(path));
+    let prev = CACHE
+        .lock()
+        .ok()
+        .and_then(|mut c| c.iter().position(|(k, _)| k == path).map(|i| c.remove(i).1));
     let p = match prev {
         Some(p) if p.len == len && p.mtime == mtime => p,
         // 이어 쓰기 — 늘어난 부분이 창보다 작으면 거기만
@@ -383,7 +389,10 @@ pub fn read(path: &std::path::Path, limit: usize) -> Result<TranscriptData, Stri
     }
     let windowed = p.windowed;
     if let Ok(mut c) = CACHE.lock() {
-        c.get_or_insert_with(Default::default).insert(path.to_path_buf(), p);
+        c.push((path.to_path_buf(), p));
+        if c.len() > CACHE_FILES {
+            c.remove(0);
+        }
     }
     if turns.is_empty() {
         return Err(format!("인식할 수 있는 턴이 없습니다 (건너뜀 {skipped}줄)"));
@@ -404,6 +413,26 @@ pub fn read(path: &std::path::Path, limit: usize) -> Result<TranscriptData, Stri
 mod tests {
     use super::*;
     use std::io::Write;
+
+    /// M2 — 파일이 많아도 캐시는 상한을 넘지 않고, 방금 읽은 파일은 남는다
+    #[test]
+    fn cache_keeps_at_most_cache_files() {
+        let dir = std::env::temp_dir().join(format!("eqmux-tsc-{}", crate::workspace::now_ms()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let line = r#"{"type":"user","timestamp":"2026-08-13T01:00:00.000Z","message":{"role":"user","content":"hi"}}"#;
+        let mut last = dir.join("x");
+        for i in 0..CACHE_FILES + 3 {
+            last = dir.join(format!("{i}.jsonl"));
+            std::fs::write(&last, format!("{line}\n")).unwrap();
+            read(&last, 200).unwrap();
+        }
+        let c = CACHE.lock().unwrap();
+        assert!(c.len() <= CACHE_FILES);
+        assert!(c.iter().any(|(k, _)| *k == last));
+        assert!(!c.iter().any(|(k, _)| *k == dir.join("0.jsonl")), "가장 오래 안 쓴 파일부터 버린다");
+        drop(c);
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn parses_turns_and_pairs_tool_results() {

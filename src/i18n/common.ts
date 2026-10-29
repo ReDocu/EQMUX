@@ -16,7 +16,6 @@ export const dict: Record<string, string> = {
   관제: "Control",
   대화: "Conversation",
   브랜치: "Branch",
-  워크트리: "Worktree",
   배치: "Layout",
   페인: "Pane",
   터미널: "Terminal",

@@ -2,7 +2,7 @@
 // 관측과 이동만 제공한다. 승인·거부·일괄 액션은 없다 (G7).
 // UI 리파인 §03: 통계 타일 4개 → 제목 옆 요약 한 줄 · 빈 슬롯 병합 · 닫힌 워크스페이스 한 줄 강등 ·
 // 세션 셀 우클릭 메뉴 (§06 — 셀에는 상태만 남고 액션은 메뉴로).
-import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { createMemo, createSignal, For, Index, onCleanup, onMount, Show } from "solid-js";
 import { queryGlobalEvents } from "../backend/events";
 import type { FeedEvent } from "../backend/events";
 import { backend, MAX_OPEN_WORKSPACES, onEventLog } from "../backend/mock";
@@ -63,10 +63,11 @@ export function Dashboard() {
 
   // 지표·기다리는 목록·모두 확인은 열린 워크스페이스만 센다 (B86) — 지표만 닫힌 것까지 세면
   // '행동 필요 2'인데 바로 옆 목록은 1건이었다. 닫힌 워크스페이스는 자기 카드 칩이 말한다
-  const openSessions = () => {
+  // 메모 (CPU·RAM C5) — 지표·목록·배너가 tick마다 8번쯤 다시 걸렀다
+  const openSessions = createMemo(() => {
     const open = new Set(openWs().map((w) => w.id));
     return sessions().filter((s) => open.has(s.workspaceId));
-  };
+  });
   // 감지된 에이전트 라벨 — 엔진 라벨(Claude Code·Codex)로 통일, 모르는 CLI는 감지 이름 그대로 (U42)
   const agentLabel = (agent: string | undefined) => {
     const c = detectedCli(agent);
@@ -137,10 +138,20 @@ export function Dashboard() {
     const r = attentionRank(s, pendingOf(s));
     return r > 0 ? r : 10 + ATTENTION_ORDER[s.status];
   };
-  const wsSessions = (wsId: string) =>
-    sessions()
-      .filter((s) => s.workspaceId === wsId)
-      .sort((a, b) => sortKey(a) - sortKey(b) || b.sinceMs - a.sinceMs);
+  // 워크스페이스별 정렬 목록을 tick당 한 번만 만든다 (C5) — 카드 하나가 wsSessions를 4~5번 부르고,
+  // 정렬 비교마다 attentionRank·인박스 판정이 돌았다
+  const byWs = createMemo(() => {
+    const m = new Map<string, Session[]>();
+    for (const s of sessions()) {
+      const list = m.get(s.workspaceId);
+      if (list) list.push(s);
+      else m.set(s.workspaceId, [s]);
+    }
+    const key = new Map(sessions().map((s) => [s, sortKey(s)] as const));
+    for (const list of m.values()) list.sort((a, b) => key.get(a)! - key.get(b)! || b.sinceMs - a.sinceMs);
+    return m;
+  });
+  const wsSessions = (wsId: string): Session[] => byWs().get(wsId) ?? [];
 
   const cellLine2 = (s: Session) => {
     if (s.status === "waiting") return s.waitingFor ? t(s.waitingFor) : t("승인 대기");
@@ -180,10 +191,15 @@ export function Dashboard() {
             {tf("열린 워크스페이스 {m} · 주의 정렬: waiting › dead › 확인 필요 › busy › idle", { m: openWs().length })}
           </div>
         </div>
+        {/* 워크스페이스 관리를 관제에서 바로 연다 — 앱 바 + 와 같은 팝업 */}
+        <button class="btn" title={t("워크스페이스 열기·관리")} onClick={() => setOverlay("connect")}>
+          {t("워크스페이스")}
+        </button>
       </div>
       {/* 지표 타일 (시안 SgZhp Metric) — 색은 단계 색만: 행동 amber · 확인 blue · 실행 green */}
       <div class="dash-metrics" title={t("폴링 없음 · 상태 스트림 구독")}>
-        <For
+        {/* Index (C5) — 매번 새 객체 배열이라 For면 tick마다 타일 6개를 다시 만든다 */}
+        <Index
           each={[
             { k: "워크스페이스", v: openWs().length, c: "blue" },
             { k: "전체 세션", v: openSessions().length, c: "" },
@@ -194,12 +210,12 @@ export function Dashboard() {
           ]}
         >
           {(m) => (
-            <div class="card dash-metric" title={m.tip}>
-              <div class="dash-metric-k">{capFirst(t(m.k))}</div>
-              <div class={`dash-metric-v mono ${m.c}`}>{m.v}</div>
+            <div class="card dash-metric" title={m().tip}>
+              <div class="dash-metric-k">{capFirst(t(m().k))}</div>
+              <div class={`dash-metric-v mono ${m().c}`}>{m().v}</div>
             </div>
           )}
-        </For>
+        </Index>
       </div>
       {/* 과부하 소프트 경고 (D11 · FR-G-36) — 상단 배너, 알림이 아니며 아무것도 막지 않는다 */}
       <Show when={busyCount() >= BUSY_SOFT_LIMIT}>

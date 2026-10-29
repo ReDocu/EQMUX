@@ -1,7 +1,7 @@
 // 세션별 Job Object (FR-C-05) — 자식 프로세스 트리 전체를 하나의 잡으로 묶는다.
 // KILL_ON_JOB_CLOSE라서 마지막 핸들이 닫히면(= PtySession drop) OS가 트리를 정리한다 —
 // 앱이 크래시해도 고아 프로세스가 남지 않는다. 명시적 종료는 terminate()로 즉시 수행한다.
-// C11(메모리 계측)도 이 핸들을 재사용할 예정이다 (FR-C-09).
+// C11(메모리 계측)도 이 핸들을 재사용할 예정이다 (FR-C-09). macOS는 아래 mac 모듈이 같은 모양을 낸다.
 
 #[cfg(windows)]
 mod win {
@@ -89,10 +89,10 @@ mod win {
         /// 손으로 띄운 claude가 감지·포트·메모리·종료에서 통째로 빠지던 자리다.
         /// 잡 안에만 있는 세션은 pids()와 같은 목록이다
         pub fn tree_pids(&self) -> Vec<u32> {
-            super::tree_pids(&self.pids(), &process_table(), start_time)
+            super::tree_pids(&self.pids(), &process_table_shared(), start_time)
         }
 
-        /// 잡을 벗어난 자손만
+        /// 잡을 벗어난 자손만 — 종료 경로라 공유 표가 아니라 새 스냅숏을 쓴다 (방금 뜬 자식을 놓치면 남는다)
         pub fn escaped(&self) -> Vec<u32> {
             let job = self.pids();
             super::tree_pids(&job, &process_table(), start_time).split_off(job.len())
@@ -193,6 +193,37 @@ mod win {
         out
     }
 
+    /// 스냅숏 공유 기간 (CPU·RAM C1)
+    const TABLE_TTL: std::time::Duration = std::time::Duration::from_secs(1);
+
+    /// 공유 스냅숏 (CPU·RAM C1) — 에이전트 scan(2초)·감지(5초)·메모리(10초)가 세션마다 시스템 전체
+    /// 스냅숏을 찍던 자리다 (세션 10개면 초당 약 8회). TABLE_TTL 안의 호출은 같은 표를 쓴다.
+    /// 잠금을 쥔 채 찍는다 — 동시에 온 호출은 기다렸다가 그 표를 받는다
+    fn process_table_shared() -> std::sync::Arc<Vec<(u32, u32)>> {
+        type Shared = Option<(std::time::Instant, std::sync::Arc<Vec<(u32, u32)>>)>;
+        static SHARED: std::sync::Mutex<Shared> = std::sync::Mutex::new(None);
+        let mut c = SHARED.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((at, t)) = c.as_ref() {
+            if at.elapsed() < TABLE_TTL {
+                return t.clone();
+            }
+        }
+        let t = std::sync::Arc::new(process_table());
+        *c = Some((std::time::Instant::now(), t.clone()));
+        t
+    }
+
+    #[cfg(test)]
+    #[test]
+    fn process_table_is_shared_within_ttl() {
+        let a = process_table_shared();
+        let b = process_table_shared();
+        assert!(std::sync::Arc::ptr_eq(&a, &b), "TTL 안에서는 같은 스냅숏");
+        assert!(a.iter().any(|&(pid, _)| pid == std::process::id()), "자기 자신이 표에 있다");
+        std::thread::sleep(TABLE_TTL + std::time::Duration::from_millis(50));
+        assert!(!std::sync::Arc::ptr_eq(&a, &process_table_shared()), "지나면 새로 찍는다");
+    }
+
     /// 프로세스 시작 시각 (FILETIME 100ns) — pid 재사용을 가르는 근거
     fn start_time(pid: u32) -> Option<u64> {
         unsafe {
@@ -245,10 +276,99 @@ pub fn tree_pids(job: &[u32], table: &[(u32, u32)], start: impl Fn(u32) -> Optio
     out
 }
 
-#[cfg(not(windows))]
+// macOS — Job Object가 없다. 페인 루트 pid(PTY 자식 = 세션 리더)에서 부모 pid를 따라 트리를 모으고,
+// 같은 제어 터미널을 쥔 프로세스도 넣는다: 셸 작업 제어가 claude를 새 프로세스 그룹으로 띄우고,
+// 부모가 먼저 끝나 launchd로 입양된 자손도 터미널은 그대로 쥐고 있다.
+// 커널이 대신 정리해 주지 않으므로 drop이 직접 끝낸다 (KILL_ON_JOB_CLOSE 자리). 앱이 크래시하면
+// PTY 마스터가 닫혀 세션이 SIGHUP을 받는 데까지가 OS의 몫이다.
+#[cfg(target_os = "macos")]
+mod mac {
+    use crate::macproc::{self, ProcInfo};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Mutex;
+
+    pub struct Job {
+        /// (루트 pid, 시작 시각) — 시각은 pid 재사용을 가른다
+        root: Mutex<Option<(u32, u64)>>,
+        /// 지금까지 본 트리 상주 메모리 최댓값 — 잡 피크 커밋의 대용
+        peak: AtomicU64,
+    }
+
+    impl Job {
+        pub fn new_kill_on_close() -> Option<Job> {
+            Some(Job { root: Mutex::new(None), peak: AtomicU64::new(0) })
+        }
+
+        pub fn assign_pid(&self, pid: u32) -> bool {
+            let Some(p) = macproc::info(pid) else { return false };
+            if let Ok(mut r) = self.root.lock() {
+                *r = Some((pid, p.start));
+            }
+            true
+        }
+
+        /// 루트가 아직 그 프로세스인가 — 이미 끝났거나 pid가 재사용됐으면 None
+        fn live_root(&self, table: &[ProcInfo]) -> Option<ProcInfo> {
+            let (pid, start) = (*self.root.lock().ok()?)?;
+            table.iter().find(|p| p.pid == pid && p.start == start).copied()
+        }
+
+        fn tree_in(&self, table: &[ProcInfo]) -> Vec<u32> {
+            let Some(root) = self.live_root(table) else { return Vec::new() };
+            let pairs: Vec<(u32, u32)> = table.iter().map(|p| (p.pid, p.ppid)).collect();
+            let start = |pid: u32| table.iter().find(|p| p.pid == pid).map(|p| p.start);
+            let mut out = super::tree_pids(&[root.pid], &pairs, start);
+            // 같은 터미널 — 루트보다 늦게 시작한 것만 (앞선 것은 이 터미널의 이전 주인일 수 없다)
+            if root.tdev != 0 && root.tdev != u32::MAX {
+                for p in table {
+                    if p.tdev == root.tdev && p.start >= root.start && !out.contains(&p.pid) {
+                        out.push(p.pid);
+                    }
+                }
+            }
+            out
+        }
+
+        pub fn terminate(&self) {
+            let pids = self.tree_in(&macproc::all());
+            for pid in pids.iter().rev() {
+                unsafe { libc::kill(*pid as libc::pid_t, libc::SIGKILL) };
+            }
+        }
+
+        pub fn pids(&self) -> Vec<u32> {
+            self.tree_in(&macproc::all())
+        }
+
+        pub fn tree_pids(&self) -> Vec<u32> {
+            self.pids()
+        }
+
+        pub fn memory_bytes(&self) -> Option<(u64, u64)> {
+            let pids = self.pids();
+            if pids.is_empty() {
+                return None;
+            }
+            let total: u64 = pids.iter().filter_map(|&p| macproc::resident_bytes(p)).sum();
+            let peak = self.peak.fetch_max(total, Ordering::Relaxed).max(total);
+            Some((total, peak))
+        }
+    }
+
+    impl Drop for Job {
+        fn drop(&mut self) {
+            self.terminate();
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub use mac::Job;
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub struct Job;
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 impl Job {
     pub fn new_kill_on_close() -> Option<Job> {
         None
@@ -270,6 +390,33 @@ impl Job {
 
 #[cfg(test)]
 mod tests {
+    /// macOS 세션 트리 — 셸이 띄운 자식이 트리에 잡히고, terminate가 트리를 끝낸다
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn mac_job_tracks_and_kills_the_tree() {
+        let mut child = std::process::Command::new("/bin/sh")
+            .args(["-c", "sleep 30 & wait"])
+            .spawn()
+            .unwrap();
+        let job = super::Job::new_kill_on_close().unwrap();
+        assert!(job.assign_pid(child.id()));
+        let mut tree = Vec::new();
+        for _ in 0..50 {
+            tree = job.pids();
+            if tree.len() > 1 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert_eq!(tree[0], child.id());
+        assert!(tree.len() > 1, "sh의 자식 sleep이 트리에 있어야 한다");
+        assert!(job.memory_bytes().is_some_and(|(cur, peak)| cur > 0 && peak >= cur));
+        job.terminate();
+        let _ = child.wait();
+        let sleep_pid = tree[1];
+        assert!(crate::macproc::info(sleep_pid).is_none_or(|p| p.ppid != child.id()), "자식도 끝나야 한다");
+    }
+
     use super::tree_pids;
     use std::collections::HashMap;
 

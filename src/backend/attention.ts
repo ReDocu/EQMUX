@@ -92,7 +92,20 @@ export function pushNotify(list: readonly NotifyItem[], it: Omit<NotifyItem, "co
   return [{ ...it, count: 1 }, ...list].slice(0, NOTIFY_MAX);
 }
 
-const [notifyItems, setNotifyItems] = createSignal<NotifyItem[]>([]);
+// 브라우저 dev 목 시드 — 벨이 빈 채로 뜨지 않게. Tauri에서는 Rust notify-item만 쌓는다
+const demoNotify = (): NotifyItem[] => {
+  const ago = (m: number) => Date.now() - m * 60000;
+  const it = (session: string, workspace: string, kind: NotifyItem["kind"], title: string, body: string, m: number, count = 1): NotifyItem =>
+    ({ id: `${session}-${m}`, session, workspace, kind, title, body, ts: ago(m), os: false, count });
+  return [
+    it("sol@academy", "academy", "report", "솔 · 완료", "회귀 검증 완료 — 42건 통과 · 증거 .eqmux/evidence/regression.log", 1),
+    it("kai@academy", "academy", "message", "카이 · 메시지 1건", "미라@EQMux: EQMux 세션 레지스트리가 auth 토큰 포맷을 읽습니다.", 2),
+    it("noel@academy", "academy", "waiting", "노엘 · 승인 대기", "Bash(npm publish)", 12, 2),
+    it("hana@eqmux", "eqmux", "dead", "하나 · 종료됨", "exit 1 · 재개 가능", 31),
+    it("lin@academy", "academy", "turn", "린 · 턴 끝남", "턴이 끝났습니다", 40),
+  ];
+};
+const [notifyItems, setNotifyItems] = createSignal<NotifyItem[]>(isTauri() ? [] : demoNotify());
 export { notifyItems };
 
 let feedStarted = false;

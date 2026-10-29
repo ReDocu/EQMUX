@@ -50,7 +50,7 @@ interface LayoutData {
   serverCommands?: Record<string, string>; // 워크스페이스 id → 마지막 서버 명령. 다시 칠 때는 사람이 누른다
 }
 
-const PANEL_TABS: readonly PanelTab[] = ["conversation", "git", "ports", "server", "logs", "browser", "mdview"];
+const PANEL_TABS: readonly PanelTab[] = ["conversation", "git", "ports", "server", "logs", "browser", "mdview", "env"];
 
 const isLayoutKey = (v: unknown): v is PaneLayout =>
   typeof v === "string" && PANE_LAYOUTS.some((l) => l.key === v);

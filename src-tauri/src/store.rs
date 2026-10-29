@@ -100,12 +100,36 @@ CREATE TABLE IF NOT EXISTS message (
   recipient_name TEXT
 );
 CREATE INDEX IF NOT EXISTS message_recipient_kind ON message(recipient, kind);
+-- CPU·RAM M7 — open_requesters의 '내 마지막 완료 보고' 하위 쿼리(sender = ? AND kind = 'report')와
+-- 모두 읽음(UPDATE … WHERE read = 0)이 원장 전체를 훑지 않게 한다. 미확인은 부분 인덱스라 작다
+CREATE INDEX IF NOT EXISTS message_sender_kind ON message(sender, kind);
+CREATE INDEX IF NOT EXISTS message_unread ON message(id) WHERE read = 0;
 ";
 
 const SCROLLBACK_CAP_PER_SESSION: i64 = 1_000; // FR-C-50 — 0.3.7에서 10만 → 1,000줄
 const CAP_CHECK_EVERY: i64 = 200; // 상한의 1/5마다 점검 — 실보관량이 상한을 크게 넘지 않게
 const RETENTION_DAYS_MS: i64 = 30 * 86_400_000;
 const BATCH_MAX: usize = 200; // FR-C-21 — 100ms 창 또는 누적 N줄 중 먼저
+/// 열린 DB의 보존 정리 주기 (CPU·RAM M7) — 첫 열기에서만 돌면 앱을 며칠 켜 두는 동안 30일이 지나도 지워지지 않는다
+const MAINTAIN_EVERY: Duration = Duration::from_secs(24 * 3600);
+/// 쓰기 실패로 다시 쌓인 대기분의 상한 (CPU·RAM M4) — 채널 상한과 같은 값. DB를 못 여는 동안에도
+/// 채널은 계속 비워져 pending으로 들어오므로, 이 상한이 없으면 그 워크스페이스의 출력 전부가 힙에 쌓인다
+const PENDING_MAX: usize = 50_000;
+
+/// 상한을 넘은 대기분에서 오래된 출력 줄(Line)부터 버린다 — 이벤트·세션 시작/종료·재개 매핑은
+/// 작고 다시 만들 수 없으니 남긴다. 버린 줄 수를 돌려준다. 버린 줄은 세션 로그 파일에 그대로 있다
+fn cap_pending(pending: &mut Vec<StoreMsg>, max: usize) -> usize {
+    let mut over = pending.len().saturating_sub(max);
+    let before = pending.len();
+    pending.retain(|m| {
+        if over > 0 && matches!(m, StoreMsg::Line { .. }) {
+            over -= 1;
+            return false;
+        }
+        true
+    });
+    before - pending.len()
+}
 
 fn now_ms() -> i64 {
     SystemTime::now()
@@ -124,17 +148,26 @@ pub fn db_path(root: &Path, ws: &str) -> PathBuf {
     root.join("workspaces").join(sanitize(ws)).join("session.db")
 }
 
+/// 이 프로세스에서 스키마를 이미 맞춘 DB 파일 (CPU·RAM C8) — 메시지 송수신·cache_set·report마다
+/// 스키마 전체·ALTER 9개·FTS 생성을 다시 돌며 쓰기 스레드와 잠금을 다투던 자리다.
+/// ponytail: 실행 중에 session.db가 지워지면(지금은 그런 경로가 없다) 다시 맞추지 않는다
+static MIGRATED: std::sync::Mutex<Option<std::collections::HashSet<PathBuf>>> = std::sync::Mutex::new(None);
+
 /// 쓰기 열림 — 스키마 보장까지만 하는 가벼운 열기. 메시지 버스(messages.rs)도 이 경로로 연다.
 pub(crate) fn open_db(root: &Path, ws: &str) -> rusqlite::Result<Connection> {
     let path = db_path(root, ws);
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    let conn = Connection::open(path)?;
+    let conn = Connection::open(&path)?;
     let _ = conn.pragma_update(None, "journal_mode", "WAL");
     let _ = conn.pragma_update(None, "synchronous", "NORMAL");
     // 이중 쓰기 연결 경합 (store 배치 커밋 vs msg_send·IPC publish) — 즉시 실패 대신 대기
     let _ = conn.busy_timeout(Duration::from_millis(500));
+    let done = MIGRATED.lock().map(|m| m.as_ref().is_some_and(|s| s.contains(&path))).unwrap_or(false);
+    if done {
+        return Ok(conn);
+    }
     conn.execute_batch(SCHEMA)?;
     // SGR 보존 컬럼 (FR-C-15, M32) — 기존 DB 마이그레이션. 이미 있으면 조용히 실패한다
     let _ = conn.execute("ALTER TABLE scrollback ADD COLUMN styled TEXT", []);
@@ -159,6 +192,9 @@ pub(crate) fn open_db(root: &Path, ws: &str) -> rusqlite::Result<Connection> {
     let _ = conn.execute_batch(
         "CREATE VIRTUAL TABLE IF NOT EXISTS scrollback_fts USING fts5(text, session_id UNINDEXED, seq UNINDEXED, ts UNINDEXED)",
     );
+    if let Ok(mut m) = MIGRATED.lock() {
+        m.get_or_insert_with(Default::default).insert(path);
+    }
     Ok(conn)
 }
 
@@ -270,6 +306,10 @@ fn run(root: PathBuf, rx: Receiver<StoreMsg>) {
     let mut dbs: HashMap<String, Connection> = HashMap::new();
     let mut cursors: HashMap<String, SessionCursor> = HashMap::new();
     let mut pending: Vec<StoreMsg> = Vec::new();
+    // 마지막 flush 뒤 새로 들어온 수 (M4) — pending 길이로 재면 쓰기 실패로 남은 대기분이 BATCH_MAX를
+    // 넘는 순간부터 줄 하나마다 flush(= DB 열기 재시도)가 돈다
+    let mut fresh = 0usize;
+    let mut last_maintain = std::time::Instant::now(); // 첫 열기(open_writer)가 이미 한 번 돈다
 
     loop {
         match rx.recv_timeout(Duration::from_millis(100)) {
@@ -281,11 +321,20 @@ fn run(root: PathBuf, rx: Receiver<StoreMsg>) {
             }
             Ok(msg) => {
                 pending.push(msg);
-                if pending.len() < BATCH_MAX {
+                fresh += 1;
+                if fresh < BATCH_MAX {
                     continue;
                 }
             }
-            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Timeout) => {
+                // 쉬는 틈에만 — 적재 중에는 배치를 늦추지 않는다
+                if last_maintain.elapsed() >= MAINTAIN_EVERY {
+                    last_maintain = std::time::Instant::now();
+                    for conn in dbs.values() {
+                        maintain(conn);
+                    }
+                }
+            }
             Err(RecvTimeoutError::Disconnected) => {
                 flush(&root, &mut dbs, &mut cursors, &mut pending);
                 return;
@@ -294,6 +343,7 @@ fn run(root: PathBuf, rx: Receiver<StoreMsg>) {
         if !pending.is_empty() {
             flush(&root, &mut dbs, &mut cursors, &mut pending);
         }
+        fresh = 0;
     }
 }
 
@@ -328,8 +378,9 @@ fn flush(
                     dbs.insert(ws.clone(), c);
                 }
                 Err(_) => {
-                    // 일시 오류(잠금·디스크)로 배치를 무음 폐기하지 않는다 — 다음 tick에 재시도.
-                    // ponytail: 영구 장애면 pending이 계속 자란다, 재시도 상한이 필요해지면 그때 단다
+                    // 일시 오류(잠금·디스크)로 배치를 바로 버리지 않는다 — 다음 tick에 재시도.
+                    // 영구 장애면 flush 끝의 cap_pending이 오래된 출력 줄부터 버려 상한을 지킨다 (M4).
+                    // ponytail: 실패한 열기를 100ms 또는 BATCH_MAX줄마다 다시 시도한다, 비용이 보이면 백오프를 단다
                     pending.extend(msgs);
                     continue;
                 }
@@ -451,6 +502,10 @@ fn flush(
                 }
             }
         }
+    }
+    let dropped = cap_pending(pending, PENDING_MAX);
+    if dropped > 0 {
+        crate::diag::write(&format!("store: 쓰기 실패가 이어져 대기 중인 출력 {dropped}줄을 버림 (상한 {PENDING_MAX})"));
     }
 }
 
@@ -665,6 +720,8 @@ pub fn is_tui_noise(line: &str) -> bool {
 /// emit은 (평문, styled)를 받고 SGR이 없던 줄의 styled는 None이다.
 /// 완전한 VT 파서(PRD A)가 오면 그 확정 줄로 교체한다.
 pub struct LineAssembler {
+    /// 색(SGR) 보존본을 만드는가 — 설정 sgrStore가 꺼져 있으면 styled를 쌓지 않는다 (CPU·RAM C9)
+    sgr: bool,
     partial: String,
     /// SGR 보존 빌더 — 문자와 SGR 시퀀스를 순서대로 쌓는다. 백스페이스는 마지막 문자만 지운다
     styled: Vec<StyledChunk>,
@@ -712,8 +769,14 @@ fn csi_rewrites_line(final_byte: char, params: &str) -> bool {
 }
 
 impl LineAssembler {
+    #[cfg(test)]
     pub fn new() -> Self {
+        Self::with_sgr(true)
+    }
+
+    pub fn with_sgr(sgr: bool) -> Self {
         LineAssembler {
+            sgr,
             partial: String::new(),
             styled: Vec::new(),
             has_sgr: false,
@@ -772,12 +835,16 @@ impl LineAssembler {
                         }
                         '\t' => {
                             self.partial.push('\t');
-                            self.styled.push(StyledChunk::Ch('\t'));
+                            if self.sgr {
+                                self.styled.push(StyledChunk::Ch('\t'));
+                            }
                         }
                         c if c.is_control() => {}
                         c => {
                             self.partial.push(c);
-                            self.styled.push(StyledChunk::Ch(c));
+                            if self.sgr {
+                                self.styled.push(StyledChunk::Ch(c));
+                            }
                         }
                     }
                 }
@@ -795,9 +862,11 @@ impl LineAssembler {
                         // 단 "버린다"와 "무시한다"는 다르다 — 제자리 갱신 시퀀스를 그냥 무시하면
                         // 프레임이 줄에 계속 쌓인다 (스피너 300프레임 = 한 줄 6.5KB).
                         if c == 'm' {
-                            self.styled
-                                .push(StyledChunk::Sgr(format!("\u{1b}[{}m", self.csi_buf)));
-                            self.has_sgr = true;
+                            if self.sgr {
+                                self.styled
+                                    .push(StyledChunk::Sgr(format!("\u{1b}[{}m", self.csi_buf)));
+                                self.has_sgr = true;
+                            }
                         } else if csi_rewrites_line(c, &self.csi_buf) {
                             self.partial.clear();
                             self.styled.clear();
@@ -837,6 +906,24 @@ impl LineAssembler {
 mod tests {
     use super::*;
 
+    /// M4 — 상한을 넘으면 오래된 Line부터 버리고, 이벤트는 남긴다
+    #[test]
+    fn cap_pending_drops_oldest_lines_only() {
+        let line = |t: &str| StoreMsg::Line { ws: "w".into(), id: "s".into(), text: t.into(), styled: None };
+        let event = || StoreMsg::Event { ws: "w".into(), id: None, kind: "k".into(), message: "m".into() };
+        let mut p = vec![line("1"), event(), line("2"), line("3")];
+        assert_eq!(cap_pending(&mut p, 2), 2);
+        let kept: Vec<String> = p
+            .iter()
+            .map(|m| match m {
+                StoreMsg::Line { text, .. } => text.clone(),
+                _ => "E".into(),
+            })
+            .collect();
+        assert_eq!(kept, ["E", "3"]);
+        assert_eq!(cap_pending(&mut p, 2), 0, "상한 안이면 그대로");
+    }
+
     #[test]
     fn fts_query_is_escaped_per_token() {
         assert_eq!(fts_escape(r#"foo "bar" NEAR"#), r#""foo" "bar" "NEAR""#);
@@ -844,6 +931,51 @@ mod tests {
 
     /// SGR 보존 (FR-C-15, M32) — 색 시퀀스만 styled에 남고 평문은 그대로,
     /// 색 없는 줄은 styled가 None, 커서 이동류(CSI K 등)는 보존하지 않는다
+    #[test]
+    fn assembler_without_sgr_keeps_text_and_skips_styled() {
+        // C9 — 색 저장이 꺼져 있으면 평문은 같고 색 사본은 만들지 않는다
+        let input = "\u{1b}[31mred\u{1b}[0m pl\u{8}lain\n\u{1b}[2Kmoved\n";
+        let (mut on, mut off) = (Vec::new(), Vec::new());
+        LineAssembler::new().push(input, |t, s| on.push((t, s)));
+        LineAssembler::with_sgr(false).push(input, |t, s| off.push((t, s)));
+        let text = |v: &Vec<(String, Option<String>)>| v.iter().map(|x| x.0.clone()).collect::<Vec<_>>();
+        assert_eq!(text(&on), text(&off));
+        assert!(on[0].1.is_some() && off.iter().all(|x| x.1.is_none()));
+    }
+
+    /// M7 — 모두 읽음과 '내 마지막 완료 보고' 하위 쿼리가 원장 전체가 아니라 인덱스를 탄다
+    #[test]
+    fn message_queries_use_indexes() {
+        let dir = std::env::temp_dir().join(format!("eqmux-idx-{}", crate::workspace::now_ms()));
+        let conn = open_db(&dir, "ws").unwrap();
+        let plan = |sql: &str| -> String {
+            let mut st = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+            let rows = st.query_map([], |r| r.get::<_, String>(3)).unwrap();
+            rows.map(|r| r.unwrap()).collect::<Vec<_>>().join(" / ")
+        };
+        let unread = plan("UPDATE message SET read = 1 WHERE read = 0");
+        assert!(unread.contains("message_unread"), "{unread}");
+        let done = plan("SELECT MAX(id) FROM message WHERE sender = 'a' AND kind = 'report' AND done = 1");
+        assert!(done.contains("message_sender_kind"), "{done}");
+        drop(conn);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// C8 — 같은 DB를 다시 열어도 동작하고, 스키마는 첫 열기에서 맞춘 것으로 기억된다
+    #[test]
+    fn open_db_migrates_once_per_file() {
+        let dir = std::env::temp_dir().join(format!("eqmux-mig-{}", crate::workspace::now_ms()));
+        let first = open_db(&dir, "ws").unwrap();
+        first.execute("INSERT OR REPLACE INTO meta VALUES ('k', 'v')", []).unwrap();
+        drop(first);
+        assert!(MIGRATED.lock().unwrap().as_ref().unwrap().contains(&db_path(&dir, "ws")));
+        let again = open_db(&dir, "ws").unwrap();
+        let v: String = again.query_row("SELECT value FROM meta WHERE key = 'k'", [], |r| r.get(0)).unwrap();
+        assert_eq!(v, "v");
+        drop(again);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn assembler_preserves_sgr_only() {
         let mut a = LineAssembler::new();

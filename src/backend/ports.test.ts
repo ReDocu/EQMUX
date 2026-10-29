@@ -6,6 +6,7 @@ import {
   feedLine,
   promoteServerCommands,
   foldPortRows,
+  exposureOf,
   isExposed,
   isNewPort,
   portAddress,
@@ -144,9 +145,30 @@ describe("isExposed — 루프백 밖 바인딩", () => {
     expect(isExposed(out[0])).toBe(true);
   });
 
-  test("루프백·와일드카드만이면 노출이 아니다", () => {
-    const out = foldPortRows([row(3000, "0.0.0.0", 5, "s1"), row(3000, "[::]", 5, "s1")], NO_PREV, 0, true);
+  test("루프백만이면 노출이 아니다", () => {
+    const out = foldPortRows([row(3000, "127.0.0.1", 5, "s1"), row(3000, "[::1]", 5, "s1")], NO_PREV, 0, true);
     expect(isExposed(out[0])).toBe(false);
+    expect(exposureOf(out[0])).toBeUndefined();
+  });
+
+  test("와일드카드(0.0.0.0·[::])는 모든 인터페이스에 열린 것 — 노출이다 (B139)", () => {
+    for (const h of ["0.0.0.0", "[::]"]) {
+      const out = foldPortRows([row(5178, h, 5, "s1")], NO_PREV, 0, true);
+      expect(isExposed(out[0])).toBe(true);
+      expect(exposureOf(out[0])).toBe("all");
+    }
+  });
+
+  test("노출 종류 — 특정 LAN 주소는 lan, 와일드카드가 섞이면 넓은 쪽(all)", () => {
+    const lan = foldPortRows([row(3000, "192.168.0.10", 5, "s1")], NO_PREV, 0, true);
+    expect(exposureOf(lan[0])).toBe("lan");
+    const both = foldPortRows([row(3000, "192.168.0.10", 5, "s1"), row(3000, "[::]", 5, "s1")], NO_PREV, 0, true);
+    expect(exposureOf(both[0])).toBe("all");
+  });
+
+  test("[::] 전용 서버는 [::1]로 연다 — 127.0.0.1은 IPv6 전용 리스너에 닿지 않는다 (B142)", () => {
+    const out = foldPortRows([row(47902, "[::]", 5, "s1")], NO_PREV, 0, true);
+    expect(portAddress(out[0])).toBe("[::1]:47902");
   });
 
   test("접기 전 바인딩 하나라도 루프백 밖이면 노출이다 — 대표 호스트만 보면 놓친다", () => {

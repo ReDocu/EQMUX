@@ -1,6 +1,6 @@
 // PTY 브리지 — Rust pty_* 커맨드의 프런트 소비 표면.
 // Tauri 밖(순수 vite dev)에서는 모든 함수가 no-op이며, 화면은 목 폴백을 그린다.
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
 export const isTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -26,10 +26,11 @@ let listenerReady: Promise<void> | undefined;
 function ensureListeners(): Promise<void> {
   if (!listenerReady) {
     listenerReady = (async () => {
-      await listen<PtyOutput>("pty-output", (e) => {
-        const { id, data } = e.payload;
-        outputSubs.get(id)?.forEach((cb) => cb(data));
-      });
+      const dispatch = ({ id, data }: PtyOutput) => outputSubs.get(id)?.forEach((cb) => cb(data));
+      // 출력은 Channel로 받는다 (CPU·RAM — cpu-optimization 후보 5). emit은 덩어리마다 스크립트를
+      // eval해 웹뷰에 쓰레기를 남겼다. 등록이 실패하면 Rust가 emit으로 보내므로 listen도 남겨 둔다
+      await invoke("pty_output_channel", { channel: new Channel<PtyOutput>(dispatch) }).catch(() => {});
+      await listen<PtyOutput>("pty-output", (e) => dispatch(e.payload));
       await listen<PtyExit>("pty-exit", (e) => {
         spawned.delete(e.payload.id);
         exitHook?.(e.payload.id, e.payload.code);
@@ -62,10 +63,11 @@ export async function spawnPty(
   rows: number,
   workspace?: string,
   shell?: string,
-): Promise<void> {
-  if (!isTauri()) return;
+): Promise<string | undefined> {
+  if (!isTauri()) return undefined;
   await ensureListeners();
-  await invoke("pty_spawn", {
+  // 돌려받는 값은 실제로 뜬 셸의 이름이다 — 요청 셸이 없어 물러났으면 그 셸 (B114)
+  const label = await invoke<string | null>("pty_spawn", {
     id,
     cwd,
     shell: shell ?? null,
@@ -74,6 +76,7 @@ export async function spawnPty(
     workspace: workspace ?? null,
   });
   spawned.add(id);
+  return label ?? undefined;
 }
 
 /** 재생 줄 (FR-C-31) — text는 평문(필터·중복 판정), styled는 SGR 색 보존본 (FR-C-15, 있을 때만) */
@@ -184,8 +187,15 @@ export function setTerminalDisposer(fn: (id: string) => void): void {
  *  터미널 인스턴스도 여기서 함께 폐기한다 (B44) — 남겨 두면 같은 세션 id로 슬롯이 다시 생겨도
  *  REGISTRY 항목의 initialized가 참이라 spawnPty가 영영 안 돌고, 죽은 세션의 마지막 화면이
  *  '실행 중'인 척 그대로 재부착된다. 세션 id는 `페르소나@워크스페이스` 결정적 관례라 반드시 충돌한다. */
+const forgetHooks: ((id: string) => void)[] = [];
+/** 세션 영구 제거 때 함께 정리할 것 (CPU·RAM M6 — 대화 인박스) */
+export function onForgetSession(cb: (id: string) => void): void {
+  forgetHooks.push(cb);
+}
+
 export function forgetAgent(id: string): void {
   disposeTerm?.(id); // 브라우저 목에서도 화면 인스턴스는 폐기해야 한다 — isTauri 가드 앞에 둔다
+  forgetHooks.forEach((cb) => cb(id));
   if (!isTauri()) return;
   void invoke("agent_forget", { id }).catch(() => {});
 }

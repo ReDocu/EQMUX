@@ -11,8 +11,10 @@ import { HARD_MAX_SLOTS, maxSlots } from "./settings";
 /** 동시에 열어 둘 수 있는 워크스페이스 수 (B9) — 등록은 무제한이고 오픈만 제한된다.
  *  화면(대시보드 "열기")이 상한을 미리 알아야 조용한 no-op이 되지 않는다 */
 export const MAX_OPEN_WORKSPACES = 10;
-import { AGENT_CLI_LABEL, agentAttached, cliOf, handoffReport, pickAutoName, planCastingSlots, projectStem, sessionName, sessionNameError } from "../types";
+import { AGENT_CLI_LABEL, agentAttached, cliOf, handoffReport, MESSAGES_PER_WS, pickAutoName, planCastingSlots, projectStem, sessionName, sessionNameError, trimStream } from "../types";
 import type { AgentCliId } from "../types";
+import type { EnvFile } from "./env";
+import type { WorktreeInfo } from "./git";
 import type {
   AgentStateApply,
   ConversationMessage,
@@ -46,8 +48,8 @@ export interface Backend {
   markAllRead(wsId?: string): void;
   /** 메시지 원장 실측으로 그 워크스페이스 스트림을 교체 (PRD F) — Tauri에서만 호출된다 */
   hydrateMessages(wsId: string, list: ConversationMessage[]): void;
-  /** message-new 이벤트 1건 반영 — 이미 있는 id는 무시한다 */
-  appendMessage(m: ConversationMessage): void;
+  /** message-new 이벤트 1건 반영 — 이미 있는 id는 무시한다. 상한으로 옛 메시지를 걷어냈으면 true */
+  appendMessage(m: ConversationMessage): boolean;
   /** 미확인 해제 (FR-G-44) — 그 세션의 페인을 보거나 상세를 열면 해제된다 */
   markSeen(sessionId: string): void;
   /** 모두 확인 (FR-G-47) */
@@ -366,11 +368,16 @@ const SESSIONS: Session[] = createMutable<Session[]>([
   }),
   s("sol@academy", "academy", 4, "sol", "debug", {
     status: "idle",
+    cwd: "C:\\workspace\\Academy\\.eqmux\\worktrees\\sol", // 워크트리 격리 세션 — 레일 워크트리 목(MOCK_WORKTREES)과 맞춘다
     missionId: "regression",
     scrollbackLines: 2100,
     memoryMb: 180,
     memoryPeakMb: 240,
-    lastOutput: "회귀 검증 대기",
+    agent: "Claude",
+    // 완료 보고 칩(0.5) 시드 — report --done을 받은 뒤 아직 페인을 안 본 상태
+    unseenDone: "report",
+    doneText: "회귀 검증 완료 — 42건 통과 · 증거 .eqmux/evidence/regression.log",
+    lastOutput: "report --done · 회귀 검증 완료",
     sinceMs: 2 * 60000,
   }),
   s("mira@eqmux", "eqmux", 1, "mira", "lead", {
@@ -497,6 +504,35 @@ const MESSAGES: ConversationMessage[] = createMutable<ConversationMessage[]>([
     body: "npm publish 승인은 보류했습니다. dry-run 산출물을 먼저 첨부하세요.",
     unread: true,
   },
+  // 완료 보고(report --done)와 프로젝트 간 메시지(0.5) 시드 — from/to가 세션 id라 다른 프로젝트면 배지가 붙는다
+  {
+    id: "m5",
+    time: "10:44",
+    from: "sol@academy",
+    to: "@all",
+    type: "report",
+    body: "회귀 검증 완료 — 42건 통과. 증거는 .eqmux/evidence/regression.log",
+    unread: true,
+    done: true,
+  },
+  {
+    id: "m6",
+    time: "10:46",
+    from: "mira@eqmux",
+    to: "kai@academy",
+    type: "ask",
+    body: "EQMux 세션 레지스트리가 auth 토큰 포맷을 읽습니다. 바뀌는 필드가 있으면 알려 주세요.",
+    unread: true,
+  },
+  {
+    id: "m7",
+    time: "10:47",
+    from: "kai@academy",
+    to: "mira@eqmux",
+    type: "report",
+    body: "공개 필드는 그대로입니다. 내부 저장 키만 바뀌어요 — 변경 목록은 handoff로 보낼게요.",
+    unread: false,
+  },
 ]);
 
 const nowTime = () => new Date().toTimeString().slice(0, 5);
@@ -549,8 +585,19 @@ export class MockBackend implements Backend {
   private listeners = new Set<() => void>();
   private timer: ReturnType<typeof setInterval> | undefined;
 
+  private soon: ReturnType<typeof setTimeout> | undefined;
+
   private broadcast() {
+    clearTimeout(this.soon); // 예약된 묶음 방송도 이 방송이 덮는다
+    this.soon = undefined;
     this.listeners.forEach((l) => l());
+  }
+
+  /** Rust 이벤트발 갱신(훅·샘플·감지) 전용 — 16ms 안의 방송을 한 번으로 묶는다 (CPU 점검 1).
+   *  바쁜 팀은 도구 호출마다 상태가 와서 tick 구독 전부가 매번 다시 돌던 자리다.
+   *  rAF가 아니라 타이머인 이유: 숨김 중에도 구독자(디렉터리 동기화·고아 해제)는 돌아야 한다 */
+  private broadcastSoon() {
+    this.soon ??= setTimeout(() => this.broadcast(), 16);
   }
 
   /** 인메모리 계측(브라우저 데모) + 실행 모드에서는 event 테이블에도 적재한다 (B63).
@@ -612,7 +659,12 @@ export class MockBackend implements Backend {
     this.broadcast();
   }
 
+  /** 워크스페이스별 메시지 상한 (M3) — `▲ 이전`으로 불러온 옛 페이지가 다음 도착 한 건에 바로
+   *  밀려나지 않게, 교체할 때 받은 양 + 100건까지는 둔다 */
+  private msgCap = new Map<string, number>();
+
   hydrateMessages(wsId: string, list: ConversationMessage[]) {
+    this.msgCap.set(wsId, Math.max(MESSAGES_PER_WS, list.length + 100));
     // 그 워크스페이스의 기존 스트림과 워크스페이스 없는 목 시드를 걷어내고 실측으로 교체
     for (let i = MESSAGES.length - 1; i >= 0; i--) {
       const w = MESSAGES[i].workspaceId;
@@ -624,8 +676,11 @@ export class MockBackend implements Backend {
   }
 
   appendMessage(m: ConversationMessage) {
-    if (MESSAGES.some((x) => x.id === m.id)) return;
+    if (MESSAGES.some((x) => x.id === m.id)) return false;
     MESSAGES.push(m);
+    // 상한 (M3) — 앱을 오래 켜 두면 대화가 끝없이 쌓여 위 중복 검사·대화 탭 렌더·앱 바 미확인 훑기가 같이 무거워진다
+    const trimmed =
+      trimStream(MESSAGES, m.workspaceId, this.msgCap.get(m.workspaceId ?? "") ?? MESSAGES_PER_WS) > 0;
     // 완료 보고 (0.5) — 실시간 도착분만. 원장 다시 읽기(hydrateMessages)는 지난 보고라 칩을 켜지 않는다.
     // 프로젝트 간 보고는 두 원장에 한 번씩 오지만 같은 세션에 같은 값을 쓰므로 무해하다
     if (m.type === "report" && m.done) {
@@ -641,7 +696,11 @@ export class MockBackend implements Backend {
       const sess = SESSIONS.find((x) => x.id === m.from);
       if (sess?.reportPending) sess.reportProgress = true;
     }
+    // 보고는 Rust(ipc report)가 event 테이블에 직접 적는다 — 프런트 logEvent를 지나지 않으므로
+    // 이벤트 로그 구독자(대시보드·로그 탭·이벤트 띠)에게 여기서 알린다 (C4)
+    if (m.type === "report") eventLogged();
     this.broadcast();
+    return trimmed;
   }
 
   markSeen(sessionId: string) {
@@ -1091,7 +1150,7 @@ export class MockBackend implements Backend {
       sess.memoryPeakMb = m.peakMb;
       changed = true;
     }
-    if (changed) this.broadcast();
+    if (changed) this.broadcastSoon();
   }
 
   applyAgents(list: { id: string; agent: string; peer?: string }[]) {
@@ -1104,7 +1163,7 @@ export class MockBackend implements Backend {
       sess.peerName = next?.peer; // Claude Code 세션 이름 — 번호 칸이 끝 조각을 보인다
       changed = true;
     }
-    if (changed) this.broadcast();
+    if (changed) this.broadcastSoon();
   }
 
   applyAgentState(evt: AgentStateApply) {
@@ -1157,7 +1216,7 @@ export class MockBackend implements Backend {
     if (sess.status === "busy") {
       sess.lastOutput = sess.activity ? `작업 중 · ${sess.activity}` : "작업 중";
     }
-    this.broadcast();
+    this.broadcastSoon();
   }
 
   /** 한 줄 요약 반영 (M35) — 라이브(session-recap 이벤트)와 복원(session_recaps) 공용 */
@@ -1165,7 +1224,7 @@ export class MockBackend implements Backend {
     const sess = SESSIONS.find((x) => x.id === id);
     if (!sess || sess.lastRecap === text) return;
     sess.lastRecap = text;
-    this.broadcast();
+    this.broadcastSoon();
   }
 
   setPermissionOverride(id: string, perms?: Permissions) {
@@ -1700,6 +1759,35 @@ export const SESSION_PORTS: SessionPort[] = [
   { port: 5173, badge: "LISTENING", proc: "vite", session: "노엘", host: "127.0.0.1" },
   { port: 3000, badge: "LISTENING", proc: "next dev", session: "카이", host: "127.0.0.1" },
   { port: 9229, badge: "DEBUG", proc: "node inspector", session: "린", host: "127.0.0.1" },
+];
+
+/** 관제 레일 워크트리 목 (브라우저 dev) — 본체 + 세션 워크트리(솔) + 사람이 만든 외부 워크트리 */
+export const MOCK_WORKTREES: Record<string, WorktreeInfo[]> = {
+  "C:\\workspace\\Academy": [
+    { path: "C:\\workspace\\Academy", branch: "main", head: "a5be1be", isMain: true, isSession: false },
+    { path: "C:\\workspace\\Academy\\.eqmux\\worktrees\\sol", branch: "eqmux/sol", head: "8f31c2a", isMain: false, isSession: true },
+    { path: "C:\\workspace\\academy-auth", branch: "feature/auth-refactor", head: "3d92b41", isMain: false, isSession: false },
+  ],
+};
+
+/** 실행 › 환경변수 목 (브라우저 dev) — 값은 패널이 기본으로 가린다 */
+export const MOCK_ENV: EnvFile[] = [
+  {
+    file: ".env",
+    vars: [
+      { key: "PORT", value: "5173" },
+      { key: "DATABASE_URL", value: "postgres://academy:dev-only@localhost:5432/academy" },
+      { key: "AUTH_SECRET", value: "dev-secret-change-me" },
+      { key: "SESSION_TTL", value: "3600" },
+    ],
+  },
+  {
+    file: ".env.local",
+    vars: [
+      { key: "API_BASE", value: "http://localhost:3000" },
+      { key: "DEBUG", value: "auth:*" },
+    ],
+  },
 ];
 
 export const PORT_SUMMARY = { session: 3, system: 28, conflicts: 0, exposed: 0 };
