@@ -2,7 +2,7 @@
 // 사이드 패널(대화·git·포트·로그·브라우저)은 [패널] 토글(마지막 탭으로 열기 · Ctrl+Shift+B)과 패널 탭으로 간다 (U33).
 // 앱 바는 터미널 전체 화면에서도 보이므로 어느 모드에서든 열린다 (M1). [대화] 버튼은 [패널]과 겹쳐 지웠다.
 // 0.5 — "워크스페이스" 도구는 지웠다(탭 줄 "+"와 같은 동작이었다). 벨(알림 센터)과 탭 메뉴를 더했다.
-import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import {
   attentionSessions,
   bellCount,
@@ -169,6 +169,61 @@ export function AppBar() {
     onCleanup(() => clearInterval(timer));
     return null;
   };
+  // 탭 줄이 넘치면 양끝에 ‹ › — 스크롤바를 숨겨서(scrollbar-width: none) 마우스로는 넘길 길이 없었다.
+  // 화살표는 넘치는 동안 둘 다 자리를 지키고, 끝에 닿은 쪽만 흐려진다 (B159·B160).
+  // 끝에서 사라지면 그 자리로 마지막 탭의 ✕가 밀려 들어와 연타가 탭 닫기가 됐고, 누르던 버튼의 포커스도 빠졌다.
+  // 한쪽만 새로 생기면 탭 줄 폭이 28px 줄어 활성 탭 맞춤이 그만큼 모자랐다
+  let tabsEl!: HTMLDivElement;
+  let arrowsWidth = 0;
+  const [tabsOverflow, setTabsOverflow] = createSignal(false);
+  const [canLeft, setCanLeft] = createSignal(false);
+  const [canRight, setCanRight] = createSignal(false);
+  const updateTabArrows = () => {
+    const shown = tabsOverflow();
+    // 화살표가 이미 있으면 그 폭까지 돌려받았을 때 들어맞는지 본다 — 넓혔는데 화살표가 남아 있지 않게
+    setTabsOverflow(tabsEl.scrollWidth - 1 > tabsEl.clientWidth + (shown ? arrowsWidth : 0));
+    setCanLeft(tabsEl.scrollLeft > 1);
+    setCanRight(tabsEl.scrollLeft + tabsEl.clientWidth < tabsEl.scrollWidth - 1);
+  };
+  const scrollTabs = (dir: -1 | 1) => {
+    if (!(dir < 0 ? canLeft() : canRight())) return;
+    const max = tabsEl.scrollWidth - tabsEl.clientWidth;
+    let to = tabsEl.scrollLeft + dir * Math.max(120, tabsEl.clientWidth * 0.7);
+    // 끝까지 한 뼘(48px) 남으면 끝까지 — 마지막 탭 ✕만 가려진 채 한 번 더 누르게 하지 않는다
+    if (to > max - 48) to = max;
+    if (to < 48) to = 0;
+    tabsEl.scrollTo({ left: to, behavior: "smooth" });
+  };
+  // 활성 탭이 화면 밖이면 보이는 곳까지 넘긴다 — 단축키·알림으로 옮겨 갔을 때 어느 탭인지 보이게.
+  // scrollIntoView는 WebKit에서 이 탭 줄을 넘기지 않았다 — 가려진 만큼 직접 민다
+  const revealActiveTab = () => {
+    const a = tabsEl?.querySelector<HTMLElement>(".tab.active");
+    if (!a) return;
+    const r = a.getBoundingClientRect();
+    const c = tabsEl.getBoundingClientRect();
+    if (r.left < c.left) tabsEl.scrollBy({ left: r.left - c.left, behavior: "smooth" });
+    else if (r.right > c.right) tabsEl.scrollBy({ left: r.right - c.right, behavior: "smooth" });
+  };
+  onMount(() => {
+    // 창 크기(ResizeObserver)와 탭 추가·이름 변경(MutationObserver) 모두 넘침을 바꾼다.
+    // 화살표가 처음 생기면 탭 줄이 좁아져 ResizeObserver가 다시 돈다 — 그때 활성 탭을 다시 맞춘다 (B159).
+    // 넘침이 바뀔 때만 — 포트 배지·벨 숫자로 도구 줄 폭이 바뀔 때마다 맞추면 ›로 넘겨 보던 자리를 되돌린다
+    const ro = new ResizeObserver(() => {
+      const was = tabsOverflow();
+      updateTabArrows();
+      if (tabsOverflow() !== was) revealActiveTab();
+    });
+    ro.observe(tabsEl);
+    const mo = new MutationObserver(updateTabArrows);
+    mo.observe(tabsEl, { childList: true, subtree: true, characterData: true });
+    updateTabArrows();
+    // 웹폰트(Inter)가 늦게 붙으면 탭 폭이 바뀐다 — 요소 크기·DOM 변화가 없어 위 두 관찰자는 모른다
+    void document.fonts.ready.then(updateTabArrows);
+    onCleanup(() => {
+      ro.disconnect();
+      mo.disconnect();
+    });
+  });
   // 실행 방식 마법사(실행 방식·기본 터미널 구성·캐스팅·편성) 중에도 그 워크스페이스 탭을 활성으로 보인다 (U30)
   const tabWs = () => {
     const v = view();
@@ -177,91 +232,129 @@ export function AppBar() {
       ? v.wsId
       : undefined;
   };
+  // effect는 DOM 갱신 뒤에 돈다. rAF는 쓰지 않는다 — WebKit은 가려진 창에서 rAF를 멈춘다
+  createEffect(() => {
+    view();
+    tabWs();
+    revealActiveTab();
+  });
+  // 화살표 두 개 폭 — 넘침이 풀렸는지 볼 때 돌려받을 폭이다
+  createEffect(() => {
+    if (tabsOverflow()) {
+      arrowsWidth = 0;
+      for (const b of tabsEl.parentElement?.querySelectorAll<HTMLElement>(".tabs-arrow") ?? [])
+        arrowsWidth += b.offsetWidth;
+    }
+  });
 
   return (
     <div class="appbar">
       <div class="brand">EQMUX</div>
-      <div class="tabs" role="tablist">
-        <button
-          class="tab"
-          role="tab"
-          aria-selected={view().kind === "control"}
-          classList={{ active: view().kind === "control" }}
-          onClick={() => setView({ kind: "control" })}
-        >
-          <Icon name="grid-2x2" size={13} />
-          <span class="tab-label">{t("관제")}</span>
-          <Show when={anyUnseen()}>
-            <span class="unread-dot" />
-          </Show>
-        </button>
-        <For each={workspaces()}>
-          {(ws) => (
-            <button
-              class="tab ws-tab"
-              role="tab"
-              aria-selected={tabWs() === ws.id}
-              classList={{ active: tabWs() === ws.id }}
-              onClick={() => setView({ kind: "workspace", id: ws.id })}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                setTabMenu({ x: e.clientX, y: e.clientY, ws });
-              }}
-            >
-              <Icon name="users" size={13} />
-              <Show when={wsSignal(ws.id)}>
-                {(color) => <span class="dot" style={{ background: color() }} />}
-              </Show>
-              <span class="tab-label" title={ws.name}>
-                {ws.name}
-              </span>
-              <Show when={wsUnseen(ws.id)}>
-                <span class="unread-dot" />
-              </Show>
-              {/* 우클릭만 두면 찾기 어렵다 — 마우스를 올리면 `⋯`가 보인다 */}
-              {/* 키보드로도 닿는다 (U37) — 탭 버튼의 Enter(탭 전환)로 새지 않게 키 처리를 끊는다 */}
-              <span
-                class="tab-more"
-                role="button"
-                tabIndex={0}
-                title={t("워크스페이스 메뉴")}
-                aria-label={t("워크스페이스 메뉴")}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                  setTabMenu({ x: r.left, y: r.bottom + 2, ws });
-                }}
-                onKeyDown={(e) => {
-                  if (e.key !== "Enter" && e.key !== " ") return;
+      <div class="tabs-wrap">
+        <Show when={tabsOverflow()}>
+          <button
+            class="tabs-arrow"
+            title={t("이전 탭")}
+            aria-label={t("이전 탭")}
+            aria-disabled={!canLeft()}
+            onClick={() => scrollTabs(-1)}
+          >
+            <Icon name="chevron-left" size={14} />
+          </button>
+        </Show>
+        <div class="tabs" role="tablist" ref={tabsEl} onScroll={updateTabArrows}>
+          <button
+            class="tab"
+            role="tab"
+            aria-selected={view().kind === "control"}
+            classList={{ active: view().kind === "control" }}
+            onClick={() => setView({ kind: "control" })}
+          >
+            <Icon name="grid-2x2" size={13} />
+            <span class="tab-label">{t("관제")}</span>
+            <Show when={anyUnseen()}>
+              <span class="unread-dot" />
+            </Show>
+          </button>
+          <For each={workspaces()}>
+            {(ws) => (
+              <button
+                class="tab ws-tab"
+                role="tab"
+                aria-selected={tabWs() === ws.id}
+                classList={{ active: tabWs() === ws.id }}
+                onClick={() => setView({ kind: "workspace", id: ws.id })}
+                onContextMenu={(e) => {
                   e.preventDefault();
-                  e.stopPropagation();
-                  e.currentTarget.click();
+                  setTabMenu({ x: e.clientX, y: e.clientY, ws });
                 }}
               >
-                <Icon name="ellipsis" size={12} />
-              </span>
-              <span
-                class="tab-close"
-                role="button"
-                tabIndex={0}
-                title={t("워크스페이스 닫기 (세션은 백그라운드 유지)")}
-                aria-label={t("워크스페이스 닫기 (세션은 백그라운드 유지)")}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  closeWs(ws.id);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key !== "Enter" && e.key !== " ") return;
-                  e.preventDefault();
-                  e.stopPropagation();
-                  closeWs(ws.id);
-                }}
-              >
-                <Icon name="x" size={11} />
-              </span>
-            </button>
-          )}
-        </For>
+                <Icon name="users" size={13} />
+                <Show when={wsSignal(ws.id)}>
+                  {(color) => <span class="dot" style={{ background: color() }} />}
+                </Show>
+                <span class="tab-label" title={ws.name}>
+                  {ws.name}
+                </span>
+                <Show when={wsUnseen(ws.id)}>
+                  <span class="unread-dot" />
+                </Show>
+                {/* 우클릭만 두면 찾기 어렵다 — 마우스를 올리면 `⋯`가 보인다 */}
+                {/* 키보드로도 닿는다 (U37) — 탭 버튼의 Enter(탭 전환)로 새지 않게 키 처리를 끊는다 */}
+                <span
+                  class="tab-more"
+                  role="button"
+                  tabIndex={0}
+                  title={t("워크스페이스 메뉴")}
+                  aria-label={t("워크스페이스 메뉴")}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                    setTabMenu({ x: r.left, y: r.bottom + 2, ws });
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key !== "Enter" && e.key !== " ") return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    e.currentTarget.click();
+                  }}
+                >
+                  <Icon name="ellipsis" size={12} />
+                </span>
+                <span
+                  class="tab-close"
+                  role="button"
+                  tabIndex={0}
+                  title={t("워크스페이스 닫기 (세션은 백그라운드 유지)")}
+                  aria-label={t("워크스페이스 닫기 (세션은 백그라운드 유지)")}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    closeWs(ws.id);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key !== "Enter" && e.key !== " ") return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    closeWs(ws.id);
+                  }}
+                >
+                  <Icon name="x" size={11} />
+                </span>
+              </button>
+            )}
+          </For>
+        </div>
+        <Show when={tabsOverflow()}>
+          <button
+            class="tabs-arrow"
+            title={t("다음 탭")}
+            aria-label={t("다음 탭")}
+            aria-disabled={!canRight()}
+            onClick={() => scrollTabs(1)}
+          >
+            <Icon name="chevron-right" size={14} />
+          </button>
+        </Show>
         <button
           class="tab tab-add"
           title={t("워크스페이스 열기·관리")}

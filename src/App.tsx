@@ -287,7 +287,7 @@ export function App() {
       </Show>
       {/* 전체 화면 팝업 4종 — overlay 신호 하나라서 동시에 하나만 열린다 (M25 확장) */}
       <Show when={overlay() === "explorer"}>
-        <ScreenOverlay title={t("임무 · 파일 탐색기")} icon="≡" guard={editorGuard} nav={explorerNav()}>
+        <ScreenOverlay title={t("임무 · 파일 탐색기")} icon="briefcase-business" guard={editorGuard} nav={explorerNav()}>
           {/* 임무는 워크스페이스 문맥이 있어야 성립한다 — 없으면(첫 실행 관제) 탐색기로 남는다 */}
           <Show when={explorerTab() === "missions" && scopeWorkspace()} fallback={<MissionExplorerTab />}>
             {(w) => <Missions wsId={w().id} />}
@@ -295,17 +295,17 @@ export function App() {
         </ScreenOverlay>
       </Show>
       <Show when={overlay() === "connect"}>
-        <ScreenOverlay title={t("워크스페이스 열기 · 관리")} icon="⌂">
+        <ScreenOverlay title={t("워크스페이스 열기 · 관리")} icon="folder-open">
           <WorkspaceConnection />
         </ScreenOverlay>
       </Show>
       <Show when={overlay() === "roles"}>
-        <ScreenOverlay title={t("역할 라이브러리")} icon="◇">
+        <ScreenOverlay title={t("역할 라이브러리")} icon="id-card">
           <RoleLibrary />
         </ScreenOverlay>
       </Show>
       <Show when={overlay() === "settings"}>
-        <ScreenOverlay title={t("설정")} icon="⚙">
+        <ScreenOverlay title={t("설정")} icon="settings">
           <Settings />
         </ScreenOverlay>
       </Show>

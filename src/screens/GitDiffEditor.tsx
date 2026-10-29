@@ -14,6 +14,7 @@ import { isTauri } from "../backend/pty";
 import { t, tf } from "../i18n";
 import { openPanel, scopeWorkspace, setView, tick, view } from "../state";
 import { diffKeyAction } from "./diffKeys";
+import { Icon } from "../components/icons";
 
 const FOLD_CONTEXT = 3; // 변경 주변에 남기는 문맥 줄 수 (U10)
 
@@ -511,7 +512,7 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
                 ↩ {t("줄바꿈")}
               </button>
               <button class="btn ghost" title={t("닫기 (Esc) — 진입한 화면으로 복귀")} onClick={close}>
-                ✕
+                <Icon name="x" size={11} />
               </button>
             </div>
           </div>

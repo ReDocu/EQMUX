@@ -342,8 +342,8 @@ export function MissionExplorerTab() {
               <button class="btn primary" style={{ padding: "2px 8px" }} onClick={() => void submitName()}>
                 {t("확인")}
               </button>
-              <button class="btn ghost" style={{ padding: "2px 6px" }} onClick={() => setNameMode(undefined)}>
-                ✕
+              <button class="btn ghost" aria-label={t("취소")} style={{ padding: "2px 6px" }} onClick={() => setNameMode(undefined)}>
+                <Icon name="x" size={11} />
               </button>
             </div>
           </Show>

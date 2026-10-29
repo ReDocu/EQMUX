@@ -281,7 +281,11 @@
   float: right;
   z-index: 3;
   margin: 10px -6px 0 0;
-  padding: 2px 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
   color: var(--eq-dim);
   border-radius: var(--eq-r-sm);
 }
@@ -586,6 +590,7 @@
   padding: 8px 0 6px;
   cursor: pointer;
   list-style: none;
+  -webkit-user-select: none; /* WebKit(mac)은 접두어만 안다 (UC-B05) */
   user-select: none;
 }
 .acc summary::-webkit-details-marker {
@@ -1093,7 +1098,7 @@
   flex: 1;
   min-width: 0;
   font-size: 12px;
-  padding: 5px 6px;
+  padding: 5px 24px 5px 6px;
 }
 .pane-add {
   align-items: center;
@@ -2447,6 +2452,7 @@
   padding: 12px 14px;
   font-size: 12px;
   line-height: 1.6;
+  -webkit-user-select: text; /* WebKit(mac)은 접두어만 안다 (UC-B05) */
   user-select: text;
   overflow-wrap: anywhere;
 }
@@ -2977,6 +2983,7 @@
   padding-right: 12px;
   color: var(--eq-muted);
   background: var(--eq-gutter);
+  -webkit-user-select: none; /* WebKit(mac)은 접두어만 안다 (UC-B05) */
   user-select: none;
 }
 .gde-text {
@@ -3276,6 +3283,9 @@
   flex-shrink: 0;
 }
 .tf-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -3899,9 +3909,9 @@ button.eq-chip-tx,
 .setting-select {
   flex-shrink: 0;
   font-size: 11px;
-  padding: 4px 8px;
+  padding: 4px 24px 4px 8px;
   color: var(--eq-text);
-  background: var(--eq-bg);
+  background-color: var(--eq-bg);
   border: 1px solid var(--eq-line);
   border-radius: var(--eq-r-sm);
 }
@@ -4153,11 +4163,17 @@ button.eq-chip-tx,
   font-size: 12px;
   color: var(--eq-muted);
 }
+/* 아이콘만 있는 닫기 — 누를 자리를 24px 이상 남긴다 (U94) */
 .exit-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
   border: 0;
+  border-radius: var(--eq-r-sm);
   background: transparent;
   color: var(--eq-muted);
-  font-size: 14px;
   cursor: pointer;
 }
 .exit-close:hover {
@@ -4925,10 +4941,13 @@ button.eq-chip-tx,
 .create-f input {
   height: 32px;
   padding: 0 10px;
-  background: var(--eq-bg);
+  background-color: var(--eq-bg);
   border: 1px solid var(--eq-line);
   border-radius: var(--eq-r-sm);
   color: var(--eq-text);
+}
+.create-f select {
+  padding-right: 28px;
 }
 .create-f:has(+ .eq-fh.err) input {
   border-color: var(--eq-red);

@@ -62,6 +62,7 @@ import { SessionDetailPanel } from "./SessionDetailPanel";
 import { TranscriptPane } from "./TranscriptPane";
 import type { AgentCliId, Session, Workspace } from "../types";
 import { AGENT_CLI_LABEL, agentAttached, cliOf, statusText, effectivePermissions, effectiveTitle, nameBesideNo, paneNo, SESSION_NAME_MAX, sessionDisplayName, sessionName, slotNo } from "../types";
+import { Icon } from "../components/icons";
 
 /** 셸에 에이전트 명령을 쳐 넣는다 — claude 말고는 EQMUX가 관리하는 스폰 경로가 없다
  *  (역할 주입·훅·재개는 agent.rs의 ClaudeCodeAdapter 전용). 사람이 터미널에 직접 치는 것과
@@ -1361,7 +1362,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
           <div class="overlay detail-overlay" onClick={() => setDetailOpen(false)}>
             <div class="dialog detail-dialog" onClick={(e) => e.stopPropagation()}>
               <button class="detail-dialog-x" title={t("닫기 (ESC)")} onClick={() => setDetailOpen(false)}>
-                ✕
+                <Icon name="x" size={11} />
               </button>
               <SessionDetailPanel session={s()} onClose={() => setDetailOpen(false)} />
             </div>
@@ -1392,7 +1393,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
                 {t("ESC 종료")}
               </span>
               <button class="btn" onClick={() => setTerminalFull(false)}>
-                ✕ {t("전체 화면 종료")}
+                <Icon name="x" size={11} /> {t("전체 화면 종료")}
               </button>
             </div>
           </div>

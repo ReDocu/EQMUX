@@ -42,6 +42,7 @@ import { selectedSession } from "../state";
 import { ContextMenu } from "./ui";
 import type { MenuGroup } from "./ui";
 import type { AgentCliId, Permissions } from "../types";
+import { Icon } from "./icons";
 
 /** 터미널 색 — styles.css의 --eq-term-* 토큰이 원본이다 (설정 · 색 팔레트가 이 토큰을 고른다).
  *  여기에 hex를 두면 팔레트와 어긋나므로 두지 않는다. 터미널은 어느 테마에서도 다크로 남는다. */
@@ -1034,7 +1035,7 @@ export function TerminalPane(props: {
               ↓
             </button>
             <button class="btn ghost" title={t("닫기 (ESC)")} onClick={closeSearch}>
-              ✕
+              <Icon name="x" size={11} />
             </button>
           </div>
         </Show>
@@ -1078,10 +1079,11 @@ export function TerminalPane(props: {
                 <span class="eyebrow">{tf("디스크 스크롤백 · {n}줄 로드됨", { n: h().length })}</span>
                 <button
                   class="btn ghost"
+                  aria-label={t("닫기")}
                   style={{ "margin-left": "auto", padding: "1px 6px" }}
                   onClick={() => setHistory(null)}
                 >
-                  ✕
+                  <Icon name="x" size={11} />
                 </button>
               </div>
               <button class="btn ghost" style={{ padding: "2px" }} onClick={() => void loadOlderHistory()}>

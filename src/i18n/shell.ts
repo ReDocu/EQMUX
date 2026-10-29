@@ -16,6 +16,8 @@ export const dict: Record<string, string> = {
   // ── AppBar 0.5 — 탭 메뉴 · 벨 ──
   "워크스페이스 열기·관리": "Open or manage workspaces",
   "워크스페이스 메뉴": "Workspace menu",
+  "이전 탭": "Previous tabs",
+  "다음 탭": "Next tabs",
   "패널 닫기": "Close panel",
   "서버 셸": "Server shell",
   "셸만 열려 있습니다": "Only the shell is open",

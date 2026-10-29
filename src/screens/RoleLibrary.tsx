@@ -26,6 +26,7 @@ import { ConfirmDialog, FieldHint, KV } from "../components/ui";
 import { JOB_META, jobMeta, TITLE_SUGGEST } from "../jobs";
 import { cleanTitle, personaLevel, personaProfile, personaTagline, TITLE_MAX } from "../types";
 import type { Job, Persona, PersonaLevel, Workspace } from "../types";
+import { Icon } from "../components/icons";
 
 // 색 팔레트 = 직무 8색 (jobs.ts JOB_META와 1:1) — 점 안 글자는 직무 이름 앞글자
 const JOB_PALETTE: { color: Persona["color"]; letter: string; job: string }[] = [
@@ -370,8 +371,8 @@ export function RoleLibrary() {
             >
               {t("고급")}
             </button>
-            <button class="btn ghost" onClick={() => setAddOpen(false)}>
-              ✕
+            <button class="btn ghost" aria-label={t("닫기")} onClick={() => setAddOpen(false)}>
+              <Icon name="x" size={11} />
             </button>
           </Show>
         </div>
