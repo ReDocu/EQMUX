@@ -4,6 +4,7 @@ import type { JSX } from "solid-js";
 import { t, tf } from "../i18n";
 import { pushLayer } from "../state";
 import { segKeyIndex } from "./keynav";
+import { Icon } from "./icons";
 import type { AgentCliId, AgentStatus, Session } from "../types";
 import { AGENT_CLI_LABEL, agentAttached, fmtSince, nameBesideNo, slotBesideNo, slotNo, statusText } from "../types";
 
@@ -394,11 +395,11 @@ export function Identity(props: {
       <Show when={props.title}>
         <span class="eq-id-ti">· {props.title}</span>
       </Show>
-      {/* 엔진 — Claude ✦ · Codex CX (U41) */}
+      {/* 엔진 — Claude ✦(SVG — 글자 ✦는 mac mono 폴백에서 '+'처럼 보였다, UC-B02) · Codex CX (U41) */}
       <Show when={props.cli}>
         <span class="eq-id-cli mono" aria-label={AGENT_CLI_LABEL[props.cli!]} title={AGENT_CLI_LABEL[props.cli!]}>
           {/* Codex는 >_ 대신 글자 — >_는 셸 선택 버튼의 기호라 '셸'로 읽혔다 (U41) */}
-          {props.cli === "codex" ? "CX" : "✦"}
+          {props.cli === "codex" ? "CX" : <Icon name="sparkle" size={12} style={{ fill: "currentColor", "vertical-align": "-2px" }} />}
         </span>
       </Show>
       <Show when={props.job}>

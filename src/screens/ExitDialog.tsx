@@ -10,6 +10,7 @@ import { Chip, Identity, notify } from "../components/ui";
 import { t, tf } from "../i18n";
 import { pushLayer, setExitOpen } from "../state";
 import { effectiveTitle, paneNo, sessionName } from "../types";
+import { Icon } from "../components/icons";
 
 const PHASE_TEXT: Record<ShutdownPhase, string> = {
   flush: "저장소 flush 중…",
@@ -76,7 +77,7 @@ export function ExitDialog() {
             </div>
           </div>
           <button class="exit-close" title={t("취소")} disabled={busy()} onClick={() => setExitOpen(false)}>
-            ✕
+            <Icon name="x" size={14} />
           </button>
         </div>
         <div class="exit-notice">

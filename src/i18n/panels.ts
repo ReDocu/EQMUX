@@ -92,7 +92,11 @@ export const dict: Record<string, string> = {
   "시스템 포트": "System ports",
   충돌: "Conflicts",
   "세션 외부 노출": "Session ports exposed",
-  "세션 포트 {n}개가 루프백 밖에 바인딩되어 있습니다.": "{n} session port(s) bound outside loopback.",
+  // 외부 노출 경고가 와일드카드·LAN 주소 둘로 갈렸다 (B139)
+  "세션 포트 {n}개가 모든 인터페이스에 열려 있습니다 — 같은 네트워크의 다른 기기가 접속할 수 있습니다.":
+    "{n} session port(s) are open on all interfaces — other devices on the same network can connect.",
+  "세션 포트 {n}개가 LAN 주소에 바인딩되어 있습니다.": "{n} session port(s) are bound to a LAN address.",
+  "포트 다시 실측": "Re-scan ports",
   "세션 포트가 루프백에만 바인딩되어 있습니다.": "Session ports are bound to loopback only.",
 
   // ── 브라우저 패널 (BrowserPanelTab) ──

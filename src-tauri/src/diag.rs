@@ -203,6 +203,13 @@ pub fn diag_alive(hidden: bool) {
     *guard = Some(Beat { at_ms: now, hidden, silent: false });
 }
 
+/// 웹뷰가 지금 끊긴 상태인가 — 종료 요청을 프런트에 물어도 답할 수 없을 때 (quit.rs, B112).
+/// 첫 박동 전(로딩 중)은 끊김이 아니다
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn webview_silent() -> bool {
+    BEAT.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|b| b.silent)
+}
+
 /// 감시 스레드 — 첫 박동 전에는 판정하지 않는다 (앱 시작·로딩 중은 끊김이 아니다)
 pub fn start_alive_watch() {
     std::thread::spawn(|| loop {

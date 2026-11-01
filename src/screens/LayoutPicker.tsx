@@ -5,6 +5,7 @@ import { t, tf } from "../i18n";
 import { PANE_LAYOUTS, paneLayout, pushLayer, setLayoutPickerOpen, setPaneLayout, view } from "../state";
 import type { PaneLayout as PaneLayoutKey } from "../state";
 import { Icon } from "../components/icons";
+import { keyLabel } from "../platform";
 
 function Preview(props: { mode: PaneLayoutKey }) {
   return (
@@ -44,7 +45,7 @@ export function LayoutPicker() {
           <div>
             <div class="lp-title">{t("페인 배치")}</div>
             <div class="mono muted lp-sub">
-              {tf("현재 워크스페이스 · {n}개 세션 · 선택 즉시 미리보기", { n: sessionCount() })} · Ctrl+Shift+L
+              {tf("현재 워크스페이스 · {n}개 세션 · 선택 즉시 미리보기", { n: sessionCount() })} · {keyLabel("Ctrl+Shift+L")}
             </div>
           </div>
           <button class="btn ghost" aria-label={t("닫기")} onClick={() => setLayoutPickerOpen(false)}>

@@ -21,6 +21,7 @@ import { defaultShell, setDefaultShell, setSettingsCat, settingsCat, SHELLS } fr
 import { t } from "../i18n";
 import { Segmented } from "../components/ui";
 import { Icon } from "../components/icons";
+import { IS_MAC } from "../platform";
 
 type Wired = {
   k: string;
@@ -90,7 +91,7 @@ const SECTIONS: Section[] = [
         // 기본 셸은 settings.json이 아니라 layout.json에 남는 값이다 (관제 화면 셸 선택과 같은 신호)
         k: "기본 셸",
         d: "새로 여는 터미널이 쓰는 셸 · 이미 열린 터미널은 그대로",
-        labels: SHELLS.map((s) => s.name),
+        labels: SHELLS.map((s) => t(s.name)),
         current: () => pick(SHELLS, defaultShell()),
         apply: (i) => setDefaultShell(SHELLS[i]),
       },
@@ -281,19 +282,36 @@ const SECTIONS: Section[] = [
     title: "단축키 (읽기 전용)",
     sub: "읽기 전용입니다. xterm은 Ctrl+Shift+글자를 터미널로 보내지 않아 셸 단축키와 겹치지 않습니다.",
     keys: true,
-    fixed: [
-      { k: "Ctrl+Shift+U", label: "다음 미확인으로 (= ⛶ 응답 대기 칩)" },
-      { k: "Ctrl+Alt+1~8", label: "N번 슬롯 페인에 키보드 포커스" },
-      { k: "Ctrl+Shift+L", label: "페인 배치" },
-      { k: "Ctrl+Shift+D", label: "관제 토글" },
-      { k: "Ctrl+Shift+B", label: "사이드 패널 토글 (마지막 탭)" },
-      { k: "Ctrl+F", label: "터미널 검색" },
-      { k: "Ctrl+Shift+C / V", label: "복사 · 붙여넣기" },
-      { k: "Ctrl+C · Ctrl+V", label: "선택이 있으면 복사 · 붙여넣기 (앱)" },
-      { k: "Esc", label: "맨 위 창·팝업·메뉴 하나만 닫기 · 입력칸에서는 칸 빠져나오기" },
-      { k: "Enter", label: "확인창에서 취소 (위험 버튼은 Tab으로 옮겨 Enter)" },
-      { k: "Ctrl+Alt+D", label: "화면이 깨졌을 때 진단 기록에 표시" },
-    ],
+    // macOS는 ⌘가 앱 키, Ctrl은 셸 제어키다 — 표가 실제 바인딩과 같아야 한다 (U67·B126)
+    fixed: IS_MAC
+      ? [
+          { k: "⌘⇧U", label: "다음 미확인으로 (= ⛶ 응답 대기 칩)" },
+          { k: "⌘1~8", label: "N번 슬롯 페인에 키보드 포커스" },
+          { k: "⌘⇧L", label: "페인 배치" },
+          { k: "⌘⇧D", label: "관제 토글" },
+          { k: "⌘⇧B", label: "사이드 패널 토글 (마지막 탭)" },
+          { k: "⌘F", label: "터미널 검색" },
+          { k: "⌘C / ⌘V", label: "복사 · 붙여넣기 (이미지는 파일 경로로)" },
+          { k: "⌘K", label: "터미널 화면 · 스크롤백 비우기" },
+          { k: "Ctrl+C · F · V", label: "셸로 그대로 — 인터럽트 · 커서 이동 · 글자 그대로 넣기" },
+          { k: "Option", label: "Meta 키 — Option+B/F 단어 이동 · Option+Enter 줄바꿈" },
+          { k: "Esc", label: "맨 위 창·팝업·메뉴 하나만 닫기 · 입력칸에서는 칸 빠져나오기" },
+          { k: "Enter", label: "확인창에서 취소 (위험 버튼은 Tab으로 옮겨 Enter)" },
+          { k: "⌃⌥D", label: "화면이 깨졌을 때 진단 기록에 표시" },
+        ]
+      : [
+          { k: "Ctrl+Shift+U", label: "다음 미확인으로 (= ⛶ 응답 대기 칩)" },
+          { k: "Ctrl+Alt+1~8", label: "N번 슬롯 페인에 키보드 포커스" },
+          { k: "Ctrl+Shift+L", label: "페인 배치" },
+          { k: "Ctrl+Shift+D", label: "관제 토글" },
+          { k: "Ctrl+Shift+B", label: "사이드 패널 토글 (마지막 탭)" },
+          { k: "Ctrl+F", label: "터미널 검색" },
+          { k: "Ctrl+Shift+C / V", label: "복사 · 붙여넣기" },
+          { k: "Ctrl+C · Ctrl+V", label: "선택이 있으면 복사 · 붙여넣기 (앱)" },
+          { k: "Esc", label: "맨 위 창·팝업·메뉴 하나만 닫기 · 입력칸에서는 칸 빠져나오기" },
+          { k: "Enter", label: "확인창에서 취소 (위험 버튼은 Tab으로 옮겨 Enter)" },
+          { k: "Ctrl+Alt+D", label: "화면이 깨졌을 때 진단 기록에 표시" },
+        ],
   },
   {
     cat: "about",

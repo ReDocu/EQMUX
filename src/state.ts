@@ -1,7 +1,10 @@
 // 앱 셸 상태 — 내비게이션은 result_prd.md §2 순서도의 계약을 따른다:
 // 상태를 바꾸는 것은 언제나 사용자 버튼이며, 자동 실행 경로는 없다.
+import { invoke } from "@tauri-apps/api/core";
 import { createSignal } from "solid-js";
 import { backend } from "./backend/mock";
+import { isTauri } from "./backend/pty";
+import { IS_MAC } from "./platform";
 import { settings } from "./backend/settings";
 import { stepIndex } from "./components/keynav";
 import type { Workspace } from "./types";
@@ -278,19 +281,60 @@ export const [terminalFull, setTerminalFull] = createSignal(false);
 
 // 임무 탐색기 팝업(M25)의 explorerOpen은 overlay("explorer")로 통합됐다 — 위 OverlayKind 참조
 
-/** 새 터미널 셸 선택 — 실패 시 Rust 쪽 폴백 체인(pwsh → powershell → cmd)이 받친다 */
+/** 새 터미널 셸 선택 — 실패 시 Rust 쪽 폴백 체인(Windows: pwsh → powershell → cmd · macOS: $SHELL → zsh → bash)이 받친다 */
 export interface ShellChoice {
   label: string; // Session.shell에 기록되는 식별자
   name: string;
-  cmd: string;
+  /** pty_spawn에 넘길 실행 파일. 없으면 Rust가 로그인 셸($SHELL)을 띄운다 */
+  cmd?: string;
+  /** 메뉴 둘째 줄 — 로그인 셸이 실제로 무엇인지 (기본 cmd) */
+  note?: string;
 }
-export const SHELLS: ShellChoice[] = [
+const WINDOWS_SHELLS: ShellChoice[] = [
   { label: "pwsh", name: "PowerShell 7", cmd: "pwsh.exe" },
   { label: "powershell", name: "Windows PowerShell", cmd: "powershell.exe" },
   { label: "git-bash", name: "Git Bash", cmd: "C:\\Program Files\\Git\\bin\\bash.exe" },
   { label: "cmd", name: "cmd", cmd: "cmd.exe" },
 ];
+/** macOS 기본 목록 (B114) — pwsh.exe를 골라도 $SHELL이 뜨고 라벨만 'PowerShell 7'로 남았다.
+ *  기본은 사용자의 로그인 셸이고, 늘 있는 시스템 셸 둘만 둔다. fish·pwsh처럼 설치에 따라 갈리는 셸은
+ *  Rust가 실제로 찾은 것만 loadShells()가 더한다 — GUI로 띄운 앱은 PATH에 Homebrew가 없어 이름만으로는 못 찾는다 */
+const MAC_SHELLS: ShellChoice[] = [
+  { label: "login", name: "로그인 셸 ($SHELL)", note: "$SHELL" },
+  { label: "zsh", name: "zsh", cmd: "/bin/zsh" },
+  { label: "bash", name: "bash", cmd: "/bin/bash" },
+];
+/** 셸 목록 — 배열은 그대로 두고 내용만 채운다 (layout 복원·설정 화면이 같은 참조를 읽는다) */
+export const SHELLS: ShellChoice[] = [...(IS_MAC ? MAC_SHELLS : WINDOWS_SHELLS)];
 export const [defaultShell, setDefaultShell] = createSignal<ShellChoice>(SHELLS[0]);
+
+/** 세션별로 실제로 뜬 셸 이름 (B114) — pty_spawn이 돌려준 값. 페인 머리가 '셸' 대신 'zsh'·'bash'를 보인다 */
+export const [ptyShells, setPtyShells] = createSignal<Record<string, string>>({});
+export const notePtyShell = (id: string, label: string | undefined): void => {
+  if (label) setPtyShells((m) => (m[id] === label ? m : { ...m, [id]: label }));
+};
+
+/** macOS — Rust(list_shells)가 /etc/shells에서 실제로 찾은 셸로 목록을 채운다 (B114).
+ *  커맨드가 없거나 실패하면 위 정적 목록으로 남는다. 고른 셸이 목록에 남아 있으면 그 선택을 지킨다 */
+export async function loadShells(): Promise<void> {
+  if (!IS_MAC || !isTauri()) return;
+  let found: { default: string; shells: { label: string; path: string }[] };
+  try {
+    found = await invoke("list_shells");
+  } catch {
+    return;
+  }
+  const next: ShellChoice[] = [
+    { ...MAC_SHELLS[0], note: found.default || MAC_SHELLS[0].note },
+    ...found.shells.map((s) => ({ label: s.label, name: s.label, cmd: s.path })),
+  ];
+  const keep = defaultShell().label;
+  SHELLS.splice(0, SHELLS.length, ...next);
+  setDefaultShell(SHELLS.find((s) => s.label === keep) ?? SHELLS[0]);
+}
+// 모듈 로드 때 바로 묻는다 — 부트스트랩의 restoreLayout(저장된 기본 셸 찾기)은 설정 로드를 기다린 뒤라
+// 그보다 먼저 끝난다. 늦어도 고른 셸이 목록에 있으면 위에서 지킨다
+void loadShells();
 
 /** 백엔드 방송(FR-C-43) 수신 틱 — 화면은 tick()을 구독해 다시 그린다 */
 export const [tick, setTick] = createSignal(0);

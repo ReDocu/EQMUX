@@ -406,8 +406,14 @@ fn narrow(raw: &str) -> Vec<String> {
 }
 
 /// 후보 중 처음으로 실재하는 경로. 상대 경로는 세션 cwd 기준으로 푼다 (cwd가 없으면 건너뛴다).
+/// macOS — `~/…`는 홈으로 푼다 (B129). Path::new("~/x")는 상대 경로라 cwd에 붙어 실패했다
 pub fn resolve_reveal_target(raw: &str, cwd: Option<&str>) -> Option<PathBuf> {
     for cand in narrow(raw) {
+        #[cfg(not(windows))]
+        let cand = match cand.strip_prefix("~/") {
+            Some(rest) => crate::home_dir().join(rest).to_string_lossy().into_owned(),
+            None => cand,
+        };
         let p = Path::new(&cand);
         let full = if p.is_absolute() {
             p.to_path_buf()
@@ -446,9 +452,17 @@ pub fn reveal_path(path: String, cwd: Option<String>) -> Result<(), String> {
     if abs.contains('"') || abs.chars().any(|c| c.is_control()) {
         return Err("경로에 쓸 수 없는 문자가 있습니다".into());
     }
+    // macOS — Finder로 연다. 파일이면 `-R`로 그 파일을 선택해 보인다
+    #[cfg(not(windows))]
+    std::process::Command::new("open")
+        .args(if is_dir { vec![abs.as_str()] } else { vec!["-R", abs.as_str()] })
+        .spawn()
+        .map_err(|e| e.to_string())?;
     // raw_arg — 탐색기는 `/select,"경로"` 형태를 기대한다. std의 자동 인용은 인자 전체를
     // 감싸버려(`"/select,C:\a b\c.png"`) 공백 있는 경로에서 어긋난다.
+    #[cfg(windows)]
     use std::os::windows::process::CommandExt;
+    #[cfg(windows)]
     std::process::Command::new("explorer")
         .raw_arg(if is_dir { format!("\"{abs}\"") } else { format!("/select,\"{abs}\"") })
         .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
@@ -611,5 +625,14 @@ mod tests {
         assert!(resolve_reveal_target("C:\\없는\\경로.png", None).is_none());
         assert!(resolve_reveal_target("그냥낱말", Some(&cwd)).is_none());
         fs::remove_dir_all(&dir).ok();
+    }
+
+    /// B129 — `~/`는 cwd가 아니라 홈 기준이다 (홈에 파일을 만들지 않으려고 홈 자체로 본다)
+    #[cfg(not(windows))]
+    #[test]
+    fn reveal_expands_tilde_to_home() {
+        let home = crate::home_dir();
+        assert_eq!(resolve_reveal_target("~/", Some("/tmp")), Some(home.join("")));
+        assert!(resolve_reveal_target("~/eqmux-없는-파일-1f3a.png", Some("/tmp")).is_none());
     }
 }

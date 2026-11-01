@@ -16,6 +16,8 @@ export const dict: Record<string, string> = {
   // ── AppBar 0.5 — 탭 메뉴 · 벨 ──
   "워크스페이스 열기·관리": "Open or manage workspaces",
   "워크스페이스 메뉴": "Workspace menu",
+  "이전 탭": "Previous tabs",
+  "다음 탭": "Next tabs",
   "패널 닫기": "Close panel",
   "서버 셸": "Server shell",
   "셸만 열려 있습니다": "Only the shell is open",
@@ -214,4 +216,6 @@ export const dict: Record<string, string> = {
   "이 셸의 서버가 포트를 열고 있습니다 — 멈춘 뒤 다시 실행할 수 있습니다":
     "This shell's server has a port open — stop it before running again",
   "돌고 있음 · 포트 {ports}": "Running · port {ports}",
+  // ── 셸 목록 (macOS, B114) ──
+  "로그인 셸 ($SHELL)": "Login shell ($SHELL)",
 };

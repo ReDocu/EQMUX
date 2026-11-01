@@ -238,11 +238,65 @@ textarea:focus {
   border-color: var(--eq-blue);
 }
 
+/* 폼 컨트롤 플랫폼 정합 — appearance를 끄지 않으면 WKWebView(macOS)는 select·checkbox를
+   macOS 기본 컨트롤로 그리고 배경·테두리를 무시한다. WebView2(Windows)와 같은 모양을 직접 그린다.
+   color-scheme은 펼친 select 메뉴·스크롤바 같은 남은 네이티브 부분을 테마에 맞춘다 */
+:root {
+  color-scheme: dark;
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+/* 화살표는 토큰 색 그라디언트 두 장 — 데이터 URI SVG는 테마 토큰을 못 읽는다.
+   화면별 규칙은 background 단축 속성 대신 background-color를 써야 화살표가 남는다 */
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 26px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--eq-muted) 50%),
+    linear-gradient(135deg, var(--eq-muted) 50%, transparent 50%);
+  background-position: calc(100% - 14px) 50%, calc(100% - 10px) 50%;
+  background-size: 4px 4px, 4px 4px;
+  background-repeat: no-repeat;
+  cursor: pointer;
+}
+select:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  vertical-align: middle;
+  background-color: var(--eq-surface-2);
+  border: 1px solid var(--eq-muted);
+  border-radius: 3px;
+  cursor: pointer;
+}
+input[type="checkbox"]:checked {
+  background-color: var(--eq-blue);
+  border-color: var(--eq-blue);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpath d='M3.5 7.2 6 9.6l4.5-5' fill='none' stroke='white' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-position: center;
+  background-repeat: no-repeat;
+}
+input[type="checkbox"]:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* 접근성 1차 (0.5 P2 U-5) — 키보드로 닿은 컨트롤에만 고리를 보인다. 마우스 클릭에는 뜨지 않는다.
    터미널(xterm의 숨은 textarea)은 제외 — 페인 테두리가 이미 포커스를 말한다 */
 button:focus-visible,
 a:focus-visible,
 select:focus-visible,
+input[type="checkbox"]:focus-visible,
 [role="menuitem"]:focus-visible,
 [role="option"]:focus-visible,
 [tabindex]:not([tabindex="-1"]):focus-visible {
@@ -435,6 +489,7 @@ select:focus-visible,
   border-bottom: 1px solid var(--eq-line);
   height: 38px;
   flex-shrink: 0;
+  -webkit-user-select: none; /* WebKit(mac)은 접두어만 안다 (UC-B05) */
   user-select: none;
 }
 .appbar .brand {
@@ -450,14 +505,40 @@ select:focus-visible,
   flex-shrink: 0;
 }
 /* 좁은 창 (QA 1024~1080px) — 탭 줄이 남는 폭을 나눠 갖고, 탭은 이름만 말줄임으로 줄어든다.
-   아이콘·점·⋯·✕는 줄지 않는다. 끝까지 모자라면 가로 스크롤이 마지막 안전판이다 */
-.appbar .tabs {
+   아이콘·점·⋯·✕는 줄지 않는다. 끝까지 모자라면 가로 스크롤 — 양끝 ‹ › 버튼으로 넘긴다 */
+/* 탭 줄 + ‹ › + [+] — 남는 폭은 wrap이 갖고, 탭 줄은 내용만큼만 커져서 [+]가 마지막 탭 바로 옆에 붙는다 */
+.appbar .tabs-wrap {
   display: flex;
   align-items: stretch;
   flex: 1 1 auto;
   min-width: 0;
+}
+.appbar .tabs {
+  display: flex;
+  align-items: stretch;
+  flex: 0 1 auto;
+  min-width: 0;
   overflow-x: auto;
   scrollbar-width: none;
+}
+/* 넘칠 때만 보이는 ‹ › — 탭과 구분되게 세로 선을 둔다 */
+.appbar .tabs-arrow {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 0 6px;
+  color: var(--eq-muted);
+  border-left: 1px solid var(--eq-line);
+  border-right: 1px solid var(--eq-line);
+}
+.appbar .tabs-arrow:hover:not([aria-disabled="true"]) {
+  color: var(--eq-text);
+  background: var(--eq-surface-2);
+}
+/* 끝에 닿은 쪽 — 자리와 포커스는 지키고 흐리게만 (B160) */
+.appbar .tabs-arrow[aria-disabled="true"] {
+  opacity: 0.35;
+  cursor: default;
 }
 .appbar .tab {
   display: flex;
@@ -480,6 +561,14 @@ select:focus-visible,
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* 워크스페이스 탭은 이름이 몇 글자는 보일 만큼 남긴다 — 더 좁아지면 ‹ ›로 넘긴다 */
+.appbar .tab.ws-tab {
+  min-width: 160px;
+}
+/* 관제 탭은 줄지 않는다 — 늘 맨 앞에 온전히 보이는 기준 탭이다 */
+.appbar .tabs > .tab:not(.ws-tab) {
+  flex-shrink: 0;
 }
 .appbar .tab.tab-add {
   min-width: 0;
@@ -521,10 +610,10 @@ select:focus-visible,
   .appbar .tab {
     padding: 0 10px;
   }
-  /* 워크스페이스 탭은 폭을 똑같이 나눠 비슷한 길이로 줄어든다 — 내용 폭 기준이면 긴 이름이 폭을 독차지한다 */
+  /* 워크스페이스 탭은 이름만큼 크되 240px에서 멈춘다 — 긴 이름 하나가 폭을 독차지하지 않게.
+     basis 0(U95)이나 고정 180px이면 내용만큼 크는 탭 줄(.tabs)이 늘지 못해 빈 자리가 있어도 이름이 잘렸다 */
   .appbar .tab.ws-tab {
-    flex: 1 1 0;
-    max-width: 180px;
+    max-width: 240px;
   }
 }
 .appbar .tool {

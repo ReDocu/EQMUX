@@ -21,6 +21,7 @@ import { ConfirmDialog, KV, notify } from "../components/ui";
 import { Icon } from "../components/icons";
 import type { Workspace } from "../types";
 import { openView } from "./launchRules";
+import { isSubmitEnter } from "../platform"; // 한글 조합 중 Enter는 제출이 아니다 (B130)
 
 /** 안쪽 창을 레이어 스택에 올린다 — Esc가 관리 화면 전체가 아니라 이 창만 닫는다 (B108).
  *  box를 주면 모달이다 — Tab이 창 안에서 돌고 단축키 이동이 막힌다 (B72 · U37) */
@@ -70,13 +71,17 @@ export function WorkspaceConnection() {
   const [cloneBusy, setCloneBusy] = createSignal(false);
   let cloneBox: HTMLDivElement | undefined;
 
+  // 선택 창이 열려 있는 동안 [폴더 찾기…]를 막는다 (B135) — 다시 누르면 선택 창이 하나 더 열렸다
+  const [picking, setPicking] = createSignal(false);
   const connectLocal = async () => {
     setError(undefined);
     if (!isTauri()) {
       backend.addWorkspace();
       return;
     }
-    const path = await pickFolder();
+    if (picking()) return;
+    setPicking(true);
+    const path = await pickFolder().finally(() => setPicking(false));
     if (!path) return;
     try {
       const info = await registerWorkspace(path);
@@ -183,7 +188,7 @@ export function WorkspaceConnection() {
           <div class="sub mono">{t("탭 줄의 + 로 연다 · 열려 있지 않은 워크스페이스가 위")}</div>
         </div>
         <div style={{ display: "flex", gap: "8px" }}>
-          <button class="btn" onClick={() => void connectLocal()}>
+          <button class="btn" disabled={picking()} onClick={() => void connectLocal()}>
             <Icon name="folder" size={12} />
             {t("폴더 찾기…")}
           </button>
@@ -438,7 +443,7 @@ export function WorkspaceConnection() {
               onInput={(e) => setCloneUrl(e.currentTarget.value)}
               ref={(el) => queueMicrotask(() => el.focus())}
               onKeyDown={(e) => {
-                if (e.key === "Enter") void runClone();
+                if (isSubmitEnter(e)) void runClone(); // 한글 조합 확정 Enter는 넘긴다 (B130)
                 // 입력칸의 Esc는 레이어 스택이 양보한다 — 이 창만 닫는다 (B108)
                 if (e.key === "Escape" && !cloneBusy()) {
                   e.stopPropagation();

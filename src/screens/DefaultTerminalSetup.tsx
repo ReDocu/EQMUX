@@ -113,7 +113,7 @@ export function DefaultTerminalSetup(props: { wsId: string }) {
                   </div>
                   <div class="kv">
                     <span class="k">{t("셸")}</span>
-                    <span class="v mono">{defaultShell().label}</span>
+                    <span class="v mono">{t(defaultShell().name)}</span>
                   </div>
                   <div class="kv">
                     <span class="k">{t("브랜치")}</span>

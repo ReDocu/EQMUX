@@ -31,10 +31,15 @@ describe("모달 중 이동 단축키 (B72)", () => {
     ...over,
   });
   test("모달이 떠 있으면 U·D·B·L을 막고, 배치 창의 L(닫기)과 다른 키는 통과", () => {
-    for (const key of ["U", "d", "b", "l"]) expect(blocksNavKey(k(key), true, false)).toBe(true);
-    expect(blocksNavKey(k("l"), true, true)).toBe(false);
-    expect(blocksNavKey(k("c"), true, false)).toBe(false);
-    expect(blocksNavKey(k("u", { altKey: true }), true, false)).toBe(false);
-    expect(blocksNavKey(k("u"), false, false)).toBe(false);
+    for (const key of ["U", "d", "b", "l"]) expect(blocksNavKey(k(key), true, false, false)).toBe(true);
+    expect(blocksNavKey(k("l"), true, true, false)).toBe(false);
+    expect(blocksNavKey(k("c"), true, false, false)).toBe(false);
+    expect(blocksNavKey(k("u", { altKey: true }), true, false, false)).toBe(false);
+    expect(blocksNavKey(k("u"), false, false, false)).toBe(false);
+  });
+  test("macOS는 ⌘⇧가 이동 단축키이고 Ctrl+Shift는 셸 몫이라 막지 않는다 (U67)", () => {
+    const cmd = { ctrlKey: false, metaKey: true, shiftKey: true, altKey: false, key: "u" };
+    expect(blocksNavKey(cmd, true, false, true)).toBe(true);
+    expect(blocksNavKey(k("u"), true, false, true)).toBe(false);
   });
 });
