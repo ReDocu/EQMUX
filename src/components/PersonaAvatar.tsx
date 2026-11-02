@@ -1,6 +1,6 @@
 // 페르소나 아바타 (0.6 §15-4) — personas/<id>.png가 있으면 초상, 없으면 이니셜. 역할 라이브러리 · 팀 캐스팅이 쓴다.
 // 레일 · 페인 머리 · 대화 탭 · 알림(W7 화면)도 이 부품을 쓰면 같은 초상이 나온다.
-import { createResource, Show } from "solid-js";
+import { createResource, createSignal, Show } from "solid-js";
 import { portraitUrl } from "../backend/library";
 import { backend } from "../backend/mock";
 import { tick } from "../state";
@@ -14,10 +14,11 @@ export function PersonaAvatar(props: { persona?: Pick<Persona, "id" | "name" | "
     () => props.persona,
     (p) => portraitUrl(p),
   );
+  const [bad, setBad] = createSignal<string>(); // 깨진 png — 브라우저가 못 그린 URL
   return (
     <span class={`cast-avatar ${props.class ?? ""} ${props.persona?.color ?? ""}`}>
-      <Show when={src()} fallback={initial(props.persona?.name ?? "")}>
-        <img class="eq-portrait" src={src()} alt="" />
+      <Show when={src() && src() !== bad()} fallback={initial(props.persona?.name ?? "")}>
+        <img class="eq-portrait" src={src()} alt="" onError={() => setBad(src())} />
       </Show>
     </span>
   );
@@ -35,9 +36,10 @@ export function SessionPortrait(props: { sessionId?: string; class?: string }) {
     () => (persona()?.portraitMtimeMs ? persona() : undefined),
     (p) => portraitUrl(p),
   );
+  const [bad, setBad] = createSignal<string>();
   return (
-    <Show when={persona()?.portraitMtimeMs && src()}>
-      <img class={`eq-portrait-sm ${props.class ?? ""}`} src={src()} alt="" />
+    <Show when={persona()?.portraitMtimeMs && src() && src() !== bad()}>
+      <img class={`eq-portrait-sm ${props.class ?? ""}`} src={src()} alt="" onError={() => setBad(src())} />
     </Show>
   );
 }

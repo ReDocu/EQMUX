@@ -43,6 +43,13 @@ export function MissionReview(props: { wsId: string; missionId: string; back?: V
   const [showAll, setShowAll] = createSignal(false);
   // 편집 기록이 없으면(빈 목록 · 브라우저) 거를 것이 없다 — 전체를 보인다
   const only = () => (showAll() || !touched()?.length ? undefined : touched());
+  // 시작점 커밋을 git이 못 찾으면(rebase 뒤 gc 등) Rust가 커밋 수를 비운다 — 그때는 HEAD ↔ 작업 트리로 내려간다.
+  // ponytail: 끝난 임무는 커밋 수를 세지 않아 이 판정을 못 한다 — 검토 진입이 진행 중 · 검토 중 임무라 둔다
+  const baseLost = () => {
+    const mm = m();
+    return !!mm?.baseCommit && mm.status !== "done" && mm.commitsSince === undefined;
+  };
+  const base = () => (baseLost() ? undefined : m()?.baseCommit);
   // ③ 저장 명령 중 kind "test" (C7). 없으면 버튼을 숨긴다
   const [tests, setTests] = createSignal<SavedCommand[]>([]);
   const [pick, setPick] = createSignal(0);
@@ -111,9 +118,11 @@ export function MissionReview(props: { wsId: string; missionId: string; back?: V
                   {t("임무 검토")} · {mm().name}
                 </h1>
                 <div class="sub mono">
-                  {mm().baseCommit
-                    ? tf("시작 {sha} · 그 뒤 커밋 {n}개", { sha: mm().baseCommit!.slice(0, 7), n: mm().commitsSince ?? 0 })
-                    : t("시작점 기록 없음 — 지금 작업 트리의 변경을 보입니다")}
+                  {baseLost()
+                    ? tf("시작점 {sha}을 git에서 찾을 수 없습니다(rebase 등) — 지금 작업 트리의 변경을 보입니다", { sha: mm().baseCommit!.slice(0, 7) })
+                    : mm().baseCommit
+                      ? tf("시작 {sha} · 그 뒤 커밋 {n}개", { sha: mm().baseCommit!.slice(0, 7), n: mm().commitsSince ?? 0 })
+                      : t("시작점 기록 없음 — 지금 작업 트리의 변경을 보입니다")}
                   {costs()[mm().id] ? ` · ${tf("비용 {usd}", { usd: fmtUsd(costs()[mm().id]) })}` : ""}
                 </div>
               </div>
@@ -199,7 +208,7 @@ export function MissionReview(props: { wsId: string; missionId: string; back?: V
               {/* ② diff — base_commit 뒤 커밋 + 작업 트리, 기본은 담당 세션이 고친 파일만. 시작점이 없으면 HEAD ↔ 작업 트리.
                   base가 있으면 GitDiffEditor는 ✕ · Esc를 숨기고 닫기를 이 화면에 맡긴다 */}
               <div class="mrv-diff">
-                <GitDiffEditor wsId={props.wsId} base={mm().baseCommit} only={only()} />
+                <GitDiffEditor wsId={props.wsId} base={base()} only={only()} />
               </div>
             </div>
             <Show when={sendBackOpen()}>

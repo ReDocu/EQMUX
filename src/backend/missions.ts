@@ -232,13 +232,14 @@ export type TestRun = number | "no-shell" | "unsupported" | "timeout";
 export async function runReviewTest(wsId: string, run: string, shellCmd: string): Promise<TestRun> {
   const id = serverTermId(wsId);
   if (!(await listAlivePty()).includes(id)) return "no-shell";
-  const suffix = exitMarkerSuffix(shellCmd);
+  const tag = Date.now().toString(36); // 실행마다 다른 꼬리표 — 같은 셸의 앞 실행 표식과 섞이지 않게
+  const suffix = exitMarkerSuffix(shellCmd, tag);
   if (!suffix) return "unsupported";
   return new Promise((resolve) => {
     let buf = "";
     const off = onPtyOutput(id, (d) => {
       buf = (buf + d).slice(-8000);
-      const code = findExitCode(buf);
+      const code = findExitCode(buf, tag);
       if (code === undefined) return;
       off();
       clearTimeout(timer);

@@ -24,7 +24,7 @@ import { memoryRel, nudgeRoleReload, nudgeTeamReload, saveRoleFile } from "../ba
 import { resaveTeams } from "../backend/team";
 import { fileChangeTick } from "../backend/watch";
 import { tick } from "../state";
-import { ConfirmDialog, FieldHint, KV } from "../components/ui";
+import { ConfirmDialog, FieldHint, KV, notify } from "../components/ui";
 import { JOB_META, jobMeta, TITLE_SUGGEST } from "../jobs";
 import { cleanTitle, personaLevel, personaProfile, personaTagline, TITLE_MAX } from "../types";
 import type { Job, Persona, PersonaLevel, Workspace } from "../types";
@@ -940,7 +940,10 @@ export function RoleLibrary() {
             onConfirm={() => {
               const id = sel()?.id;
               setAskClear(undefined);
-              if (id) void fsDelete(ws().path, memoryRel(id)).finally(() => void loadMemories(id));
+              if (id)
+                void fsDelete(ws().path, memoryRel(id))
+                  .catch((e) => notify(tf("기억을 비우지 못했습니다 — {err}", { err: String(e) })))
+                  .finally(() => void loadMemories(id));
             }}
             onCancel={() => setAskClear(undefined)}
           />

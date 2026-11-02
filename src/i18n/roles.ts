@@ -289,6 +289,7 @@ export const dict: Record<string, string> = {
   "아직 기억이 없습니다 — {path}": "No memory yet — {path}",
   "{n}줄": "{n} lines",
   "기억 열기": "Open memory",
+  "기억을 비우지 못했습니다 — {err}": "Couldn't clear the memory — {err}",
   비우기: "Clear",
   "이 워크스페이스의 기억을 비울까요?": "Clear this workspace's memory?",
   "기억 파일을 휴지통으로 보냅니다. 다음 세션부터 이 캐릭터는 이 프로젝트의 지난 일을 모릅니다.":
