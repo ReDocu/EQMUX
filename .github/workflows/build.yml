@@ -46,6 +46,8 @@ jobs:
           $v = (Get-Content package.json | ConvertFrom-Json).version
           New-Item -ItemType Directory -Force out, stage\EQMUX | Out-Null
           Copy-Item src-tauri\target\release\eqmux.exe stage\EQMUX\
+          # 셸 페인의 `eqmux`가 잡는 콘솔 대리인 (B248) — 설치본은 hooks.nsh가 같은 이름으로 바꾼다
+          Copy-Item src-tauri\target\release\eqmux-console.exe stage\EQMUX\eqmux.com
           Compress-Archive -Path stage\EQMUX -DestinationPath "out\EQMUX_${v}_x64_portable.zip" -Force
           Copy-Item src-tauri\target\release\bundle\nsis\*.exe out\
       - uses: actions/upload-artifact@v4

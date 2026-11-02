@@ -288,7 +288,7 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
     void loadLog(true);
   };
 
-  createEffect(on([() => ws()?.id, allBranches, file], () => reloadAll()));
+  createEffect(on([createMemo(() => ws()?.id), allBranches, file], () => reloadAll())); // 메모 — 방송마다 다시 읽지 않게 (B249 계열)
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
   createEffect(
     on(

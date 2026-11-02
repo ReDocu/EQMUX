@@ -1,7 +1,7 @@
 // 임무 · 파일 탐색기 패널 (ehpqx) — 워크스페이스 파일 트리 + 미리보기 + 파일 CRUD (M24).
 // Tauri에서는 실제 FS를 읽고 쓴다 (깊이·개수 상한 · .git 불가침 · 삭제는 휴지통).
 // 파일이 원본이라는 계약 그대로: 임무 파일은 backend의 실측 임무 데이터로, 그 외 텍스트는 원문으로.
-import { createEffect, createSignal, For, lazy, on, onMount, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, lazy, on, onMount, Show } from "solid-js";
 import { Portal } from "solid-js/web";
 import { backend } from "../backend/mock";
 import { fsCreate, fsDelete, fsPreview, fsRead, fsRename, fsTree, fsWrite } from "../backend/panels";
@@ -84,7 +84,8 @@ export function MissionExplorerTab() {
   };
   onMount(() => {
     createEffect(
-      on(() => ws()?.id, () => {
+      // 메모 — on()은 같은 값에도 돌아, 방송(tick)마다 폴더가 다 접히고 트리를 다시 읽었다 (B249 계열)
+      on(createMemo(() => ws()?.id), () => {
         setCollapsed(new Set<string>()); // 워크스페이스가 바뀌면 접기 상태도 새로 — 다른 트리다
         void loadTree();
         // 선택·미리보기·편집도 이전 워크스페이스의 것이다 (B200) — 남겨 두면 [삭제]·[이름]이 새 워크스페이스의

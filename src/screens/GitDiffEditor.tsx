@@ -122,7 +122,7 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
       return;
     }
     // 커밋 전환도 재로드 대상이다 — 같은 화면에서 다른 커밋 diff로 옮겨갈 수 있다 (UI 리파인 §git)
-    createEffect(on(() => [ws()?.id, commit()?.hash, props.base] as const, () => void loadFiles()));
+    createEffect(on(createMemo(() => `${ws()?.id}\u0000${commit()?.hash}\u0000${props.base}`), () => void loadFiles())); // 메모 — 방송마다 다시 읽지 않게 (B249 계열)
     createEffect(on(selected, () => void loadDiff()));
   });
 

@@ -64,7 +64,7 @@ export function GitPanelTab() {
 
   onMount(() => {
     if (!isTauri()) return;
-    createEffect(on(() => ws()?.id, () => void load()));
+    createEffect(on(createMemo(() => ws()?.id), () => void load())); // 메모 — on()은 같은 값에도 돌아 방송마다 git을 다시 띄웠다 (B249 계열)
     // 숨김 중 쉰다 (CPU 점검 2) — 한 번에 git 5개를 띄우는 호출이다. 다시 보이면 다음 틱(≤10초)에 따라잡는다
     const t = setInterval(() => !document.hidden && void load(), 10_000);
     onCleanup(() => clearInterval(t));
@@ -161,7 +161,7 @@ export function GitPanelTab() {
   const [runningIn, setRunningIn] = createSignal<string[]>([]);
   const running = () => !!ws() && runningIn().includes(ws()!.id);
   // B240 — 워크스페이스를 바꾸면 이전 저장소의 개요 · 실행 결과 줄을 바로 지운다 (새 응답까지 A의 커밋이 B 이름 아래 남았다)
-  createEffect(on(() => ws()?.id, () => batch(() => (setReal(undefined), setActNote(undefined), setAuthFail(false))), { defer: true }));
+  createEffect(on(createMemo(() => ws()?.id), () => batch(() => (setReal(undefined), setActNote(undefined), setAuthFail(false))), { defer: true }));
   const [guardAsk, setGuardAsk] = createSignal<{ level: "busy" | "waiting"; names: string[] } | undefined>();
   const runCmd = async (args: string[]) => {
     const w = ws();

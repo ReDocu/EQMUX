@@ -2,7 +2,7 @@
 // 값은 비밀(API 키·토큰)이 많아 기본으로 가린다 — 화면 공유·녹화 중에 그대로 새지 않게. 편집 칸도 같다.
 // 알림·오류에는 키만 쓰고 값은 쓰지 않는다. 변수 하나를 고치면 그 한 줄만 바뀐다(원문 보존).
 // 파일 목록은 SidePanel이 읽는다. 여기는 그리기와 편집 — 저장 뒤에는 onReload로 다시 읽힌다.
-import { createEffect, createResource, createSignal, For, lazy, on, onMount, Show } from "solid-js";
+import { createEffect, createMemo, createResource, createSignal, For, lazy, on, onMount, Show } from "solid-js";
 import {
   addToGitignore,
   appendLine,
@@ -51,10 +51,11 @@ export function EnvPanelTab(props: { files: EnvFile[]; loading?: boolean; wsPath
   // [값 보기]가 꺼진 채 [원문 편집]을 누르면 먼저 묻는다 (U115) — 원문은 모든 값을 평문으로 펼친다
   const [askRaw, setAskRaw] = createSignal<string>();
 
-  // 워크스페이스를 옮기면 [값 보기]와 편집 상태를 끈다 — 다른 저장소의 키가 확인 없이 펼쳐지지 않게 (B147)
+  // 워크스페이스를 옮기면 [값 보기]와 편집 상태를 끈다 — 다른 저장소의 키가 확인 없이 펼쳐지지 않게 (B147).
+  // createMemo로 값이 실제로 바뀔 때만 돈다 — on()은 같은 값에도 돌아, 방송(tick)마다 편집이 닫혔다 (B249)
   createEffect(
     on(
-      () => props.wsPath,
+      createMemo(() => props.wsPath),
       () => {
         setReveal(false);
         setEdit(undefined);

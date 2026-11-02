@@ -349,7 +349,7 @@ export function SkillsPanelTab() {
   const scan = () => (scanRes()?.ws === ws()?.path ? scanRes() : undefined);
   const loading = () => plugins.loading || scanRes.loading || (isTauri() && !scan());
   const [sel, setSel] = createSignal<SkillRow>();
-  createEffect(on(() => ws()?.path, () => setSel(undefined), { defer: true }));
+  createEffect(on(createMemo(() => ws()?.path), () => setSel(undefined), { defer: true })); // 메모 — 없으면 방송마다 상세가 닫혔다 (B249 계열)
   // 만들기 · 저장 · 삭제 · 복사 모두에서 켠다 (B192) — 상세 안에 두면 다시 읽기가 상세를 새로 만들며 꺼졌다
   const [changed, setChanged] = createSignal(false);
   const [newName, setNewName] = createSignal("");
