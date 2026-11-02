@@ -130,7 +130,7 @@
 - **C4 `file_touch`**(W1 → W2, 완료 `2669083`): 쓰기 `Store::touch_file(ws, session, path, tool, ts)`(writer 스레드 배치), 읽기 `store::recent_touches(root, ws, since_ms)` · `store::touches_for(root, ws, session, since_ms)`. DB가 워크스페이스마다 따로라 workspace 열은 없다.
 - **C5 역할 frontmatter `model:`**(W4 쓴다 → W2 읽는다). 값이 없으면 키를 쓰지 않는다.
 - **C6 역할 frontmatter `remind:` · `memory:`**(W4 쓴다 → W3 읽는다). `remind:`는 한 줄 문장, 꺼짐이면 키 없음. `memory:`는 워크스페이스 기준 상대 경로 `.eqmux/memory/<persona id>.md`.
-- **C7 `.eqmux/commands.json`**(W6 정한다 → 2라운드 §13-3).
+- **C7 `.eqmux/commands.json`**(W6, 완료 `3448556`): `{ "version": 1, "commands": [{ "name": "test", "run": "npm test", "kind": "server" | "test" | "other" }] }`. 순수 함수 `backend/ports.ts` `parseCommands`. 서버 셸에 치므로 종료 코드는 따로 오지 않는다 — §13-3 [테스트 실행]은 run 뒤 표식으로 출력에서 읽게 설계한다.
 - **공통 부품**: `ConfirmDialog` · `notify()` · `Segmented` · `Chip`은 `src/components/ui.tsx`(W7)에 이미 있다. 그것을 쓴다.
 
 ## 진행 기록
@@ -154,3 +154,5 @@
 | 11-02 | W0 | `ba499fb`에 섞인 gitx · AgentStateEvt 줄 되돌림(경로 붙인 commit 실수) | `6a1f38d` |
 | 11-02 | W6 | §16 환경변수 CRUD 1~4단계. 목록과 다른 점: 값은 이스케이프 대신 dotenv가 같은 값으로 읽는 따옴표를 고른다 · [원문 편집]은 탭 안 CodeEditor. git 칩은 W5 `git_path_status` 커밋 뒤 동작. 실기: §16-7 전부, dotenv 대조 | `f1adaa6` |
 | 11-02 | W3 | 직함 수신자 · `--re` · `send --wait`. 한계: 다른 프로젝트 --re 회신은 --wait가 못 잡음, 직함별 담당 경로 미구현, team.json 대체 해석은 직함 안 봄 | `bdec5fd` |
+| 11-02 | W3 | re 열 없는 DB에서도 버스 동작 | `a67ca91` |
+| 11-02 | W6 | 저장 명령 C7 + 서버 탭 버튼 줄 | `3448556` |
