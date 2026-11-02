@@ -232,3 +232,9 @@
 | 11-02 | W5 | GitDiffEditor 닫기를 화면 자체일 때만 | `b792d0d` |
 | 11-02 | W4 | 임무 카드 · 검토 화면 비용 | `f0172bd` |
 | 11-02 | W2 | 상태 판정 근거 `reason` · 서브에이전트 종류. **Codex 실측 2건(apply_patch 경로, PermissionRequest 결정 형식)은 실기 필요** — 측정에 `--dangerously-bypass-hook-trust`가 필요해 세션 권한에서 거부됨, 사용자 허락 필요 | `358fb3d` |
+| 11-02 | W7 | labels.ts(revealLabel · fileManagerName · jobName) · F1 한도 칩 · 한도 소진 전달 보류 · 컨텍스트 칩 | `cb74d75` |
+| 11-02 | W4 | 직무 owns → 역할 파일 owns(담당 경로 배관) | `2bff0ba` |
+| 11-02 | W6 | §11-3 패널 문구 · U76 · U101 · U102 · U112-④. mac 잔여 주인 배정: B132 · B151 → W5 Rust canonicalize + W7 비교, B121 → W2, B163 · U100 · U101 · U102 → W7 · W4 · W5 | `e1fc804` |
+| 11-02 | W3 | 건너뛰기 팔레트 Ctrl+Shift+K(⌘⇧K, ⌘K는 터미널 비우기라 피함) · 단축키 표 보강 | `9d172aa` |
+| 11-02 | W7 | 판정 근거 표시 · 하루 예산 cost_summary 합계. 실기: 재시작 뒤 합계 | `62fe468` |
+| 11-02 | W0 | 실기 확인 목록 틀 `docs/update-0.6-qa-checklist.md`(스트림별 절) | 이 커밋 |
