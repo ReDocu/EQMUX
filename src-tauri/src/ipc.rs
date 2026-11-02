@@ -334,9 +334,11 @@ fn handle(app: &AppHandle, line: &str) -> Result<serde_json::Value, String> {
             let to_raw = req["to"].as_str().unwrap_or("@all");
             // 원점은 스폰 관문이 남긴다 — 에이전트 추적 맵을 요구하면 셸 세션은 영영 못 보낸다
             let (ws, cwd) = crate::session_origin(app, session).ok_or("UNKNOWN_SESSION")?;
-            let mut extra = crate::messages::Extra::default();
             // escalate 심각도 (§4) — high면 보낸 뒤 알림 센터 + OS 알림 한 번
-            extra.severity = crate::messages::severity(kind, req["severity"].as_str())?;
+            let mut extra = crate::messages::Extra {
+                severity: crate::messages::severity(kind, req["severity"].as_str())?,
+                ..Default::default()
+            };
             let high = extra.severity.is_some();
             if let Some(f) = req["file"].as_str() {
                 extra.file = Some(crate::messages::attach_file(&cwd, f)?);
@@ -662,7 +664,7 @@ fn publish(
         let rate: State<crate::MsgRate> = app.state();
         let mut map = rate.0.lock().map_err(|e| e.to_string())?;
         let times = map.entry(format!("{ws}/{from}")).or_default();
-        if !crate::messages::allow_rate(times, crate::workspace::now_ms() as i64) {
+        if !crate::messages::allow_rate(times, crate::workspace::now_ms()) {
             return Err("RATE_LIMIT".into());
         }
     }
@@ -722,6 +724,7 @@ fn directory() -> Vec<DirEntry> {
 /// 받는 쪽 — 팀 전체(@all, 자기 프로젝트만) 또는 세션 하나. 디렉터리 항목이 없으면(디렉터리를
 /// 아직 못 받았을 때의 team.json 폴백) 같은 워크스페이스 세션이다.
 #[derive(Debug)]
+#[allow(clippy::large_enum_variant)] // 요청 하나 동안만 사는 값이라 크기 차이가 문제 되지 않는다
 enum Target {
     All,
     One(String, Option<DirEntry>),
@@ -815,6 +818,7 @@ fn resolve_target(app: &AppHandle, ws: &str, cwd: &str, raw: &str) -> Result<Tar
 
 /// 발신 + 전달 결과. 다른 프로젝트로 가는 메시지는 두 원장에 적는다 — 각 줄의 project는
 /// 상대 쪽 프로젝트 이름이다. 전달(PTY 주입)은 받는 워크스페이스의 message-new가 맡는다.
+#[allow(clippy::too_many_arguments)] // 발신 한 건의 문맥 그대로다 — 묶음 구조체는 호출 두 곳만 위해 생긴다
 fn send_to(
     app: &AppHandle,
     ws: &str,

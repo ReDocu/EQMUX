@@ -84,7 +84,7 @@ fn search_dir(dir: &Path, query: &str, slots: &HashMap<String, (String, bool)>) 
         .filter(|p| p.extension().is_some_and(|x| x == "jsonl"))
         .filter_map(|p| Some((std::fs::metadata(&p).ok()?.modified().ok()?, p)))
         .collect();
-    files.sort_by(|a, b| b.0.cmp(&a.0));
+    files.sort_by_key(|f| std::cmp::Reverse(f.0));
     let mut hits = Vec::new();
     for (mtime, path) in files {
         let Some(uuid) = path.file_stem().map(|s| s.to_string_lossy().into_owned()) else { continue };

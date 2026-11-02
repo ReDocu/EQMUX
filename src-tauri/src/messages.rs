@@ -147,7 +147,7 @@ pub fn send_with(
     validate(kind, body)?;
     check_len(from, body)?;
     let conn = crate::store::open_db(root, ws).map_err(|e| e.to_string())?;
-    let now = crate::workspace::now_ms() as i64;
+    let now = crate::workspace::now_ms();
     let body = body.trim();
     let read = from == "나";
     let (fpath, fsize) = match &extra.file {
