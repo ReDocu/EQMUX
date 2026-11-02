@@ -482,16 +482,32 @@ fn sessions_dir() -> PathBuf {
 /// 실측 결과 CC는 ASCII 영숫자만 남기고 나머지(`:` `\` `/` `.` `_` 공백 한글 등)를 전부 '-'로 치환한다
 /// (예: `C:\Users` → `C--Users`, `D:\ClaudeProject.EQMent` → `D---ClaudeProject-EQMent`).
 /// cwd가 경로에 들어가므로 재개는 같은 cwd에서만 성립한다 (FR-D-03 · R4).
+///
+/// B121 — Claude Code는 실제 경로(심볼릭 링크를 푼 cwd)로 폴더 이름을 짓는다. canonicalize한 경로의 폴더가
+/// 있으면 그것을, 없으면 원래 경로로 한 번 더 찾는다. mac NFD 한글 폴더(자모 수만큼 '-')는 실기 확인 필요
 pub fn transcript_path(cwd: &str, uuid: &str) -> PathBuf {
-    let escaped: String = cwd
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect();
-    home()
-        .join(".claude")
-        .join("projects")
-        .join(escaped)
+    let dir = |p: &str| -> PathBuf {
+        let escaped: String = p
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect();
+        home().join(".claude").join("projects").join(escaped)
+    };
+    fs::canonicalize(cwd)
+        .ok()
+        .map(|c| dir(&strip_verbatim(&c.to_string_lossy())))
+        .filter(|d| d.is_dir())
+        .unwrap_or_else(|| dir(cwd))
         .join(format!("{uuid}.jsonl"))
+}
+
+/// Windows canonicalize의 `\\?\` 접두를 떼어 사람이 쓰는 경로로 (`\\?\UNC\srv` → `\\srv`)
+fn strip_verbatim(p: &str) -> String {
+    if let Some(rest) = p.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else {
+        p.strip_prefix(r"\\?\").unwrap_or(p).to_string()
+    }
 }
 
 /// cwd의 Claude projects 디렉터리에서 가장 최근에 수정된 트랜스크립트 (셸 우선 모델) —
@@ -758,6 +774,21 @@ fn done_key(session: &str) -> String {
 /// `eqmux report --done` (W2 ipc.rs)이 부른다 — OS 알림 "이름 · 완료" + 알림 센터 항목
 pub fn notify_report(app: &AppHandle, session: &str, text: &str) {
     notify_done(app, session, "report", Some(text));
+}
+
+/// `eqmux send --type escalate --severity high` (W3 ipc.rs)이 부른다 — 메시지마다 알림 센터 한 건 + OS 알림 한 번.
+/// 60초 합침 게이트는 타지 않는다(긴급을 합치면 뒤의 것이 묻힌다). 발신 상한(분당 10건)이 이미 막아 준다.
+/// 알림 끔 · 음소거 · 창 포커스는 그대로 따른다 — 그때도 알림 센터 항목은 남는다
+pub fn notify_escalate(app: &AppHandle, session: &str, text: &str) {
+    let en = crate::setting_str(app, "language").as_deref() == Some("en");
+    let name = display_name(session);
+    let title = if en { format!("{name} · urgent escalation") } else { format!("{name} · 긴급 에스컬레이션") };
+    let body: String = text.chars().take(200).collect();
+    let os = crate::setting_str(app, "notifications").as_deref() != Some("off") && !os_quiet(app, session);
+    emit_item(app, session, "escalate", &title, &body, os);
+    if os {
+        show_os(app, session, &title, &body);
+    }
 }
 
 /// OS 알림을 삼켜야 하는 자리인가 — 음소거(FR-G-35, 세션·워크스페이스)·창 포커스(FR-G-31).
@@ -2401,6 +2432,15 @@ mod tests {
         assert_eq!(esc("D:\\ClaudeProject.EQMent"), "D--ClaudeProject-EQMent");
         assert_eq!(esc("D:\\my_proj v2"), "D--my-proj-v2"); // 밑줄·공백도 '-'
         assert_eq!(esc("D:\\팀"), "D---"); // 한글은 ASCII 영숫자가 아니라 '-'
+    }
+
+    /// B121 — canonicalize 결과의 verbatim 접두를 떼야 Claude Code 폴더 이름과 맞는다
+    #[test]
+    fn strip_verbatim_matches_plain_paths() {
+        use super::strip_verbatim;
+        assert_eq!(strip_verbatim(r"\\?\D:\ws\EQMUX"), r"D:\ws\EQMUX");
+        assert_eq!(strip_verbatim(r"\\?\UNC\srv\share\p"), r"\\srv\share\p");
+        assert_eq!(strip_verbatim("/Users/me/p"), "/Users/me/p");
     }
 
     /// cwd 최신 트랜스크립트 추정 (셸 우선 모델) — 빈 파일·jsonl 아닌 파일은 제외, 최신 수정본
