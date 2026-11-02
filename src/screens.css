@@ -7303,3 +7303,17 @@ label.inbox-pop-row {
 .bell-title.escalate {
   color: var(--eq-red);
 }
+
+/* 0.6 W4: 세션 초상 (§15-4) — 레일 · 페인 머리 · 대화 탭 · 알림. png가 있을 때만 그려진다 */
+.eq-portrait-sm {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex: none;
+}
+.pane-head-id .eq-portrait-sm,
+.conv-author .eq-portrait-sm {
+  margin-right: 6px;
+  vertical-align: -3px;
+}

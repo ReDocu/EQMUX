@@ -24,6 +24,7 @@ import { isTauri, revealPath } from "../backend/pty";
 import { t, tf } from "../i18n";
 import { draftRequest, focusSession, jumpToSession, scopeWorkspace, setDraftRequest, setView, tick, view } from "../state";
 import { ContextMenu, Eyebrow, notify } from "./ui";
+import { SessionPortrait } from "./PersonaAvatar";
 import { effectiveTitle, sessionName as sessionNameOf } from "../types";
 import type { ConversationMessage, Session } from "../types";
 import { jobName, revealLabel } from "../labels";
@@ -454,6 +455,7 @@ export function ConversationTab() {
               >
                 <div class="conv-msg-top">
                   <span class="conv-author">
+                    <SessionPortrait sessionId={m.from} />
                     <span title={titleTip(m.from)}>{label(m.from)}</span> → {label(m.to)}
                   </span>
                   <span class={`conv-type mono t-${TYPE_COLOR[m.type]}`}>{m.type.toUpperCase()}</span>

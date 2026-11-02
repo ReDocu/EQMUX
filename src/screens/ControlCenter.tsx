@@ -32,6 +32,7 @@ import {
 import { Chip, ConfirmDialog, ContextMenu, Eyebrow, FieldHint, Identity, notify, PaneNoText, Segmented, StatusLabel, StopConfirm } from "../components/ui";
 import { jobMeta } from "../jobs";
 import type { ChipTone, MenuGroup } from "../components/ui";
+import { SessionPortrait } from "../components/PersonaAvatar";
 import { discardPending, injectPending, pendingCount, pendingFor, sendConversation, senderLabel, unmanagedAgent } from "../backend/conversation";
 import { attentionOrder, inboxWaiting, pickNext } from "../backend/attention";
 import { canStartFresh, resumeAgent, startFresh } from "../backend/agent";
@@ -213,6 +214,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
     >
       {/* 점 하나 — 주의 신호가 있으면 그 단계 색, 없으면 상태 색 (§페인 헤더 문법) */}
       <span class={attnChips(s)[0] ? `rail-attn ${attnChips(s)[0]!.tone}` : `sdot ${s.status}`} />
+      <SessionPortrait sessionId={s.id} />
       {/* 번호는 헤더와 같은 두 자리 슬롯 번호 — 헤더와 레일을 번호로 맞춰 본다 */}
       <span class="rail-no mono">
         <PaneNoText slot={s.slot} no={paneNo(s)} />
@@ -913,6 +915,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
                   applyZoom(zoomed() === s.id ? undefined : s.id);
                 }}
               >
+                <SessionPortrait sessionId={s.id} />
                 <Identity
                   slot={s.slot}
                   no={paneNo(s)}

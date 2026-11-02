@@ -46,6 +46,7 @@ import { Icon } from "./icons";
 import { ContextMenu, notify } from "./ui";
 import { crashReport, setCrashOpen } from "../backend/recovery";
 import type { MenuGroup } from "./ui";
+import { SessionPortrait } from "./PersonaAvatar";
 import { revealLabel } from "../labels";
 
 export function AppBar() {
@@ -510,6 +511,7 @@ export function AppBar() {
                         <span class="bell-dot" />
                         <span class="bell-body">
                           <span class="bell-line">
+                            <SessionPortrait sessionId={s.id} />
                             <b class="mono">{sessName(s)}</b>
                             <Show when={wsLabel(s.workspaceId)}>{(n) => <span class="badge">{n()}</span>}</Show>
                           </span>
@@ -535,6 +537,7 @@ export function AppBar() {
                       <span class={`bell-dot ${itemRead(it) ? "" : it.kind}`} />
                       <span class="bell-body">
                         <span class="bell-line">
+                          <SessionPortrait sessionId={it.session} />
                           <b class="mono">{itemName(it)}</b>
                           <Show when={wsLabel(it.workspace)}>{(n) => <span class="badge">{n()}</span>}</Show>
                           <Show when={it.count > 1}>
