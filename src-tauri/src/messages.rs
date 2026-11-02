@@ -142,12 +142,20 @@ pub fn send_with(
     // 보낸 때의 이름을 원장에 남긴다 — "나"·"@all"은 디렉터리에 없어 비고, 화면이 원문을 쓴다
     let from_name = extra.from_name.clone().or_else(|| crate::ipc::session_name(from));
     let to_name = extra.to_name.clone().or_else(|| crate::ipc::session_name(to));
-    conn.execute(
-        "INSERT INTO message (ts, sender, recipient, kind, body, read, done, file_path, file_size, project, sender_name, recipient_name, re)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-        params![now, from, to, kind, body, read as i64, extra.done as i64, fpath, fsize, extra.project, from_name, to_name, extra.re],
-    )
-    .map_err(|e| e.to_string())?;
+    // re 열이 없는 DB(이전이 v2에서 멈춤)에서는 회신 연결만 빠지고 메시지는 간다
+    let has_re = re_col(&conn) == "re";
+    let re = extra.re.filter(|_| has_re);
+    let sql = format!(
+        "INSERT INTO message (ts, sender, recipient, kind, body, read, done, file_path, file_size, project, sender_name, recipient_name{})
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12{})",
+        if has_re { ", re" } else { "" },
+        if has_re { ", ?13" } else { "" },
+    );
+    let mut args: Vec<&dyn rusqlite::ToSql> = vec![&now, &from, &to, &kind, &body, &read, &extra.done, &fpath, &fsize, &extra.project, &from_name, &to_name];
+    if has_re {
+        args.push(&re);
+    }
+    conn.execute(&sql, args.as_slice()).map_err(|e| e.to_string())?;
     Ok(MsgRow {
         id: conn.last_insert_rowid(),
         ts: now,
@@ -161,7 +169,7 @@ pub fn send_with(
         project: extra.project.clone(),
         from_name,
         to_name,
-        re: extra.re,
+        re,
     })
 }
 
@@ -220,7 +228,8 @@ pub fn list(
     let conn = crate::store::open_db(root, ws).map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(&format!(
-            "SELECT {COLS} FROM (SELECT * FROM message WHERE id < ?1 ORDER BY id DESC LIMIT ?2) ORDER BY id ASC"
+            "SELECT {} FROM (SELECT * FROM message WHERE id < ?1 ORDER BY id DESC LIMIT ?2) ORDER BY id ASC",
+            cols(&conn)
         ))
         .map_err(|e| e.to_string())?;
     let rows = stmt
@@ -229,7 +238,18 @@ pub fn list(
     Ok(rows.filter_map(|r| r.ok()).collect())
 }
 
-const COLS: &str = "id, ts, sender, recipient, kind, body, read, done, file_path, file_size, project, sender_name, recipient_name, re";
+/// re 열 (스키마 v3 · §4 회신) — 이전이 v2에서 멈춘 DB에는 없다. 그때는 NULL로 읽어 버스는 계속 돈다
+fn re_col(conn: &rusqlite::Connection) -> &'static str {
+    if conn.prepare("SELECT re FROM message LIMIT 0").is_ok() {
+        "re"
+    } else {
+        "NULL"
+    }
+}
+
+fn cols(conn: &rusqlite::Connection) -> String {
+    format!("id, ts, sender, recipient, kind, body, read, done, file_path, file_size, project, sender_name, recipient_name, {}", re_col(conn))
+}
 
 fn row(r: &rusqlite::Row) -> rusqlite::Result<MsgRow> {
     let file = r.get::<_, Option<String>>(8)?.map(|path| FileRef {
@@ -258,7 +278,8 @@ fn one(root: &Path, ws: &str, sql_where: &str, args: impl rusqlite::Params) -> R
         return Ok(None);
     }
     let conn = crate::store::open_db(root, ws).map_err(|e| e.to_string())?;
-    let mut stmt = conn.prepare(&format!("SELECT {COLS} FROM message WHERE {sql_where} ORDER BY id LIMIT 1")).map_err(|e| e.to_string())?;
+    let sql_where = sql_where.replace("{re}", re_col(&conn));
+    let mut stmt = conn.prepare(&format!("SELECT {} FROM message WHERE {sql_where} ORDER BY id LIMIT 1", cols(&conn))).map_err(|e| e.to_string())?;
     let mut rows = stmt.query_map(args, row).map_err(|e| e.to_string())?;
     rows.next().transpose().map_err(|e| e.to_string())
 }
@@ -274,7 +295,7 @@ pub fn reply_to(root: &Path, ws: &str, me: &str, id: i64) -> Result<Option<MsgRo
     one(
         root,
         ws,
-        "id > ?1 AND recipient = ?2 AND (re = ?1 OR (kind = 'report' AND done = 1 AND sender =
+        "id > ?1 AND recipient = ?2 AND ({re} = ?1 OR (kind = 'report' AND done = 1 AND sender =
            (SELECT recipient FROM message WHERE id = ?1 AND sender = ?2)))",
         params![id, me],
     )
@@ -410,6 +431,23 @@ mod tests {
         let ask2 = send(&dir, "ws1", me, "lin@ws1", "handoff", "로그인").unwrap();
         let d = send_with(&dir, "ws1", "lin@ws1", me, "report", "완료", &Extra { done: true, ..Default::default() }).unwrap();
         assert_eq!(reply_to(&dir, "ws1", me, ask2.id).unwrap().unwrap().id, d.id);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 이전이 v2에서 멈춰 re 열이 없는 DB — 회신 연결만 빠지고 버스(보내기·목록·--wait 완료 보고)는 돈다
+    #[test]
+    fn bus_runs_without_re_column() {
+        let dir = std::env::temp_dir().join(format!("eqmux-nore-{}", crate::workspace::now_ms()));
+        let me = "kai@ws1";
+        let ask = send(&dir, "ws1", me, "lin@ws1", "ask", "스키마?").unwrap();
+        crate::store::open_db(&dir, "ws1")
+            .unwrap()
+            .execute_batch("DROP INDEX IF EXISTS message_re; ALTER TABLE message DROP COLUMN re;")
+            .unwrap();
+        let r = send_with(&dir, "ws1", "lin@ws1", me, "report", "답", &Extra { re: Some(ask.id), done: true, ..Default::default() }).unwrap();
+        assert_eq!(r.re, None);
+        assert_eq!(list(&dir, "ws1", None, 50).unwrap().len(), 2);
+        assert_eq!(reply_to(&dir, "ws1", me, ask.id).unwrap().unwrap().id, r.id); // 완료 보고로 잡힌다
         std::fs::remove_dir_all(&dir).ok();
     }
 
