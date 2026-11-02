@@ -197,12 +197,63 @@ pub fn db_path(root: &Path, ws: &str) -> PathBuf {
 /// ponytail: 실행 중에 session.db가 지워지면(지금은 그런 경로가 없다) 다시 맞추지 않는다
 static MIGRATED: std::sync::Mutex<Option<std::collections::HashSet<PathBuf>>> = std::sync::Mutex::new(None);
 
+/// DB를 손상으로 옮겼을 때 사람에게 알리는 자리 (§1-2) — setup이 OS 알림을 단다. (워크스페이스, 옮긴 파일)
+type RecoverHook = Box<dyn Fn(&str, &Path) + Send + Sync>;
+static ON_RECOVER: std::sync::OnceLock<RecoverHook> = std::sync::OnceLock::new();
+
+pub(crate) fn on_recover(f: impl Fn(&str, &Path) + Send + Sync + 'static) {
+    let _ = ON_RECOVER.set(Box::new(f));
+}
+
+fn is_corrupt(e: &rusqlite::Error) -> bool {
+    matches!(
+        e.sqlite_error_code(),
+        Some(rusqlite::ErrorCode::NotADatabase | rusqlite::ErrorCode::DatabaseCorrupt)
+    )
+}
+
+/// 손상된 DB를 `session.db.corrupt-<ts>`(+ -wal · -shm)로 옮긴다 — 지우지 않는다. 옮긴 본체 경로를 돌려준다.
+/// 옛 WAL이 새 DB 옆에 남으면 새 DB에 재생되므로, WAL을 치우지 못하면 본체를 되돌리고 실패로 본다
+fn quarantine(path: &Path) -> Option<PathBuf> {
+    let base = path.display().to_string();
+    let moved = PathBuf::from(format!("{base}.corrupt-{}", now_ms()));
+    std::fs::rename(path, &moved).ok()?;
+    for suffix in ["-wal", "-shm"] {
+        let side = PathBuf::from(format!("{base}{suffix}"));
+        if side.exists()
+            && std::fs::rename(&side, format!("{}{suffix}", moved.display())).is_err()
+            && std::fs::remove_file(&side).is_err()
+        {
+            let _ = std::fs::rename(&moved, path);
+            return None;
+        }
+    }
+    Some(moved)
+}
+
 /// 쓰기 열림 — 스키마 보장까지만 하는 가벼운 열기. 메시지 버스(messages.rs)도 이 경로로 연다.
+/// 손상(§1-2): 스키마를 맞추다 "DB가 아니다/손상"이 나면 파일을 옮기고 새로 만든 뒤 알린다.
+/// ponytail: 머리·스키마 쪽 손상만 잡는다 — 깊은 페이지 손상은 그 줄을 읽을 때 오류로 나며, quick_check는 큰 DB에서 느려 열 때 돌리지 않는다
 pub(crate) fn open_db(root: &Path, ws: &str) -> rusqlite::Result<Connection> {
     let path = db_path(root, ws);
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
+    match open_path(&path) {
+        Err(e) if is_corrupt(&e) => {
+            let Some(moved) = quarantine(&path) else { return Err(e) };
+            crate::diag::write(&format!("store: 손상된 DB를 옮기고 새로 만듦 {} ({e})", moved.display()));
+            if let Some(f) = ON_RECOVER.get() {
+                f(ws, &moved);
+            }
+            open_path(&path)
+        }
+        r => r,
+    }
+}
+
+fn open_path(path: &Path) -> rusqlite::Result<Connection> {
+    let path = path.to_path_buf();
     let conn = Connection::open(&path)?;
     let _ = conn.pragma_update(None, "journal_mode", "WAL");
     let _ = conn.pragma_update(None, "synchronous", "NORMAL");
@@ -219,8 +270,8 @@ pub(crate) fn open_db(root: &Path, ws: &str) -> rusqlite::Result<Connection> {
     // 세션당 한 행이라 event 테이블처럼 턴마다 자라지 않는다
     let _ = conn.execute("ALTER TABLE session ADD COLUMN last_recap TEXT", []);
     let _ = conn.execute("ALTER TABLE session ADD COLUMN last_recap_at INTEGER", []);
-    // 메시지 0.5 열 (W2) — 완료 보고 · --file 첨부 · 다른 프로젝트 발신. 결정 1b로 버전 업 땐
-    // session.db를 새로 만들지만, 같은 버전 안에서 열린 DB도 깨지지 않게 한 번 더 보장한다
+    // 메시지 0.5 열 (W2) — 완료 보고 · --file 첨부 · 다른 프로젝트 발신. 0.5까지는 버전 업 때
+    // session.db를 새로 만들었고(결정 1b, 0.6에서 폐기), 이 열들은 그 전 DB를 메우던 것이라 그대로 둔다
     // sender_name·recipient_name (W1) — 보낸 때의 세션 이름. 세션이 사라져도 대화에 이름이 남는다
     for col in [
         "done INTEGER NOT NULL DEFAULT 0",
@@ -309,6 +360,75 @@ fn trim_to_cap(conn: &Connection) {
         }
         drop_lines(conn, &id, floor);
     }
+}
+
+/// 전역 보존 상한 (§1-2) — 모든 워크스페이스 session.db를 합쳐 이 크기를 넘지 않게 한다
+const GLOBAL_CAP_BYTES: u64 = 2 << 30;
+
+/// DB가 실제로 쓰는 바이트 — 지운 페이지는 freelist로 가서 다음 쓰기가 재사용한다.
+/// VACUUM으로 파일을 줄이지 않는다: scrollback은 INTEGER PRIMARY KEY가 없어 VACUUM이 rowid를 다시 매기고,
+/// 그러면 같은 rowid로 묶인 FTS 색인이 어긋난다 (drop_lines). 그래서 "더 자라지 않게"가 상한의 뜻이다
+fn used_bytes(conn: &Connection) -> u64 {
+    let q = |p: &str| conn.query_row(&format!("PRAGMA {p}"), [], |r| r.get::<_, i64>(0)).unwrap_or(0);
+    ((q("page_count") - q("freelist_count")).max(0) * q("page_size")) as u64
+}
+
+/// 합계가 cap을 넘으면 모든 DB를 통틀어 가장 오래된 스크롤백 줄부터 지운다. 지운 줄 수를 돌려준다.
+/// 메시지 원장·세션·이벤트·재개 앵커·편집 기록은 건드리지 않는다 — 크기의 대부분은 스크롤백이고,
+/// 원장을 지울지는 제품 결정이다(목록 §5 메시지 보존 기간). 스크롤백을 다 비워도 넘으면 진단에 남기고 멈춘다
+pub(crate) fn enforce_global_cap(root: &Path, cap: u64) -> u64 {
+    let Ok(entries) = std::fs::read_dir(root.join("workspaces")) else { return 0 };
+    let dirs: Vec<String> = entries
+        .flatten()
+        .filter(|e| e.path().join("session.db").exists())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    // 싼 사전 판정 — 파일 크기 합(≥ 실사용)이 상한 안이면 DB를 열지 않는다
+    let file_total: u64 = dirs
+        .iter()
+        .flat_map(|d| ["session.db", "session.db-wal"].map(|f| root.join("workspaces").join(d).join(f)))
+        .filter_map(|p| std::fs::metadata(p).ok())
+        .map(|m| m.len())
+        .sum();
+    if file_total <= cap {
+        return 0;
+    }
+    // 디렉터리 이름은 이미 sanitize된 것이라 open_db가 같은 경로로 연다
+    let conns: Vec<Connection> = dirs.iter().filter_map(|d| open_db(root, d).ok()).collect();
+    let oldest = |c: &Connection| -> Option<i64> {
+        c.query_row("SELECT MIN(ts) FROM scrollback", [], |r| r.get::<_, Option<i64>>(0)).ok().flatten()
+    };
+    let mut dropped = 0u64;
+    for _ in 0..10_000 {
+        let total: u64 = conns.iter().map(used_bytes).sum();
+        if total <= cap {
+            break;
+        }
+        let mut by_age: Vec<(i64, &Connection)> = conns.iter().filter_map(|c| oldest(c).map(|t| (t, c))).collect();
+        by_age.sort_by_key(|(t, _)| *t);
+        let Some(&(_, conn)) = by_age.first() else { break };
+        // 다음으로 오래된 DB의 첫 줄보다 새 줄은 이번 차례에 지우지 않는다 — 전역으로 오래된 순을 지킨다
+        let next = by_age.get(1).map(|(t, _)| *t).unwrap_or(i64::MAX);
+        let rows: i64 = conn.query_row("SELECT COUNT(*) FROM scrollback", [], |r| r.get(0)).unwrap_or(1).max(1);
+        let per_row = (used_bytes(conn) / rows as u64).max(1);
+        let k = ((total - cap) / per_row + 1).clamp(100, 50_000) as i64;
+        let pick = "SELECT rowid FROM scrollback WHERE ts <= ?1 ORDER BY ts, rowid LIMIT ?2";
+        let _ = conn.execute(&format!("DELETE FROM scrollback_fts WHERE rowid IN ({pick})"), params![next, k]);
+        let n = conn
+            .execute(&format!("DELETE FROM scrollback WHERE rowid IN ({pick})"), params![next, k])
+            .unwrap_or(0);
+        if n == 0 {
+            break;
+        }
+        dropped += n as u64;
+    }
+    let total: u64 = conns.iter().map(used_bytes).sum();
+    if total > cap {
+        crate::diag::write(&format!("store: 전역 상한 {cap}바이트를 스크롤백 정리만으로 맞추지 못함 (지금 {total})"));
+    } else if dropped > 0 {
+        crate::diag::write(&format!("store: 전역 상한으로 오래된 스크롤백 {dropped}줄 정리"));
+    }
+    dropped
 }
 
 /// 세션의 seq 이하 줄을 본문·색인에서 함께 지운다. FTS 행의 rowid는 scrollback 행의 rowid와 같게
@@ -418,6 +538,7 @@ fn run(root: PathBuf, rx: Receiver<StoreMsg>) {
     // 넘는 순간부터 줄 하나마다 flush(= DB 열기 재시도)가 돈다
     let mut fresh = 0usize;
     let mut last_maintain = std::time::Instant::now(); // 첫 열기(open_writer)가 이미 한 번 돈다
+    enforce_global_cap(&root, GLOBAL_CAP_BYTES); // 기동 때 한 번 — 상한 안이면 파일 크기만 보고 끝난다
 
     loop {
         match rx.recv_timeout(Duration::from_millis(100)) {
@@ -441,6 +562,7 @@ fn run(root: PathBuf, rx: Receiver<StoreMsg>) {
                     for conn in dbs.values() {
                         maintain(conn);
                     }
+                    enforce_global_cap(&root, GLOBAL_CAP_BYTES);
                 }
             }
             Err(RecvTimeoutError::Disconnected) => {
@@ -1121,6 +1243,69 @@ mod tests {
         let kai = touches_for(&dir, "ws", "kai@ws", 0);
         assert_eq!(kai.iter().map(|t| t.path.as_str()).collect::<Vec<_>>(), ["src/x.ts", "src/y.ts"]);
         drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// §1-2 — DB가 아닌 파일(손상)이면 옆으로 옮기고 새로 만든다. 옛 WAL은 새 DB에 붙지 않는다
+    #[test]
+    fn corrupt_db_is_moved_aside_and_recreated() {
+        let dir = std::env::temp_dir().join(format!("eqmux-corrupt-{}", crate::workspace::now_ms()));
+        let path = db_path(&dir, "ws");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, vec![b'x'; 8192]).unwrap();
+        std::fs::write(format!("{}-wal", path.display()), b"stale").unwrap();
+
+        let conn = open_db(&dir, "ws").expect("새로 만들어 열린다");
+        conn.execute("INSERT INTO meta VALUES ('k', 'v')", []).unwrap();
+        let names: Vec<String> = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(names.iter().any(|n| n.starts_with("session.db.corrupt-") && !n.ends_with("-wal")), "{names:?}");
+        // 옛 WAL은 옮겨지거나(quarantine) 열기 실패 때 SQLite가 버린다 — 어느 쪽이든 새 DB의 WAL이 아니다
+        let wal = std::fs::read(format!("{}-wal", path.display())).unwrap_or_default();
+        assert_ne!(wal, b"stale", "옛 WAL이 새 DB 옆에 남으면 안 된다");
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// §1-2 — 합계가 상한을 넘으면 모든 DB를 통틀어 오래된 스크롤백부터 지우고, 원장은 남긴다
+    #[test]
+    fn global_cap_drops_oldest_scrollback_across_workspaces() {
+        let dir = std::env::temp_dir().join(format!("eqmux-gcap-{}", crate::workspace::now_ms()));
+        let fill = |ws: &str, ts: i64| {
+            let conn = open_db(&dir, ws).unwrap();
+            let text = "y".repeat(1000);
+            for i in 1..=800i64 {
+                conn.execute(
+                    "INSERT INTO scrollback (session_id, seq, ts, text) VALUES ('s', ?1, ?2, ?3)",
+                    params![i, ts + i, text],
+                )
+                .unwrap();
+            }
+            conn.execute(
+                "INSERT INTO message (ts, sender, recipient, kind, body) VALUES (1, 'a', 'b', 'ask', 'keep')",
+                [],
+            )
+            .unwrap();
+            conn
+        };
+        let (old, new) = (fill("old", 1_000), fill("new", 1_000_000));
+        let total = used_bytes(&old) + used_bytes(&new);
+        drop((old, new));
+        let cap = total - 300_000;
+
+        assert!(enforce_global_cap(&dir, cap) > 0);
+        let count = |ws: &str, sql: &str| -> i64 {
+            Connection::open(db_path(&dir, ws)).unwrap().query_row(sql, [], |r| r.get(0)).unwrap()
+        };
+        assert!(count("old", "SELECT COUNT(*) FROM scrollback") < 800, "오래된 쪽이 먼저 줄어든다");
+        assert_eq!(count("new", "SELECT COUNT(*) FROM scrollback"), 800, "새 쪽은 그대로");
+        assert_eq!(count("old", "SELECT COUNT(*) FROM message"), 1, "원장은 지우지 않는다");
+        let after: u64 = ["old", "new"].iter().map(|w| used_bytes(&open_db(&dir, w).unwrap())).sum();
+        assert!(after <= cap, "{after} > {cap}");
+        assert_eq!(enforce_global_cap(&dir, u64::MAX), 0, "상한 안이면 아무것도 안 한다");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

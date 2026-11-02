@@ -2807,8 +2807,8 @@ fn write_hook_settings(root: &Path) {
 
 /// 자동 승인할 eqmux 명령 — 에이전트가 Bash로도 PowerShell로도 부르므로 두 도구 모두에 건다
 fn eqmux_allow_rules() -> Vec<String> {
-    const CMDS: [&str; 9] = [
-        "send", "report", "who",
+    const CMDS: [&str; 11] = [
+        "send", "report", "who", "list", "read",
         "browser open", "browser snapshot", "browser get-text", "browser back", "browser forward", "browser reload",
     ];
     ["Bash", "PowerShell"]
@@ -2874,36 +2874,6 @@ fn another_instance_running() -> bool {
     ipc::focus_existing()
 }
 
-/// 버전 업 때 워크스페이스마다 session.db를 session.db.bak으로 옮긴다 (BR-09 · 결정 1b) —
-/// 지우지 않으므로 되돌릴 길이 남는다. WAL·SHM도 짝 이름(session.db.bak-wal)으로 함께 옮긴다.
-/// 하나라도 실패하면(AV·열린 핸들 — Windows에서 흔함) false — 표식을 갱신하지 않아 다음 실행에 다시 한다.
-fn backup_session_dbs(root: &Path) -> bool {
-    let Ok(entries) = std::fs::read_dir(root.join("workspaces")) else {
-        return true; // 첫 설치 — 옮길 것이 없다
-    };
-    let mut ok = true;
-    for dir in entries.flatten().map(|e| e.path()).filter(|p| p.is_dir()) {
-        if !dir.join("session.db").exists() {
-            continue;
-        }
-        // 옛 .bak의 WAL이 새 .bak에 붙으면 엉뚱한 페이지가 재생된다 — 먼저 걷어낸다
-        for stale in ["session.db.bak-wal", "session.db.bak-shm"] {
-            let _ = std::fs::remove_file(dir.join(stale));
-        }
-        for (from, to) in [
-            ("session.db", "session.db.bak"),
-            ("session.db-wal", "session.db.bak-wal"),
-            ("session.db-shm", "session.db.bak-shm"),
-        ] {
-            let src = dir.join(from);
-            if src.exists() && std::fs::rename(&src, dir.join(to)).is_err() {
-                ok = false;
-            }
-        }
-    }
-    ok
-}
-
 pub fn run() {
     if another_instance_running() {
         return; // 창은 하나뿐이다 — 두 번째 프로세스는 조용히 물러난다
@@ -2940,14 +2910,13 @@ pub fn run() {
         .setup(|app| {
             // 스토어 루트 = 앱 데이터 (FR-C-20a — repo 안에 바이너리를 두지 않는다)
             let root = app.path().app_data_dir()?;
-            // 설치·갱신 후 첫 실행 감지 — 데이터 버전 표식이 현재 앱 버전과 다르면 세션 DB만
-            // 새로 시작한다 (BR-09 · 결정 1b). 워크스페이스 등록·배치·설정·라이브러리는 남긴다
+            // 데이터 버전 표식 — 0.6부터 버전 업 때 session.db를 .bak으로 넘기지 않는다(결정 1b 폐기).
+            // 스키마는 store::open_db의 이전(MIGRATIONS)이 맞춘다 (§1-2). 표식은 계속 쓴다 —
+            // 0.4.x 이하로 내려 깔면 그 버전이 이 값을 보고 판단한다(workspace::backup_dir 주석)
             let ver_file = root.join("data.ver");
             let cur_ver = app.package_info().version.to_string();
             std::fs::create_dir_all(&root)?;
-            if std::fs::read_to_string(&ver_file).ok().as_deref() != Some(cur_ver.as_str())
-                && backup_session_dbs(&root)
-            {
+            if std::fs::read_to_string(&ver_file).ok().as_deref() != Some(cur_ver.as_str()) {
                 let _ = std::fs::write(&ver_file, &cur_ver);
             }
             // 데이터 소실 안전망 — 옛 버전이 비운 등록·배치를 앱 데이터 밖 사본에서 되살린다
@@ -2974,12 +2943,6 @@ pub fn run() {
                 .ok()
                 .and_then(|s| serde_json::from_str(&s).ok())
                 .unwrap_or(serde_json::Value::Null);
-            // 트레이 (§1-1) — 설정(언어)을 읽으므로 그 뒤에. 실패하면 닫기는 지금처럼 종료로 간다
-            if let Err(e) = tray::install(app.handle()) {
-                diag::write(&format!("TRAY-INSTALL failed: {e}"));
-            }
-            #[cfg(windows)]
-            quit::install_end_session(app.handle()); // 로그오프·시스템 종료 정리 (§2)
             // macOS 창 — 숨긴 채 만들어졌다(tauri.macos.conf.json). 자리를 정하고 보인다 (B134·B141),
             // 제목 막대 테마를 맞추고 (U105), ⌘Q·Dock·로그아웃을 종료 시퀀스로 돌린다 (B112)
             #[cfg(target_os = "macos")]
@@ -2991,6 +2954,24 @@ pub fn run() {
                 quit::install(app.handle());
             }
             app.manage(SettingsState(Mutex::new(settings)));
+            // 트레이 (§1-1) — 설정(언어)을 읽으므로 그 뒤에. 실패하면 닫기는 지금처럼 종료로 간다
+            if let Err(e) = tray::install(app.handle()) {
+                diag::write(&format!("TRAY-INSTALL failed: {e}"));
+            }
+            #[cfg(windows)]
+            quit::install_end_session(app.handle()); // 로그오프·시스템 종료 정리 (§2)
+            // DB 손상 복구 알림 (§1-2) — 쓰기 스레드가 Store::new 직후부터 열 수 있으니 그 전에 단다
+            let notify_app = app.handle().clone();
+            store::on_recover(move |ws, moved| {
+                use tauri_plugin_notification::NotificationExt;
+                let file = moved.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
+                let body = if setting_str(&notify_app, "language").as_deref() == Some("en") {
+                    format!("The session history DB for {ws} was damaged and has been recreated. The old file was kept as {file}.")
+                } else {
+                    format!("{ws}의 세션 기록 DB가 손상되어 새로 만들었습니다. 옛 파일은 {file}로 남겼습니다.")
+                };
+                let _ = notify_app.notification().builder().title("EQMUX").body(body).show();
+            });
             app.manage(StoreState(Store::new(root)));
             // 에이전트 런타임 (PRD D) — 세션 레지스트리 watch 시작 (FR-D-11)
             app.manage(agent::AgentRt::default());
@@ -3159,7 +3140,7 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        backup_session_dbs, open_session_log, prune_session_logs, resize_is_current, restart_cli, session_prompt,
+        open_session_log, prune_session_logs, resize_is_current, restart_cli, session_prompt,
         pick_shells, take_complete_utf8, window_theme, workspace,
     };
 
@@ -3309,29 +3290,6 @@ mod tests {
         }
         assert!(allow.iter().all(|r| !r.contains("eval") && !r.contains("click") && !r.contains("type")));
         assert!(allow.iter().all(|r| r.contains("(eqmux ")), "eqmux 밖의 명령은 열지 않는다");
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    /// BR-09 — 버전 업은 세션 DB만 .bak으로 옮기고 등록·배치는 남긴다. 옛 .bak의 WAL은 따라오지 않는다
-    #[test]
-    fn version_bump_backs_up_session_db_only() {
-        let root = std::env::temp_dir().join(format!("eqmux-bak-{}", workspace::now_ms()));
-        let ws = root.join("workspaces").join("ws1");
-        std::fs::create_dir_all(&ws).unwrap();
-        std::fs::write(root.join("workspaces.json"), "[]").unwrap();
-        std::fs::write(root.join("layout.json"), "{}").unwrap();
-        std::fs::write(ws.join("session.db"), "new").unwrap();
-        std::fs::write(ws.join("session.db-wal"), "wal").unwrap();
-        std::fs::write(ws.join("session.db.bak"), "old").unwrap();
-        std::fs::write(ws.join("session.db.bak-shm"), "stale").unwrap();
-
-        assert!(backup_session_dbs(&root));
-        assert!(!ws.join("session.db").exists());
-        assert_eq!(std::fs::read_to_string(ws.join("session.db.bak")).unwrap(), "new");
-        assert_eq!(std::fs::read_to_string(ws.join("session.db.bak-wal")).unwrap(), "wal");
-        assert!(!ws.join("session.db.bak-shm").exists(), "옛 .bak의 SHM이 남으면 안 된다");
-        assert!(root.join("workspaces.json").exists() && root.join("layout.json").exists());
-        assert!(backup_session_dbs(&std::env::temp_dir().join("eqmux-bak-none"))); // 첫 설치
         let _ = std::fs::remove_dir_all(&root);
     }
 
