@@ -377,16 +377,17 @@ fn first_line_of(program: &str, args: &[&str]) -> Option<String> {
     text.lines().map(str::trim).find(|l| !l.is_empty()).map(str::to_string).filter(|_| out.status.success())
 }
 
-/// 엔진 CLI 버전 줄 (`claude --version` 첫 줄) — 앱이 떠 있는 동안 한 번만 부른다.
-/// 진단 묶음과 스폰 때 버전 검사(agent::check_cli_version)가 같이 쓴다. 없으면 None도 기억한다
+/// 엔진 CLI 버전 줄 (`claude --version` 첫 줄) — 읽으면 앱이 떠 있는 동안 기억한다.
+/// 진단 묶음과 스폰 때 버전 검사(agent::check_cli_version)가 같이 쓴다. 못 읽으면 다음에 다시 잰다
 pub fn cli_version(cli: &str) -> Option<String> {
     static CACHE: Mutex<Option<std::collections::HashMap<String, Option<String>>>> = Mutex::new(None);
     if let Some(v) = CACHE.lock().ok()?.get_or_insert_with(Default::default).get(cli) {
         return v.clone();
     }
-    let v = first_line_of(cli, &["--version"]); // 잠금 밖에서 — 최대 5초
-    CACHE.lock().ok()?.get_or_insert_with(Default::default).insert(cli.to_string(), v.clone());
-    v
+    let v = first_line_of(cli, &["--version"])?; // 잠금 밖에서 — 최대 5초
+    // 읽은 것만 기억한다 — 한 번의 시한 초과(npm 래퍼 첫 기동)가 앱 수명 내내 버전 검사를 끄지 않게
+    CACHE.lock().ok()?.get_or_insert_with(Default::default).insert(cli.to_string(), Some(v.clone()));
+    Some(v)
 }
 
 /// ASCII 대소문자를 무시하고 바꾼다 — Windows 경로는 철자가 섞여 온다
