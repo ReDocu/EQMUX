@@ -1,6 +1,6 @@
 // 과거 세션 검색 묶기 (0.6 §4) — 최근 대화 먼저, 대화 안은 시간 순, 슬롯 매핑은 대화 단위로 남는다
 import { describe, expect, test } from "vitest";
-import { groupByConversation, resumeCommand } from "./history";
+import { groupByConversation, resumeCommand, subagentCalls } from "./history";
 import type { HistoryHit } from "./history";
 
 const hit = (uuid: string, ts: number, extra: Partial<HistoryHit> = {}): HistoryHit => ({
@@ -28,5 +28,13 @@ describe("groupByConversation", () => {
 
   test("앱 밖 재개 명령", () => {
     expect(resumeCommand("abc-1")).toBe("claude --resume abc-1");
+  });
+});
+
+describe("subagentCalls", () => {
+  test("Agent · Task 도구 턴만 고른다", () => {
+    const turn = (role: string, text: string) => ({ role, text, summary: null });
+    const turns = [turn("tool", "⚙ Agent"), turn("tool", "⚙ Bash"), turn("agent", "⚙ Agent"), turn("tool", "⚙ Task")];
+    expect(subagentCalls(turns)).toEqual([turns[0], turns[3]]);
   });
 });

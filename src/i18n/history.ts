@@ -18,4 +18,7 @@ export const dict: Record<string, string> = {
   "슬롯의 마지막 대화가 아니라 앱에서 재개할 수 없습니다 — 명령을 복사해 터미널에서 이어 가세요":
     "Not the slot's latest conversation, so the app can't resume it — copy the command and continue in a terminal",
   "Codex 대화와 워크트리 세션은 아직 찾지 않습니다": "Codex conversations and worktree sessions aren't searched yet",
+  // 서브에이전트 목록 (SubagentList.tsx)
+  "서브에이전트": "Subagents",
+  "설명 없음": "No description",
 };

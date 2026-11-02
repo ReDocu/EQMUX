@@ -14,6 +14,7 @@ import { settings, toggleMuted } from "../backend/settings";
 import { t, tf } from "../i18n";
 import { jumpToSession } from "../state";
 import { Eyebrow, FieldHint, Identity, KV, StatusLabel, StopConfirm } from "../components/ui";
+import { SubagentList } from "../components/SubagentList"; // §4 서브에이전트 목록 (W3)
 import type { AgentCliId, Permissions, Session } from "../types";
 import { AGENT_CLI_LABEL, agentAttached, agentFlagsToString, cleanTitle, cliOf, effectiveTitle, engineSwitched, paneNo, SESSION_NAME_MAX, sessionName, statusText, TITLE_MAX, translatePermissions } from "../types";
 import { isSubmitEnter } from "../platform"; // 한글 조합 중 Enter는 제출이 아니다 (B130)
@@ -618,6 +619,7 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
             </div>
           </div>
         </Show>
+        <SubagentList session={s()} />
       </details>
 
       <Show when={actionErr()}>
