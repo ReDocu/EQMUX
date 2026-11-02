@@ -3,6 +3,8 @@
 import { createSignal, For, onMount, Show } from "solid-js";
 import { backend } from "../backend/mock";
 import {
+  fmtUsd,
+  missionCostSignal,
   createMission,
   missionDoneReport,
   refreshMissions,
@@ -21,6 +23,7 @@ import type { Mission, MissionStatus } from "../types";
 
 export function Missions(props: { wsId: string }) {
   onMount(() => void refreshMissions(props.wsId));
+  const costs = missionCostSignal(() => props.wsId); // §13-6
   const ws = () => backend.listWorkspaces().find((w) => w.id === props.wsId);
 
   // 임무-브랜치 체크아웃 (FR-E-52) — 공유 repo 전체(E1′ 공유 기본)에 영향이 있어 2단 확인.
@@ -237,6 +240,10 @@ export function Missions(props: { wsId: string }) {
                         ? tf("시작 {sha}", { sha: m().baseCommit!.slice(0, 7) })
                         : tf("시작 {sha} · 그 뒤 커밋 {n}개", { sha: m().baseCommit!.slice(0, 7), n: m().commitsSince! })}
                     </div>
+                  </Show>
+                  {/* 임무별 비용 (§13-6) — 배정된 세션이 이 임무를 하는 동안 쓴 비용 */}
+                  <Show when={costs()[m().id]}>
+                    <div class="ma-hint mono muted">{tf("비용 {usd}", { usd: fmtUsd(costs()[m().id]) })}</div>
                   </Show>
                   <Show when={coNote()?.id === m().id}>
                     <div class="ma-hint mono muted">{coNote()!.text}</div>

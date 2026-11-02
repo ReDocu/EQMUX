@@ -5,6 +5,8 @@ import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { backend } from "../backend/mock";
 import { nameOf } from "../backend/conversation";
 import {
+  fmtUsd,
+  missionCostSignal,
   missionDoneReport,
   missionTouchedFiles,
   refreshMissions,
@@ -34,6 +36,7 @@ export function MissionReview(props: { wsId: string; missionId: string; back?: V
     return mm ? missionDoneReport(backend.listMessages(), mm) : undefined;
   };
   const close = () => setView(props.back ?? { kind: "workspace", id: props.wsId });
+  const costs = missionCostSignal(() => props.wsId); // §13-6
 
   // ② diff 필터 — 기본은 이 임무 담당 세션이 편집 도구로 고친 파일. 한 폴더를 같이 쓰므로 필터가 없으면 남의 변경이 섞인다
   const [touched, setTouched] = createSignal<string[] | undefined>(undefined);
@@ -111,6 +114,7 @@ export function MissionReview(props: { wsId: string; missionId: string; back?: V
                   {mm().baseCommit
                     ? tf("시작 {sha} · 그 뒤 커밋 {n}개", { sha: mm().baseCommit!.slice(0, 7), n: mm().commitsSince ?? 0 })
                     : t("시작점 기록 없음 — 지금 작업 트리의 변경을 보입니다")}
+                  {costs()[mm().id] ? ` · ${tf("비용 {usd}", { usd: fmtUsd(costs()[mm().id]) })}` : ""}
                 </div>
               </div>
               <div class="ma-head-r">

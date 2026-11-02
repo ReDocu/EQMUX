@@ -107,6 +107,7 @@ export const dict: Record<string, string> = {
   "담당 세션이 고친 파일 · {n}개": "Files edited by assigned sessions · {n}",
   "편집 도구로 고친 것만": "edit-tool changes only",
   "편집 기록이 없습니다 — 전체 변경을 보세요": "No edit records — review all changes",
+  "비용 {usd}": "Cost {usd}",
   "전체 변경 보기 — 한 폴더를 같이 쓰므로 다른 세션의 변경도 섞인다": "Show all changes — the folder is shared, so other sessions' changes mix in",
   "테스트 실행 — 서버 탭 셸에서 돕니다": "Run tests — runs in the server tab shell",
   "테스트 실행": "Run tests",

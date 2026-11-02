@@ -2,6 +2,7 @@
 // 배정의 원본은 역할 파일의 임무 블록 (FR-E-58) — 토글은 mission_assign으로 파일을 고치고
 // 목록을 다시 실측한다 (FR-E-59). 브라우저 dev에서는 기존 목 동작으로 폴백한다.
 import { invoke } from "@tauri-apps/api/core";
+import { createSignal, onCleanup, onMount } from "solid-js";
 import { backend } from "./mock";
 import { cancelBrief, injectLine, queueBrief, sendConversation } from "./conversation";
 import { isTauri, listAlivePty, onPtyOutput, writePty } from "./pty";
@@ -254,3 +255,22 @@ export async function sendBackMission(wsId: string, m: Mission, note: string, na
   await Promise.all(m.assigned.map((sid) => sendConversation(wsId, `@${nameOf(sid)}`, "review", body)));
   await setMissionStatus(wsId, m.id, "in-progress");
 }
+
+/** 임무별 비용 (§13-6 · W2 cost_summary) — 임무 id → USD, 보존 기간(30일) 전체. 임무 밖 비용(null)은 뺀다 */
+export async function missionCosts(wsId: string): Promise<Record<string, number>> {
+  if (!isTauri()) return {};
+  const rows = await invoke<{ mission: string | null; usd: number }[]>("cost_summary", { workspace: wsId, sinceMs: 0 }).catch(() => []);
+  return Object.fromEntries(rows.filter((r) => r.mission).map((r) => [r.mission!, r.usd]));
+}
+
+/** 화면이 떠 있는 동안 임무별 비용 — W2 배정 캐시가 60초라 그보다 자주 읽을 까닭이 없다 */
+export function missionCostSignal(wsId: () => string): () => Record<string, number> {
+  const [costs, setCosts] = createSignal<Record<string, number>>({});
+  const load = () => void missionCosts(wsId()).then(setCosts);
+  onMount(load);
+  const timer = setInterval(load, 60_000);
+  onCleanup(() => clearInterval(timer));
+  return costs;
+}
+
+export const fmtUsd = (usd: number) => `$${usd.toFixed(2)}`;
