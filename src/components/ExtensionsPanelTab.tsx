@@ -3,7 +3,7 @@
 // 워크스페이스 범위의 플러그인은 local로 바꾼다(X2 — project는 커밋되어 팀원에게 번진다).
 // 세션별 표는 읽기만 한다(3단계) — 세션별 쓰기(역할 frontmatter extensions)는 4단계다.
 // 바꾼 것은 새로 띄우는 세션부터 먹는다. 자동 재시작은 하지 않는다.
-import { createMemo, createResource, createSignal, For, Show } from "solid-js";
+import { createMemo, createResource, createSignal, For, lazy, Show } from "solid-js";
 import type { JSX } from "solid-js";
 import {
   duplicateNames,
@@ -30,9 +30,11 @@ import { scopeWorkspace, setPanelTab } from "../state";
 import { cliOf, sessionName } from "../types";
 import type { Session } from "../types";
 import { t, tf } from "../i18n";
-import { CodeEditor } from "./CodeEditor";
 import { markdownHtml } from "./markdownHtml";
 import { ConfirmDialog, notify, Segmented } from "./ui";
+
+// CodeMirror는 무겁다 — 편집을 열 때만 받는다 (EnvPanelTab과 같은 방식)
+const CodeEditor = lazy(() => import("./CodeEditor").then((m) => ({ default: m.CodeEditor })));
 
 /** 사이드 패널이 부르는 자리 — 하위 탭(mcp · plugins · skills)은 패널 공통 세그먼트가 나눈다 */
 export function ExtensionsPanelTab(props: { kind: "mcp" | "plugins" | "skills" }) {

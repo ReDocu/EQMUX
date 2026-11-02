@@ -58,6 +58,7 @@ pub(crate) fn sync_memory_target(app: &AppHandle) {
         COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL,
     };
     use windows_core::Interface;
+    // ponytail: 바뀔 때만 건다 — 숨은 동안 새로 만든 브라우저 패널 웹뷰는 다음 복원·숨김까지 NORMAL (W6 확인, 손해는 메모리 조금)
     static LOW: AtomicBool = AtomicBool::new(false);
     fn apply(pw: tauri::webview::PlatformWebview, level: COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL) {
         unsafe {

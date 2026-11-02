@@ -1060,6 +1060,7 @@ fn msg_list(
 /// msg_* 커맨드는 메인 스레드 밖에서 돈다 (최적화 B1) — 쓰기 스레드와 겹치면 busy 대기가 있다.
 /// PRD I의 `eqmux send` CLI도 이 함수로 들어오게 된다.
 #[tauri::command(async)]
+#[allow(clippy::too_many_arguments)] // 프런트 invoke 인자 그대로 — 묶으면 API가 바뀐다
 fn msg_send(
     app: AppHandle,
     store_state: State<StoreState>,
@@ -1074,7 +1075,7 @@ fn msg_send(
     {
         let mut map = rate.0.lock().map_err(|e| e.to_string())?;
         let times = map.entry(format!("{workspace}/{from}")).or_default();
-        if !messages::allow_rate(times, workspace::now_ms() as i64) {
+        if !messages::allow_rate(times, workspace::now_ms()) {
             return Err("RATE_LIMIT".into());
         }
     }
