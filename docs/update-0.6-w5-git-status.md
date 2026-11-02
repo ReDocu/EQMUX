@@ -19,7 +19,7 @@
 | QA 목록 W5 절 | `update-0.6-qa-checklist.md` "## W5 — git" K1~K25 | 4be6ee5 |
 | 설명서 0.6 초안 | `docs/site/drafts/0.6-w5.md` — git 화면 · 작업 중 경고 · 로그인 · 세션 배지 · .env 가림 · 담당 밖 편집 경고 · who 한 줄 · 문제 해결 7항목 · 설계 경계 3행 · diff 뷰어 문단 바꿈. docs.md 합치기는 리드 | 초안 · docs.md 합침 fd63a4e(리드) |
 | git 패널 안내 줄 | 커밋 메뉴 "cherry-pick · revert는 다음 단계" → "… git 화면에서"(한 · 영), 안 쓰는 "다음 단계 — 터미널에서" 키 4개 삭제 | 404cf40 |
-| 출시 전 실패 경로 점검 | 원격 없음 · 분리 HEAD push · 빈 저장소 · 긴 브랜치 이름 · 서브모듈 stash/reset을 scratch 저장소로 재현. 고친 것: 업스트림 없는 push가 원격이 하나뿐이면 그 이름으로(`origin` 고정이던 것), 빈 저장소에서 [+ 브랜치] 끔, 긴 이름 라벨 · 툴바 줄임표 + 전체 이름 title. 그대로 둔 것: 나머지는 git 오류 첫 줄이 그대로 뜨고 잃는 것이 없다. 서브모듈만 바뀐 상태의 reset --hard 확인창은 서브모듈도 "사라질 변경"으로 세어 겁을 더 준다(안전한 쪽) | 미커밋 |
+| 출시 전 실패 경로 점검 | 원격 없음 · 분리 HEAD push · 빈 저장소 · 긴 브랜치 이름 · 서브모듈 stash/reset을 scratch 저장소로 재현. 고친 것: 업스트림 없는 push가 원격이 하나뿐이면 그 이름으로(`origin` 고정이던 것), 빈 저장소에서 [+ 브랜치] 끔, 긴 이름 라벨 · 툴바 줄임표 + 전체 이름 title. 그대로 둔 것: 나머지는 git 오류 첫 줄이 그대로 뜨고 잃는 것이 없다. 서브모듈만 바뀐 상태의 reset --hard 확인창은 서브모듈도 "사라질 변경"으로 세어 겁을 더 준다(안전한 쪽) | 3d9b519 |
 
 테스트(마지막): `npx tsc --noEmit` 통과, `npm test` 244/244, `cargo test --lib` 237 통과 · 1 실패(ports 기준선, W6), owns 4/4 · canon_key 1/1 · gitx attribute(`repo_rel` 이동 뒤) 통과, clippy W5 파일 경고 없음.
 
