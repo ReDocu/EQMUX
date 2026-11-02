@@ -81,7 +81,7 @@ export function ExitDialog() {
           </button>
         </div>
         <div class="exit-notice">
-          <span class="exit-notice-ic">⚠</span>
+          <span class="exit-notice-ic"><Icon name="triangle-alert" size={14} /></span>
           <span classList={{ "st-waiting": busy() }}>
             {busy() ? t(PHASE_TEXT[phase()!]) : t("입력을 막고, 저장하고, 세션을 차례로 끈 뒤 닫습니다")}
           </span>

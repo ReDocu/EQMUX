@@ -34,7 +34,7 @@ import { jobMeta } from "../jobs";
 import type { ChipTone, MenuGroup } from "../components/ui";
 import { SessionPortrait } from "../components/PersonaAvatar";
 import { discardPending, injectPending, pendingCount, pendingFor, sendConversation, senderLabel, unmanagedAgent } from "../backend/conversation";
-import { attentionOrder, inboxWaiting, pickNext } from "../backend/attention";
+import { attentionOrder, inboxWaiting, pickNext, urgentSenders } from "../backend/attention";
 import { canStartFresh, resumeAgent, startFresh } from "../backend/agent";
 import { queryEvents } from "../backend/events";
 import type { FeedEvent } from "../backend/events";
@@ -168,7 +168,10 @@ export function ControlCenter(props: { workspace: Workspace }) {
   const engineCount = () => new Set(sessions().filter((s) => s.personaId).map((s) => cliOf(s))).size;
   // 상단 칩은 이 워크스페이스 안에서만 돈다 (B88) — 숫자는 이 탭 것인데 누르면 다른 탭의 종료 세션으로
   // 가던 것. 세는 집합과 도는 집합이 같다. 모든 워크스페이스를 도는 것은 Ctrl+Shift+U(nextUnseen)다
-  const localAttention = () => attentionOrder(sessions(), inboxWaiting);
+  const localAttention = () => {
+    const u = urgentSenders(backend.listMessages()); // 긴급 에스컬레이션이 맨 위 (W3 §4)
+    return attentionOrder(sessions(), inboxWaiting, (s) => u.has(s.id));
+  };
   let lastLocalJump: string | undefined;
   const nextLocal = () => {
     const next = pickNext(localAttention(), lastLocalJump);
@@ -1098,7 +1101,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
         onMouseDown={(e) => e.stopPropagation()}
         onClick={() => setEvOpen(!evOpen())}
       >
-        {t("이벤트")} {evOpen() ? "▾" : "▸"}
+        {t("이벤트")} {evOpen() ? <Icon name="chevron-down" size={12} /> : <Icon name="chevron-right" size={12} />}
       </button>
       <span class="muted" style={{ "margin-left": "auto" }}>
         {selected()?.cwd ?? props.workspace.path}
@@ -1172,7 +1175,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
         {/* 셸 선택 — 새로 추가하는 터미널부터 적용된다 */}
         <div class="shell-picker">
           <button class="btn ghost mono" title={t("새 터미널 셸 선택")} onClick={() => setShellMenuOpen(!shellMenuOpen())}>
-            &gt;_ <span class="cc-btn-label">{t(defaultShell().name)}</span> ▾
+            &gt;_ <span class="cc-btn-label">{t(defaultShell().name)}</span> <Icon name="chevron-down" size={12} />
           </button>
           <Show when={shellMenuOpen()}>
             <div class="card shell-menu">
@@ -1219,7 +1222,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
             setTeamMenu(teamMenu() ? undefined : { x: r.right - 232, y: r.bottom + 4 });
           }}
         >
-          {t("팀")} ▾
+          {t("팀")} <Icon name="chevron-down" size={12} />
         </button>
       </div>
       <Show when={teamMenu()}>
@@ -1337,7 +1340,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
               <span class="rail-folder-path mono">{shortPath(props.workspace.path)}</span>
             </span>
             <span class="rail-folder-go mono" aria-hidden="true">
-              ▸
+              <Icon name="chevron-right" size={12} />
             </span>
           </button>
           {/* 브랜치 현황 — 클릭은 git 패널. 비저장소면 행을 숨긴다 */}
@@ -1355,7 +1358,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
                 </Show>
               </span>
               <span class="rail-folder-go mono" aria-hidden="true">
-                ▸
+                <Icon name="chevron-right" size={12} />
               </span>
             </button>
           </Show>

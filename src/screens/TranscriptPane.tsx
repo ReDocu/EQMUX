@@ -15,6 +15,7 @@ import { tick } from "../state";
 import { effectiveTitle, paneNo, sessionName } from "../types";
 import type { Session } from "../types";
 import { Identity } from "../components/ui";
+import { Icon } from "../components/icons";
 import { isSubmitEnter } from "../platform"; // 한글 조합 중 Enter는 제출이 아니다 (B130)
 
 /** onJump — 페인(터미널 탭)으로 돌아가는 길. 화면을 소유한 쪽이 넘긴다 (시안 Yd4E5 "페인으로 점프") */
@@ -250,7 +251,7 @@ export function TranscriptPane(props: { session: Session; onJump?: () => void })
                     >
                       {t.text}
                       <Show when={t.summary}>{(s) => <span class="muted"> · {s()}</span>}</Show>{" "}
-                      <span class="muted">{openTurn() === i() ? "▾" : "▸"}</span>
+                      <span class="muted">{openTurn() === i() ? <Icon name="chevron-down" size={12} /> : <Icon name="chevron-right" size={12} />}</span>
                     </button>
                     <Show when={openTurn() === i() && t.detail}>
                       <pre class="mono muted tr-detail">{t.detail}</pre>

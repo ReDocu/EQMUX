@@ -12,6 +12,7 @@ import { projectStem } from "../types";
 import type { Session } from "../types";
 import { quickStartSlots, wizardSteps } from "./launchRules";
 import type { WizardPath } from "./launchRules";
+import { Icon } from "../components/icons";
 
 /** saved = 저장소의 team.json으로 시작 (D3 · W4) — 단계는 빠른 시작과 같다(실행 방식에서 바로 워크스페이스) */
 type Mode = WizardPath | "saved";
@@ -195,7 +196,7 @@ export function LaunchMode(props: { wsId: string }) {
                   <span class="launch-choice-icon mono">{c.icon}</span>
                   <span class="launch-choice-title">{c.title}</span>
                   <span class="launch-radio" classList={{ on: mode() === c.id }} aria-hidden="true">
-                    {mode() === c.id ? "✓" : ""}
+                    {mode() === c.id ? <Icon name="check" size={12} /> : ""}
                   </span>
                 </div>
                 <div class="muted launch-choice-desc">{c.copy}</div>
@@ -204,7 +205,7 @@ export function LaunchMode(props: { wsId: string }) {
                   <For each={c.features}>
                     {(f) => (
                       <div class="launch-feature">
-                        <span class="launch-check">✓</span>
+                        <span class="launch-check"><Icon name="check" size={12} /></span>
                         {f}
                       </div>
                     )}
