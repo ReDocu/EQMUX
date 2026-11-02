@@ -556,7 +556,8 @@ fn untrusted(label: &str, lines: &[String], en: bool) -> String {
     if lines.is_empty() {
         return if en { format!("No screen record for {label}") } else { format!("{label}의 화면 기록이 없습니다") };
     }
-    let body = lines.join("\n").replace("</untrusted", "</ untrusted");
+    // 화면에 찍힌 토큰·비밀번호는 가린다 (W6 secrets — 로그 패널과 같은 패턴)
+    let body = crate::secrets::mask_secrets(&lines.join("\n")).replace("</untrusted", "</ untrusted");
     let n = body.chars().count();
     let body = if n > READ_MAX_CHARS { body.chars().skip(n - READ_MAX_CHARS).collect() } else { body };
     let note = if en {
@@ -1052,6 +1053,7 @@ mod tests {
         assert_eq!(out.matches("</untrusted>").count(), 1); // 기록 속 닫는 태그는 감싸기를 끝내지 못한다
         assert!(!out.contains("남의 줄"));
         assert_eq!(untrusted("린", &[], false), "린의 화면 기록이 없습니다");
+        assert!(!untrusted("린", &["API_KEY=abcdefgh".into()], false).contains("abcdefgh")); // 비밀값은 가린다
         std::fs::remove_dir_all(&root).ok();
     }
 
