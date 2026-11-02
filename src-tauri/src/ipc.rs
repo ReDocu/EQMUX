@@ -140,6 +140,21 @@ pub fn start_server(app: AppHandle) {
     std::thread::spawn(move || server_loop(app));
 }
 
+/// 앱 종료 때 소켓 파일을 지운다 (B116) — 내가 묶은 것만. 버스를 못 연 두 번째 프로세스가 지우면
+/// 살아 있는 앱의 소켓이 사라진다
+#[cfg(windows)]
+pub fn remove_socket() {}
+
+#[cfg(not(windows))]
+static BOUND: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(not(windows))]
+pub fn remove_socket() {
+    if BOUND.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        let _ = std::fs::remove_file(socket_path());
+    }
+}
+
 /// 떠 있는 앱에 창을 앞으로 부르라고 한 번만 묻는다 — 재시도 없이 (기동을 늦추지 않게)
 #[cfg(not(windows))]
 pub fn focus_existing() -> bool {
@@ -160,17 +175,23 @@ pub fn start_server(app: AppHandle) {
         let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
     }
     // 남은 소켓 파일 — 받는 쪽이 살아 있으면 다른 EQMUX가 떠 있는 것이니 빼앗지 않는다.
-    // 죽은 파일(비정상 종료의 잔재)만 지우고 다시 묶는다
+    // 죽은 파일(비정상 종료의 잔재)만 지우고 다시 묶는다. 조용히 넘어가면 창 둘이 같은 DB를 쥔 채
+    // 이 앱만 버스 없이 돈다 (B116). 단일 인스턴스는 lib.rs instance.lock이 먼저 막으므로 여기는 진단 한 줄이면 된다
     if path.exists() {
         if UnixStream::connect(&path).is_ok() {
+            crate::diag::write("bus: 살아 있는 bus.sock — 다른 EQMUX가 버스를 쥐고 있어 열지 않았다 (B116)");
             return;
         }
         let _ = std::fs::remove_file(&path);
     }
     let listener = match UnixListener::bind(&path) {
         Ok(l) => l,
-        Err(_) => return,
+        Err(e) => {
+            crate::diag::write(&format!("bus: bus.sock 바인드 실패 — {e}"));
+            return;
+        }
     };
+    BOUND.store(true, std::sync::atomic::Ordering::SeqCst);
     let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
     std::thread::spawn(move || {
         for stream in listener.incoming() {
@@ -471,6 +492,13 @@ fn handle(app: &AppHandle, line: &str) -> Result<serde_json::Value, String> {
             verify_session(app, session, &req)?;
             let event = req["event"].as_str().ok_or("BAD_EVENT")?;
             crate::agent::apply_hook(app, session, event, &req["payload"]);
+            // 승인함 (§13-4 · W2) — 권한 요청 훅은 앱의 [허용]·[거부]를 기다렸다가 결정을 돌려받는다.
+            // 이 연결 스레드가 최대 570초 머문다. 결정이 없으면 output 없이 끝나 페인의 승인 창이 그대로다
+            if event == "PermissionRequest" {
+                if let Some(out) = crate::agent::wait_approval(app, session, &req["payload"]) {
+                    return Ok(json!({"ok": true, "output": out}));
+                }
+            }
             Ok(json!({"ok": true}))
         }
         "browser" => {

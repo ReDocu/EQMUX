@@ -2530,6 +2530,7 @@ fn finish_store_and_flag(app: &AppHandle) {
     let _ = flush_store(&store.0, std::time::Duration::from_secs(1));
     // 클린 종료 표식 제거 (FR-C-35) — 이 줄에 도달했다는 것이 곧 정상 종료의 정의다
     let _ = std::fs::remove_file(store.0.root().join("running.flag"));
+    ipc::remove_socket(); // 버스 소켓 파일도 남기지 않는다 (B116 · macOS)
 }
 
 /// 기다려 줄 수 없는 종료의 정리 (B112) — 로그아웃·시스템 종료·웹뷰가 답하지 못할 때, 그리고
@@ -2867,11 +2868,47 @@ fn another_instance_running() -> bool {
     true
 }
 
-/// macOS — 버스 소켓이 답하면 이미 하나 떠 있다. 그 창을 앞으로 부르고 물러난다
-/// (Finder 더블클릭은 LaunchServices가 막아 주지만, 실행 파일을 직접 띄우면 여기까지 온다)
+/// macOS — `~/.eqmux/instance.lock`을 배타 잠금(flock)으로 쥔 프로세스가 첫 인스턴스다 (B116).
+/// 소켓 응답으로 판정하면 첫 앱이 바쁠 때(2초 안에 focus를 못 답함)나 거의 동시에 두 번 띄울 때
+/// 둘 다 통과해 같은 앱 데이터를 두 프로세스가 쥐었다. 잠금은 OS가 프로세스 종료 때 풀어 주므로
+/// 비정상 종료의 잔재가 남지 않는다. 소켓은 기존 창을 앞으로 부르는 데만 쓴다 (최선 노력).
+/// (Finder 더블클릭은 LaunchServices가 막아 주지만, open -n이나 실행 파일 직접 실행은 여기까지 온다)
 #[cfg(not(windows))]
 fn another_instance_running() -> bool {
-    ipc::focus_existing()
+    use std::sync::OnceLock;
+    // 쥔 잠금은 프로세스가 끝날 때까지 놓지 않는다 — 파일을 닫으면 잠금이 풀린다
+    static HELD: OnceLock<std::fs::File> = OnceLock::new();
+    let dir = home_dir().join(".eqmux");
+    let _ = std::fs::create_dir_all(&dir);
+    let file = match std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(dir.join("instance.lock")) {
+        Ok(f) => f,
+        // 잠금 파일을 못 열면 예전 판정(소켓 응답)으로 물러선다 — 앱을 막지는 않는다
+        Err(_) => return ipc::focus_existing(),
+    };
+    match instance_lock(&file) {
+        Some(true) => {
+            let _ = HELD.set(file);
+            // 잠금을 얻었는데 소켓이 답한다 = 잠금을 모르는 옛 버전이 떠 있다 (업데이트 직후). 그 창을 부르고 물러난다.
+            // 소켓이 없으면 connect가 바로 실패하므로 보통의 기동에는 비용이 없다
+            ipc::focus_existing()
+        }
+        Some(false) => {
+            let _ = ipc::focus_existing(); // 창을 앞으로 — 답이 늦어도 물러나는 것은 같다
+            true
+        }
+        None => ipc::focus_existing(), // 잠금을 지원하지 않는 파일 시스템 — 예전 판정
+    }
+}
+
+/// Some(true) = 잠금을 얻었다, Some(false) = 다른 프로세스가 쥐고 있다, None = 잠금 자체가 실패했다.
+/// Windows는 이름 있는 뮤텍스를 쓰지만 이 판정은 플랫폼 공통이라 여기서도 시험한다
+#[cfg_attr(windows, allow(dead_code))]
+fn instance_lock(file: &std::fs::File) -> Option<bool> {
+    match file.try_lock() {
+        Ok(()) => Some(true),
+        Err(std::fs::TryLockError::WouldBlock) => Some(false),
+        Err(std::fs::TryLockError::Error(_)) => None,
+    }
 }
 
 pub fn run() {
@@ -3140,7 +3177,7 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        open_session_log, prune_session_logs, resize_is_current, restart_cli, session_prompt,
+        instance_lock, open_session_log, prune_session_logs, resize_is_current, restart_cli, session_prompt,
         pick_shells, take_complete_utf8, window_theme, workspace,
     };
 
@@ -3291,6 +3328,19 @@ mod tests {
         assert!(allow.iter().all(|r| !r.contains("eval") && !r.contains("click") && !r.contains("type")));
         assert!(allow.iter().all(|r| r.contains("(eqmux ")), "eqmux 밖의 명령은 열지 않는다");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// B116 — 잠금을 쥔 핸들이 있는 동안 다른 핸들은 못 얻고(= 두 번째 인스턴스), 놓으면 다시 얻는다
+    #[test]
+    fn instance_lock_is_exclusive_until_released() {
+        let path = std::env::temp_dir().join(format!("eqmux-lock-{}", workspace::now_ms()));
+        let open = || std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(&path).unwrap();
+        let first = open();
+        assert_eq!(instance_lock(&first), Some(true));
+        assert_eq!(instance_lock(&open()), Some(false), "첫 인스턴스가 쥐고 있다");
+        drop(first); // 프로세스 종료 = 핸들 닫힘 = 잠금 풀림
+        assert_eq!(instance_lock(&open()), Some(true));
+        let _ = std::fs::remove_file(&path);
     }
 
     /// 안내문은 360자 이하 — 역할 파일이 있는 세션 기준 (통신 간소화 수용 기준)
