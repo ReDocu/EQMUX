@@ -49,6 +49,38 @@ fn labels(n: usize, en: bool) -> (String, String, &'static str, &'static str) {
     }
 }
 
+/// R1 (§6) — 창이 최소화되거나 트레이로 숨으면 WebView2 메모리 목표를 LOW로, 다시 보이면 NORMAL로.
+/// 브라우저 패널 웹뷰도 같이 건다. 런타임이 _19(1.0.1661+)보다 낡으면 조용히 건너뛴다. mac은 아무것도 안 한다
+#[cfg(windows)]
+pub(crate) fn sync_memory_target(app: &AppHandle) {
+    use webview2_com::Microsoft::Web::WebView2::Win32::{
+        ICoreWebView2_19, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW,
+        COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL,
+    };
+    use windows_core::Interface;
+    static LOW: AtomicBool = AtomicBool::new(false);
+    fn apply(pw: tauri::webview::PlatformWebview, level: COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL) {
+        unsafe {
+            if let Ok(core) = pw.controller().CoreWebView2().and_then(|c| c.cast::<ICoreWebView2_19>()) {
+                let _ = core.SetMemoryUsageTargetLevel(level);
+            }
+        }
+    }
+    let Some(w) = app.get_webview_window("main") else { return };
+    let low = w.is_minimized().unwrap_or(false) || !w.is_visible().unwrap_or(true);
+    if LOW.swap(low, Ordering::SeqCst) == low {
+        return;
+    }
+    let level = if low { COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW } else { COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL };
+    let _ = w.with_webview(move |pw| apply(pw, level));
+    if let Some(b) = app.get_webview(crate::browser::LABEL) {
+        let _ = b.with_webview(move |pw| apply(pw, level));
+    }
+}
+
+#[cfg(not(windows))]
+pub(crate) fn sync_memory_target(_app: &AppHandle) {}
+
 pub(crate) fn show_main(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.unminimize();
@@ -125,6 +157,7 @@ pub(crate) fn window_close_to_tray(app: AppHandle) -> bool {
     if w.hide().is_err() {
         return false;
     }
+    sync_memory_target(&app); // 숨김은 창 이벤트가 없어 여기서 건다
     refresh(&app);
     if !HINTED.swap(true, Ordering::SeqCst) {
         use tauri_plugin_notification::NotificationExt;

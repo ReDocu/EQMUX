@@ -2956,6 +2956,10 @@ pub fn run() {
         // 그대로라 ResizeObserver도 resize 이벤트도 울리지 않는다. 여기서만 잡힌다.
         // 보정은 하지 않는다 — 원인을 확정하기 전에 가리면 원인을 못 찾는다.
         .on_window_event(|window, event| {
+            // R1 — 최소화·복원은 Resized로, 트레이에서 다시 보이면 Focused로 온다
+            if window.label() == "main" && matches!(event, tauri::WindowEvent::Resized(_) | tauri::WindowEvent::Focused(true)) {
+                tray::sync_memory_target(window.app_handle());
+            }
             let kind = match event {
                 tauri::WindowEvent::ScaleFactorChanged { .. } => "scale-factor-changed",
                 tauri::WindowEvent::Moved(_) => "moved",

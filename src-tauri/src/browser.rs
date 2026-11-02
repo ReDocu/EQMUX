@@ -8,7 +8,7 @@ use tauri::webview::WebviewBuilder;
 use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Url, WebviewUrl};
 
 /// 자식 웹뷰 라벨 — 창에 하나만 둔다. 탭 전환·다이얼로그는 파괴가 아니라 숨김/표시로 다룬다
-const LABEL: &str = "panel-browser";
+pub(crate) const LABEL: &str = "panel-browser"; // tray::sync_memory_target도 쓴다 (R1, W1)
 
 #[derive(Serialize, Clone)]
 struct NavPayload {
