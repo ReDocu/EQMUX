@@ -800,6 +800,10 @@ pub fn run(args: Vec<String>) -> i32 {
         Ok(resp) => {
             let v: serde_json::Value = serde_json::from_str(&resp).unwrap_or_default();
             if v["ok"].as_bool().unwrap_or(false) {
+                // 훅 결정 (§13-4 승인함 · W2) — 앱이 돌려준 JSON을 그대로 훅 stdout으로
+                if let (Req::Hook { .. }, Some(out)) = (&req, v.get("output").filter(|o| o.is_object())) {
+                    println!("{out}");
+                }
                 if !silent {
                     match &req {
                         Req::Ping => {

@@ -65,6 +65,21 @@ pub struct Tracked {
     pub busy_since: Option<i64>,
     /// Stop이 30초 넘는 턴을 닫았다 — apply_hook이 방송에 실으며 지운다 (AgentStateEvt.completed)
     pub turn_done: bool,
+    /// 마지막으로 시작된 도구와 원문 (§13-4 · C2) — PreToolUse(Codex는 PermissionRequest)가 채우고
+    /// PostToolUse·턴 경계가 지운다. waiting일 때만 방송에 실린다 (승인함이 "무엇을 기다리나"를 보인다)
+    pub pre_tool: Option<PendingTool>,
+    /// 훅·statusLine이 마지막으로 온 시각 ms (A5) — 멈춤 판정의 근거
+    pub signal_ms: i64,
+    /// busy인데 STALL_MS 넘게 신호가 없다 (A5 · C2) — 다음 신호가 오면 풀린다
+    pub stalled: bool,
+}
+
+/// 승인함 한 줄 (C2) — 도구명, 원문 요약, 응답 종류(질문·계획은 페인에서만 답한다)
+#[derive(Clone, Serialize, PartialEq, Debug)]
+pub struct PendingTool {
+    pub tool: String,
+    pub input: String,
+    pub kind: &'static str,
 }
 
 // ── 실행 엔진 (M37) — 관리 기동이 되는 CLI는 둘: Claude Code(기본)와 Codex ──
@@ -210,6 +225,9 @@ pub struct AgentRt {
     registry_cache: Mutex<RegistryCache>,
     /// 최근 편집 (§13-1) — "ws\n정규화 경로" → 세션 → 마지막 편집 ms. EDIT_WINDOW_MS 지난 것은 편집마다 걷힌다
     recent_edits: Mutex<HashMap<String, HashMap<String, i64>>>,
+    /// 승인함 응답 대기 (§13-4 · Q1(b)) — 세션 → (도구명, 대기 표식, 훅 연결 스레드에 답을 넘길 끝).
+    /// 끝을 버리면(remove) 기다리던 훅이 "결정 없음"으로 풀려 페인의 승인 창이 그대로 쓰인다
+    approvals: Mutex<HashMap<String, (String, u64, std::sync::mpsc::Sender<bool>)>>,
 }
 
 /// 레지스트리 파일별 (수정 시각, 크기) → 파싱 결과. 둘이 같으면 다시 읽지 않는다.
@@ -261,6 +279,34 @@ pub struct AgentStateEvt {
     /// 30초 넘게 일한 턴이 방금 끝났다 (계약 C1) — 그 한 번의 방송에만 실린다
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub completed: bool,
+    /// 기다리는 도구와 원문 (§13-4 · C2) — waiting일 때만
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pending_tool: Option<PendingTool>,
+    /// 멈춘 세션 (A5 · C2)
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub stalled: bool,
+}
+
+/// 추적 → 방송 한 건. 호출부는 다른 칸만 `..evt_of(t, uuid)`로 덮어쓴다
+pub fn evt_of(t: &Tracked, uuid: &str) -> AgentStateEvt {
+    AgentStateEvt {
+        session: t.app_session.clone(),
+        agent_session: uuid.to_string(),
+        status: t.last_status.clone(),
+        waiting_for: t.last_waiting.clone(),
+        activity: t.activity.clone(),
+        subagents: t.subagents,
+        cost_usd: t.cost_usd,
+        resumable: resumable_of(t, uuid),
+        version: None,
+        exit_code: None,
+        degraded: t.degraded,
+        seq: t.seq,
+        since_ms: Some(t.status_ms),
+        completed: false,
+        pending_tool: t.pre_tool.clone().filter(|_| t.last_status == "waiting"),
+        stalled: t.stalled && t.last_status == "busy",
+    }
 }
 
 /// 세션 레지스트리 레코드 (§10.1) — 부분 파싱 (FR-D-64): 모르는 필드는 무시,
@@ -1010,6 +1056,162 @@ fn record_edit(app: &AppHandle, session: &str, payload: &serde_json::Value) {
     }
 }
 
+// ── 승인함 원문 (§13-4) · 멈춘 세션 (A5) — 계약 C2 ───────────────────────────
+
+/// 승인함 행의 원문 상한 — 한 줄 칸이다. 넘으면 말줄임
+const PENDING_INPUT_MAX: usize = 400;
+/// busy인데 훅·statusLine 신호가 이만큼 없으면 멈춤 (A5). PTY 출력은 근거로 쓰지 않는다 —
+/// Claude Code는 막혀 있어도 스피너가 출력을 계속 낸다. 긴 Bash 하나도 여기에 걸린다(그것도 "진행 없음"이다)
+pub const STALL_MS: i64 = 10 * 60_000;
+
+/// tool_input → 사람이 읽는 한 줄. 아는 키(명령·경로·URL)가 있으면 그것, 없으면 JSON 그대로.
+/// Codex의 command는 배열로 올 수 있다
+fn tool_summary(input: &serde_json::Value) -> String {
+    use serde_json::Value;
+    let pick = ["command", "file_path", "notebook_path", "url", "pattern", "path"]
+        .iter()
+        .find_map(|k| match input.get(k)? {
+            Value::String(s) => Some(s.clone()),
+            Value::Array(a) => Some(a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(" ")),
+            _ => None,
+        });
+    let s = pick.unwrap_or_else(|| if input.is_null() { String::new() } else { input.to_string() });
+    match s.char_indices().nth(PENDING_INPUT_MAX) {
+        Some((i, _)) => format!("{}…", &s[..i]),
+        None => s,
+    }
+}
+
+/// PreToolUse·PermissionRequest payload → 승인함 한 줄. 질문·계획은 [페인으로 가기]만 받는다
+pub fn pending_of(payload: &serde_json::Value) -> Option<PendingTool> {
+    let tool = payload.get("tool_name")?.as_str()?;
+    let kind = match tool {
+        "AskUserQuestion" => "question",
+        "ExitPlanMode" => "plan",
+        _ => "tool",
+    };
+    let input = tool_summary(payload.get("tool_input").unwrap_or(&serde_json::Value::Null));
+    Some(PendingTool { tool: tool.into(), input, kind })
+}
+
+/// 훅 한 건이 남기는 부연 — 마지막 도구 원문과 생존 신호 (순수 함수). 반환: 멈춤이 방금 풀렸다.
+/// PostToolUse는 같은 도구일 때만 지운다 — 병렬 도구 중 먼저 끝난 것이 승인 대기 중인 것을 지우지 않게
+fn note_hook(t: &mut Tracked, event: &str, payload: &serde_json::Value, now: i64) -> bool {
+    match event {
+        "PreToolUse" | "PermissionRequest" => t.pre_tool = pending_of(payload),
+        "PostToolUse" => {
+            let tool = payload.get("tool_name").and_then(|v| v.as_str());
+            if t.pre_tool.as_ref().is_some_and(|p| Some(p.tool.as_str()) == tool) {
+                t.pre_tool = None;
+            }
+        }
+        "Stop" | "UserPromptSubmit" => t.pre_tool = None,
+        _ => {}
+    }
+    t.signal_ms = now;
+    std::mem::take(&mut t.stalled)
+}
+
+// ── 승인함 응답 경로 (§13-4 · 결정 Q1(b)) ──────────────────────────────────
+// Claude Code의 PermissionRequest 훅은 승인 창과 **함께** 뜬다 (2.1.316 Windows 실측, 2026-11-02):
+//   · 창은 훅 시작과 같은 순간(+67ms) 그려진다 — 훅이 막고 있어도 사람은 페인에서 답할 수 있다
+//   · 훅이 allow를 내면 창이 닫히고 도구가 돈다("Allowed by PermissionRequest hook")
+//   · 사람이 페인에서 먼저 답하면 그 답이 이긴다. 그 뒤 훅이 늦게 allow를 내도 무시된다(No → 실행 안 됨)
+// 그래서 훅은 앱의 버튼을 기다리기만 하고, 페인 쪽 흐름은 하나도 바뀌지 않는다.
+// 훅 시한(600초, write_hook_settings)보다 먼저 놓아 연결 스레드가 남지 않게 한다.
+
+/// 훅이 앱의 답을 기다리는 상한 — 훅 시한 600초보다 짧게
+const APPROVAL_WAIT: Duration = Duration::from_secs(570);
+
+/// 훅이 내는 결정 JSON (PermissionRequest 출력 스키마)
+fn approval_output(allow: bool) -> serde_json::Value {
+    let decision = if allow {
+        serde_json::json!({ "behavior": "allow" })
+    } else {
+        serde_json::json!({ "behavior": "deny", "message": "Denied by the user from the EQMUX dashboard" })
+    };
+    serde_json::json!({ "hookSpecificOutput": { "hookEventName": "PermissionRequest", "decision": decision } })
+}
+
+/// IPC 훅 연결 스레드에서 부른다 (apply_hook 다음) — 앱의 [허용]·[거부]를 기다렸다가 훅 출력을 돌려준다.
+/// None = 결정 없음(페인에서 답했다, 턴이 끝났다, 시한, Codex) → 훅은 아무것도 내지 않는다
+pub fn wait_approval(app: &AppHandle, session: &str, payload: &serde_json::Value) -> Option<serde_json::Value> {
+    let tool = payload.get("tool_name")?.as_str()?.to_string();
+    let rt: tauri::State<AgentRt> = app.state();
+    let codex = rt
+        .by_uuid
+        .lock()
+        .ok()
+        .and_then(|m| current_uuid(&m, session).and_then(|u| m.get(&u).map(|t| is_codex(&t.cli))))?;
+    if codex {
+        return None; // Codex의 결정 출력 형식은 실측 전이다 — 페인에서 답한다
+    }
+    let (tx, rx) = channel();
+    let id = next_seq(); // 내 대기의 표식 — 시한 정리 때 새 대기를 걷지 않게
+    // 같은 세션의 이전 대기는 여기서 버려진다(끝이 덮어써져 drop) — 그 훅은 결정 없이 풀린다
+    rt.approvals.lock().ok()?.insert(session.to_string(), (tool, id, tx));
+    let allow = rx.recv_timeout(APPROVAL_WAIT).ok();
+    if allow.is_none() {
+        if let Ok(mut a) = rt.approvals.lock() {
+            if a.get(session).is_some_and(|(_, i, _)| *i == id) {
+                a.remove(session);
+            }
+        }
+    }
+    allow.map(approval_output)
+}
+
+/// 대기 중인 훅을 놓는다 — 페인에서 답했거나 턴이 넘어갔다 (note_hook 다음, apply_hook에서)
+fn release_approval(app: &AppHandle, session: &str, event: &str, payload: &serde_json::Value) {
+    // 턴 경계, 또는 같은 도구가 끝났다(= 페인에서 허용했다). 병렬로 도는 다른 도구의 끝은 놓지 않는다
+    if !matches!(event, "Stop" | "UserPromptSubmit" | "SessionEnd" | "PostToolUse" | "PostToolUseFailure") {
+        return;
+    }
+    let tool = payload.get("tool_name").and_then(|v| v.as_str());
+    let rt: tauri::State<AgentRt> = app.state();
+    if let Ok(mut a) = rt.approvals.lock() {
+        if a.get(session).is_some_and(|(t, _, _)| tool.is_none() || tool == Some(t.as_str())) {
+            a.remove(session);
+        }
+    };
+}
+
+/// 승인함 [허용]·[거부] (C2). 누르는 순간 다시 본다 — 그 세션이 아직 같은 도구로 waiting이고
+/// 훅이 기다리고 있어야 한다. 아니면 아무것도 하지 않는다.
+/// reason 코드: NOT_WAITING(이미 답했거나 상태가 바뀜) · OTHER_TOOL(다른 도구를 기다림) ·
+/// NO_HOOK(훅 대기가 없다 — Codex, 질문·계획, 훅 이전에 뜬 세션: 페인에서 답한다)
+#[tauri::command]
+pub fn approval_respond(app: AppHandle, session: String, allow: bool) -> serde_json::Value {
+    let fail = |reason: &str| serde_json::json!({ "ok": false, "reason": reason });
+    let rt: tauri::State<AgentRt> = app.state();
+    let pending = rt.by_uuid.lock().ok().and_then(|m| {
+        let t = m.get(&current_uuid(&m, &session)?)?;
+        (t.last_status == "waiting").then(|| t.pre_tool.clone()).flatten()
+    });
+    let Some(pending) = pending else { return fail("NOT_WAITING") };
+    let Ok(mut a) = rt.approvals.lock() else { return fail("NO_HOOK") };
+    let Some((tool, _, tx)) = a.remove(&session) else { return fail("NO_HOOK") };
+    if tool != pending.tool || pending.kind != "tool" {
+        return fail("OTHER_TOOL"); // 꺼낸 끝은 버린다 — 맞지 않는 대기는 페인에서 답한다
+    }
+    match tx.send(allow) {
+        Ok(()) => serde_json::json!({ "ok": true }),
+        Err(_) => fail("NOT_WAITING"), // 훅이 방금 시한으로 풀렸다
+    }
+}
+
+/// 2초 스캔마다 — 멈춤 표식을 켜거나 끈다 (순수 함수). Some: 바뀌었다 → 방송.
+/// 채택 세션은 훅이 없어 신호가 영영 안 오므로 보지 않는다. 기준은 신호와 busy 진입 중 늦은 쪽
+fn stall_step(t: &mut Tracked, now: i64) -> Option<()> {
+    let stalled = t.last_status == "busy" && !t.adopted && now - t.signal_ms.max(t.status_ms) >= STALL_MS;
+    if t.stalled == stalled {
+        return None;
+    }
+    t.stalled = stalled;
+    // busy를 떠나며 접히는 것은 전이 방송이 이미 가렸다(evt_of) — 따로 알리지 않는다
+    (t.last_status == "busy").then_some(())
+}
+
 /// 훅 2차 소스 — 레지스트리 스캔(1차)과 같은 diff 경로로 emit_state 한 곳에 합류한다.
 /// 레지스트리보다 빠르게 도착하므로 waiting 알림·인박스 전달의 지연이 줄어든다.
 // ── 마지막 한 줄 요약 (M35) ────────────────────────────────────────────────
@@ -1143,22 +1345,7 @@ fn adopt_codex_session(app: &AppHandle, session: &str, payload: &serde_json::Val
             t.transcript = transcript.clone();
         }
         t.seq = next_seq();
-        let evt = AgentStateEvt {
-            session: session.to_string(),
-            agent_session: sid.to_string(),
-            status: t.last_status.clone(),
-            waiting_for: t.last_waiting.clone(),
-            activity: t.activity.clone(),
-            subagents: t.subagents,
-            cost_usd: t.cost_usd,
-            resumable: resumable_of(&t, sid),
-            version: None,
-            exit_code: None,
-            degraded: t.degraded,
-            seq: t.seq,
-            since_ms: Some(t.status_ms),
-            completed: false,
-        };
+        let evt = evt_of(&t, sid);
         out = Some((t.ws.clone(), t.transcript.clone(), evt));
         map.insert(sid.to_string(), t);
     }
@@ -1186,36 +1373,22 @@ pub fn apply_hook(app: &AppHandle, session: &str, event: &str, payload: &serde_j
     if event == "PostToolUse" {
         record_edit(app, session, payload); // §13-1 — 상태와 무관한 부연이라 효과 판정과 따로 간다
     }
+    release_approval(app, session, event, payload); // §13-4 — 페인에서 먼저 답했으면 기다리던 훅을 놓는다
     let effect = hook_effect(event, payload);
-    if matches!(effect, HookEffect::Ignore) {
-        return;
-    }
     let rt: tauri::State<AgentRt> = app.state();
     let mut out = None;
     if let Ok(mut map) = rt.by_uuid.lock() {
         if let Some(uuid) = current_uuid(&map, session) {
             let Some(t) = map.get_mut(&uuid) else { return };
-            if let Some(quiet) = apply_effect(t, &effect, payload, crate::workspace::now_ms()) {
+            let now = crate::workspace::now_ms();
+            // Ignore인 이벤트도 생존 신호다 (A5) — 멈춤이 풀렸으면 효과가 없어도 조용히 방송한다
+            let unstalled = note_hook(t, event, payload, now);
+            if let Some(quiet) = apply_effect(t, &effect, payload, now).or(unstalled.then_some(true)) {
                 t.seq = next_seq();
                 let completed = std::mem::take(&mut t.turn_done);
                 out = Some((
                     quiet,
-                    AgentStateEvt {
-                        session: session.to_string(),
-                        agent_session: uuid.clone(),
-                        status: t.last_status.clone(),
-                        waiting_for: t.last_waiting.clone(),
-                        activity: t.activity.clone(),
-                        subagents: t.subagents,
-                        cost_usd: t.cost_usd,
-                        resumable: resumable_of(t, &uuid),
-                        version: None,
-                        exit_code: None,
-                        degraded: t.degraded,
-                        seq: t.seq,
-                        since_ms: Some(t.status_ms),
-                        completed,
-                    },
+                    AgentStateEvt { completed, ..evt_of(t, &uuid) },
                 ));
             }
         }
@@ -1257,22 +1430,7 @@ pub fn apply_statusline(app: &AppHandle, session: &str, payload: &serde_json::Va
             }
             t.cost_usd = Some(cost);
             t.seq = next_seq();
-            evt = Some(AgentStateEvt {
-                session: session.to_string(),
-                agent_session: uuid.clone(),
-                status: t.last_status.clone(),
-                waiting_for: t.last_waiting.clone(),
-                activity: t.activity.clone(),
-                subagents: t.subagents,
-                cost_usd: t.cost_usd,
-                resumable: resumable_of(t, &uuid),
-                version: None,
-                exit_code: None,
-                degraded: t.degraded,
-                seq: t.seq,
-                since_ms: Some(t.status_ms),
-                completed: false,
-            });
+            evt = Some(evt_of(t, &uuid));
         }
     }
     if let Some(e) = evt {
@@ -1292,22 +1450,8 @@ pub fn on_pty_exit(app: &AppHandle, id: &str, code: Option<u32>, gen: u64) {
                 t.activity = None;
                 t.subagents = 0;
                 t.seq = next_seq();
-                evt = Some(AgentStateEvt {
-                    session: id.to_string(),
-                    agent_session: uuid.clone(),
-                    status: "dead".into(),
-                    waiting_for: None,
-                    activity: None,
-                    subagents: 0,
-                    cost_usd: t.cost_usd, // 종료 후에도 마지막 비용은 남긴다
-                    resumable: resumable_of(t, uuid),
-                    version: None,
-                    exit_code: code.map(i64::from),
-                    degraded: t.degraded,
-                    seq: t.seq,
-                    since_ms: Some(t.status_ms),
-                    completed: false,
-                });
+                // 종료 후에도 마지막 비용은 남긴다 — t는 이미 dead로 접혔다
+                evt = Some(AgentStateEvt { waiting_for: None, exit_code: code.map(i64::from), ..evt_of(t, uuid) });
                 break;
             }
         }
@@ -1501,22 +1645,7 @@ fn scan(app: &AppHandle) {
             }
             t.degraded = !registry_ok;
             t.seq = next_seq();
-            flips.push(AgentStateEvt {
-                session: t.app_session.clone(),
-                agent_session: uuid.clone(),
-                status: t.last_status.clone(),
-                waiting_for: t.last_waiting.clone(),
-                activity: t.activity.clone(),
-                subagents: t.subagents,
-                cost_usd: t.cost_usd,
-                resumable: resumable_of(t, uuid),
-                version: None,
-                exit_code: None,
-                degraded: t.degraded,
-                seq: t.seq,
-                since_ms: Some(t.status_ms),
-                completed: false,
-            });
+            flips.push(evt_of(t, uuid));
         }
     }
     for evt in &flips {
@@ -1533,6 +1662,22 @@ fn scan(app: &AppHandle) {
                 "관측 정상화 — 세션 레지스트리 접근 회복".into()
             },
         });
+    }
+    // 멈춤 판정 (A5) — 레지스트리 접근과 무관하게 훅 신호만 본다. 그래서 아래 조기 반환보다 앞이다
+    let now = crate::workspace::now_ms();
+    let stalls: Vec<AgentStateEvt> = match rt.by_uuid.lock() {
+        Ok(mut map) => map
+            .iter_mut()
+            .filter_map(|(uuid, t)| {
+                stall_step(t, now)?;
+                t.seq = next_seq();
+                Some(evt_of(t, uuid))
+            })
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+    for evt in stalls {
+        let _ = app.emit_to("main", "agent-state", evt); // 상태 전이가 아니라 배지 — 피드·알림 없이 방송만
     }
     let Ok(entries) = entries else { return };
     let found = match rt.registry_cache.lock() {
@@ -1602,6 +1747,8 @@ fn scan(app: &AppHandle) {
                     // 앱이 붙기 전부터 그 상태였다 — 레코드가 쓰인 시각이 전이 시각이다 (B19)
                     since_ms: Some(*mtime_ms),
                     completed: false,
+                    pending_tool: None,
+                    stalled: false,
                 });
                 let name = app_session.split('@').next().unwrap_or(&app_session).to_string();
                 map.insert(
@@ -1651,20 +1798,14 @@ fn scan(app: &AppHandle) {
             let alive = adopted_alive(t, &job_pids);
             if !alive {
                 lost.push(AgentStateEvt {
-                    session: t.app_session.clone(),
-                    agent_session: uuid.clone(),
                     status: "shell".into(), // 페인은 살아 있다 — dead가 아니라 셸로 되돌린다
                     waiting_for: None,
                     activity: None,
                     subagents: 0,
-                    cost_usd: t.cost_usd,
-                    resumable: resumable_of(t, uuid),
-                    version: None,
-                    exit_code: None,
                     degraded: false,
                     seq: next_seq(),
                     since_ms: Some(crate::workspace::now_ms()),
-                    completed: false,
+                    ..evt_of(t, uuid)
                 });
             }
             alive // 추적에서 뺀다 — 사용자가 다시 띄우면 그때 새 uuid로 다시 채택된다
@@ -1685,22 +1826,7 @@ fn scan(app: &AppHandle) {
                     continue;
                 }
                 t.seq = next_seq();
-                updates.push(AgentStateEvt {
-                    session: t.app_session.clone(),
-                    agent_session: uuid.clone(),
-                    status: t.last_status.clone(),
-                    waiting_for: t.last_waiting.clone(),
-                    activity: t.activity.clone(),
-                    subagents: t.subagents,
-                    cost_usd: t.cost_usd,
-                    resumable: resumable_of(t, &uuid),
-                    version: rec.version.clone(),
-                    exit_code: None,
-                    degraded: t.degraded,
-                    seq: t.seq,
-                    since_ms: Some(t.status_ms),
-                    completed: false,
-                });
+                updates.push(AgentStateEvt { version: rec.version.clone(), ..evt_of(t, &uuid) });
             }
         }
     }
@@ -2368,4 +2494,66 @@ mod tests {
             assert_eq!(super::display_path(r"d:\W\App", r"D:\w\app\Src\X.ts"), "Src/X.ts", "철자는 원문대로");
         }
     }
+
+    /// §13-4 — 승인함 원문은 아는 키를 먼저, 없으면 JSON. 질문·계획은 종류가 갈린다
+    #[test]
+    fn pending_of_summarizes_tool_input() {
+        let p = |tool: &str, input: serde_json::Value| serde_json::json!({ "tool_name": tool, "tool_input": input });
+        let b = super::pending_of(&p("Bash", serde_json::json!({ "command": "npm publish", "description": "x" }))).unwrap();
+        assert_eq!((b.tool.as_str(), b.input.as_str(), b.kind), ("Bash", "npm publish", "tool"));
+        assert_eq!(super::pending_of(&p("Edit", serde_json::json!({ "file_path": "src/x.ts", "old_string": "a" }))).unwrap().input, "src/x.ts");
+        assert_eq!(super::pending_of(&p("shell", serde_json::json!({ "command": ["git", "push"] }))).unwrap().input, "git push", "Codex 배열 명령");
+        assert_eq!(super::pending_of(&p("AskUserQuestion", serde_json::json!({}))).unwrap().kind, "question");
+        assert_eq!(super::pending_of(&p("ExitPlanMode", serde_json::json!({ "plan": "p" }))).unwrap().kind, "plan");
+        assert_eq!(super::pending_of(&p("mcp__x__y", serde_json::json!({ "q": 1 }))).unwrap().input, r#"{"q":1}"#);
+        let long = super::pending_of(&p("Bash", serde_json::json!({ "command": "가".repeat(500) }))).unwrap();
+        assert_eq!(long.input.chars().count(), super::PENDING_INPUT_MAX + 1, "말줄임 한 글자 포함");
+        assert!(super::pending_of(&nil()).is_none());
+    }
+
+    /// 원문은 waiting일 때만 방송에 실리고, 같은 도구의 PostToolUse·턴 경계가 지운다
+    #[test]
+    fn pending_tool_rides_waiting_only_and_clears_on_its_own_post() {
+        let mut t = tracked("busy");
+        let bash = serde_json::json!({ "tool_name": "Bash", "tool_input": { "command": "rm -rf x" } });
+        super::note_hook(&mut t, "PreToolUse", &bash, 1);
+        assert!(super::evt_of(&t, "u").pending_tool.is_none(), "busy에는 싣지 않는다");
+        t.last_status = "waiting".into(); // Notification(권한) 또는 레지스트리가 올린 자리
+        assert_eq!(super::evt_of(&t, "u").pending_tool.unwrap().input, "rm -rf x");
+        super::note_hook(&mut t, "PostToolUse", &serde_json::json!({ "tool_name": "Read" }), 2);
+        assert!(t.pre_tool.is_some(), "병렬로 먼저 끝난 다른 도구는 지우지 않는다");
+        super::note_hook(&mut t, "PostToolUse", &bash, 3);
+        assert!(t.pre_tool.is_none());
+        super::note_hook(&mut t, "PreToolUse", &bash, 4);
+        super::note_hook(&mut t, "Stop", &nil(), 5);
+        assert!(t.pre_tool.is_none(), "턴 경계");
+    }
+
+    /// A5 — busy인데 훅이 STALL_MS 없으면 멈춤, 다음 훅이 풀고, busy를 떠나면 조용히 접힌다
+    #[test]
+    fn stall_marks_busy_without_hooks_and_any_hook_clears_it() {
+        use super::{note_hook, stall_step, STALL_MS};
+        let mut t = tracked("busy");
+        t.status_ms = 1_000;
+        note_hook(&mut t, "PreToolUse", &serde_json::json!({ "tool_name": "Bash" }), 2_000);
+        assert_eq!(stall_step(&mut t, 2_000 + STALL_MS - 1), None);
+        assert_eq!(stall_step(&mut t, 2_000 + STALL_MS), Some(()));
+        assert!(super::evt_of(&t, "u").stalled);
+        assert_eq!(stall_step(&mut t, 3_000 + STALL_MS), None, "한 번만 알린다");
+        assert!(note_hook(&mut t, "PreCompact", &nil(), 4_000 + STALL_MS), "모르는 이벤트도 생존 신호");
+        assert!(!t.stalled);
+        // busy 진입이 신호보다 늦으면 진입 시각부터 센다
+        t.status_ms = 10 * STALL_MS;
+        assert_eq!(stall_step(&mut t, 10 * STALL_MS + 1), None);
+        // busy가 아니면 멈춤이 아니다 — 켜져 있던 것은 방송 없이 접힌다
+        t.stalled = true;
+        t.last_status = "idle".into();
+        assert!(!super::evt_of(&t, "u").stalled);
+        assert_eq!(stall_step(&mut t, 20 * STALL_MS), None);
+        assert!(!t.stalled);
+        // 채택 세션은 훅이 없어 판정하지 않는다
+        let mut a = super::Tracked { adopted: true, last_status: "busy".into(), ..Default::default() };
+        assert_eq!(stall_step(&mut a, 100 * STALL_MS), None);
+    }
 }
+

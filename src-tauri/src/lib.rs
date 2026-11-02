@@ -1468,6 +1468,8 @@ fn agent_spawn_inner(
             seq,
             since_ms: Some(workspace::now_ms()),
             completed: false,
+            pending_tool: None,
+            stalled: false,
         },
     );
     Ok(uuid)
@@ -2564,22 +2566,8 @@ fn agent_snapshot(app: AppHandle) -> Vec<agent::AgentStateEvt> {
     };
     map.iter()
         .filter(|(_, t)| alive.contains(&t.app_session))
-        .map(|(uuid, t)| agent::AgentStateEvt {
-            session: t.app_session.clone(),
-            agent_session: uuid.clone(),
-            status: t.last_status.clone(),
-            waiting_for: t.last_waiting.clone(),
-            activity: t.activity.clone(),
-            subagents: t.subagents,
-            cost_usd: t.cost_usd,
-            resumable: agent::resumable_of(t, uuid),
-            version: None,
-            exit_code: None,
-            degraded: t.degraded,
-            seq: t.seq, // P-4 — 스냅숏은 마지막 발급 순번 그대로 (실시간 이벤트와 역전 판별)
-            since_ms: Some(t.status_ms), // 웹뷰만 다시 떠도 경과가 '방금'으로 되돌아가지 않게 (B19)
-            completed: false,
-        })
+        // P-4 순번 · B19 진입 시각 · C2 승인함·멈춤까지 추적 그대로 (agent::evt_of)
+        .map(|(uuid, t)| agent::evt_of(t, uuid))
         .collect()
 }
 
@@ -2793,6 +2781,9 @@ fn write_hook_settings(root: &Path) {
             "PostToolUse": hook("PostToolUse"),
             "SubagentStart": hook("SubagentStart"),
             "SubagentStop": hook("SubagentStop"),
+            // 승인함 (§13-4 · W2) — 앱의 [허용]·[거부]를 기다린다. 승인 창은 훅과 함께 떠 있어
+            // 페인에서 먼저 답해도 된다(실측). 앱은 570초에 놓으므로 시한은 그보다 길게
+            "PermissionRequest": [{ "hooks": [{ "type": "command", "command": "eqmux _hook PermissionRequest", "timeout": 600 }] }],
         },
         // statusLine 채널 (FR-D-19 · §10.4) — 주기 호출의 stdin JSON에서 비용을 수집하고,
         // stdout 첫 줄로 Claude Code 상태 줄을 그린다 (eqmux _statusline)
@@ -3121,6 +3112,7 @@ pub fn run() {
             diag::diag_geometry,
             diag::diag_note,
             diag::diag_alive,
+            agent::approval_respond,
             fsx::fs_tree,
             fsx::fs_preview,
             fsx::fs_read,
