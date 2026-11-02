@@ -153,3 +153,4 @@
 | 11-02 | W4 | 매 턴 상기 remind(페르소나 체크박스 · 역할 frontmatter) | `94272d4` |
 | 11-02 | W0 | `ba499fb`에 섞인 gitx · AgentStateEvt 줄 되돌림(경로 붙인 commit 실수) | `6a1f38d` |
 | 11-02 | W6 | §16 환경변수 CRUD 1~4단계. 목록과 다른 점: 값은 이스케이프 대신 dotenv가 같은 값으로 읽는 따옴표를 고른다 · [원문 편집]은 탭 안 CodeEditor. git 칩은 W5 `git_path_status` 커밋 뒤 동작. 실기: §16-7 전부, dotenv 대조 | `f1adaa6` |
+| 11-02 | W3 | 직함 수신자 · `--re` · `send --wait`. 한계: 다른 프로젝트 --re 회신은 --wait가 못 잡음, 직함별 담당 경로 미구현, team.json 대체 해석은 직함 안 봄 | `bdec5fd` |
