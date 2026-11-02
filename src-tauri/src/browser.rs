@@ -37,6 +37,7 @@ pub async fn browser_open(app: AppHandle, url: String, x: f64, y: f64, w: f64, h
     let win = app.get_window("main").ok_or("메인 창을 찾지 못했습니다")?;
     let emitter = app.clone();
     let builder = WebviewBuilder::new(LABEL, WebviewUrl::External(target))
+        .initialization_script(CONSOLE_HOOK) // `eqmux browser console` (G5)
         // 주소 바 동기화 — 웹뷰 안에서 링크를 따라가도 패널 입력칸이 따라온다.
         // 스킴 제한도 여기서 계속 지킨다 (페이지 안 링크가 http·https 밖으로 못 나가게)
         .on_navigation(move |u| {
@@ -156,7 +157,7 @@ pub fn eval_text(app: &AppHandle, body: &str) -> Result<String, String> {
     .map_err(|e| format!("웹뷰에 접근하지 못했습니다: {e}"))?;
     let raw = rx
         .recv_timeout(std::time::Duration::from_secs(EVAL_SECS))
-        .map_err(|_| format!("브라우저가 {EVAL_SECS}초 안에 응답하지 않았습니다"))??;
+        .map_err(|_| format!("브라우저가 {EVAL_SECS}초 안에 응답하지 않았습니다 — 페이지에 alert·confirm 창이 떠 있으면 사람이 닫아야 합니다"))??;
     // ExecuteScript는 결과를 JSON으로 준다 — 문자열이면 따옴표를 벗기고, undefined는 빈 줄
     Ok(match serde_json::from_str::<serde_json::Value>(&raw) {
         Ok(serde_json::Value::String(s)) => s,
@@ -196,7 +197,7 @@ pub fn eval_text(app: &AppHandle, body: &str) -> Result<String, String> {
     })
     .map_err(|e| format!("웹뷰에 접근하지 못했습니다: {e}"))?;
     rx.recv_timeout(std::time::Duration::from_secs(EVAL_SECS))
-        .map_err(|_| format!("브라우저가 {EVAL_SECS}초 안에 응답하지 않았습니다"))?
+        .map_err(|_| format!("브라우저가 {EVAL_SECS}초 안에 응답하지 않았습니다 — 페이지에 alert·confirm 창이 떠 있으면 사람이 닫아야 합니다"))?
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
@@ -290,7 +291,7 @@ fn normalize_url(raw: &str) -> Result<String, String> {
 /// ponytail: 문서 순서로 엮지 않고 제목·조작요소·본문 세 묶음으로 낸다 — 접근성 트리가
 /// 아니라 DOM 훑기라 순서 정보가 정확하지 않다. 필요해지면 그때 문서 순서로.
 const SNAPSHOT: &str = r#"
-const R=[];window.__eq=R;const L=[];
+const R=[];window.__eq=R;window.__eqhref=location.href;const L=[];
 const vis=el=>{const r=el.getBoundingClientRect();return r.width>0&&r.height>0};
 const txt=s=>(s||'').trim().replace(/\s+/g,' ');
 const name=el=>txt(el.getAttribute('aria-label')||el.getAttribute('placeholder')||el.getAttribute('title')||el.getAttribute('alt')||(el.tagName==='INPUT'&&el.type!=='password'?el.value:'')||el.innerText).slice(0,80);
@@ -306,6 +307,40 @@ const H=[...document.querySelectorAll('h1,h2,h3')].filter(vis).slice(0,20).map(e
 const body=(document.body&&document.body.innerText||'').replace(/\n{3,}/g,'\n\n').trim().slice(0,4000);
 return [location.href,document.title,'',...H,'','조작 가능:',...(L.length?L:['(없음)']),'','본문:',body].join('\n')
 "#;
+
+/// @eN 참조 꺼내기 — 없거나 낡았으면(요소가 문서에서 빠짐 · snapshot 뒤 주소가 바뀜) 실패로 끊는다 (G5).
+/// SPA는 문서를 바꾸지 않고 화면을 갈아 끼우므로 window.__eq가 남아 엉뚱한 요소를 누를 수 있었다
+fn pick(n: usize) -> String {
+    format!(
+        "const el=(window.__eq||[])[{n}];if(!el)return '\\u0001ERR @e{n} 참조가 없습니다 — snapshot을 다시 찍으세요';\
+         if(!el.isConnected||window.__eqhref!==location.href)return '\\u0001ERR @e{n}은 낡은 참조입니다 — snapshot 뒤에 페이지가 바뀌었습니다. snapshot을 다시 찍으세요';"
+    )
+}
+
+/// 에이전트 동작 동안만 alert·confirm·prompt를 기록기로 바꾼다 (G5) — 네이티브 대화상자가 뜨면
+/// 웹뷰가 스크립트 응답을 멈춰 CLI가 상한까지 매달리고 사람 화면도 막힌다. 사람이 패널을 직접 쓸
+/// 때는 그대로 둔다. confirm은 기본 '취소'다 — 삭제 확인 같은 것을 에이전트가 혼자 넘기지 않게.
+/// `click @eN --accept`일 때만 '확인'. 결과 끝에 `__dlg()`가 무엇이 떴는지 붙인다.
+/// ponytail: 동기 처리기에서 뜬 것만 잡는다 — setTimeout 뒤에 뜨는 창은 eval 상한 안내로 넘긴다
+fn guarded(action: &str, accept: bool) -> String {
+    format!(
+        "const __D=[],__sv=[window.alert,window.confirm,window.prompt];\
+         window.alert=m=>{{__D.push('alert: '+m)}};\
+         window.confirm=m=>{{__D.push('confirm: '+m+' → '+({accept}?'확인':'취소 (확인하려면 --accept)'));return {accept}}};\
+         window.prompt=m=>{{__D.push('prompt: '+m+' → 취소');return null}};\
+         try{{{action}}}finally{{window.alert=__sv[0];window.confirm=__sv[1];window.prompt=__sv[2]}}\
+         const __dlg=()=>__D.length?'\\n대화상자 — '+__D.join(' | '):'';"
+    )
+}
+
+/// 문서마다 먼저 도는 콘솔 기록기 (G5) — `eqmux browser console`이 읽는다. 최근 200줄만.
+/// 원격 페이지 안에서 도는 페이지 자신의 코드와 같은 권한이다 — 앱 IPC는 여전히 없다
+const CONSOLE_HOOK: &str = r#"(()=>{if(window.__eqcon)return;const B=window.__eqcon=[];
+const fmt=x=>{if(typeof x==='string')return x;try{return JSON.stringify(x)}catch(e){return String(x)}};
+const push=(lv,a)=>{try{B.push(new Date().toTimeString().slice(0,8)+' '+lv+' '+Array.from(a).map(fmt).join(' ').slice(0,500));if(B.length>200)B.shift()}catch(e){}};
+for(const lv of ['log','info','warn','error','debug']){const o=console[lv];console[lv]=function(){push(lv,arguments);return o.apply(this,arguments)}}
+addEventListener('error',e=>push('error',[e.message+(e.filename?' @'+e.filename+':'+e.lineno:'')]));
+addEventListener('unhandledrejection',e=>push('error',['unhandled rejection: '+fmt(e.reason&&e.reason.message||e.reason)]));})()"#;
 
 /// 파이프가 가져온 한 줄 → 동작. 결과는 문자열 한 덩어리(CLI가 그대로 stdout에 찍는다).
 ///
@@ -346,25 +381,39 @@ pub fn cli(app: &AppHandle, action: &str, args: &[String]) -> Result<String, Str
         )?,
         "click" => {
             let n = ref_index(args.first())?;
+            let accept = args.iter().any(|a| a == "--accept");
             eval_text(app, &format!(
-                "const el=(window.__eq||[])[{n}];if(!el)return '\\u0001ERR @e{n} 참조가 없습니다 — snapshot을 다시 찍으세요';\
-                 el.scrollIntoView({{block:'center'}});el.click();\
-                 return 'clicked @e{n} '+(el.innerText||el.value||el.tagName).trim().slice(0,60)"
+                "{}el.scrollIntoView({{block:'center'}});{}\
+                 return 'clicked @e{n} '+(el.innerText||el.value||el.tagName).trim().slice(0,60)+__dlg()",
+                pick(n),
+                guarded("el.click()", accept)
             ))?
         }
         "type" => {
             let n = ref_index(args.first())?;
             let text = serde_json::to_string(&args[1..].join(" ")).unwrap_or_else(|_| "\"\"".into());
             // 네이티브 setter로 넣어야 React·Solid 같은 제어 입력이 값을 따라온다
-            eval_text(app, &format!(
-                "const el=(window.__eq||[])[{n}];if(!el)return '\\u0001ERR @e{n} 참조가 없습니다 — snapshot을 다시 찍으세요';\
-                 el.focus();const v={text};\
+            let fill = "el.focus();\
                  const d=Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el),'value');\
                  if(d&&d.set)d.set.call(el,v);else if(el.isContentEditable)el.textContent=v;else el.value=v;\
-                 el.dispatchEvent(new Event('input',{{bubbles:true}}));el.dispatchEvent(new Event('change',{{bubbles:true}}));\
-                 return 'typed @e{n}'"
+                 el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}))";
+            eval_text(app, &format!(
+                "{}const v={text};{}return 'typed @e{n}'+__dlg()",
+                pick(n),
+                guarded(fill, false)
             ))?
         }
+        // 패널을 연 뒤 페이지가 남긴 콘솔 · 오류 (CONSOLE_HOOK이 모은다). URL·토큰 모양은 가린다
+        "console" => crate::secrets::mask_secrets(&eval_text(
+            app,
+            "const B=window.__eqcon;return B?(B.length?B.slice(-100).join('\\n'):'(콘솔 기록 없음)'):'(콘솔 기록 없음 — 패널을 다시 열면 그 뒤부터 모읍니다)'",
+        )?),
+        // 이 문서가 받은 리소스 — 상태 코드는 엔진이 주는 경우만(Chromium responseStatus)
+        "network" => crate::secrets::mask_secrets(&eval_text(
+            app,
+            "const E=performance.getEntriesByType('resource').slice(-100);\
+             return E.length?E.map(e=>(e.responseStatus?e.responseStatus+' ':'')+e.initiatorType+' '+Math.round(e.duration)+'ms '+e.name.slice(0,200)).join('\\n'):'(네트워크 기록 없음 — 이 문서가 받은 리소스만 보입니다)'",
+        )?),
         "eval" => {
             let src = args.join(" ");
             if src.trim().is_empty() {
@@ -377,7 +426,7 @@ pub fn cli(app: &AppHandle, action: &str, args: &[String]) -> Result<String, Str
         }
         other => {
             return Err(format!(
-                "모르는 동작: {other} — open · snapshot · click · type · get-text · eval · back · forward · reload"
+                "모르는 동작: {other} — open · snapshot · click · type · get-text · console · network · eval · back · forward · reload"
             ))
         }
     };
@@ -444,5 +493,24 @@ mod tests {
         let js = wrap("return 1");
         assert!(js.contains("return 1") && !js.contains("eval("));
         assert!(js.starts_with("(function(){") && js.ends_with("})()"));
+    }
+
+    /// G5 — 만든 JS가 문법상 맞는가. format! 중괄호 이스케이프가 틀리면 페이지에서야 터진다.
+    /// node가 없으면 건너뛴다
+    #[test]
+    fn generated_scripts_parse() {
+        let click = wrap(&format!("{}{}return 'x'+__dlg()", pick(3), guarded("el.click()", false)));
+        let type_ = wrap(&format!("{}const v=\"a\";{}return 'y'+__dlg()", pick(0), guarded("el.focus()", true)));
+        for (name, js) in [("click", click), ("type", type_), ("hook", CONSOLE_HOOK.to_string()), ("snapshot", wrap(SNAPSHOT))] {
+            let path = std::env::temp_dir().join(format!("eqmux-g5-{name}-{}.js", std::process::id()));
+            std::fs::write(&path, &js).unwrap();
+            let out = std::process::Command::new("node").arg("--check").arg(&path).output();
+            let _ = std::fs::remove_file(&path);
+            let Ok(out) = out else {
+                eprintln!("node를 실행할 수 없다 — 건너뜀");
+                return;
+            };
+            assert!(out.status.success(), "{name} 문법 오류: {}", String::from_utf8_lossy(&out.stderr));
+        }
     }
 }
