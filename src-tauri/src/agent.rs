@@ -1076,6 +1076,48 @@ fn record_edit(app: &AppHandle, session: &str, payload: &serde_json::Value) {
     }
 }
 
+// ── 주입 결과 (B10 · B168) ──────────────────────────────────────────────────
+// '전달됨'이 실제 주입보다 20초 넘게 먼저 붙었다(B168) — 프런트가 큐에 넣는 순간 표시했기 때문이다.
+// 진짜 도착은 수신 에이전트가 그 프롬프트로 턴을 시작한 때다: UserPromptSubmit의 prompt에 주입 머리
+// (`[EQ·ask #12]`, 묶음은 `1) 이름·ask #12:`)가 실려 온다. 거기서 원장 id를 뽑아 알리고 로그에 남긴다.
+
+const MSG_TYPES: [&str; 5] = ["ask", "handoff", "report", "review", "escalate"];
+
+/// 주입 프롬프트 → 원장 id. 머리의 `·타입 #N`만 센다 — 본문 속 `#3`이나 회신 표시 `(#N에 회신)`은 아니다
+pub fn injected_ids(prompt: &str) -> Vec<i64> {
+    if !prompt.trim_start().starts_with("[EQ") {
+        return Vec::new();
+    }
+    let mut ids = Vec::new();
+    for ty in MSG_TYPES {
+        let tag = format!("·{ty} #");
+        for (i, _) in prompt.match_indices(&tag) {
+            let digits: String = prompt[i + tag.len()..].chars().take_while(char::is_ascii_digit).collect();
+            if let Ok(n) = digits.parse() {
+                ids.push(n);
+            }
+        }
+    }
+    ids.sort_unstable();
+    ids.dedup();
+    ids
+}
+
+fn record_injected(app: &AppHandle, session: &str, payload: &serde_json::Value) {
+    let Some(prompt) = payload.get("prompt").and_then(|p| p.as_str()) else { return };
+    let ids = injected_ids(prompt);
+    if ids.is_empty() {
+        return;
+    }
+    let ws = crate::session_origin(app, session).map(|(ws, _)| ws).unwrap_or_default();
+    crate::diag::write(&format!("INJECT-SUBMITTED {session} ids={ids:?}"));
+    let _ = app.emit_to(
+        "main",
+        "message-injected",
+        serde_json::json!({ "workspace": ws, "session": session, "ids": ids, "ts": crate::workspace::now_ms() }),
+    );
+}
+
 // ── 승인함 원문 (§13-4) · 멈춘 세션 (A5) — 계약 C2 ───────────────────────────
 
 /// 승인함 행의 원문 상한 — 한 줄 칸이다. 넘으면 말줄임
@@ -1394,6 +1436,9 @@ pub fn apply_hook(app: &AppHandle, session: &str, event: &str, payload: &serde_j
         record_edit(app, session, payload); // §13-1 — 상태와 무관한 부연이라 효과 판정과 따로 간다
     }
     release_approval(app, session, event, payload); // §13-4 — 페인에서 먼저 답했으면 기다리던 훅을 놓는다
+    if event == "UserPromptSubmit" {
+        record_injected(app, session, payload); // B10 · B168 — 주입한 대화가 실제로 턴에 들어갔다
+    }
     let effect = hook_effect(event, payload);
     let rt: tauri::State<AgentRt> = app.state();
     let mut out = None;
@@ -2587,5 +2632,16 @@ mod tests {
         assert!(super::model_args("claude", "", &[]).is_empty(), "역할 파일 없음");
         let given = vec!["--model".to_string(), "opus".to_string()];
         assert!(super::model_args("claude", &role("sonnet"), &given).is_empty(), "인자가 이긴다");
+    }
+    /// B168 — 주입 머리의 원장 id만 뽑는다. 사람이 친 프롬프트, 본문 속 #, 회신 표시는 아니다
+    #[test]
+    fn injected_ids_read_the_inject_header_only() {
+        assert_eq!(super::injected_ids("[EQ·ask #12] 카이: 로그인 API #3 봐 줘 (클라이언트)"), vec![12]);
+        assert_eq!(
+            super::injected_ids("[EQ 2건] 1) 카이·report #14 (#12에 회신): 끝 2) 린·review #15: 봐 줘"),
+            vec![14, 15]
+        );
+        assert_eq!(super::injected_ids("[EQ·handoff] 사람: 번호 없는 옛 메시지"), Vec::<i64>::new());
+        assert_eq!(super::injected_ids("·ask #5 를 사람이 직접 쳤다"), Vec::<i64>::new(), "주입이 아니다");
     }
 }
