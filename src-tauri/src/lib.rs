@@ -25,7 +25,6 @@ mod clip;
 mod diag;
 mod diff;
 mod fsx;
-mod gitx; // §17 git 화면 (W5)
 pub(crate) mod ipc;
 mod job;
 #[cfg(target_os = "macos")]
@@ -40,8 +39,8 @@ mod recovery;
 mod roles;
 pub(crate) mod store;
 mod team;
-mod tray;
 mod transcript;
+mod tray;
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))] // macOS 전용 (appenv와 같다)
 mod winstate;
 pub(crate) mod workspace;
@@ -531,8 +530,8 @@ fn spawn_pty_session(
         },
     );
     drop(sessions);
-    tray::refresh(&app); // 트레이의 "실행 중 N개" (§1-1) — 잠금을 놓은 뒤에
 
+    tray::refresh(&app); // 트레이의 "실행 중 N개" (§1-1) — 잠금을 놓은 뒤에
     // 세션 원점 기록 — 셸이든 에이전트든 스폰은 전부 이 관문을 지나므로, 여기 한 곳이면
     // IPC 발신(PRD I)이 어떤 세션에서 와도 워크스페이스를 풀 수 있다 (session_origin).
     {
@@ -680,8 +679,8 @@ fn spawn_pty_session(
                 }
             })
         };
-        tray::refresh(&app);
         let code = owned.and_then(|mut s| s.child.wait().ok()).map(|st| st.exit_code());
+        tray::refresh(&app);
         if let Some((f, _)) = log_file.as_mut() {
             let _ = writeln!(f, "\n=== session exit · {} · code {:?} · epoch {} ===", id, code, epoch_secs());
         }
@@ -1460,8 +1459,6 @@ fn agent_spawn_inner(
             seq,
             since_ms: Some(workspace::now_ms()),
             completed: false,
-            pending_tool: None,
-            stalled: false,
         },
     );
     Ok(uuid)
@@ -2557,8 +2554,22 @@ fn agent_snapshot(app: AppHandle) -> Vec<agent::AgentStateEvt> {
     };
     map.iter()
         .filter(|(_, t)| alive.contains(&t.app_session))
-        // P-4 순번 · B19 진입 시각 · C2 승인함·멈춤까지 추적 그대로 (agent::evt_of)
-        .map(|(uuid, t)| agent::evt_of(t, uuid))
+        .map(|(uuid, t)| agent::AgentStateEvt {
+            session: t.app_session.clone(),
+            agent_session: uuid.clone(),
+            status: t.last_status.clone(),
+            waiting_for: t.last_waiting.clone(),
+            activity: t.activity.clone(),
+            subagents: t.subagents,
+            cost_usd: t.cost_usd,
+            resumable: agent::resumable_of(t, uuid),
+            version: None,
+            exit_code: None,
+            degraded: t.degraded,
+            seq: t.seq, // P-4 — 스냅숏은 마지막 발급 순번 그대로 (실시간 이벤트와 역전 판별)
+            since_ms: Some(t.status_ms), // 웹뷰만 다시 떠도 경과가 '방금'으로 되돌아가지 않게 (B19)
+            completed: false,
+        })
         .collect()
 }
 
@@ -2954,6 +2965,12 @@ pub fn run() {
                 .ok()
                 .and_then(|s| serde_json::from_str(&s).ok())
                 .unwrap_or(serde_json::Value::Null);
+            // 트레이 (§1-1) — 설정(언어)을 읽으므로 그 뒤에. 실패하면 닫기는 지금처럼 종료로 간다
+            if let Err(e) = tray::install(app.handle()) {
+                diag::write(&format!("TRAY-INSTALL failed: {e}"));
+            }
+            #[cfg(windows)]
+            quit::install_end_session(app.handle()); // 로그오프·시스템 종료 정리 (§2)
             // macOS 창 — 숨긴 채 만들어졌다(tauri.macos.conf.json). 자리를 정하고 보인다 (B134·B141),
             // 제목 막대 테마를 맞추고 (U105), ⌘Q·Dock·로그아웃을 종료 시퀀스로 돌린다 (B112)
             #[cfg(target_os = "macos")]
@@ -2965,12 +2982,6 @@ pub fn run() {
                 quit::install(app.handle());
             }
             app.manage(SettingsState(Mutex::new(settings)));
-            // 트레이 (§1-1) — 설정(언어)을 읽으므로 그 뒤에. 실패하면 닫기는 지금처럼 종료로 간다
-            if let Err(e) = tray::install(app.handle()) {
-                diag::write(&format!("TRAY-INSTALL failed: {e}"));
-            }
-            #[cfg(windows)]
-            quit::install_end_session(app.handle()); // 로그오프·시스템 종료 정리 (§2)
             app.manage(StoreState(Store::new(root)));
             // 에이전트 런타임 (PRD D) — 세션 레지스트리 watch 시작 (FR-D-11)
             app.manage(agent::AgentRt::default());
@@ -3042,13 +3053,13 @@ pub fn run() {
             mission_set_default,
             mission_assign,
             missions::mission_mark_assigned, // 배정 시각 (B92) — eqmux-66
-            missions::mission_mark_base, // 임무 시작점 (§13-2) — 0.6 W4
             scrollback_tail,
             scrollback_search,
             scrollback_page,
             scrollback_export,
             store_usage_real,
             store_purge_scrollback,
+            missions::mission_mark_base, // 임무 시작점 (§13-2) — 0.6 W4
             events_query,
             msg_list,
             msg_send,
@@ -3094,19 +3105,9 @@ pub fn run() {
             diff_file,
             commit_changed_files,
             commit_file_diff,
-            // §17 git 화면 (W5)
-            gitx::git_log,
-            gitx::git_refs,
-            gitx::git_commit_detail,
-            gitx::git_blame,
-            gitx::git_status,
-            gitx::git_file_patch,
-            gitx::git_run,
-            gitx::git_apply_patch,
-            gitx::git_path_status,
             shutdown_flush,
-            app_exit,
             tray::window_close_to_tray,
+            app_exit,
             recovery::crash_recovery,
             agent_snapshot,
             layout_load,
