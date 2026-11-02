@@ -1,4 +1,23 @@
-# 0.6 W5 git 확장 — 1라운드 상태
+# 0.6 W5 git 확장 — 상태
+
+## 이어서 한 일 (2026-11-02 오후)
+
+| 항목 | 내용 | 커밋 |
+|---|---|---|
+| 탐색기 [파일 히스토리 · blame] | `MissionExplorerTab.tsx`(W4) 파일 행 메뉴 → git 화면 file 모드. 열린 git 화면도 새 파일을 따라간다 | f0514a0 |
+| §17-3 세션 배지 | `git_commit_sessions` — 커밋 직전 4시간 안에 그 커밋 파일을 편집 도구로 고친 세션(C4 file_touch). 추정이다(Bash · Codex는 못 잡는다) | f0514a0 |
+| §17-3 동시 편집 표시 | 작업 트리 파일 행에 §13-1 경고 배지 | f0514a0 |
+| 첫 커밋 전 스테이지 내리기 | HEAD가 없으면 `rm --cached -q --` | f0514a0 |
+| B154 | diff · 덩어리 · blame · 충돌 칸에서 `.env` · `.env.*` 값을 가린다. [값 보기] 토글 | f0514a0 |
+| index.lock 충돌 | 모든 git 호출에 `--no-optional-locks` (`run_git` 한 곳) | f0514a0 |
+| **§17 3단계** | merge · rebase(비대화형) · cherry-pick · revert · stash(push/apply/pop/drop) · reset(soft/mixed/hard) · 분리 체크아웃. 진행 중 배너([충돌 보기] · [세션에게 해결 맡기기] · [계속] · [중단]). 충돌 덩어리별 우리 것/저쪽 것/둘 다. reset --hard는 사라질 커밋 · 변경 수 · 되돌릴 해시를 보이고 두 번 묻는다. `GIT_EDITOR=true`로 편집기에서 멈추지 않는다 | f0514a0 |
+| §13-3 기준 모드 (W4 부탁) | `GitDiffEditor` `base` · `only` props, `diff.rs` `diff_changed_files_since` · `file_diff_since`(HEAD 자리에 base) | 미커밋 |
+
+테스트(마지막): `npm test` 237/237, `cargo test --lib` 223 통과 · 1 실패(ports 기준선, W6), gitx 11/11 · diff 6/6.
+
+---
+
+## 1라운드 상태
 
 2026-11-02 · W5 eqmux-17 · 근거 `update-0.6-scope.md` §17 · §4-1, 분담 `update-0.6-work-split.md` "W5"
 

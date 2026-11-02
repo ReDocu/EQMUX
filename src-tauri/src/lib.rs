@@ -3177,6 +3177,8 @@ pub fn run() {
             gitx::git_path_status,
             gitx::git_range,
             gitx::git_commit_sessions,
+            diff::diff_changed_files_since, // §13-3 임무 검토 (W5 diff.rs)
+            diff::file_diff_since,
             shutdown_flush,
             app_exit,
             tray::window_close_to_tray,

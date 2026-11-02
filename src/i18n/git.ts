@@ -307,4 +307,7 @@ export const dict: Record<string, string> = {
   // B154 · 탐색기 진입 (GitDiffEditor.tsx · MissionExplorerTab.tsx)
   ".env 값은 가려서 보입니다 — 화면 공유 주의": ".env values are masked — mind screen sharing",
   "파일 히스토리 · blame": "File history · blame",
+  // §13-3 기준 모드 (GitDiffEditor base · only — W4 임무 검토가 품는다)
+  "기준 {base} ↔ 워크트리": "Base {base} ↔ worktree",
+  "비교 · 기준 커밋 {base} ↔ 워크트리 · {stat}": "Compare · base commit {base} ↔ worktree · {stat}",
 };

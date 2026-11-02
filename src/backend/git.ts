@@ -323,3 +323,15 @@ export async function gitCommitSessions(wsId: string, wsPath: string, hashes: st
   if (!isTauri() || hashes.length === 0) return {};
   return invoke<Record<string, string[]>>("git_commit_sessions", { wsId, wsPath, hashes }).catch(() => ({}));
 }
+
+// ── §13-3 임무 검토 (W4) — 기준 커밋(base_commit) ↔ 워크트리. diffChangedFiles · diffFile과 같은 계약 ──
+
+export async function diffChangedFilesSince(wsPath: string, base: string): Promise<ChangedFile[] | undefined> {
+  if (!isTauri()) return undefined;
+  return invoke<ChangedFile[]>("diff_changed_files_since", { wsPath, base }).catch(() => undefined);
+}
+
+export async function diffFileSince(wsPath: string, base: string, path: string, renamedFrom?: string | null): Promise<FileDiff | string> {
+  if (!isTauri()) return t("브라우저 dev — 실측 없음");
+  return invoke<FileDiff>("file_diff_since", { wsPath, base, path, renamedFrom: renamedFrom ?? "" }).catch((e) => String(e));
+}

@@ -1,13 +1,15 @@
 // Git Diff (AXXhV) — 변경 파일 트리 사이드바 + 나란히 비교. 두 모드가 있다 (UI 리파인 §git):
 // · 워크트리 모드(기본) — HEAD ↔ 워크트리
 // · 커밋 모드(props.commit) — 부모 커밋 ↔ 이 커밋 (git 패널의 커밋 행 클릭이 연다)
+// · 기준 모드(props.base) — 기준 커밋 ↔ 워크트리 (§13-3 임무 검토가 품는다). 닫기는 품은 화면이 맡는다.
+//   props.only가 있으면 그 경로(저장소 기준 상대, `/`)만 목록에 보인다 — undefined = 전부
 // 양측 행은 1:1 정렬돼 있고(B8 — pad 필러) 세로·가로 스크롤이 동기화된다.
 // 변경 내비게이션(U10): n/p 점프 · 스크롤바 마커 · ±3줄 문맥 접기 · ↑↓ 파일 이동.
 // Tauri에서는 실측 (PRD H) · 읽기 전용이다 — 스테이지·커밋·편집은 터미널에서 사람이 한다
 // (다른 패널과 같은 원칙). 브라우저 dev에서는 기존 목 데이터를 보여준다.
 import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
 import type { JSX } from "solid-js";
-import { commitChangedFiles, commitFileDiff, diffChangedFiles, diffFile, gitOverview } from "../backend/git";
+import { commitChangedFiles, commitFileDiff, diffChangedFiles, diffChangedFilesSince, diffFile, diffFileSince, gitOverview } from "../backend/git";
 import type { ChangedFile, DiffLine, FileDiff } from "../backend/git";
 import { backend, DIFF_BRANCH, DIFF_CONTENT, DIFF_FILES, GIT_STATE } from "../backend/mock";
 import { isTauri } from "../backend/pty";
@@ -22,7 +24,7 @@ const FOLD_CONTEXT = 3; // 변경 주변에 남기는 문맥 줄 수 (U10)
 
 type DispRow = { type: "line"; i: number } | { type: "fold"; start: number; end: number };
 
-export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; message: string } }) {
+export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; message: string }; base?: string; only?: string[] }) {
   // 커밋 모드 (UI 리파인 §git) — 있으면 부모 커밋 ↔ 이 커밋, 없으면 HEAD ↔ 워크트리
   const commit = () => props.commit;
   // wsId 지정(진입점이 안다)이 우선, 없으면 현재 워크스페이스 문맥 (단일 소스 — 임의 폴백 없음)
@@ -66,7 +68,12 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
     if (!isTauri() || !target) return;
     const req = ++filesReq;
     const c = commit();
-    const result = c ? await commitChangedFiles(target.path, c.hash) : await diffChangedFiles(target.path);
+    const base = props.base;
+    const result = c
+      ? await commitChangedFiles(target.path, c.hash)
+      : base
+        ? await diffChangedFilesSince(target.path, base)
+        : await diffChangedFiles(target.path);
     if (req !== filesReq) return; // 그새 대상이 바뀌었다 — 이 응답은 버린다
     setFilesErr(result === undefined); // 실패(비 저장소·git 없음)를 빈 목록과 구분한다 (B9)
     const list = result ?? [];
@@ -77,7 +84,7 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
     } else {
       void loadDiff();
     }
-    if (c) return; // 커밋 모드에는 브랜치·동기화 줄이 없다 — 커밋 자체가 문맥이다
+    if (c || base) return; // 커밋 · 기준 모드에는 브랜치·동기화 줄이 없다 — 커밋 자체가 문맥이다
     void gitOverview(target.path).then((o) => {
       if (req !== filesReq) return;
       if (o) {
@@ -97,7 +104,12 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
     const req = ++diffReq;
     setDiffLoading(true);
     const c = commit();
-    const d = c ? await commitFileDiff(target.path, c.hash, path) : await diffFile(target.path, path, files().find((f) => f.path === path)?.renamedFrom);
+    const from = files().find((f) => f.path === path)?.renamedFrom;
+    const d = c
+      ? await commitFileDiff(target.path, c.hash, path)
+      : props.base
+        ? await diffFileSince(target.path, props.base, path, from)
+        : await diffFile(target.path, path, from);
     if (req !== diffReq) return;
     setDiffLoading(false);
     if (typeof d === "string") setDiffErr(d);
@@ -110,7 +122,7 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
       return;
     }
     // 커밋 전환도 재로드 대상이다 — 같은 화면에서 다른 커밋 diff로 옮겨갈 수 있다 (UI 리파인 §git)
-    createEffect(on(() => [ws()?.id, commit()?.hash] as const, () => void loadFiles()));
+    createEffect(on(() => [ws()?.id, commit()?.hash, props.base] as const, () => void loadFiles()));
     createEffect(on(selected, () => void loadDiff()));
   });
 
@@ -131,7 +143,9 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
   // 필터 — 대소문자 무시 + 상태(A/M/D) 칩 (U12). 경로 정렬 — 트리 표시·↑↓ 이동 순서가 일치한다
   const filtered = () => {
     const q = query().trim().toLowerCase();
+    const only = props.only && new Set(props.only.map((p) => p.replace(/\\/g, "/")));
     return files()
+      .filter((f) => !only || only.has(f.path) || (!!f.renamedFrom && only.has(f.renamedFrom)))
       .filter((f) => (!q || f.path.toLowerCase().includes(q)) && (!statusFilter() || f.status === statusFilter()))
       .sort((a, b) => a.path.localeCompare(b.path));
   };
@@ -331,7 +345,9 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
       const inInput = !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT");
       const a = diffKeyAction(e, inInput);
       if (!a) return;
-      if (a === "close") close();
+      if (a === "close") {
+        if (!props.base) close(); // 기준 모드는 품은 화면이 닫기를 맡는다
+      }
       else if (a === "next") jumpTo(blockIdx() + 1);
       else if (a === "prev") jumpTo(blockIdx() - 1);
       else {
@@ -393,7 +409,11 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
               </span>
             </div>
             <div class="mono muted gde-sidebar-sub" style={{ "font-size": "10px", "margin-top": "3px" }} title={commit()?.message}>
-              {commit() ? commit()!.message : `${branch()} ↑${sync().ahead} ↓${sync().behind} · ${ws()?.name ?? "—"}`}
+              {commit()
+                ? commit()!.message
+                : props.base
+                  ? tf("기준 {base} ↔ 워크트리", { base: props.base.slice(0, 7) })
+                  : `${branch()} ↑${sync().ahead} ↓${sync().behind} · ${ws()?.name ?? "—"}`}
             </div>
           </div>
           <input
@@ -487,7 +507,9 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
               <div class="mono muted" style={{ "font-size": "10px" }}>
                 {commit()
                   ? tf("비교 · 부모 커밋 {base} ↔ {hash} · {stat}", { base: baseLabel(), hash: commit()!.hash, stat: t(stat()) })
-                  : tf("비교 · {base} ({branch}) ↔ 워크트리 · {stat} — 커밋·편집은 터미널에서", { base: baseLabel(), branch: branch(), stat: t(stat()) })}
+                  : props.base
+                    ? tf("비교 · 기준 커밋 {base} ↔ 워크트리 · {stat}", { base: baseLabel(), stat: t(stat()) })
+                    : tf("비교 · {base} ({branch}) ↔ 워크트리 · {stat} — 커밋·편집은 터미널에서", { base: baseLabel(), branch: branch(), stat: t(stat()) })}
               </div>
             </div>
             <div class="gde-toolbar-actions">
@@ -523,9 +545,11 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
               <button class="btn ghost" classList={{ on: wrap() }} title={t("줄바꿈")} onClick={() => setWrap(!wrap())}>
                 ↩ {t("줄바꿈")}
               </button>
-              <button class="btn ghost" title={t("닫기 (Esc) — 진입한 화면으로 복귀")} onClick={close}>
-                <Icon name="x" size={11} />
-              </button>
+              <Show when={!props.base}>
+                <button class="btn ghost" title={t("닫기 (Esc) — 진입한 화면으로 복귀")} onClick={close}>
+                  <Icon name="x" size={11} />
+                </button>
+              </Show>
             </div>
           </div>
 
