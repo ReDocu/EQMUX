@@ -188,4 +188,9 @@ export const dict: Record<string, string> = {
   "{f}을(를) 휴지통으로 옮겼습니다": "Moved {f} to the trash",
   "{f}을(를) 휴지통으로 옮깁니다.": "Moves {f} to the trash.",
   "{f}에서 {k} 줄을 지웁니다. 되돌리기는 없습니다.": "Deletes the {k} line from {f}. This can't be undone.",
+  // 서버 탭 저장 명령 (D2)
+  "저장 명령": "Saved commands",
+  "셸에 입력합니다: {run}": "Types into the shell: {run}",
+  "{f}을(를) 읽지 못했습니다": "Couldn't read {f}",
+  "쓸 수 없는 항목 {n}개를 건너뛰었습니다": "Skipped {n} unusable entries",
 };

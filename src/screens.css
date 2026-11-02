@@ -6491,3 +6491,7 @@ label.inbox-pop-row {
 .env-err { color: var(--eq-red); font-size: 12px; margin: 6px 0; }
 .env-note { font-size: 11px; margin: 4px 0; }
 .env-empty-actions { display: flex; gap: 6px; margin-top: 6px; }
+
+/* 0.6 W6: 서버 탭 저장 명령 (D2) */
+.srvp-saved { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 6px; font-size: 11px; }
+.srvp-saved-warn { color: var(--eq-amber, var(--eq-muted)); }

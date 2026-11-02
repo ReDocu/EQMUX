@@ -334,3 +334,39 @@ export function startPortWatch(): void {
   started = true;
   void poll();
 }
+
+// ── 저장 명령 (§3 D2 · 계약 C7) — `.eqmux/commands.json`(커밋 대상)에 적은 명령을 서버 탭에서 사람이 눌러 친다 ──
+// 형식: { "version": 1, "commands": [{ "name": "dev", "run": "npm run dev", "kind": "server" }, …] }
+//  - name: 버튼 글자 (40자까지). run: 서버 셸에 그대로 치는 한 줄. kind: "server" | "test" | "other" (없으면 other).
+//  - 클론한 저장소의 파일이라 믿지 않는다: 자동 실행 경로는 없고, 버튼 title에 run 원문을 그대로 보인다.
+//    줄바꿈이 든 run은 버린다 — 한 번 눌러 여러 명령이 들어가지 않게.
+// §13-3 [테스트 실행]은 kind "test"를 고른다.
+
+export const COMMANDS_FILE = ".eqmux/commands.json";
+
+export interface SavedCommand {
+  name: string;
+  run: string;
+  kind: "server" | "test" | "other";
+}
+
+/** 원문 → 쓸 수 있는 명령 + 버린 항목 수. JSON 자체가 깨졌으면 error */
+export function parseCommands(text: string): { commands: SavedCommand[]; skipped: number; error?: string } {
+  let doc: unknown;
+  try {
+    doc = JSON.parse(text);
+  } catch (e) {
+    return { commands: [], skipped: 0, error: String(e) };
+  }
+  const list = (doc as { commands?: unknown })?.commands;
+  if (!Array.isArray(list)) return { commands: [], skipped: 0, error: "commands 배열이 없습니다" };
+  const commands: SavedCommand[] = [];
+  for (const c of list as Record<string, unknown>[]) {
+    const name = typeof c?.name === "string" ? c.name.trim() : "";
+    const run = typeof c?.run === "string" ? c.run.trim() : "";
+    if (!name || name.length > 40 || !run || /[\r\n]/.test(run)) continue;
+    const kind = c.kind === "server" || c.kind === "test" ? c.kind : "other";
+    commands.push({ name, run, kind });
+  }
+  return { commands, skipped: list.length - commands.length };
+}

