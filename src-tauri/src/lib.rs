@@ -61,6 +61,20 @@ pub(crate) fn setting_str(app: &AppHandle, key: &str) -> Option<String> {
     v.get(key).and_then(|x| x.as_str()).map(str::to_string)
 }
 
+/// 스크롤백 디스크 저장 (0.6 E4 · B150, 설정 `scrollbackPersist`, 기본 켬) — 끄면 session.db 스크롤백 줄과
+/// ~/.eqmux/logs 세션 로그를 쓰지 않는다. 이미 저장된 것은 지우지 않는다. 출력 8KB마다 보는 값이라
+/// 설정 잠금 대신 원자값을 두고, 설정을 읽고 저장할 때 갱신한다 — 돌고 있는 세션도 그다음 출력부터 따른다
+static SCROLLBACK_PERSIST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+fn apply_scrollback_persist(settings: &serde_json::Value) {
+    let on = settings.get("scrollbackPersist").and_then(|x| x.as_bool()).unwrap_or(true);
+    SCROLLBACK_PERSIST.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn scrollback_persist() -> bool {
+    SCROLLBACK_PERSIST.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub(crate) fn setting_bool(app: &AppHandle, key: &str, default: bool) -> bool {
     let s: State<SettingsState> = app.state();
     s.0.lock()
@@ -608,7 +622,9 @@ fn spawn_pty_session(
         };
         // 최적화 A10 — 8KB 읽기마다 write syscall이던 것을 버퍼로. 아래에서 짧은 읽기(출력 덩어리 끝)마다
         // 비우므로 로그가 한 덩어리 이상 뒤처지지 않는다. 스레드가 끝나면 drop이 마저 비운다
-        let mut log_file = open_session_log(&log_path, SESSION_LOG_CAP);
+        // 저장을 꺼 두었으면 로그 파일을 열지도 않는다 (E4). 켜지면 그다음 출력에서 연다
+        let mut persist = scrollback_persist();
+        let mut log_file = if persist { open_session_log(&log_path, SESSION_LOG_CAP) } else { None };
         if let Some((f, _)) = log_file.as_mut() {
             let _ = writeln!(f, "\n=== EQMUX session start · {} · epoch {} ===", id, epoch_secs());
         }
@@ -624,6 +640,12 @@ fn spawn_pty_session(
             match reader.read(&mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
+                    // 저장 설정이 바뀌었으면 여기서 따른다 — 끄면 로그를 닫고(drop이 비운다), 켜면 다시 연다
+                    let now = scrollback_persist();
+                    if now != persist {
+                        persist = now;
+                        log_file = if persist { open_session_log(&log_path, SESSION_LOG_CAP) } else { None };
+                    }
                     let mut over_cap = false;
                     if let Some((f, len)) = log_file.as_mut() {
                         let _ = f.write_all(&buf[..n]);
@@ -645,7 +667,7 @@ fn spawn_pty_session(
                     }
                     assembler.push(&data, |line, styled| {
                         // TUI 프레임 잔해·연속 중복은 스필하지 않는다 (재생 오염 방지)
-                        if store::is_tui_noise(&line) || line == last_spilled {
+                        if !persist || store::is_tui_noise(&line) || line == last_spilled {
                             return;
                         }
                         last_spilled = line.clone();
@@ -681,12 +703,15 @@ fn spawn_pty_session(
                 }
             })
         };
-        let code = owned.and_then(|mut s| s.child.wait().ok()).map(|st| st.exit_code());
         tray::refresh(&app);
+        let code = owned.and_then(|mut s| s.child.wait().ok()).map(|st| st.exit_code());
         if let Some((f, _)) = log_file.as_mut() {
             let _ = writeln!(f, "\n=== session exit · {} · code {:?} · epoch {} ===", id, code, epoch_secs());
         }
         assembler.finish(|line, styled| {
+            if !scrollback_persist() {
+                return;
+            }
             let _ = store_tx.send(StoreMsg::Line {
                 ws: ws.clone(),
                 id: id.clone(),
@@ -2625,6 +2650,7 @@ fn settings_save(
     // 메모리 사본을 먼저 갱신한다 (B54) — 알림 라우팅·음소거 게이트가 이 사본만 본다.
     // 쓰기 실패 뒤에 갱신하면 화면은 '알림 꺼짐'인데 토스트는 계속 오는 상태가 된다.
     // 파일 실패는 그대로 Err로 올려 프런트가 배너로 알린다 (다음 실행에는 반영되지 않는다).
+    apply_scrollback_persist(&data);
     if let Ok(mut v) = settings.0.lock() {
         *v = data;
     }
@@ -2988,6 +3014,7 @@ pub fn run() {
                 apply_window_theme(app.handle(), &settings);
                 quit::install(app.handle());
             }
+            apply_scrollback_persist(&settings);
             app.manage(SettingsState(Mutex::new(settings)));
             // 트레이 (§1-1) — 설정(언어)을 읽으므로 그 뒤에. 실패하면 닫기는 지금처럼 종료로 간다
             if let Err(e) = tray::install(app.handle()) {
