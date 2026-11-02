@@ -17,7 +17,7 @@ import { Eyebrow, FieldHint, Identity, KV, StatusLabel, StopConfirm } from "../c
 import { SubagentList } from "../components/SubagentList"; // §4 서브에이전트 목록 (W3)
 import type { AgentCliId, Permissions, Session } from "../types";
 import { AGENT_CLI_LABEL, agentAttached, agentFlagsToString, cleanTitle, cliOf, effectiveTitle, engineSwitched, paneNo, SESSION_NAME_MAX, sessionName, statusText, TITLE_MAX, translatePermissions } from "../types";
-import { jobName } from "../labels";
+import { jobName, reasonText } from "../labels";
 import { isSubmitEnter } from "../platform"; // 한글 조합 중 Enter는 제출이 아니다 (B130)
 
 const PERM_KEYS: (keyof Permissions)[] = ["write", "commit", "push"];
@@ -281,6 +281,7 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
         <summary>{t("개요")}</summary>
         <div class="card inset" style={{ padding: "4px 10px" }}>
           <KV k={t("상태")} v={statusText(s().status)} vClass={s().status === "waiting" ? "st-waiting" : ""} />
+          <Show when={s().stateReason}>{(r) => <KV k={t("판정 근거")} v={reasonText(r())} vClass="mono" />}</Show>
           {/* 낮은 신뢰 (FR-G-27) — 정확한 척하지 않는다 */}
           <Show when={s().degraded}>
             <KV k={t("관측")} v={t("저하 — 레지스트리 접근 불가 · 훅 + 프로세스 생존으로 유지")} vClass="st-waiting" />

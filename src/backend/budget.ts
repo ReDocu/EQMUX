@@ -1,9 +1,11 @@
 // 하루 비용 예산 알림 (0.6 §13-6) — statusLine 누적 비용(costUsd)의 증분을 오늘 합계에 더하고,
 // 설정 예산을 넘으면 알림 센터와 OS 알림으로 하루 한 번 알린다. 세션을 멈추지 않는다.
-// ponytail: 오늘 합계는 이 웹뷰의 localStorage에 둔다 — 임무별 합계(W2 집계)가 생기면 그 값을 쓴다
+// Tauri에서는 W2 원장(cost_summary — 워크스페이스별 · 1¢ 단위 · 재시작을 넘긴다)의 오늘 합계를 쓴다.
+// 목 모드(브라우저)만 statusLine 증분을 localStorage에 더한다
 import { invoke } from "@tauri-apps/api/core";
 import { createSignal } from "solid-js";
 import { notifyLocal } from "./attention";
+import { backend } from "./mock";
 import { isTauri } from "./pty";
 import { settings } from "./settings";
 import { tf } from "../i18n";
@@ -42,14 +44,44 @@ export const spentToday = (): number => (spend().day === dayKey(Date.now()) ? sp
 
 const lastCost = new Map<string, number>();
 
-/** agent-state의 costUsd 한 건 — agent.ts가 부른다 */
+/** 로컬 자정 epoch ms — cost_summary의 sinceMs */
+export const midnight = (ms: number): number => {
+  const d = new Date(ms);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+};
+
+/** agent-state의 costUsd 한 건 — agent.ts가 부른다. Tauri면 원장 합계를 다시 읽는다(몰리면 한 번) */
 export function noteCost(session: string, cost: number | null | undefined, now = Date.now()): void {
   if (cost == null) return;
+  if (isTauri()) {
+    if (lastCost.get(session) === cost) return; // 값이 그대로면 원장도 그대로다
+    lastCost.set(session, cost);
+    if (!refreshing) refreshing = setTimeout(() => void refreshSpend(), 3000);
+    return;
+  }
   const d = costDelta(lastCost.get(session), cost);
   lastCost.set(session, cost);
+  commit(spend().day === dayKey(now) ? spend().usd + d : d, now, d === 0);
+}
+
+let refreshing: ReturnType<typeof setTimeout> | undefined;
+/** 열린 워크스페이스 전부의 오늘 합계 (W2 cost_summary) — 실패한 워크스페이스는 0으로 본다 */
+export async function refreshSpend(now = Date.now()): Promise<void> {
+  refreshing = undefined;
+  const sinceMs = midnight(now);
+  const rows = await Promise.all(
+    backend.listWorkspaces().map((w) =>
+      invoke<{ mission: string | null; usd: number }[]>("cost_summary", { workspace: w.id, sinceMs }).catch(() => []),
+    ),
+  );
+  commit(rows.flat().reduce((a, r) => a + r.usd, 0), now, false);
+}
+
+/** 오늘 합계를 정하고, 예산을 처음 넘었으면 하루 한 번 알린다 */
+function commit(usd: number, now: number, unchanged: boolean): void {
   const day = dayKey(now);
   const cur = spend().day === day ? spend() : { day, usd: 0, alerted: false };
-  const next = { ...cur, usd: cur.usd + d };
+  const next = { ...cur, usd };
   const budget = settings().dailyBudgetUsd;
   if (budget > 0 && next.usd >= budget && !next.alerted) {
     next.alerted = true;
@@ -59,7 +91,7 @@ export function noteCost(session: string, cost: number | null | undefined, now =
     // OS 알림 — notification 플러그인 커맨드를 바로 부른다(JS 패키지 없이). 실패해도 인앱 알림은 남는다
     if (isTauri()) void invoke("plugin:notification|notify", { options: { title: `EQMUX · ${title}`, body } }).catch(() => {});
   }
-  if (d === 0 && next.alerted === cur.alerted && cur === spend()) return;
+  if (unchanged && next.alerted === cur.alerted && cur === spend()) return;
   setSpend(next);
   try {
     localStorage.setItem(KEY, JSON.stringify(next));

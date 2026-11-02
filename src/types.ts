@@ -121,6 +121,7 @@ export interface Session {
   stalled?: boolean; // busy인데 오래 훅·출력이 없다 (0.6 A5 · C2)
   contextPct?: number; // 컨텍스트 사용률 0–100 (0.6 토큰 #5) — 첫 응답 전에는 없다
   rateLimit?: RateLimit; // 요금제 한도 (0.6 F1) — API 키 사용자는 없다
+  stateReason?: StateReason; // 상태를 정한 근거 (0.6 §4 · W2) — 기동 직후·전이 전에는 없다
   activity?: string; // 훅 2차 소스 (FR-D-15)
   costUsd?: number; // statusLine 누적 비용 USD (FR-D-19) — 미보고면 undefined
   subagents: number;
@@ -180,6 +181,14 @@ export interface Session {
 
 /** 기다리는 도구 (0.6 §13-4 · C2) — tool은 도구명, input은 원문 한 줄(Bash 명령 · 편집 경로).
  *  question(AskUserQuestion) · plan(ExitPlanMode)은 답을 고르는 일이라 승인함에서 [페인으로 가기]만 둔다 */
+/** 상태 판정 근거 (0.6 §4 · W2) — event는 훅 이름(UserPromptSubmit·Stop…) 또는 registry · pty-exit · process-gone.
+ *  stalled면 event/ts는 마지막으로 받은 훅이고 note가 "stalled"다 */
+export interface StateReason {
+  event: string;
+  ts: number; // epoch ms
+  note?: string; // adopted · exit N · stalled
+}
+
 /** 요금제 한도 (0.6 F1 · W2 statusLine) — 플랜 한도 중 사용률이 가장 높은 창 하나 */
 export interface RateLimit {
   window: string; // "five_hour" | "seven_day" | …
@@ -206,6 +215,7 @@ export interface AgentStateApply {
   stalled?: boolean; // 0.6 A5 · C2
   contextPct?: number; // 0.6 토큰 #5
   rateLimit?: RateLimit; // 0.6 F1
+  stateReason?: StateReason; // 0.6 §4
   activity?: string; // 훅 2차 소스 (FR-D-15)
   subagents?: number; // FR-D-18
   costUsd?: number; // statusLine 누적 비용 (FR-D-19)

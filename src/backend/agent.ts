@@ -9,7 +9,7 @@ import { saveRoleFile } from "./roles";
 import { settings } from "./settings";
 import { beepWaiting } from "./sound";
 import { noteCost } from "./budget";
-import type { AgentCliId, AgentStatus, PendingTool, Permissions, RateLimit, Session } from "../types";
+import type { AgentCliId, AgentStatus, PendingTool, Permissions, RateLimit, Session, StateReason } from "../types";
 import { agentFlagsToString, cliOf, engineSwitched, sessionName, translatePermissions } from "../types";
 
 export interface AgentStateEvt {
@@ -31,6 +31,7 @@ export interface AgentStateEvt {
   stalled?: boolean; // 멈춘 세션 (0.6 A5 · C2) — busy일 때만
   contextPct?: number; // 컨텍스트 사용률 0–100 (0.6 토큰 #5 · W2) — 첫 응답 전에는 없다
   rateLimit?: RateLimit; // 요금제 한도 (0.6 F1 · W2) — API 키 사용자는 없다
+  reason?: StateReason; // 상태 판정 근거 (0.6 §4 · W2)
 }
 
 const STATUSES: AgentStatus[] = ["starting", "busy", "waiting", "shell", "idle", "dead"];
@@ -92,6 +93,7 @@ function applyEvt(p: AgentStateEvt, fromSnapshot = false): void {
     stalled: !!p.stalled,
     contextPct: p.contextPct,
     rateLimit: p.rateLimit,
+    stateReason: p.reason,
     activity: p.activity ?? undefined,
     subagents: p.subagents,
     costUsd: p.costUsd ?? undefined,

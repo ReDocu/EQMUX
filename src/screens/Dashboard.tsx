@@ -238,7 +238,7 @@ export function Dashboard() {
               v: worstLimit(openSessions()) ? `${spendText()} · ${limitText(worstLimit(openSessions())!)}` : spendText(),
               c: overBudget() || (worstLimit(openSessions())?.usedPct ?? 0) >= LIMIT_WARN ? "amber" : "",
               tip: [
-                t("모든 세션의 statusLine 비용 증분 합계 · 예산은 설정 › 알림"),
+                t("모든 워크스페이스의 오늘 비용 합계 · 예산은 설정 › 알림"),
                 worstLimit(openSessions())?.resetsAt ? tf("한도 재설정 {at}", { at: resetAt(worstLimit(openSessions())!)! }) : "",
               ]
                 .filter(Boolean)

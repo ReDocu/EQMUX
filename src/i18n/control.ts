@@ -302,7 +302,7 @@ export const dict: Record<string, string> = {
   "보낸 메시지 {n}": "{n} sent",
   // ── 0.6 W7: 하루 비용 예산 (§13-6) ──
   "오늘 비용": "Today's cost",
-  "모든 세션의 statusLine 비용 증분 합계 · 예산은 설정 › 알림": "Sum of status line cost across all sessions · set a budget in Settings › Notifications",
+  "모든 워크스페이스의 오늘 비용 합계 · 예산은 설정 › 알림": "Today's cost across all workspaces · set a budget in Settings › Notifications",
   "오늘 비용이 예산 ${budget}을 넘었습니다": "Today's cost passed the ${budget} budget",
   "지금 ${usd} · 세션은 멈추지 않습니다": "Now ${usd} · sessions keep running",
   "{name} · 메시지": "{name} · message",
@@ -319,4 +319,10 @@ export const dict: Record<string, string> = {
   "메시지는 쌓아 두었다가 한도가 풀리면 넣습니다": "Messages are held and sent once the limit resets",
   "컨텍스트 {pct}% 사용 — 높으면 /compact나 다른 세션으로 넘김을 생각하세요": "Context {pct}% used — when high, consider /compact or handing off to another session",
   "한도 재설정 {at}": "Limit resets {at}",
+  "판정 근거": "Why this status",
+  "{event} 뒤로 훅 없음 · {ago}": "No hooks since {event} · {ago}",
+  "직접 띄운 claude를 붙임": "Adopted a hand-started claude",
+  "세션 레지스트리 재확인": "Session registry rescan",
+  "프로세스 종료 · {note}": "Process ended · {note}",
+  "붙였던 claude가 사라짐": "Adopted claude went away",
 };

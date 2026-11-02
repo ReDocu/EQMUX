@@ -1182,6 +1182,7 @@ export class MockBackend implements Backend {
     if (evt.costUsd !== undefined) sess.costUsd = evt.costUsd; // statusLine (FR-D-19)
     if (evt.contextPct !== undefined) sess.contextPct = evt.contextPct; // 컨텍스트 배지 (0.6 토큰 #5)
     if (evt.rateLimit !== undefined) sess.rateLimit = evt.rateLimit; // 한도 (0.6 F1)
+    sess.stateReason = evt.stateReason; // 판정 근거 (0.6 §4) — 지금 상태의 것이라 없으면 지운다
     if (evt.degraded !== undefined) sess.degraded = evt.degraded; // 낮은 신뢰 (FR-G-27)
     sess.resumable = evt.resumable;
     sess.resumeReason = evt.resumable ? "transcript + cwd 일치" : "transcript 없음";

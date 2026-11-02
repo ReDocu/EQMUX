@@ -4,6 +4,7 @@ import type { JSX } from "solid-js";
 import { t, tf } from "../i18n";
 import { pushLayer } from "../state";
 import { segKeyIndex } from "./keynav";
+import { reasonText } from "../labels";
 import { Icon } from "./icons";
 import type { AgentCliId, AgentStatus, Session } from "../types";
 import { AGENT_CLI_LABEL, agentAttached, fmtSince, nameBesideNo, slotBesideNo, slotNo, statusText } from "../types";
@@ -16,7 +17,7 @@ export function statusClass(st: AgentStatus): string {
 export function StatusLabel(props: { session: Session; hideExit?: boolean /* 본문이 exit를 따로 보일 때 (U49) */ }) {
   const s = () => props.session;
   return (
-    <span class={`mono ${statusClass(s().status)}`}>
+    <span class={`mono ${statusClass(s().status)}`} title={s().stateReason ? `${t("판정 근거")} · ${reasonText(s().stateReason!)}` : undefined}>
       {statusText(s().status)}
       <Show when={s().status === "busy" && s().subagents > 0}> · {t("서브")} {s().subagents}</Show>
       <Show when={s().status === "waiting" || s().status === "dead"}> · {fmtSince(s().sinceMs)}</Show>
