@@ -5,6 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { notify } from "../components/ui";
 import { t, tf } from "../i18n";
 import { castingChanges, sessionName } from "../types";
+import type { Persona, Session } from "../types";
 import { applyAgentSnapshot } from "./agent";
 import { backend, libraryRev } from "./mock";
 import { isServerTermId } from "./ports";
@@ -177,6 +178,32 @@ export function castingConfirmLines(wsId: string, wanted: readonly { personaId: 
     ...c.dropped.map((p) => tf("{name} 자리 없음 — 빠집니다", { name: persona(p)?.name ?? p })),
     ...(c.dropped.length ? [t("자리를 늘리려면 설정에서 슬롯 수를 올리거나 기본 터미널을 닫으세요")] : []),
   ];
+}
+
+/** 저장소 편성에서 이 PC 라이브러리에 없는 페르소나 (D3) — 클론한 저장소의 team.json은 남의 라이브러리 id를 가리킬 수 있다 */
+export function missingPersonas(slots: readonly Pick<TeamSlotInfo, "persona" | "personaName">[], personas: readonly Pick<Persona, "id">[]): string[] {
+  return slots.filter((s) => !personas.some((p) => p.id === s.persona)).map((s) => s.personaName || s.persona);
+}
+
+/** "이 팀으로 시작" 안내 (0.6 §3 D3) — 저장소에 team.json 편성이 있으면 슬롯 수와 없는 페르소나 이름. 없으면 undefined */
+export async function savedTeam(wsId: string): Promise<{ slots: number; missing: string[] } | undefined> {
+  const ws = backend.listWorkspaces().find((w) => w.id === wsId);
+  if (!ws || ws.pathMissing) return undefined;
+  const slots = await loadTeam(wsId, ws.path);
+  if (slots.length === 0) return undefined;
+  return { slots: slots.length, missing: missingPersonas(slots, backend.listPersonas()) };
+}
+
+/** "이 팀으로 시작" (0.6 §3 D3) — team.json 편성을 슬롯에 올리고(이미 올라 있으면 그대로) 워크스페이스를 연다.
+ *  반환은 그 워크스페이스의 역할 세션 — 기동은 부르는 화면이 launchRoleAgents로 한다(빠른 시작과 같은 흐름).
+ *  라이브러리에 없는 페르소나의 슬롯은 셸로 남는다 (역할 파일을 만들 수 없다) */
+export async function castSavedTeam(wsId: string): Promise<Session[]> {
+  const ws = backend.listWorkspaces().find((w) => w.id === wsId);
+  if (!ws || ws.pathMissing) return [];
+  const slots = await loadTeam(wsId, ws.path);
+  if (slots.length > 0) backend.hydrateTeam(wsId, slots, new Set(await listAlivePty()));
+  backend.openWorkspace(wsId);
+  return backend.listSessions().filter((s) => s.workspaceId === wsId && s.personaId);
 }
 
 /** 페르소나 직함이 바뀌었다 — 슬롯 직렬화는 그대로라 디바운스 저장이 건너뛴다. team.md의 직함 열은
