@@ -228,3 +228,7 @@
 | 11-02 | W1 | 비용 store(v4 cost 표, 30일) | `53d0ecc` |
 | 11-02 | W4 | 임무 검토 diff를 시작점 · 담당 파일 기준으로, [전체 변경 보기] | `a758473` |
 | 11-02 | W2 | §13-6 임무별 비용 cost_summary(첫 값은 기준선, 담당 임무 60초 캐시) | `9cd0a54` |
+| 11-02 | W0 | HEAD 검증(`9cd0a54`): tsc OK · npm test 237 · cargo 225 통과 + ports 1 | — |
+| 11-02 | W5 | GitDiffEditor 닫기를 화면 자체일 때만 | `b792d0d` |
+| 11-02 | W4 | 임무 카드 · 검토 화면 비용 | `f0172bd` |
+| 11-02 | W2 | 상태 판정 근거 `reason` · 서브에이전트 종류. **Codex 실측 2건(apply_patch 경로, PermissionRequest 결정 형식)은 실기 필요** — 측정에 `--dangerously-bypass-hook-trust`가 필요해 세션 권한에서 거부됨, 사용자 허락 필요 | `358fb3d` |
