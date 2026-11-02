@@ -142,7 +142,11 @@ export function Dashboard() {
   const respond = async (s: Session, seen: PendingTool, allow: boolean) => {
     setAnswering(s.id);
     const r = await approvalRespond(s.id, seen, allow).finally(() => setAnswering(undefined));
-    if (!r.ok) notify(t(r.reason ?? "답을 넣지 못했습니다 — 페인에서 답하세요"));
+    if (r.ok) return;
+    // 이미 답했으면 목록에서 곧 빠진다(상태 이벤트) — 알리기만. 그 밖에는 페인으로 데려간다
+    if (r.reason === "NOT_WAITING") return notify(t("이미 페인에서 답했습니다 — 아무것도 넣지 않았습니다"));
+    notify(t(r.reason === "OTHER_TOOL" ? "지금은 다른 것을 기다립니다 — 페인에서 답하세요" : "이 세션은 앱에서 답할 수 없습니다 — 페인에서 답하세요"));
+    focusSession(s.workspaceId, s.id);
   };
   // 승인함 (0.6 §13-4) — waiting은 모든 워크스페이스에서(닫아 둔 팀도 기다린다), dead는 열린 것만. 기다린 순
   const waitRows = () => {

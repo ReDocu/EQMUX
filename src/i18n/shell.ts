@@ -77,8 +77,6 @@ export const dict: Record<string, string> = {
   "이 프로젝트 전체": "Everyone in this project",
   "받는 사람": "Recipient",
   "세션 {n} 실행 중": "{n} sessions running",
-  "탭이 묶였습니다 — 대화 [대화 | 로그] · 코드 [git | 문서] · 실행 [서버 | 포트] · 브라우저":
-    "Tabs are grouped — Conversation [Conversation | Logs] · Code [git | Docs] · Run [Server | Ports] · Browser",
   포트: "Ports",
   서버: "Server",
   "종료됨 (exit {code})": "Exited (exit {code})",
@@ -283,4 +281,18 @@ export const dict: Record<string, string> = {
   "진단 정보를 만들지 못했습니다 · {err}": "Couldn't collect diagnostic info · {err}",
   "진단 정보에서 경로의 사용자 이름과 토큰은 가립니다. 앱이 보내지 않습니다 — 복사해서 직접 붙입니다.":
     "User names in paths and tokens are masked. The app never sends this; you copy and paste it yourself.",
+  // ── 0.6 W7: 이 팀으로 시작 (D3 · W4 team.ts) ──
+  "이 팀으로 시작": "Start with this team",
+  "저장소의 편성(.eqmux/team.json) {n}명으로 바로 기동합니다": "Launch right away with the repo's {n}-member team (.eqmux/team.json)",
+  "라이브러리에 없는 페르소나는 셸로 둡니다: {names}": "Personas not in your library stay as shells: {names}",
+  "편성은 팀 캐스팅에서 나중에 바꿀 수 있다": "You can change the team later in Team casting",
+  "다음 → 워크스페이스 (편성대로 기동)": "Next → Workspace (launches the saved team)",
+  "저장된 팀": "Saved team",
+  "이 팀으로 시작 → 워크스페이스": "Start with this team → Workspace",
+  "저장소의 편성대로 시작해요. 워크스페이스가 열리면 역할 세션이 바로 떠요. 슬롯은 {n}개까지 써요.":
+    "Starts with the repo's team. Role sessions launch as soon as the workspace opens. Uses up to {n} slots.",
+  // ── 0.6 W7: 스크롤백 저장 토글 (E4 · W6) ──
+  "스크롤백 · 세션 로그 저장": "Save scrollback and session logs",
+  "스크롤백과 세션 로그 파일에는 토큰·비밀번호가 평문으로 남을 수 있습니다. 끄면 디스크에 쓰지 않습니다(재시작 뒤 이전 출력을 다시 볼 수 없습니다).":
+    "Scrollback and session log files can keep tokens and passwords in plain text. Turn this off to stop writing them to disk (you won't see earlier output after a restart).",
 };

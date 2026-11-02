@@ -246,12 +246,17 @@ export function stillWaitingFor(s: Pick<Session, "status" | "pendingTool"> | und
   return !!s && s.status === "waiting" && s.pendingTool?.tool === seen.tool && s.pendingTool.input === seen.input;
 }
 
-export async function approvalRespond(sessionId: string, seen: PendingTool, allow: boolean): Promise<{ ok: boolean; reason?: string }> {
+/** 응답 실패 이유 (C2 — W2가 코드로 준다). NOT_WAITING=이미 답함 · OTHER_TOOL=다른 도구를 기다림 · NO_HOOK=앱이 답할 길이 없다 */
+export type ApprovalReason = "NOT_WAITING" | "OTHER_TOOL" | "NO_HOOK";
+
+/** 답은 엔진의 권한 훅이 기다리다 받는다 (Q1 (b)) — 페인의 승인 창도 그대로 떠 있고, 먼저 온 답이 이긴다 */
+export async function approvalRespond(sessionId: string, seen: PendingTool, allow: boolean): Promise<{ ok: boolean; reason?: ApprovalReason }> {
   const s = backend.listSessions().find((x) => x.id === sessionId);
-  if (!stillWaitingFor(s, seen)) return { ok: false, reason: "이미 답했거나 다른 것을 기다립니다 — 아무것도 넣지 않았습니다" };
-  if (!isTauri()) return { ok: false, reason: "브라우저 dev — 페인에서 답하세요" };
-  return invoke<{ ok: boolean; reason?: string }>("approval_respond", { session: sessionId, allow }).catch(() => ({
+  if (!s || s.status !== "waiting") return { ok: false, reason: "NOT_WAITING" };
+  if (!stillWaitingFor(s, seen)) return { ok: false, reason: "OTHER_TOOL" };
+  if (!isTauri()) return { ok: false, reason: "NO_HOOK" };
+  return invoke<{ ok: boolean; reason?: ApprovalReason }>("approval_respond", { session: sessionId, allow }).catch(() => ({
     ok: false,
-    reason: "앱이 아직 대신 답할 수 없습니다 — 페인에서 답하세요",
+    reason: "NO_HOOK" as const,
   }));
 }
