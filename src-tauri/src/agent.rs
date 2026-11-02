@@ -425,6 +425,12 @@ pub fn agent_builders(
     for a in args {
         via_cmd.arg(a);
     }
+        // 세션별 포트 범위 (§4, W6 ports.rs) — dev 서버가 다른 세션과 부딪히지 않게. PORT는 심지 않는다
+        if let Some(r) = crate::ports::assign_range(app_session) {
+            for (k, v) in crate::ports::range_env(&r) {
+                b.env(k, v);
+            }
+        }
     apply(&mut via_cmd);
     vec![direct, via_cmd]
 }

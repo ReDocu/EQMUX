@@ -193,4 +193,6 @@ export const dict: Record<string, string> = {
   "셸에 입력합니다: {run}": "Types into the shell: {run}",
   "{f}을(를) 읽지 못했습니다": "Couldn't read {f}",
   "쓸 수 없는 항목 {n}개를 건너뛰었습니다": "Skipped {n} unusable entries",
+  "세션 포트 범위": "Session port ranges",
+  "세션마다 EQMUX_PORT_BASE ~ EQMUX_PORT_END로 알립니다 — 강제하지는 않습니다": "Each session is told its range via EQMUX_PORT_BASE ~ EQMUX_PORT_END — not enforced",
 };

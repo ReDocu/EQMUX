@@ -695,6 +695,8 @@ fn spawn_pty_session(
         let _ = store_tx.send(StoreMsg::SessionExit { ws: ws.clone(), id: id.clone(), code });
         let _ = app.emit_to("main", "pty-exit", PtyExit { id: id.clone(), code });
         agent::on_pty_exit(&app, &id, code, gen); // 에이전트면 dead 전이 (FR-D-50)
+        // ponytail: 재스폰이 옛 PTY 종료보다 먼저면 새 PTY의 범위가 풀린다 — 알림용 환경변수라 겹쳐도 해는 작다, 문제되면 gen으로 거른다
+        ports::release_range(&id); // 세션별 포트 범위 (§4, W6)
     });
 
     Ok((gen, shell_label))
@@ -755,6 +757,12 @@ async fn pty_spawn(
                 b.env("EQMUX_TOKEN", &token);
                 b.env("EQMUX_TERMINAL", "eqmux");
                 if let Some(rf) = &role_file {
+                // 세션별 포트 범위 (§4, W6) — 사람이 쓰는 서버 셸(#server@)은 받지 않는다
+                if !id.starts_with("#server@") {
+                    for (k, v) in ports::assign_range(&id).iter().flat_map(ports::range_env) {
+                        b.env(k, v);
+                    }
+                }
                     b.env("EQMUX_ROLE_FILE", rf);
                 }
                 if let Some(tf) = &team_md {
@@ -3067,6 +3075,7 @@ pub fn run() {
             msg_export,
             ipc::directory_set,
             ws_set_cross_project,
+            ports::port_ranges,
             ws_pick_folder,
             ws_watch,
             ws_unwatch,

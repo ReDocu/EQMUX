@@ -7,6 +7,7 @@ import {
   clearServerExit,
   COMMANDS_FILE,
   parseCommands,
+  portRanges,
   isNewPort,
   portEntries,
   refreshPorts,
@@ -75,6 +76,10 @@ function ServerTerm(props: { wsId: string }) {
     () => isTauri() && path,
     (p) => fsRead(p, COMMANDS_FILE).then((c) => parseCommands(c.text), () => undefined),
   );
+  // 세션별 포트 범위 (§4) — 이 워크스페이스 세션 것만. [포트 다시 실측]이 같이 다시 읽는다
+  const [ranges, { refetch: reloadRanges }] = createResource(async () =>
+    (await portRanges()).filter((r) => r.session.endsWith(`@${props.wsId}`)),
+  );
   const reveal = async () => {
     if (!(await revealPath(path))) notify(t("폴더를 열 수 없습니다 — 경로가 없어졌습니다"));
   };
@@ -120,6 +125,7 @@ function ServerTerm(props: { wsId: string }) {
           onClick={() => {
             refreshPorts();
             void reloadSaved();
+            void reloadRanges();
           }}
           title={t("포트 다시 실측")} aria-label={t("포트 다시 실측")}>
           <Icon name="refresh-cw" size={12} />
@@ -155,6 +161,18 @@ function ServerTerm(props: { wsId: string }) {
             </Show>
           </div>
         )}
+      </Show>
+      <Show when={(ranges() ?? []).length > 0}>
+        <div class="srvp-saved muted" title={t("세션마다 EQMUX_PORT_BASE ~ EQMUX_PORT_END로 알립니다 — 강제하지는 않습니다")}>
+          <span class="mono">{t("세션 포트 범위")}</span>
+          <For each={ranges()}>
+            {(r) => (
+              <span class="mono">
+                {r.session.split("@")[0]} {r.base}–{r.end}
+              </span>
+            )}
+          </For>
+        </div>
       </Show>
       <Show when={serverExited(id)}>
         <div class="srvp-state">

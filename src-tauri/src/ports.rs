@@ -252,6 +252,73 @@ pub fn snapshot(session_pids: &HashMap<String, Vec<u32>>) -> Vec<PortRow> {
         .collect()
 }
 
+// ── 세션별 포트 범위 (§4) — 병렬 세션의 dev 서버가 같은 포트를 두고 부딪히지 않게 ──
+// 세션마다 RANGE_SIZE칸 블록을 준다: RANGE_BASE + RANGE_SIZE × 슬롯. 슬롯은 살아 있는 세션 중
+// 비어 있는 가장 작은 번호다. 포트는 머신 전역이라 워크스페이스를 가리지 않는다. 메모리에만 둔다 —
+// 앱을 다시 켜면 PTY도 새로 뜨므로 그때 다시 받는다. 범위는 환경변수로 알릴 뿐 강제하지 않는다.
+// ponytail: 42000대 고정 — 다른 프로그램이 그 대역을 쓰면 설정으로 꺼내기
+
+pub const RANGE_BASE: u16 = 42000;
+pub const RANGE_SIZE: u16 = 10;
+const RANGE_SLOTS: u16 = 100;
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PortRange {
+    pub session: String,
+    pub base: u16,
+    pub end: u16, // 포함
+}
+
+static RANGES: std::sync::Mutex<Vec<(String, u16)>> = std::sync::Mutex::new(Vec::new());
+
+/// 쓰는 슬롯 → 비어 있는 가장 작은 슬롯 (순수 함수)
+fn lowest_free(used: &[u16]) -> Option<u16> {
+    (0..RANGE_SLOTS).find(|s| !used.contains(s))
+}
+
+fn range_of(session: &str, slot: u16) -> PortRange {
+    let base = RANGE_BASE + RANGE_SIZE * slot;
+    PortRange { session: session.to_string(), base, end: base + RANGE_SIZE - 1 }
+}
+
+/// 세션 스폰 때 — 이미 받았으면 같은 범위를 돌려준다(재스폰). 슬롯이 다 찼으면 None
+pub fn assign_range(session: &str) -> Option<PortRange> {
+    let mut map = RANGES.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((_, slot)) = map.iter().find(|(s, _)| s == session) {
+        return Some(range_of(session, *slot));
+    }
+    let used: Vec<u16> = map.iter().map(|(_, slot)| *slot).collect();
+    let slot = lowest_free(&used)?;
+    map.push((session.to_string(), slot));
+    Some(range_of(session, slot))
+}
+
+/// PTY 종료 때 — 슬롯을 돌려준다
+pub fn release_range(session: &str) {
+    RANGES.lock().unwrap_or_else(|e| e.into_inner()).retain(|(s, _)| s != session);
+}
+
+/// 지금 나눠 준 범위 — 서버 탭 표시용
+pub fn ranges() -> Vec<PortRange> {
+    let map = RANGES.lock().unwrap_or_else(|e| e.into_inner());
+    let mut v: Vec<PortRange> = map.iter().map(|(s, slot)| range_of(s, *slot)).collect();
+    v.sort_by_key(|r| r.base);
+    v
+}
+
+/// 서버 탭 표시 — 지금 나눠 준 세션 포트 범위
+#[tauri::command]
+pub fn port_ranges() -> Vec<PortRange> {
+    ranges()
+}
+
+/// 스폰 빌더에 심을 환경변수 — `PORT`는 넣지 않는다: dotenv는 있는 환경변수를 덮지 않으므로
+/// 심으면 사용자가 .env에 적은 PORT가 조용히 무시된다
+pub fn range_env(r: &PortRange) -> [(&'static str, String); 2] {
+    [("EQMUX_PORT_BASE", r.base.to_string()), ("EQMUX_PORT_END", r.end.to_string())]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -306,6 +373,28 @@ mod tests {
 
         let _ = child.kill();
         let _ = child.wait();
+    }
+
+    /// 포트 범위 (§4) — 빈 가장 작은 슬롯 · 재스폰은 같은 범위 · 놓으면 다시 쓴다
+    #[test]
+    fn assigns_lowest_free_port_range() {
+        assert_eq!(lowest_free(&[]), Some(0));
+        assert_eq!(lowest_free(&[0, 1, 3]), Some(2));
+        assert_eq!(lowest_free(&(0..RANGE_SLOTS).collect::<Vec<_>>()), None);
+
+        // 전역 표를 다른 테스트와 나누지 않게 이 테스트만의 이름을 쓴다
+        let a = assign_range("t-range-a").unwrap();
+        let b = assign_range("t-range-b").unwrap();
+        assert_ne!(a.base, b.base);
+        assert_eq!(a.end, a.base + RANGE_SIZE - 1);
+        assert_eq!(assign_range("t-range-a").unwrap(), a, "재스폰은 같은 범위");
+        release_range("t-range-a");
+        assert!(!ranges().iter().any(|r| r.session == "t-range-a"));
+        let c = assign_range("t-range-c").unwrap();
+        assert_eq!(c.base, a.base, "놓은 슬롯을 다시 쓴다");
+        assert_eq!(range_env(&c)[0], ("EQMUX_PORT_BASE", c.base.to_string()));
+        release_range("t-range-b");
+        release_range("t-range-c");
     }
 
     #[test]

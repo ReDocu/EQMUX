@@ -7,6 +7,7 @@
 //
 // 관측 전용이라는 포트 패널의 원칙은 그대로다 (PRD H): 프로세스 종료도, 자동 열기도 없다.
 // 새 포트는 뱃지로 알리기만 하고 여는 것은 언제나 사용자의 클릭이다 (PRD §2 — 자동 실행 경로 없음).
+import { invoke } from "@tauri-apps/api/core";
 import { createSignal } from "solid-js";
 import { portsSnapshot } from "./panels";
 import type { PortRow } from "./panels";
@@ -369,4 +370,17 @@ export function parseCommands(text: string): { commands: SavedCommand[]; skipped
     commands.push({ name, run, kind });
   }
   return { commands, skipped: list.length - commands.length };
+}
+
+// ── 세션별 포트 범위 (§4) — Rust ports.rs가 스폰 때 나눠 주고 EQMUX_PORT_BASE·END로 심는다 ──
+
+export interface PortRange {
+  session: string;
+  base: number;
+  end: number;
+}
+
+export async function portRanges(): Promise<PortRange[]> {
+  if (!isTauri()) return [];
+  return invoke<PortRange[]>("port_ranges").catch(() => []);
 }
