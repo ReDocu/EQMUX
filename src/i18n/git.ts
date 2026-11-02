@@ -105,9 +105,9 @@ export const dict: Record<string, string> = {
   "탭으로 가기": "Go to tab",
   "첫 세션을 어떻게 시작할지 고르세요 — 나중에 바꿀 수 있습니다 · 어느 방식이든 워크스페이스의 슬롯 {n}개를 씁니다":
     "How should the first session start? You can change it later · both use the workspace's {n} slots",
-  "기본 터미널로 시작해요. 역할 팀은 나중에 추가할 수 있고, 두 방식 모두 슬롯 {n}개를 함께 써요.":
+  "기본 터미널로 시작합니다. 역할 팀은 나중에 추가할 수 있고, 두 방식 모두 슬롯 {n}개를 함께 씁니다.":
     "Starting with a default terminal. You can add a role team later; both share the {n} slots.",
-  "역할 팀으로 시작해요. 기본 터미널은 나중에 추가할 수 있고, 두 방식 모두 슬롯 {n}개를 함께 써요.":
+  "역할 팀으로 시작합니다. 기본 터미널은 나중에 추가할 수 있고, 두 방식 모두 슬롯 {n}개를 함께 씁니다.":
     "Starting with a role team. You can add a default terminal later; both share the {n} slots.",
   "기본 터미널이 이미 열려 있습니다 — 탭으로 갑니다": "A default terminal is already open — going to its tab",
   "빈 슬롯이 없습니다 ({n}/{n}) — 세션 하나를 닫고 다시 여세요":
