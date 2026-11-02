@@ -4,7 +4,13 @@
 
 **A desktop app where a team of AI agents works one git repo together, and a human runs the control tower.**
 
-EQMUX is a Windows desktop app that puts agent-team supervision on top of a terminal multiplexer (MUX).
+> **Beta.** Pre-1.0: screens and file formats may change.
+>
+> **Getting past install warnings** — Windows: builds are not code-signed yet, so SmartScreen shows "Windows protected your PC". Click [More info] → [Run anyway]. macOS: the app is ad-hoc signed, so Gatekeeper blocks the first launch. Right-click the app in Finder → [Open], or use [Open Anyway] in System Settings › Privacy & Security.
+>
+> **Where EQMUX writes, and where it doesn't** — only the app data folder, `~/.eqmux/logs`, and the workspace's `.eqmux/`. It never edits engine settings (`~/.claude`, `~/.codex`) or the repo's `.claude/`·`.codex/`. The app itself sends nothing over the network. Details: [CODE_SIGNING_POLICY.md](CODE_SIGNING_POLICY.md).
+
+EQMUX is a Windows and macOS desktop app that puts agent-team supervision on top of a terminal multiplexer (MUX).
 Each workspace (= 1 git repo = 1 team = 1 tab) runs four Claude Code or Codex sessions in parallel by default — six or
 eight if you raise it in settings. You watch their state from the control dashboard, assign missions, and
 step in when needed.
@@ -39,10 +45,10 @@ Auxiliary panes (editor, diff, browser) do not consume session slots.
 - **Control dashboard** — workspace × session grid, sorted by what needs attention, waiting/dead surfaced first, event feed for state transitions and missions, OS notifications plus an in-app notification center (subagent counts show in session detail and the busy card, not in the feed)
 - **Terminal workspace** — ConPTY + xterm.js, 6 pane layouts + draggable splitters + zoom, in-terminal search (Ctrl+F), link detection, clipboard and drag-and-drop
 - **Agent runtime** — managed launch of Claude Code and Codex sessions (role, permission flags, hooks and resume attached), state detection via registry watch + hooks, resume and permission restart, degraded-observability indicator
-- **Teams · roles · missions** — casting presets, job/persona library (global + per-workspace override), role-file frontmatter decides execution permissions, opt-in git worktree isolation per session
+- **Teams · roles · missions** — casting presets, job/persona library (global + per-workspace override), role-file frontmatter decides execution permissions
 - **Session persistence** — SQLite (WAL) scrollback storage, replays the last 500 lines on restart (SGR colors preserved) with explicit resume, FTS full-text search, child process tree cleanup via Job Objects, survives webview crashes
 - **Message bus** — typed inter-agent messages (ask / handoff / report / review / escalate), state-aware delivery (immediate when idle, at end of turn when busy), humans join with `@session` and `@all`, deliver by name to sessions in other open projects, save the whole ledger to a Markdown file
-- **Dev tool panels** — four groups: conversation · code (git · docs) · run (server · ports) · browser. git (status · worktrees · checkout), explorer (file CRUD), logs, diff viewer, and a browser panel that opens any http/https address
+- **Dev tool panels** — four groups: conversation · code (git · docs) · run (server · ports) · browser. git (status · branches · commit diffs), explorer (file CRUD), logs, diff viewer, and a browser panel that opens any http/https address
 - **Transcript view** — read Claude Code JSONL logs turn by turn (reference only), collapsible tool calls, scrollback fallback
 - **External interface** — `eqmux send · report · who · browser · ping` CLI over a named pipe, statusLine cost collection. Claude Code and Codex agents talk to each other over the same bus
 - **Browser control** — agents drive the browser panel with `eqmux browser open · snapshot · click · type · get-text · eval`. Not a hidden window — **the panel the human is watching** is the one that moves
@@ -93,13 +99,13 @@ product / quality). Each slot carries a preview of its execution permissions (wr
 | Frontend | [SolidJS](https://solidjs.com) + TypeScript + Vite |
 | Terminal | ConPTY ([portable-pty](https://crates.io/crates/portable-pty)) + [xterm.js](https://xtermjs.org) |
 | Storage | SQLite (rusqlite, WAL) for sessions · scrollback · events / JSON for settings · layout / files for teams · roles · missions |
-| Platform | **Windows first** (WebView2 · Job Objects · NSIS installer) |
+| Platform | Windows (WebView2 · Job Objects · NSIS installer) · macOS 11+ (universal dmg) |
 
 ## Getting started
 
 ### Requirements
 
-- Windows 10/11 (WebView2)
+- Windows 10/11 (WebView2) or macOS 11+
 - [Node.js](https://nodejs.org) 18+
 - [Rust](https://rustup.rs) (stable)
 - [Claude Code CLI](https://claude.com/claude-code) — required to run agent sessions (Codex CLI is optional)
@@ -147,13 +153,12 @@ To check only the frontend, run `npm run build` (tsc --noEmit + vite build).
 | `team.md` | derived table that agents read (committed) |
 | `roles/<session>.md` | composed per-session role — frontmatter `permissions` decides the execution flags (gitignored) |
 | `missions/*.md` | mission definitions (branch + goal) |
-| `worktrees/<session>/` | git worktree, when session isolation is opted into |
 
 Your `CLAUDE.md` is never modified — roles reach the agent only through a role-file pointer in the session start prompt (`--append-system-prompt` for Claude Code, `developer_instructions` for Codex) and a SessionStart hook.
 
 ## Feedback
 
-Bug reports and feature requests are welcome. It's still pre-1.0, so anything helps.
+File bugs and ideas in [GitHub Issues](https://github.com/ReDocu/EQMUX/issues) (paste Settings › Copy diagnostics). Security issues: see [SECURITY.md](SECURITY.md). To contribute: [CONTRIBUTING.md](CONTRIBUTING.md). It's still pre-1.0, so anything helps.
 
 - [English feedback form](https://docs.google.com/forms/d/e/1FAIpQLSdGjEUhbjNoMhi3BiYAeTRnTOPoxqKNKsN4_m0_6Ta_6KcMNw/viewform)
 - [한글 문의 폼](https://docs.google.com/forms/d/e/1FAIpQLScn7JEfOpWv1W7FPJwDIFluvRkK_y6_dpOPCe6E-opf-YHHKw/viewform)
