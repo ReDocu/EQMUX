@@ -235,7 +235,7 @@ mod win {
             let (mut c, mut x, mut k, mut u) = (z, z, z, z);
             let ok = GetProcessTimes(ph, &mut c, &mut x, &mut k, &mut u) != 0;
             CloseHandle(ph);
-            ok.then(|| ((c.dwHighDateTime as u64) << 32) | c.dwLowDateTime as u64)
+            ok.then_some(((c.dwHighDateTime as u64) << 32) | c.dwLowDateTime as u64)
         }
     }
 

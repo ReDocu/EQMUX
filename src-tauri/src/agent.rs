@@ -310,10 +310,13 @@ pub struct AgentRt {
     recent_edits: Mutex<HashMap<String, HashMap<String, i64>>>,
     /// 승인함 응답 대기 (§13-4 · Q1(b)) — 세션 → (도구명, 대기 표식, 훅 연결 스레드에 답을 넘길 끝).
     /// 끝을 버리면(remove) 기다리던 훅이 "결정 없음"으로 풀려 페인의 승인 창이 그대로 쓰인다
-    approvals: Mutex<HashMap<String, (String, u64, std::sync::mpsc::Sender<bool>)>>,
+    approvals: Mutex<HashMap<String, ApprovalWait>>,
     /// 세션 → (맡은 임무, 조회 시각 ms) — 비용 증분을 붙일 임무 (§13-6, MISSION_CACHE_MS)
     mission_cache: Mutex<HashMap<String, (Option<String>, i64)>>,
 }
+
+/// 승인함 대기 하나 — (도구명, 대기 표식, 답을 넘길 끝)
+type ApprovalWait = (String, u64, std::sync::mpsc::Sender<bool>);
 
 /// 레지스트리 파일별 (수정 시각, 크기) → 파싱 결과. 둘이 같으면 다시 읽지 않는다.
 /// 파싱 실패도 기억한다 — 손상 파일을 2초마다 다시 읽지 않게. 사라진 파일은 스캔마다 걷힌다
@@ -1437,8 +1440,8 @@ fn stall_step(t: &mut Tracked, now: i64) -> Option<()> {
     (t.last_status == "busy").then_some(())
 }
 
-/// 훅 2차 소스 — 레지스트리 스캔(1차)과 같은 diff 경로로 emit_state 한 곳에 합류한다.
-/// 레지스트리보다 빠르게 도착하므로 waiting 알림·인박스 전달의 지연이 줄어든다.
+// 훅 2차 소스 — 레지스트리 스캔(1차)과 같은 diff 경로로 emit_state 한 곳에 합류한다.
+// 레지스트리보다 빠르게 도착하므로 waiting 알림·인박스 전달의 지연이 줄어든다.
 // ── 마지막 한 줄 요약 (M35) ────────────────────────────────────────────────
 // "이 페인이 마지막에 무엇을 했는가"를 한 문장으로 남긴다. 앱을 껐다 켜도 남아야 하므로
 // 화면 상태가 아니라 SQLite(session.last_recap)가 원본이다.
@@ -1515,13 +1518,11 @@ pub fn record_recap(app: &AppHandle, session: &str, payload: &serde_json::Value)
         Some(t) => t,
         None => {
             let rt: tauri::State<AgentRt> = app.state();
-            let Some((cwd, uuid)) = ({
+            let (cwd, uuid) = {
                 let map = rt.by_uuid.lock().ok()?;
                 current_uuid(&map, session)
                     .and_then(|u| map.get(&u).map(|t| (t.cwd.clone(), u)))
-            }) else {
-                return None;
-            };
+            }?;
             recap_from_transcript(&transcript_path(&cwd, &uuid))?
         }
     };
