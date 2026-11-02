@@ -54,15 +54,20 @@ function buildItems(): JumpItem[] {
   }
   for (const w of wss) items.push({ id: `w:${w.id}`, kind: "workspace", label: w.name, sub: w.path, run: () => void setView({ kind: "workspace", id: w.id }) });
   const back = view();
+  // git · 기록 · 임무는 워크스페이스 문맥이 있어야 쓸 것이 있다 — 하나도 안 열었으면 빼서 빈 화면으로 보내지 않는다
   const screens: [string, () => void][] = [
     ["관제", () => void setView({ kind: "control" })],
-    ["git", () => void setView({ kind: "git", wsId: scope?.id, back })],
-    ["과거 세션 검색", () => void setView({ kind: "history", wsId: scope?.id, back })],
+    ...(scope
+      ? ([
+          ["git", () => void setView({ kind: "git", wsId: scope.id, back })],
+          ["과거 세션 검색", () => void setView({ kind: "history", wsId: scope.id, back })],
+          ["임무", () => void setOverlay("explorer")],
+        ] as [string, () => void][])
+      : []),
     ["설정", () => void setOverlay("settings")],
     ["역할 라이브러리", () => void setOverlay("roles")],
     ["단축키", () => (setSettingsCat("keys"), void setOverlay("settings"))],
   ];
-  if (scope) screens.splice(3, 0, ["임무", () => void setOverlay("explorer")]);
   for (const [label, run] of screens) items.push({ id: `v:${label}`, kind: "screen", label: t(label), run });
   for (const [tab, label] of PANEL_TABS) items.push({ id: `p:${tab}`, kind: "panel", label: t(label), run: () => openPanel(tab) });
   // 임무는 그 워크스페이스로 가서 임무 팝업을 연다 — 특정 임무를 골라 여는 것은 아직 없다

@@ -93,7 +93,10 @@ fn search_dir(dir: &Path, query: &str, slots: &HashMap<String, (String, bool)>) 
         let slot = slots.get(&uuid);
         let mut n = 0;
         // ponytail: 파일 전체를 줄마다 훑는다 — 큰 저장소에서 느려지면 FTS 색인을 둔다
-        for line in std::io::BufReader::new(f).lines().map_while(Result::ok) {
+        // 바이트로 나눠 손실 디코딩한다 — lines()는 UTF-8이 아닌 줄(쓰다 끊긴 줄)에서 Err를 내고, map_while이
+        // 거기서 그 파일의 나머지를 통째로 버렸다. 깨진 JSON 줄은 turn_text가 건너뛴다
+        for line in std::io::BufReader::new(f).split(b'\n').map_while(Result::ok) {
+            let line = String::from_utf8_lossy(&line);
             if !line.to_lowercase().contains(&q) {
                 continue; // 원문 줄로 먼저 거른다 — JSON 해석은 맞을 법한 줄에만
             }
@@ -185,6 +188,20 @@ mod tests {
         assert_eq!((other.len(), other[0].session.clone(), other[0].resumable), (1, None, false)); // 매핑 없는 대화
         assert!(search_dir(&dir, " ", &slots).is_empty());
         assert!(search_dir(&dir.join("없음"), "login", &slots).is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 쓰다 끊긴 UTF-8 줄 · CRLF가 섞여도 그 뒤 줄까지 찾는다 (예전에는 깨진 줄에서 파일 읽기가 멈췄다)
+    #[test]
+    fn keeps_reading_past_broken_bytes() {
+        let dir = std::env::temp_dir().join(format!("eqmux-hist-bad-{}", crate::workspace::now_ms()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut bytes = line("user", "2026-11-02T01:00:00Z", serde_json::json!("deploy 첫째")).into_bytes();
+        bytes.extend_from_slice(b"\r\n{\"type\":\"user\",\"message\":{\"content\":\"deploy \xEA\xB0\n");
+        bytes.extend_from_slice(line("assistant", "2026-11-02T01:01:00Z", serde_json::json!("deploy 둘째")).as_bytes());
+        std::fs::write(dir.join("ccc.jsonl"), bytes).unwrap();
+        let hits = search_dir(&dir, "deploy", &HashMap::new());
+        assert_eq!(hits.iter().map(|h| h.snippet.as_str()).collect::<Vec<_>>(), ["deploy 첫째", "deploy 둘째"]);
         std::fs::remove_dir_all(&dir).ok();
     }
 

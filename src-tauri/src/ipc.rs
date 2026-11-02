@@ -61,7 +61,20 @@ fn pipe_path() -> String {
         .chars()
         .map(|c| if c.is_alphanumeric() { c } else { '_' })
         .collect();
-    format!(r"\\.\pipe\eqmux-bus-{user}")
+    // 로그온 세션 번호도 붙인다 — 단일 실행 뮤텍스(Local\)는 로그온 세션마다 따로라, 같은 사용자가 원격 데스크톱 ·
+    // 빠른 사용자 전환으로 두 번 로그온하면 앱이 둘 뜬다. 파이프 이름은 컴퓨터 전체에서 하나라 이름이 같으면
+    // 두 앱이 같은 이름으로 듣고 CLI 요청이 아무 쪽에나 갔다. CLI는 그 앱이 띄운 자식이라 같은 세션 번호를 얻는다
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn ProcessIdToSessionId(pid: u32, session: *mut u32) -> i32;
+    }
+    let mut sid = 0u32;
+    let ok = unsafe { ProcessIdToSessionId(std::process::id(), &mut sid) } != 0;
+    if ok {
+        format!(r"\\.\pipe\eqmux-bus-{user}-{sid}")
+    } else {
+        format!(r"\\.\pipe\eqmux-bus-{user}")
+    }
 }
 
 // ── 클라이언트 (CLI 모드) — 명명 파이프는 파일처럼 열린다 ──

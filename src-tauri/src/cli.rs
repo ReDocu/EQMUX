@@ -553,8 +553,8 @@ fn friendly(err: &str, to: &str, report: bool, en: bool) -> String {
             "The request line is too long or not UTF-8".into(),
         ),
         e if e.contains("RATE_LIMIT") => pick(
-            "분당 발신 상한(10건)에 닿았습니다 — 잠시 후 다시".into(),
-            "Hit the send limit (10 per minute) — try again shortly".into(),
+            "보내지 않았습니다 — 분당 발신 상한(10건)에 닿았습니다. 잠시 뒤(길어야 1분) 다시 보내세요 — escalate도 같은 상한입니다".into(),
+            "Not sent — hit the send limit (10 per minute). Try again shortly (at most a minute) — escalate shares the limit".into(),
         ),
         e if e.contains("TOO_LONG") && report => pick(
             format!("오류: 보고가 800자를 넘습니다 ({}자). 보고는 한 줄로 쓰고, 긴 근거는 파일에 써서 보내세요 — eqmux send --type report --file .eqmux/notes/<이름>.md \"요약\"", arg("TOO_LONG")),
@@ -747,9 +747,26 @@ const WAIT_SECS: u64 = 110;
 fn wait_reply(session: &str, token: Option<&str>, id: i64, en: bool) -> i32 {
     let line = serde_json::json!({ "cmd": "reply", "session": session, "token": token.unwrap_or(""), "id": id }).to_string();
     let end = std::time::Instant::now() + std::time::Duration::from_secs(WAIT_SECS);
+    let mut lost = 0; // 연이은 연결 실패 — BUSY는 응답이 오므로 여기 들지 않는다
     while std::time::Instant::now() < end {
         std::thread::sleep(std::time::Duration::from_secs(2));
-        let Ok(resp) = crate::ipc::request(&line) else { continue }; // 앱이 잠깐 바빴다 — 다음 차례에
+        let Ok(resp) = crate::ipc::request(&line) else {
+            // 앱이 꺼졌다 — 110초를 다 채운 뒤 "오면 전달됩니다"라고 하면 거짓말이다. 약 7초(3번) 만에 멈춘다
+            lost += 1;
+            if lost >= 3 {
+                say(
+                    true,
+                    if en {
+                        "Stopped waiting — the EQMUX app closed. The sent message stays in the ledger"
+                    } else {
+                        "기다리기를 멈췄습니다 — EQMUX 앱이 꺼졌습니다. 보낸 메시지는 원장에 남아 있습니다"
+                    },
+                );
+                return 1;
+            }
+            continue;
+        };
+        lost = 0;
         let v: serde_json::Value = serde_json::from_str(&resp).unwrap_or_default();
         if let Some(text) = v["reply"].as_str() {
             say(false, text);
