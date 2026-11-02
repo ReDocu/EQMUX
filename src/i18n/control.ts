@@ -307,4 +307,8 @@ export const dict: Record<string, string> = {
   "지금 ${usd} · 세션은 멈추지 않습니다": "Now ${usd} · sessions keep running",
   "{name} · 메시지": "{name} · message",
   "검토 →": "Review →",
+  "보내는 중": "Sending",
+  "입력란에 넣었습니다 — 에이전트가 이 메시지로 턴을 시작하면 전달됨으로 바뀝니다": "Put in the input box — turns to Delivered when the agent starts a turn with it",
+  "모든 임무": "All missions",
+  "그 임무 담당 세션이 보냈거나 받은 메시지만": "Only messages sent or received by that mission's sessions",
 };

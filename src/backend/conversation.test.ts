@@ -1,7 +1,7 @@
 // 주입 본문 단위 테스트 — 전달 경로(PTY·인박스)는 통합의 몫이고, 여기서는 "여러 건을 어떻게
 // 한 줄로 접는가"만 본다: 단건/묶음 접두 · 개행 평탄화 · 상한에서 덩어리 갈리기.
 import { describe, expect, test } from "vitest";
-import { batches, cancelBrief, consumeTaken, droppedIds, noteTaken, capQueue, deliveredIds, flushInboxOnState, fmt, fmtNotice, goneName, orphanedInbox, pendingBrief, queueBrief, pendingReason, prependOlder, splitPending, unmanagedAgent } from "./conversation";
+import { batches, cancelBrief, consumeTaken, droppedIds, noteTaken, capQueue, deliveredIds, flushInboxOnState, fmt, fmtNotice, goneName, injectedMsgIds, sentState, touchesMission, orphanedInbox, pendingBrief, queueBrief, pendingReason, prependOlder, splitPending, unmanagedAgent } from "./conversation";
 import { typedText } from "./pty";
 import type { ConversationMessage } from "../types";
 
@@ -222,5 +222,23 @@ describe("상한으로 밀려난 메시지 (§2 M3)", () => {
   test("사람이 보낸 것만 버려짐이 된다", () => {
     const mine = { ...msg("나", "a"), id: "m1" };
     expect(droppedIds([mine, msg("카이", "b")])).toEqual(["m1"]);
+  });
+});
+
+describe("전달됨 시점 (B168)", () => {
+  test("rowId가 있으면 보내는 중 — 도착 이벤트와 짝지을 수 없으면 바로 전달됨", () => {
+    expect(sentState({ rowId: 7 })).toBe("sending");
+    expect(sentState({})).toBe("delivered");
+  });
+  test("message-injected의 rowId → 그 워크스페이스 메시지 id", () => {
+    const a = { ...msg("나", "a"), id: "a", rowId: 7, workspaceId: "w1" };
+    const b = { ...msg("나", "b"), id: "b", rowId: 7, workspaceId: "w2" };
+    const c = { ...msg("나", "c"), id: "c" };
+    expect(injectedMsgIds([a, b, c], "w1", [7, 8])).toEqual(["a"]);
+  });
+  test("임무 필터 — 담당 세션이 보냈거나 받은 것 (§4)", () => {
+    expect(touchesMission({ from: "kai", to: "@all" }, ["kai"])).toBe(true);
+    expect(touchesMission({ from: "나", to: "kai" }, ["kai"])).toBe(true);
+    expect(touchesMission({ from: "나", to: "rin" }, ["kai"])).toBe(false);
   });
 });

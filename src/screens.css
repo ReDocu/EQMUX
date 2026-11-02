@@ -7050,3 +7050,9 @@ label.inbox-pop-row {
   object-fit: cover;
   display: block;
 }
+
+/* ── 대화 탭 임무 필터 (0.6 §4 · W7) ── */
+.conv-mission {
+  max-width: 160px;
+  font-size: 12px;
+}

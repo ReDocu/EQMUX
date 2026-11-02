@@ -456,6 +456,8 @@ function enqueueInject(sessionId: string, text: () => string): void {
   const prev = injectQueue.get(sessionId) ?? Promise.resolve();
   const next = prev
     .then(async () => {
+      // 시도 시각 (B10) — Rust가 남기는 도착(message-injected) 시각과 diagnostics.log에서 맞춰 본다
+      if (isTauri()) void invoke("diag_note", { text: `INJECT-TRY ${sessionId}` }).catch(() => {});
       writePty(sessionId, text());
       await sleep(SUBMIT_DELAY_MS);
       writePty(sessionId, "\r"); // 제출 — 여기서 비로소 수신자의 턴이 돈다
@@ -584,8 +586,10 @@ export function discardPending(sessionId: string, only?: ReadonlySet<string>): v
 
 // ── 사람이 보낸 메시지의 전달 상태 — `eqmux send`가 에이전트에게 돌려주는 것과 같은 판정 ──
 
-/** dropped = 받는 세션의 대기가 상한(50)을 넘어 오래된 것부터 버렸다 (§2 M3) — 원문은 원장에 남는다 */
-export type Delivery = "delivered" | "queued" | "dropped";
+/** dropped = 받는 세션의 대기가 상한(50)을 넘어 오래된 것부터 버렸다 (§2 M3) — 원문은 원장에 남는다.
+ *  sending = 입력란에 넣었고 에이전트가 그 프롬프트로 턴을 시작하기를 기다린다 (B168) —
+ *  훅(UserPromptSubmit)이 `#rowId`를 읽어 message-injected를 보내면 delivered가 된다 */
+export type Delivery = "delivered" | "queued" | "dropped" | "sending";
 const [deliveries, setDeliveries] = createSignal<Record<string, Delivery>>({});
 
 /** 대화 탭이 "나"의 메시지 옆에 붙이는 `전달됨` · `대기 중` (반응형). 앱을 다시 켜면 비운다 */
@@ -598,14 +602,50 @@ export function deliveredIds(msgs: ConversationMessage[], boxes: ReadonlyMap<str
   return msgs.filter((m) => m.from === "나" && !parked.has(m.id)).map((m) => m.id);
 }
 
-function markDelivered(msgs: ConversationMessage[]): void {
-  const ids = deliveredIds(msgs, inbox);
+/** 대화 탭 임무 필터 (0.6 §4) — 메시지에 임무 칸이 없으므로 그 임무 담당 세션이 보냈거나 받은 것으로 본다.
+ *  ponytail: 담당이 여러 임무를 겹쳐 맡으면 섞인다 — 메시지에 mission_id가 생기면 그 칸으로. 순수 함수 */
+export const touchesMission = (m: Pick<ConversationMessage, "from" | "to">, assigned: readonly string[]): boolean =>
+  assigned.includes(m.from) || assigned.includes(m.to);
+
+/** 에이전트 입력란에 넣은 직후의 표시 (B168) — rowId가 있어야 도착 이벤트와 짝지을 수 있다. 순수 함수 */
+export const sentState = (m: Pick<ConversationMessage, "rowId">): Delivery => (m.rowId !== undefined ? "sending" : "delivered");
+
+/** 훅이 없는 에이전트는 message-injected가 오지 않는다 — 이만큼 지나면 예전처럼 전달됨으로 본다.
+ *  ponytail: 고정 대기. 엔진별 훅 유무를 알게 되면 훅 없는 세션은 바로 전달됨으로 */
+const SENDING_FALLBACK_MS = 30_000;
+
+function setSent(ids: string[], state: (id: string) => Delivery): void {
   if (ids.length === 0) return;
   setDeliveries((d) => {
     const n = { ...d };
-    for (const id of ids) if (n[id] !== "dropped") n[id] = "delivered"; // 한 수신자에게서 버려졌으면 그 표시가 남는다
+    for (const id of ids) if (n[id] !== "dropped") n[id] = state(id); // 한 수신자에게서 버려졌으면 그 표시가 남는다
     return n;
   });
+  const waiting = ids.filter((id) => state(id) === "sending");
+  if (waiting.length) setTimeout(() => setArrived(waiting), SENDING_FALLBACK_MS);
+}
+
+/** sending → delivered (도착 이벤트 · 폴백). 그 사이 다른 표시로 바뀐 것은 두지 않는다 */
+function setArrived(ids: readonly string[]): void {
+  setDeliveries((d) => {
+    if (!ids.some((id) => d[id] === "sending")) return d;
+    const n = { ...d };
+    for (const id of ids) if (n[id] === "sending") n[id] = "delivered";
+    return n;
+  });
+}
+
+/** message-injected의 rowId들 → 그 워크스페이스 메시지 id. 순수 함수 */
+export function injectedMsgIds(msgs: readonly ConversationMessage[], workspace: string, rowIds: readonly number[]): string[] {
+  const want = new Set(rowIds);
+  return msgs.filter((m) => m.rowId !== undefined && want.has(m.rowId) && (m.workspaceId ?? workspace) === workspace).map((m) => m.id);
+}
+
+/** 인박스에서 꺼내 에이전트에게 넣었다 — 보내는 중으로 (B168) */
+function markDelivered(msgs: ConversationMessage[]): void {
+  const ids = deliveredIds(msgs, inbox);
+  const byId = new Map(msgs.map((m) => [m.id, m]));
+  setSent(ids, (id) => sentState(byId.get(id) ?? {}));
 }
 
 /** 기본 터미널의 대기분이 고아가 됐다 (B90) — 손으로 띄운 에이전트가 내려가면 넣기 칩이 사라지고
@@ -627,7 +667,7 @@ function releaseOrphans(): void {
     agentSeen.delete(id);
     inbox.delete(id);
     for (const m of q) shellNotice(id, s.workspaceId, m);
-    markDelivered(q);
+    setSent(deliveredIds(q, inbox), () => "delivered"); // 셸 알림 — 기다릴 턴이 없다
     changed = true;
   }
   if (changed) {
@@ -711,6 +751,7 @@ export function noteTaken(session: string, rowId: number, now = Date.now()): voi
 function deliver(wsId: string, m: ConversationMessage): void {
   let queued = false;
   let reached = false;
+  let injected = false; // 에이전트 입력란에 넣었다 — 턴 시작(message-injected)을 기다린다 (B168)
   const park = (id: string) => {
     enqueue(id, [m]);
     setInboxTick((t) => t + 1);
@@ -720,6 +761,7 @@ function deliver(wsId: string, m: ConversationMessage): void {
   const inject = (id: string) => {
     gather(id, m);
     reached = true;
+    injected = true;
   };
   for (const s of recipients(wsId, m.to)) {
     if (s.id === m.from) continue; // 에이전트 발신(@all)이 자기 자신에게 되돌아가지 않게
@@ -756,9 +798,8 @@ function deliver(wsId: string, m: ConversationMessage): void {
       if (s.status === "idle") retryWhenFree(s.id); // 유휴인데 사람이 치는 중 — 끝나면 넣는다
     }
   }
-  if (m.from === "나" && (queued || reached)) {
-    setDeliveries((d) => ({ ...d, [m.id]: queued ? "queued" : "delivered" }));
-  }
+  if (m.from === "나" && queued) setDeliveries((d) => ({ ...d, [m.id]: "queued" }));
+  else if (m.from === "나" && reached) setSent([m.id], () => (injected ? sentState(m) : "delivered"));
 }
 
 /** 임무 배정 브리프 대기 (B93) — 지금 넣을 수 없는 세션(작업 중·승인 대기·셸·종료)의 한 줄을
@@ -819,6 +860,10 @@ export function startMessageBus(): Promise<void> {
     // --wait 회신을 CLI가 받아 갔다 (W3 §4) — 같은 회신을 턴 끝에 다시 넣지 않는다
     void listen<{ workspace: string; session: string; id: number }>("message-taken", (e) =>
       noteTaken(e.payload.session, e.payload.id),
+    );
+    // 받는 에이전트가 넣은 프롬프트로 턴을 시작했다 (B168 · W2 훅) — 보내는 중 → 전달됨
+    void listen<{ workspace: string; session: string; ids: number[] }>("message-injected", (e) =>
+      setArrived(injectedMsgIds(backend.listMessages(), e.payload.workspace, e.payload.ids)),
     );
     backend.subscribe(releaseOrphans); // 에이전트 감지(applyAgents)가 agent를 지우면 방송이 온다
   }

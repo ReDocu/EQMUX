@@ -17,6 +17,7 @@ import {
   projectLabels,
   sendConversation,
   senderLabel,
+  touchesMission,
 } from "../backend/conversation";
 import { backend } from "../backend/mock";
 import { isTauri, revealPath } from "../backend/pty";
@@ -135,9 +136,15 @@ export function ConversationTab() {
     queueMicrotask(() => draftEl?.focus());
   });
 
+  // 임무 필터 (§4) — 이 워크스페이스 임무만. 고른 임무가 사라지면 전체로 본다
+  const [missionId, setMissionId] = createSignal("");
+  const wsMissions = () => backend.listMissions().filter((x) => x.workspaceId === ws()?.id);
+  const mission = () => wsMissions().find((x) => x.id === missionId());
   const shown = createMemo(() => {
     tick();
-    const v = allProjects() ? visible() : visible().filter((m) => !otherProject(m));
+    let v = allProjects() ? visible() : visible().filter((m) => !otherProject(m));
+    const mi = mission();
+    if (mi) v = v.filter((m) => touchesMission(m, mi.assigned));
     return filter() === "미확인" ? v.filter((m) => m.unread) : v;
   });
 
@@ -308,6 +315,17 @@ export function ConversationTab() {
             <input type="checkbox" checked={allProjects()} onChange={(e) => setAllProjects(e.currentTarget.checked)} />
             {t("다른 프로젝트 포함")}
           </label>
+          <Show when={wsMissions().length > 0}>
+            <select
+              class="conv-mission"
+              title={t("그 임무 담당 세션이 보냈거나 받은 메시지만")}
+              value={mission()?.id ?? ""}
+              onChange={(e) => setMissionId(e.currentTarget.value)}
+            >
+              <option value="">{t("모든 임무")}</option>
+              <For each={wsMissions()}>{(x) => <option value={x.id}>{x.name}</option>}</For>
+            </select>
+          </Show>
           <span class="conv-head-gap" />
           <button class="btn ghost conv-act" onClick={() => markConversationRead(ws()?.id)}>
             {t("모두 읽음")}
@@ -459,16 +477,18 @@ export function ConversationTab() {
                     {(d) => (
                       <span
                         class="mono conv-delivery"
-                        classList={{ queued: d() === "queued", dropped: d() === "dropped" }}
+                        classList={{ queued: d() === "queued" || d() === "sending", dropped: d() === "dropped" }}
                         title={
                           d() === "queued"
                             ? t("받을 사람 인박스에 남아 있습니다 — 사유는 위 인박스 대기 줄에")
                             : d() === "dropped"
                               ? t("받는 세션의 대기가 50건을 넘어 오래된 것부터 버렸습니다 — 원문은 대화 기록에 남아 있습니다")
-                              : undefined
+                              : d() === "sending"
+                                ? t("입력란에 넣었습니다 — 에이전트가 이 메시지로 턴을 시작하면 전달됨으로 바뀝니다")
+                                : undefined
                         }
                       >
-                        {d() === "queued" ? t("대기 중") : d() === "dropped" ? t("버려짐") : t("전달됨")}
+                        {d() === "queued" ? t("대기 중") : d() === "dropped" ? t("버려짐") : d() === "sending" ? t("보내는 중") : t("전달됨")}
                       </span>
                     )}
                   </Show>
