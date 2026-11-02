@@ -40,6 +40,7 @@ mod roles;
 pub(crate) mod store;
 mod team;
 mod transcript;
+mod tray;
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))] // macOS 전용 (appenv와 같다)
 mod winstate;
 pub(crate) mod workspace;
@@ -530,6 +531,7 @@ fn spawn_pty_session(
     );
     drop(sessions);
 
+    tray::refresh(&app); // 트레이의 "실행 중 N개" (§1-1) — 잠금을 놓은 뒤에
     // 세션 원점 기록 — 셸이든 에이전트든 스폰은 전부 이 관문을 지나므로, 여기 한 곳이면
     // IPC 발신(PRD I)이 어떤 세션에서 와도 워크스페이스를 풀 수 있다 (session_origin).
     {
@@ -678,6 +680,7 @@ fn spawn_pty_session(
             })
         };
         let code = owned.and_then(|mut s| s.child.wait().ok()).map(|st| st.exit_code());
+        tray::refresh(&app);
         if let Some((f, _)) = log_file.as_mut() {
             let _ = writeln!(f, "\n=== session exit · {} · code {:?} · epoch {} ===", id, code, epoch_secs());
         }
@@ -2522,7 +2525,6 @@ fn finish_store_and_flag(app: &AppHandle) {
 /// 기다려 줄 수 없는 종료의 정리 (B112) — 로그아웃·시스템 종료·웹뷰가 답하지 못할 때, 그리고
 /// 어떤 이유로든 정리를 건너뛴 채 이벤트 루프가 끝날 때(RunEvent::Exit). 메인 스레드에서 막고 돈다.
 /// running.flag가 이미 없으면 app_exit가 끝낸 것이다 — 다시 하지 않는다
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) fn finish_exit_sync(app: &AppHandle) {
     let store: State<StoreState> = app.state();
     if !store.0.root().join("running.flag").exists() {
@@ -2962,6 +2964,12 @@ pub fn run() {
                 .ok()
                 .and_then(|s| serde_json::from_str(&s).ok())
                 .unwrap_or(serde_json::Value::Null);
+            // 트레이 (§1-1) — 설정(언어)을 읽으므로 그 뒤에. 실패하면 닫기는 지금처럼 종료로 간다
+            if let Err(e) = tray::install(app.handle()) {
+                diag::write(&format!("TRAY-INSTALL failed: {e}"));
+            }
+            #[cfg(windows)]
+            quit::install_end_session(app.handle()); // 로그오프·시스템 종료 정리 (§2)
             // macOS 창 — 숨긴 채 만들어졌다(tauri.macos.conf.json). 자리를 정하고 보인다 (B134·B141),
             // 제목 막대 테마를 맞추고 (U105), ⌘Q·Dock·로그아웃을 종료 시퀀스로 돌린다 (B112)
             #[cfg(target_os = "macos")]
@@ -3097,6 +3105,7 @@ pub fn run() {
             commit_changed_files,
             commit_file_diff,
             shutdown_flush,
+            tray::window_close_to_tray,
             app_exit,
             recovery::crash_recovery,
             agent_snapshot,
@@ -3112,11 +3121,14 @@ pub fn run() {
         .run(|app, event| {
             // 마지막 안전망 (B112) — 종료 시퀀스를 건너뛴 채 루프가 끝나면(델리게이트 훅이 못 걸렸거나
             // 다른 경로의 terminate) 여기서라도 세션 트리를 끄고 flush하고 running.flag를 지운다.
-            // 정상 종료(app_exit)는 표식을 이미 지웠으므로 아무것도 하지 않는다. Windows는 그대로 둔다 —
-            // 세션 잡(KILL_ON_JOB_CLOSE)이 트리를 거두고, 로그오프 뒤 복구 창도 지금처럼 뜬다
+            // 정상 종료(app_exit)는 표식을 이미 지웠으므로 아무것도 하지 않는다. Windows의 로그오프·시스템
+            // 종료는 메인 창 서브클래스(quit::install_end_session)가 WM_ENDSESSION에서 같은 정리를 한다
             #[cfg(target_os = "macos")]
-            if let tauri::RunEvent::Exit = event {
-                finish_exit_sync(app);
+            match event {
+                tauri::RunEvent::Exit => finish_exit_sync(app),
+                // 창을 닫아 Dock에 남은 뒤 Dock 아이콘을 누르면 창을 돌려준다 (U70 · §10)
+                tauri::RunEvent::Reopen { .. } => tray::show_main(app),
+                _ => {}
             }
             #[cfg(not(target_os = "macos"))]
             let _ = (app, event);

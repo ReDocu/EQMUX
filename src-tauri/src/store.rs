@@ -351,6 +351,7 @@ impl Store {
 }
 
 /// 편집 기록 행 (C4)
+#[allow(dead_code)]
 #[derive(serde::Serialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Touch {
@@ -360,6 +361,7 @@ pub struct Touch {
     pub ts: i64,
 }
 
+#[allow(dead_code)] // 읽는 쪽은 §13-3·13-5(2라운드) — W2가 쓰기만 먼저 붙였다
 fn read_touches(root: &Path, ws: &str, session: Option<&str>, since_ms: i64) -> Vec<Touch> {
     let path = db_path(root, ws);
     if !path.exists() {
@@ -383,11 +385,13 @@ fn read_touches(root: &Path, ws: &str, session: Option<&str>, since_ms: i64) -> 
 }
 
 /// 워크스페이스의 since_ms 이후 편집 기록, 오래된 순 (C4)
+#[allow(dead_code)]
 pub fn recent_touches(root: &Path, ws: &str, since_ms: i64) -> Vec<Touch> {
     read_touches(root, ws, None, since_ms)
 }
 
 /// 한 세션의 since_ms 이후 편집 기록, 오래된 순 (C4 — 임무 검토 필터 §13-3)
+#[allow(dead_code)]
 pub fn touches_for(root: &Path, ws: &str, session: &str, since_ms: i64) -> Vec<Touch> {
     read_touches(root, ws, Some(session), since_ms)
 }

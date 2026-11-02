@@ -11,7 +11,7 @@
 //!   app_exit가 이미 도는 중      → 사람 종료는 무시(곧 끝난다), 시스템 종료는 바로 끝낸다
 //! tao는 정상 종료를 [NSApp stop:]으로 하므로 app_exit의 app.exit(0)이 여기를 다시 부르지 않는다.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 
 /// app_exit가 시작됐다 — 그 뒤의 종료 요청은 확인창을 다시 띄우지 않는다
 pub static EXITING: AtomicBool = AtomicBool::new(false);
@@ -43,6 +43,7 @@ pub fn decide(system_quit: bool, exiting: bool, webview_silent: bool) -> Reply {
 #[cfg(target_os = "macos")]
 mod mac {
     use super::*;
+    use std::sync::atomic::Ordering;
     use objc2::runtime::{AnyClass, AnyObject, Sel};
     use objc2::{class, msg_send, sel};
     use std::sync::OnceLock;
@@ -115,6 +116,76 @@ mod mac {
 #[cfg(target_os = "macos")]
 pub use mac::install;
 
+/// Windows 로그오프·재시동·시스템 종료 (0.6 §2) — 창 닫기도 RunEvent::ExitRequested도 거치지 않고
+/// 프로세스가 끝난다. mac의 시스템 종료와 같은 방식이다: 기다려 줄 사람이 없으니 그 자리에서 정리한다.
+///   WM_QUERYENDSESSION        → 스토어만 flush한다. 다른 앱이 종료를 취소할 수 있어 세션은 아직 두고, 막지도 않는다
+///   WM_ENDSESSION(wParam≠0)   → 확정. finish_exit_sync(Ctrl+C → 유예 → 트리 종료 → flush → running.flag 지우기)
+/// 정리가 시한(약 5초) 안에 못 끝나면 running.flag가 남아 다음 기동에 복구 창이 뜬다 — 그것이 안전망이다
+#[cfg_attr(not(windows), allow(dead_code))]
+#[derive(Debug, PartialEq)]
+pub enum EndSession {
+    Flush,
+    Cleanup,
+    Pass,
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn end_session(msg: u32, wparam: usize) -> EndSession {
+    const WM_QUERYENDSESSION: u32 = 0x0011;
+    const WM_ENDSESSION: u32 = 0x0016;
+    match msg {
+        WM_QUERYENDSESSION => EndSession::Flush,
+        WM_ENDSESSION if wparam != 0 => EndSession::Cleanup,
+        _ => EndSession::Pass,
+    }
+}
+
+#[cfg(windows)]
+mod win {
+    use super::*;
+    use std::sync::OnceLock;
+    use tauri::{AppHandle, Manager, State};
+    use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+    use windows_sys::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
+
+    static APP: OnceLock<AppHandle> = OnceLock::new();
+
+    unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM, _id: usize, _data: usize) -> LRESULT {
+        if let Some(app) = APP.get() {
+            match end_session(msg, wp) {
+                EndSession::Flush => {
+                    let store: State<crate::StoreState> = app.state();
+                    let ok = crate::flush_store(&store.0, std::time::Duration::from_secs(1));
+                    crate::diag::write(&format!("QUERYENDSESSION flush={ok}"));
+                }
+                EndSession::Cleanup => {
+                    crate::diag::write("ENDSESSION cleanup");
+                    crate::finish_exit_sync(app);
+                }
+                EndSession::Pass => {}
+            }
+        }
+        DefSubclassProc(hwnd, msg, wp, lp)
+    }
+
+    /// setup에서 한 번 — 메인 창(숨겨져 있어도 최상위 창이라 이 메시지를 받는다)에 서브클래스를 단다
+    pub fn install(app: &AppHandle) {
+        let _ = APP.set(app.clone());
+        let Some(hwnd) = app.get_webview_window("main").and_then(|w| w.hwnd().ok()) else {
+            crate::diag::write("ENDSESSION-HOOK no main window");
+            return;
+        };
+        // SetWindowSubclass는 창을 만든 스레드에서 불러야 한다 — setup은 메인 스레드다
+        let ok = unsafe { SetWindowSubclass(hwnd.0 as HWND, Some(proc), 0x5155_4954, 0) };
+        if ok == 0 {
+            crate::diag::write("ENDSESSION-HOOK SetWindowSubclass failed");
+        }
+    }
+}
+
+#[cfg(windows)]
+pub use win::install as install_end_session;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -126,5 +197,13 @@ mod tests {
         assert_eq!(decide(true, true, false), Reply::CleanupNow);
         assert_eq!(decide(false, true, false), Reply::Ignore, "종료 중 ⌘Q를 또 누르면 무시");
         assert_eq!(decide(false, false, true), Reply::CleanupNow, "웹뷰가 죽었으면 물을 곳이 없다");
+    }
+
+    #[test]
+    fn windows_end_session_flushes_first_and_cleans_up_only_when_final() {
+        assert_eq!(end_session(0x0011, 0), EndSession::Flush, "QUERYENDSESSION — 취소될 수 있어 flush만");
+        assert_eq!(end_session(0x0016, 1), EndSession::Cleanup, "ENDSESSION(TRUE) — 확정, 정리");
+        assert_eq!(end_session(0x0016, 0), EndSession::Pass, "ENDSESSION(FALSE) — 누가 취소했다");
+        assert_eq!(end_session(0x0010, 0), EndSession::Pass, "WM_CLOSE는 프런트 흐름");
     }
 }
