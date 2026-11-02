@@ -24,6 +24,7 @@ mod cli;
 mod clip;
 mod diag;
 mod diff;
+mod extensions; // 엔진 확장 관리 (0.6 §12)
 mod fsx;
 mod gitx; // §17 git 화면 (W5)
 mod history; // §4 과거 세션 검색 (W3)
@@ -42,8 +43,8 @@ mod roles;
 pub(crate) mod secrets; // 비밀값 가리기 (§2, W6) — eqmux read(W3)가 쓴다
 pub(crate) mod store;
 mod team;
-mod transcript;
 mod tray;
+mod transcript;
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))] // macOS 전용 (appenv와 같다)
 mod winstate;
 pub(crate) mod workspace;
@@ -547,8 +548,8 @@ fn spawn_pty_session(
         },
     );
     drop(sessions);
-
     tray::refresh(&app); // 트레이의 "실행 중 N개" (§1-1) — 잠금을 놓은 뒤에
+
     // 세션 원점 기록 — 셸이든 에이전트든 스폰은 전부 이 관문을 지나므로, 여기 한 곳이면
     // IPC 발신(PRD I)이 어떤 세션에서 와도 워크스페이스를 풀 수 있다 (session_origin).
     {
@@ -722,9 +723,9 @@ fn spawn_pty_session(
         });
         let _ = store_tx.send(StoreMsg::SessionExit { ws: ws.clone(), id: id.clone(), code });
         let _ = app.emit_to("main", "pty-exit", PtyExit { id: id.clone(), code });
-        agent::on_pty_exit(&app, &id, code, gen); // 에이전트면 dead 전이 (FR-D-50)
         // ponytail: 재스폰이 옛 PTY 종료보다 먼저면 새 PTY의 범위가 풀린다 — 알림용 환경변수라 겹쳐도 해는 작다, 문제되면 gen으로 거른다
         ports::release_range(&id); // 세션별 포트 범위 (§4, W6)
+        agent::on_pty_exit(&app, &id, code, gen); // 에이전트면 dead 전이 (FR-D-50)
     });
 
     Ok((gen, shell_label))
@@ -2831,9 +2832,10 @@ fn write_hook_settings(root: &Path) {
 
 /// 자동 승인할 eqmux 명령 — 에이전트가 Bash로도 PowerShell로도 부르므로 두 도구 모두에 건다
 fn eqmux_allow_rules() -> Vec<String> {
-    const CMDS: [&str; 11] = [
+    const CMDS: [&str; 13] = [
         "send", "report", "who", "list", "read",
         "browser open", "browser snapshot", "browser get-text", "browser back", "browser forward", "browser reload",
+        "browser console", "browser network", // 읽기 전용 (G5, W6)
     ];
     ["Bash", "PowerShell"]
         .iter()
@@ -3104,15 +3106,15 @@ pub fn run() {
             mission_set_default,
             mission_assign,
             missions::mission_mark_assigned, // 배정 시각 (B92) — eqmux-66
+            missions::mission_mark_base, // 임무 시작점 (§13-2) — 0.6 W4
+            library::library_portrait, // 초상 이미지 (§15-4) — 0.6 W4
+            missions::mission_touched_files, // 임무 검토 필터 (§13-3) — 0.6 W4
             scrollback_tail,
             scrollback_search,
             scrollback_page,
             scrollback_export,
             store_usage_real,
             store_purge_scrollback,
-            missions::mission_mark_base, // 임무 시작점 (§13-2) — 0.6 W4
-            library::library_portrait, // 초상 이미지 (§15-4) — 0.6 W4
-            missions::mission_touched_files, // 임무 검토 필터 (§13-3) — 0.6 W4
             events_query,
             msg_list,
             msg_send,
@@ -3121,7 +3123,6 @@ pub fn run() {
             ipc::directory_set,
             history::history_search,
             ws_set_cross_project,
-            ports::port_ranges,
             ws_pick_folder,
             ws_watch,
             ws_unwatch,
@@ -3155,6 +3156,7 @@ pub fn run() {
             fsx::fs_preview,
             fsx::fs_read,
             fsx::fs_write,
+            ports::port_ranges,
             fsx::fs_create,
             fsx::fs_rename,
             fsx::fs_delete,
@@ -3178,6 +3180,11 @@ pub fn run() {
             shutdown_flush,
             app_exit,
             tray::window_close_to_tray,
+            extensions::engine_plugin, // 확장 그룹 (0.6 §12)
+            extensions::mcp_scan,
+            extensions::skills_list,
+            extensions::skill_create,
+            extensions::skill_copy,
             recovery::crash_recovery,
             agent_snapshot,
             layout_load,
@@ -3354,7 +3361,7 @@ mod tests {
         let v: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(root.join("hook-settings.json")).unwrap()).unwrap();
         let allow: Vec<&str> = v["permissions"]["allow"].as_array().unwrap().iter().filter_map(|x| x.as_str()).collect();
-        for rule in ["Bash(eqmux send:*)", "Bash(eqmux report:*)", "PowerShell(eqmux who:*)", "Bash(eqmux browser snapshot:*)"] {
+        for rule in ["Bash(eqmux send:*)", "Bash(eqmux report:*)", "PowerShell(eqmux who:*)", "Bash(eqmux browser snapshot:*)", "Bash(eqmux browser console:*)"] {
             assert!(allow.contains(&rule), "{rule}");
         }
         assert!(allow.iter().all(|r| !r.contains("eval") && !r.contains("click") && !r.contains("type")));

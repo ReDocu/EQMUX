@@ -1,0 +1,78 @@
+// 확장 그룹 사전 (0.6 §12, W1) — 사이드 패널 [MCP | 플러그인 | 스킬].
+// 다른 사전에 이미 있는 원문(다시 읽기 · 읽는 중… · 워크스페이스를 먼저 여세요 · 점검 중…)은 여기 두지 않는다.
+export const dict: Record<string, string> = {
+  // 그룹 · 탭 이름
+  "확장": "Extensions",
+  "플러그인": "Plugins",
+  "스킬": "Skills",
+  // 범위 칩
+  "범위": "Scope",
+  "전체": "All",
+  "이 워크스페이스": "This workspace",
+  "세션별": "Per session",
+  "모든 워크스페이스의 새 세션에 적용됩니다": "Applies to new sessions in every workspace",
+  "새로 띄우는 세션부터 적용됩니다 — 이미 떠 있는 세션은 재시작해야 반영됩니다":
+    "Applies to newly started sessions — running sessions need a restart",
+  "앱에서만 됩니다": "Available in the app only",
+  // 플러그인
+  "전체 — 사용자 설정(--scope user)을 바꿉니다": "All — changes your user settings (--scope user)",
+  "이 워크스페이스 — 나만 쓰는 local 설정을 바꿉니다 (커밋되지 않음)":
+    "This workspace — changes your personal local settings (not committed)",
+  "설치된 플러그인이 없습니다": "No plugins installed",
+  "플러그인 목록을 읽지 못했습니다 — {err}": "Could not read the plugin list — {err}",
+  "바꾸지 못했습니다 — {err}": "Could not change it — {err}",
+  "상세를 읽지 못했습니다 — {err}": "Could not read details — {err}",
+  "{id} 끄기 — 전체": "Disable {id} — all",
+  "{id} 켜기 — 전체": "Enable {id} — all",
+  "켬": "On",
+  "끔": "Off",
+  "켜기": "Enable",
+  "끄기": "Disable",
+  "상세": "Details",
+  "이 워크스페이스 세션 {n}개 × ~{tok} tok = ~{sum} tok": "{n} sessions in this workspace × ~{tok} tok = ~{sum} tok",
+  // 세션별 표
+  "이 워크스페이스에 에이전트 세션이 없습니다": "No agent sessions in this workspace",
+  "읽기 전용 — 세션별로 싣고 끄는 기능은 다음 단계입니다. Codex 세션은 실측 전까지 표시하지 않습니다":
+    "Read-only — loading and disabling per session comes next. Codex sessions are not shown until verified",
+  "전체 스킬": "global skill",
+  "워크스페이스 스킬": "workspace skill",
+  // 스킬
+  "새 전체 스킬 이름": "New global skill name",
+  "새 워크스페이스 스킬 이름": "New workspace skill name",
+  "＋ 새 스킬": "＋ New skill",
+  "스킬이 없습니다": "No skills",
+  "이름은 소문자 · 숫자 · 하이픈, 64자 이하만 씁니다": "Use lowercase letters, digits and hyphens, up to 64 characters",
+  "전체 스킬 만들기 — {name}": "Create global skill — {name}",
+  "전체 스킬 저장 — {name}": "Save global skill — {name}",
+  "스킬 삭제 — {name}": "Delete skill — {name}",
+  "전체로 복사 — {name}": "Copy to all — {name}",
+  "폴더째 휴지통으로 옮깁니다": "Moves the whole folder to the trash",
+  "휴지통으로": "Move to trash",
+  "만들기": "Create",
+  "저장": "Save",
+  "취소": "Cancel",
+  "편집": "Edit",
+  "삭제": "Delete",
+  "복사": "Copy",
+  "워크스페이스로 복사": "Copy to workspace",
+  "전체로 복사": "Copy to all",
+  "플러그인 스킬 — 읽기 전용": "Plugin skill — read-only",
+  "같은 이름": "Same name",
+  "같은 이름이 다른 위치에도 있습니다 — 어느 쪽이 쓰이는지는 엔진이 정합니다":
+    "The same name exists elsewhere — the engine decides which one is used",
+  "실행 중인 세션은 재시작해야 반영될 수 있습니다": "Running sessions may need a restart to pick this up",
+  // MCP
+  "마지막 점검 {time}": "Last checked {time}",
+  "점검 전 — 설정 파일에서 읽은 목록입니다": "Not checked yet — list read from config files",
+  "점검": "Check",
+  "서버 프로세스를 띄워 연결을 봅니다": "Starts the server processes to test connections",
+  "점검하지 못했습니다 — {err}": "Could not check — {err}",
+  "추가 명령 채우기": "Fill add command",
+  "제거 명령 채우기": "Fill remove command",
+  "서버 탭에서 터미널을 먼저 여세요": "Open the terminal in the Server tab first",
+  "설정된 MCP 서버가 없습니다": "No MCP servers configured",
+  "값은 읽지 않습니다 — 키 이름만": "Values are not read — key names only",
+  "승인 대기 — 페인에서 /mcp": "Pending approval — run /mcp in the pane",
+  "이 프로젝트에서 거부됨": "Rejected for this project",
+  "점검에서만 보임 — 플러그인 · 커넥터": "Seen only in the check — plugin or connector",
+};
