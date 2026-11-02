@@ -142,3 +142,4 @@
 | 11-02 | W0 | CI · 서명 정책 · SECURITY · CONTRIBUTING · 이슈 템플릿 · README · 다른 도구 문서 | `46b8d01` |
 | 11-02 | W2 | 동시 편집 감지 `edit-conflict`(C1, PostToolUse 기준) | `b16b035` |
 | 11-02 | W6 | 기준선 포트 테스트 실패 = 이 PC TCP 표에 LISTENING이 안 나오는 환경 문제. 실기는 다른 PC에서 | — |
+| 11-02 | W3 | PowerShell 파이프 인코딩(콘솔 CP 변환). 실기: 한국어 Windows 기본 pwsh에서 `eqmux who \| Select-Object` | `be185da` |
