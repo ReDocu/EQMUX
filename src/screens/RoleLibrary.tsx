@@ -16,9 +16,10 @@ import {
 } from "../backend/library";
 import type { LibSource, MergedLibrary } from "../backend/library";
 import { backend } from "../backend/mock";
-import { isTauri } from "../backend/pty";
+import { isTauri, revealPath } from "../backend/pty";
+import { fsDelete, fsRead } from "../backend/panels";
 import { t, tf } from "../i18n";
-import { nudgeRoleReload, nudgeTeamReload, saveRoleFile } from "../backend/roles";
+import { memoryRel, nudgeRoleReload, nudgeTeamReload, saveRoleFile } from "../backend/roles";
 import { resaveTeams } from "../backend/team";
 import { fileChangeTick } from "../backend/watch";
 import { tick } from "../state";
@@ -94,6 +95,22 @@ export function RoleLibrary() {
   const [draftJob, setDraftJob] = createSignal(""); // 기본 직무 — 역할 부여가 따라간다. "" = 미지정
   const [draftTitle, setDraftTitle] = createSignal(""); // 직함 (0.5) — "" = 직함 없음
   const [draftRemind, setDraftRemind] = createSignal(false); // 매 턴 캐릭터 상기 (0.6 §15-3)
+  // 캐릭터 기억 (0.6 §15-4) — 워크스페이스마다 .eqmux/memory/<id>.md. 파일이 있는 워크스페이스만 보인다
+  const [memories, setMemories] = createSignal<{ ws: Workspace; lines: number }[]>([]);
+  const [askClear, setAskClear] = createSignal<Workspace | undefined>(undefined);
+  const loadMemories = async (id: string) => {
+    if (!isTauri()) return setMemories([]);
+    const wss = backend.listWorkspaces().filter((w) => !w.pathMissing);
+    const found = await Promise.all(
+      wss.map((ws) =>
+        fsRead(ws.path, memoryRel(id)).then(
+          (c) => ({ ws, lines: c.text.split("\n").filter((l) => l.trim()).length }),
+          () => undefined,
+        ),
+      ),
+    );
+    if (selId() === id) setMemories(found.filter((m) => m !== undefined));
+  };
   // ── 단계별 독립 프로필 3벌 — 단계 전환은 편집 대상 교체일 뿐, 다른 단계 값은 그대로 남는다 ──
   type DraftProfile = { hint: string; tone: string; personality: string; examples: string };
   const emptyProf = (): DraftProfile => ({ hint: "", tone: "", personality: "", examples: "" });
@@ -124,6 +141,7 @@ export function RoleLibrary() {
     setDraftJob(p.job ?? "");
     setDraftTitle(p.title ?? "");
     setDraftRemind(!!p.remind);
+    void loadMemories(p.id);
     setDraftProfiles({ basic: profileOf(p, "basic"), mid: profileOf(p, "mid"), adv: profileOf(p, "adv") });
     setEditLevel(personaLevel(p));
     setPersonaBase(personaKey());
@@ -659,6 +677,34 @@ export function RoleLibrary() {
                 {t("프롬프트마다 캐릭터 한 줄을 다시 싣습니다 — 턴당 수십 토큰. Claude Code만 (Codex는 나가지 않음)")}
               </span>
             </div>
+            {/* 캐릭터 기억 (0.6 §15-4) — 캐릭터 본인이 덧붙이고 SessionStart가 뒤 4000자를 싣는다. 비우기는 휴지통 */}
+            <Show when={isTauri()}>
+              <div class="rl-field">
+                <label class="rl-label">{t("캐릭터 기억 — 워크스페이스마다 따로. 세션이 스스로 덧붙이고 다음 세션 시작에 실립니다")}</label>
+                <Show
+                  when={memories().length > 0}
+                  fallback={<span class="rl-hint muted">{tf("아직 기억이 없습니다 — {path}", { path: memoryRel(sel()!.id) })}</span>}
+                >
+                  <For each={memories()}>
+                    {(m) => (
+                      <div style={{ display: "flex", gap: "6px", "align-items": "center" }}>
+                        <span>{m.ws.name}</span>
+                        <span class="muted mono" style={{ "font-size": "11px" }}>
+                          {tf("{n}줄", { n: m.lines })}
+                        </span>
+                        <span style={{ flex: 1 }} />
+                        <button class="btn ghost" onClick={() => void revealPath(memoryRel(sel()!.id), m.ws.path)}>
+                          {t("기억 열기")}
+                        </button>
+                        <button class="btn ghost danger" onClick={() => setAskClear(m.ws)}>
+                          {t("비우기")}
+                        </button>
+                      </div>
+                    )}
+                  </For>
+                </Show>
+              </div>
+            </Show>
             <div class="rl-field">
               <label class="rl-label">{t("이름 (세션 이름과 분리 가능)")}</label>
               <input value={draftName()} onInput={(e) => setDraftName(e.currentTarget.value)} />
@@ -848,6 +894,23 @@ export function RoleLibrary() {
           </Show>
         </div>
       </div>
+      <Show when={askClear()}>
+        {(ws) => (
+          <ConfirmDialog
+            title={t("이 워크스페이스의 기억을 비울까요?")}
+            body={t("기억 파일을 휴지통으로 보냅니다. 다음 세션부터 이 캐릭터는 이 프로젝트의 지난 일을 모릅니다.")}
+            info={[`${ws().name} · ${memoryRel(sel()?.id ?? "")}`]}
+            danger
+            confirmLabel={t("비우기")}
+            onConfirm={() => {
+              const id = sel()?.id;
+              setAskClear(undefined);
+              if (id) void fsDelete(ws().path, memoryRel(id)).finally(() => void loadMemories(id));
+            }}
+            onCancel={() => setAskClear(undefined)}
+          />
+        )}
+      </Show>
       <Show when={askDelete()}>
         {(kind) => (
           <ConfirmDialog

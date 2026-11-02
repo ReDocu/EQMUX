@@ -278,6 +278,16 @@ export const dict: Record<string, string> = {
   "버리고 이동": "Discard and move on",
   // 0.6 §15-3 매 턴 캐릭터 상기
   "매 턴 캐릭터 상기": "Remind character every turn",
+  // 0.6 §15-4 캐릭터 기억
+  "캐릭터 기억 — 워크스페이스마다 따로. 세션이 스스로 덧붙이고 다음 세션 시작에 실립니다":
+    "Character memory — one per workspace. The session appends to it and it is loaded at the next session start",
+  "아직 기억이 없습니다 — {path}": "No memory yet — {path}",
+  "{n}줄": "{n} lines",
+  "기억 열기": "Open memory",
+  비우기: "Clear",
+  "이 워크스페이스의 기억을 비울까요?": "Clear this workspace's memory?",
+  "기억 파일을 휴지통으로 보냅니다. 다음 세션부터 이 캐릭터는 이 프로젝트의 지난 일을 모릅니다.":
+    "The memory file goes to the trash. From the next session on, this character won't remember past work in this project.",
   "대사 예시 (중급 프로필) — 상황 → 응답 2~3줄. 말투 재현에 가장 효과가 큽니다":
     "Sample lines (Mid profile) — 2–3 lines of situation → reply. The most effective way to keep the voice",
   '예: - 빌드 실패 보고 → "어디가 막혔는지 같이 봅시다."': 'e.g. - Build failure report → "Where did it get stuck? Let us look together."',

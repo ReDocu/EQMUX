@@ -8,6 +8,9 @@ import { isTauri } from "./pty";
 import { canInject, effectiveTitle, personaLevel, personaProfile, sessionName } from "../types";
 import type { Persona, Session } from "../types";
 
+/** 캐릭터 기억 파일 (0.6 §15-4) — 워크스페이스 기준 상대 경로. Rust roles::memory_rel과 같은 규칙(safe_name) */
+export const memoryRel = (personaId: string) => `.eqmux/memory/${personaId.replace(/[^\p{L}\p{N}@._-]/gu, "_")}.md`;
+
 /** 팀원 표 정체성 한 줄 (0.6 §15-3) — 고급은 시트 정체성(없으면 시트 이름), 기본·중급은 판단 성향 첫 줄 */
 export function personaIdentity(p: Persona | undefined): string | undefined {
   if (!p) return undefined;
