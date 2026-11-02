@@ -46,6 +46,7 @@ import { cliOf, effectivePermissions, sessionName } from "../types";
 import { Icon } from "./icons";
 import { IS_MAC, isImeEnter, keyLabel } from "../platform";
 import { findPathLinks, pathChunkAt } from "./termPaths";
+import { fileManagerName, revealLabel } from "../labels";
 
 /** 터미널 색 — styles.css의 --eq-term-* 토큰이 원본이다 (설정 · 색 팔레트가 이 토큰을 고른다).
  *  여기에 hex를 두면 팔레트와 어긋나므로 두지 않는다. 터미널은 어느 테마에서도 다크로 남는다. */
@@ -805,7 +806,7 @@ export function TerminalPane(props: {
   const [hint, setHint] = createSignal<string | undefined>(undefined);
   let hintTimer: ReturnType<typeof setTimeout> | undefined;
   const showRevealFail = () => {
-    setHint(t("탐색기에서 열 수 없습니다 — 실재하는 경로가 아닙니다"));
+    setHint(tf("{fm}에서 열 수 없습니다 — 실재하는 경로가 아닙니다", { fm: fileManagerName() }));
     clearTimeout(hintTimer);
     hintTimer = setTimeout(() => setHint(undefined), 2600);
   };
@@ -1168,7 +1169,7 @@ export function TerminalPane(props: {
                 { label: t("붙여넣기"), kbd: keyLabel(IS_MAC ? "Ctrl+V" : "Ctrl+Shift+V"), action: () => menuAction((term) => void pasteFromClipboard(props.sessionId, term)) },
                 { label: t("모두 선택"), action: () => menuAction((term) => term.selectAll()) },
                 {
-                  label: t("탐색기에서 열기"),
+                  label: revealLabel(),
                   kbd: t("더블클릭"),
                   disabled: !m().hasSel,
                   action: () => menuAction(() => void revealSelection(true)),
@@ -1190,7 +1191,7 @@ export function TerminalPane(props: {
               ...(props.extraMenu?.() ?? []),
               [
                 { label: t("이미지 붙여넣기 → 파일 저장 후 경로 삽입"), note: true },
-                { label: t("경로 더블클릭 → 탐색기에서 열기 (실재하는 경로만)"), note: true },
+                { label: tf("경로 더블클릭 → {reveal} (실재하는 경로만)", { reveal: revealLabel() }), note: true },
               ],
             ]}
           />

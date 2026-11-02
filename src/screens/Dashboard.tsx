@@ -16,10 +16,12 @@ import { approvalRespond, canRespondInline, canStartFresh, resumeAgent, startFre
 import { attentionRank, fmtAgo, inboxWaiting } from "../backend/attention";
 import { awayCard, dismissAway } from "../backend/away";
 import { overBudget, spendText } from "../backend/budget";
+import { LIMIT_WARN, limitText, resetAt, worstLimit } from "../backend/usage";
 import { ConflictCards } from "../components/EditConflicts";
 import { sessionTermSize } from "../components/TerminalPane";
 import type { PendingTool, Session } from "../types";
 import { AGENT_CLI_LABEL, ATTENTION_ORDER, cliOf, detectedCli, effectiveTitle, fmtSince, nameBesideNo, paneNo, sessionDisplayName, sessionName, statusText } from "../types";
+import { jobName as jobLabel } from "../labels";
 
 /** 빈 슬롯 고스트의 열 span — 셀 그리드는 4열 고정이라 마지막 줄의 남은 칸만 채운다 */
 /** 지표 타일 제목 — 영어 사전 값이 문장 중간용 소문자여도("resumable") 타일은 첫 글자를 대문자로 */
@@ -115,7 +117,7 @@ export function Dashboard() {
   };
   const personaName = (s: Session) =>
     sessionDisplayName(s, backend.listPersonas().find((p) => p.id === s.personaId)?.name ?? (s.personaId || t("기본 터미널")));
-  const jobName = (s: Session) => backend.listJobs().find((j) => j.id === s.jobId)?.name ?? t("셸");
+  const jobName = (s: Session) => jobLabel(backend.listJobs().find((j) => j.id === s.jobId), t("셸"));
   const missionName = (s: Session) => missions().find((m) => m.id === s.missionId)?.name;
   // 피드 행의 발신자 — 이미 사라진 세션의 이벤트도 남으므로 안전 조회
   const eventName = (sessionId?: string) => {
@@ -230,7 +232,18 @@ export function Dashboard() {
             { k: "확인 필요", v: openSessions().filter((s) => (attentionRank(s, pendingOf(s)) || 0) >= 3).length, c: "blue" },
             { k: "재개 가능", v: openSessions().filter(canResume).length, c: "purple" },
             // 오늘 비용 (0.6 §13-6) — 예산을 켜면 "$3.20 / $10", 넘으면 amber. 설정 › 알림에서 켠다
-            { k: "오늘 비용", v: spendText(), c: overBudget() ? "amber" : "", tip: t("모든 세션의 statusLine 비용 증분 합계 · 예산은 설정 › 알림") },
+            // 한도 (0.6 F1) — 구독 요금제에는 금액보다 한도가 의미 있다. 두 표시를 한 칸에 둔다 (§13-6)
+            {
+              k: "오늘 비용",
+              v: worstLimit(openSessions()) ? `${spendText()} · ${limitText(worstLimit(openSessions())!)}` : spendText(),
+              c: overBudget() || (worstLimit(openSessions())?.usedPct ?? 0) >= LIMIT_WARN ? "amber" : "",
+              tip: [
+                t("모든 세션의 statusLine 비용 증분 합계 · 예산은 설정 › 알림"),
+                worstLimit(openSessions())?.resetsAt ? tf("한도 재설정 {at}", { at: resetAt(worstLimit(openSessions())!)! }) : "",
+              ]
+                .filter(Boolean)
+                .join(" · "),
+            },
           ]}
         >
           {(m) => (

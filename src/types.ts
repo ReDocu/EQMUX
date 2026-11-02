@@ -118,6 +118,8 @@ export interface Session {
   waitingFor?: string; // status=waiting 일 때만 (FR-D-14)
   pendingTool?: PendingTool; // 기다리는 도구와 원문 (0.6 §13-4 · C2) — waiting일 때만
   stalled?: boolean; // busy인데 오래 훅·출력이 없다 (0.6 A5 · C2)
+  contextPct?: number; // 컨텍스트 사용률 0–100 (0.6 토큰 #5) — 첫 응답 전에는 없다
+  rateLimit?: RateLimit; // 요금제 한도 (0.6 F1) — API 키 사용자는 없다
   activity?: string; // 훅 2차 소스 (FR-D-15)
   costUsd?: number; // statusLine 누적 비용 USD (FR-D-19) — 미보고면 undefined
   subagents: number;
@@ -177,6 +179,16 @@ export interface Session {
 
 /** 기다리는 도구 (0.6 §13-4 · C2) — tool은 도구명, input은 원문 한 줄(Bash 명령 · 편집 경로).
  *  question(AskUserQuestion) · plan(ExitPlanMode)은 답을 고르는 일이라 승인함에서 [페인으로 가기]만 둔다 */
+/** 요금제 한도 (0.6 F1 · W2 statusLine) — 플랜 한도 중 사용률이 가장 높은 창 하나 */
+export interface RateLimit {
+  window: string; // "five_hour" | "seven_day" | …
+  usedPct: number; // 0–100
+  resetsAt?: number; // epoch 초
+}
+
+/** 한도를 다 썼다 — 넣어도 거절당하므로 메시지를 쌓아 둔다 (F1 전달 보류). 재설정 뒤 상태 이벤트(idle)에 흘러간다 */
+export const limitHit = (s: { rateLimit?: RateLimit } | undefined): boolean => (s?.rateLimit?.usedPct ?? 0) >= 100;
+
 export interface PendingTool {
   tool: string;
   input: string;
@@ -191,6 +203,8 @@ export interface AgentStateApply {
   waitingFor?: string;
   pendingTool?: PendingTool; // 0.6 §13-4 · C2
   stalled?: boolean; // 0.6 A5 · C2
+  contextPct?: number; // 0.6 토큰 #5
+  rateLimit?: RateLimit; // 0.6 F1
   activity?: string; // 훅 2차 소스 (FR-D-15)
   subagents?: number; // FR-D-18
   costUsd?: number; // statusLine 누적 비용 (FR-D-19)
@@ -243,7 +257,7 @@ export const agentAttached = (s: Session): boolean => s.status !== "shell" && s.
  *  둘을 합쳐 제출한다 — 쓰던 프롬프트는 사라지고 의도하지 않은 문장이 그 세션의 턴을 시작시킨다.
  *  기본 터미널에는 같은 위험 때문에 화면 에코만 하는 가드가 이미 있다 (P-2). */
 export const canInject = (s: Session | undefined): boolean =>
-  s?.status === "idle" && !humanTyping(s.id);
+  s?.status === "idle" && !humanTyping(s.id) && !limitHit(s);
 
 /** 세션 표시 이름 (P5 · FR-E-36) — 분리된 이름이 있으면 그것, 없으면 페르소나 이름 */
 export const sessionDisplayName = (s: Session, personaName: string): string =>

@@ -26,6 +26,7 @@ import { draftRequest, focusSession, jumpToSession, scopeWorkspace, setDraftRequ
 import { ContextMenu, Eyebrow, notify } from "./ui";
 import { effectiveTitle, sessionName as sessionNameOf } from "../types";
 import type { ConversationMessage, Session } from "../types";
+import { jobName, revealLabel } from "../labels";
 
 /** 화면 지우기 (표시 전용) — 워크스페이스별로 "지운 시점에 화면에 있던 메시지 id"를 담아 둔다.
  *  원장(message 테이블)은 건드리지 않는다: 저장(⤓)은 여전히 전량을 내보내고, "다시 보기"로 되돌아온다.
@@ -218,7 +219,7 @@ export function ConversationTab() {
     if (!here) return [];
     const labels = projectLabels();
     const hint = (s: Session) =>
-      [effectiveTitle(s, personaOf(s)), backend.listJobs().find((j) => j.id === s.jobId)?.name].filter(Boolean).join(" · ");
+      [effectiveTitle(s, personaOf(s)), jobName(backend.listJobs().find((j) => j.id === s.jobId), "")].filter(Boolean).join(" · ");
     return [
       ...wsSessions().map((s) => ({ key: nameOf(s), hint: hint(s), project: labels.get(here.id) ?? here.name })),
       ...backend
@@ -515,7 +516,7 @@ export function ConversationTab() {
                 </Show>
                 <Show when={m.file}>
                   {(f) => (
-                    <button class="btn ghost mono conv-file" title={t("탐색기에서 열기")} onClick={() => void openFile(m)}>
+                    <button class="btn ghost mono conv-file" title={revealLabel()} onClick={() => void openFile(m)}>
                       📎 {relPath(f().path, ws()?.path)} · {fmtSize(f().size)}
                     </button>
                   )}

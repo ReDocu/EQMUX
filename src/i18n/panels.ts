@@ -134,6 +134,7 @@ export const dict: Record<string, string> = {
   "손으로 띄운 에이전트 · 넣기 필요": "hand-started agent · needs Insert",
   "에이전트 미기동 · 띄우면 전달": "agent not started · delivered on launch",
   "응답 대기 · 답한 뒤 전달": "waiting for you · delivered after you answer",
+  "사용 한도 소진 · 재설정 뒤 전달": "usage limit reached · delivered after it resets", // F1 (W7)
   "작업 중 · 턴 끝나면 전달": "busy · delivered at turn end",
   "대기 중": "Queued",
   "받을 사람 인박스에 남아 있습니다 — 사유는 위 인박스 대기 줄에": "Still in a recipient's inbox — see the reason in the inbox line above",

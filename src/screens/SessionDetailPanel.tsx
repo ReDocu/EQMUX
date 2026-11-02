@@ -17,6 +17,7 @@ import { Eyebrow, FieldHint, Identity, KV, StatusLabel, StopConfirm } from "../c
 import { SubagentList } from "../components/SubagentList"; // §4 서브에이전트 목록 (W3)
 import type { AgentCliId, Permissions, Session } from "../types";
 import { AGENT_CLI_LABEL, agentAttached, agentFlagsToString, cleanTitle, cliOf, effectiveTitle, engineSwitched, paneNo, SESSION_NAME_MAX, sessionName, statusText, TITLE_MAX, translatePermissions } from "../types";
+import { jobName } from "../labels";
 import { isSubmitEnter } from "../platform"; // 한글 조합 중 Enter는 제출이 아니다 (B130)
 
 const PERM_KEYS: (keyof Permissions)[] = ["write", "commit", "push"];
@@ -240,7 +241,7 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
       <div class="detail-top">
       <div class="detail-head sd-head">
         <div style={{ "min-width": 0 }}>
-          <div class="sd-id" title={job()?.name ?? t("셸")}>
+          <div class="sd-id" title={jobName(job(), t("셸"))}>
             <Identity
               slot={s().slot}
               no={paneNo(s())}
@@ -285,7 +286,7 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
             <KV k={t("관측")} v={t("저하 — 레지스트리 접근 불가 · 훅 + 프로세스 생존으로 유지")} vClass="st-waiting" />
           </Show>
           <KV k={t("임무")} v={mission()?.name ?? t("미배정")} />
-          <KV k={t("역할")} v={`${persona()?.name ?? "—"} · ${job()?.name ?? "—"}`} />
+          <KV k={t("역할")} v={`${persona()?.name ?? "—"} · ${jobName(job())}`} />
           <KV k={t("서브에이전트")} v={String(s().subagents)} />
           <KV k={t("활동 (훅 2차)")} v={s().activity ?? "—"} />
           <KV
@@ -520,7 +521,7 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
                 style={{ "font-size": "11px", "white-space": "nowrap" }}
                 title={t("페르소나의 저장 직무 (미지정이면 기본값) — 라이브러리의 페르소나 편집에서 바꿉니다")}
               >
-                {t("직무")} {backend.listJobs().find((j) => j.id === pendJob())?.name ?? "—"}
+                {t("직무")} {jobName(backend.listJobs().find((j) => j.id === pendJob()))}
               </span>
               <button class="btn primary" disabled={!pendPersona() || !pendJob()} onClick={applyRole}>
                 {t("역할 부여")}
@@ -539,7 +540,7 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
               <For each={availablePersonas()}>{(p) => <option value={p.id} selected={p.id === pendPersona()}>{p.name}</option>}</For>
             </select>
             <select value={pendJob()} onChange={(e) => setPendJob(e.currentTarget.value)}>
-              <For each={backend.listJobs()}>{(j) => <option value={j.id} selected={j.id === pendJob()}>{j.name}</option>}</For>
+              <For each={backend.listJobs()}>{(j) => <option value={j.id} selected={j.id === pendJob()}>{jobName(j)}</option>}</For>
             </select>
             <button class="btn primary" disabled={!roleChanged()} onClick={applyRole}>
               {t("적용")}

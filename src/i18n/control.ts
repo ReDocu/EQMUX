@@ -311,4 +311,12 @@ export const dict: Record<string, string> = {
   "입력란에 넣었습니다 — 에이전트가 이 메시지로 턴을 시작하면 전달됨으로 바뀝니다": "Put in the input box — turns to Delivered when the agent starts a turn with it",
   "모든 임무": "All missions",
   "그 임무 담당 세션이 보냈거나 받은 메시지만": "Only messages sent or received by that mission's sessions",
+  "{window} 한도 {pct}%": "{window} limit {pct}%",
+  "5시간": "5-hour",
+  "7일": "7-day",
+  "한도 소진": "Limit reached",
+  "한도 소진 · {at} 재설정": "Limit reached · resets {at}",
+  "메시지는 쌓아 두었다가 한도가 풀리면 넣습니다": "Messages are held and sent once the limit resets",
+  "컨텍스트 {pct}% 사용 — 높으면 /compact나 다른 세션으로 넘김을 생각하세요": "Context {pct}% used — when high, consider /compact or handing off to another session",
+  "한도 재설정 {at}": "Limit resets {at}",
 };

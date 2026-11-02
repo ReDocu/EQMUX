@@ -46,6 +46,7 @@ import { Icon } from "./icons";
 import { ContextMenu, notify } from "./ui";
 import { crashReport, setCrashOpen } from "../backend/recovery";
 import type { MenuGroup } from "./ui";
+import { revealLabel } from "../labels";
 
 export function AppBar() {
   const workspaces = () => {
@@ -95,7 +96,7 @@ export function AppBar() {
     };
     return [
       [
-        { label: t("탐색기에서 열기"), disabled: ws.pathMissing, action: () => void reveal() },
+        { label: revealLabel(), disabled: ws.pathMissing, action: () => void reveal() },
         // 웹 주소로 바꿀 수 없는 원격(로컬 경로·없음)은 숨긴다 — 조건이 영영 맞지 않는 동작이다
         ...(web ? [{ label: t("원격 저장소 열기"), action: () => openLink(web) }] : []),
         { label: t("워크스페이스 관리…"), action: () => toggleOverlay("connect") },

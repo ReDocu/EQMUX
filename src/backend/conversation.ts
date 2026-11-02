@@ -10,13 +10,13 @@ import { t, tf } from "../i18n";
 import { backend } from "./mock";
 import { humanTyping, isTauri, onForgetSession, writePty } from "./pty";
 import { jumpToSession, setFocusRequest } from "../state";
-import { canInject, effectiveTitle, sessionName } from "../types";
+import { canInject, effectiveTitle, limitHit, sessionName } from "../types";
 import { settings } from "./settings";
 import { notifyLocal } from "./attention";
 
 /** 손으로 띄운 에이전트에 자동으로 넣는가 (설정 manualDelivery) */
 const autoManual = () => settings().manualDelivery === "auto";
-import type { ConversationMessage } from "../types";
+import type { ConversationMessage, RateLimit } from "../types";
 
 /** 에이전트 발신 본문 상한 (결정 8) — Rust MAX_BODY_CHARS와 같은 값. 사람이 대화 탭에서
  *  보내는 메시지는 이 상한에서 뺀다(결정 18) — 상한은 받는 에이전트의 컨텍스트를 아끼는 장치다 */
@@ -529,11 +529,12 @@ export const unmanagedAgent = (s: { status: string; agent?: string; personaId?: 
 
 /** 인박스에 쌓인 사유 (U50) — 셋은 기다려도 저절로 가지 않아 사람이 할 일이 있다.
  *  반환값은 i18n 키. 저장하지 않고 지금 세션 상태에서 읽는다 (상태가 바뀌면 사유도 바뀐다) */
-export function pendingReason(s: { status: string; agent?: string; personaId?: string } | undefined): string {
+export function pendingReason(s: { status: string; agent?: string; personaId?: string; rateLimit?: RateLimit } | undefined): string {
   if (!s || s.status === "dead") return "종료됨 · 재개해야 전달";
   if (unmanagedAgent(s)) return "손으로 띄운 에이전트 · 넣기 필요";
   if (s.status === "shell") return "에이전트 미기동 · 띄우면 전달";
   if (s.status === "waiting") return "응답 대기 · 답한 뒤 전달";
+  if (limitHit(s)) return "사용 한도 소진 · 재설정 뒤 전달"; // F1
   return "작업 중 · 턴 끝나면 전달";
 }
 
@@ -830,6 +831,7 @@ export function flushInboxOnState(sessionId: string, status: string | undefined)
   // 손으로 띄운 에이전트도 채택되면 idle 전이가 온다 — 쌓아 두기 설정이면 사람이 넣을 때까지 둔다
   const s = backend.listSessions().find((x) => x.id === sessionId);
   if (s && unmanagedAgent(s) && !autoManual()) return;
+  if (limitHit(s)) return; // 한도 소진 (F1) — 넣어도 거절된다. 재설정 뒤 오는 상태 이벤트가 다시 부른다
   if (brief !== undefined) {
     briefs.delete(sessionId);
     injectLine(sessionId, brief); // 같은 주입 큐 — 아래 대화 묶음과 겹치지 않는다

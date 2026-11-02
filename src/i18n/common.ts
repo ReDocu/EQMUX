@@ -6,7 +6,6 @@ export const dict: Record<string, string> = {
   세션: "Session",
   슬롯: "Slot",
   임무: "Missions",
-  탐색기: "Explorer", // 임무 탐색기 팝업의 안쪽 전환 (0.3.7)
   "워크스페이스를 먼저 여세요": "Open a workspace first",
   직무: "Job",
   페르소나: "Persona",
@@ -99,4 +98,9 @@ export const dict: Record<string, string> = {
   "재개 대기": "awaiting resume",
   "재개 가능": "resumable",
   "재개 불가": "not resumable",
+  // ── 플랫폼 표기 (U76 · labels.ts) — 앱 안 '파일 탐색기'와 다르다 ──
+  "탐색기": "File Explorer",
+  "Finder에서 보기": "Reveal in Finder",
+  "{fm}에서 열 수 없습니다 — 실재하는 경로가 아닙니다": "Can't open {fm} — no such path",
+  "경로 더블클릭 → {reveal} (실재하는 경로만)": "Double-click a path → {reveal} (existing paths only)",
 };

@@ -21,6 +21,7 @@ import { ConfirmDialog, KV, notify } from "../components/ui";
 import { Icon } from "../components/icons";
 import type { Workspace } from "../types";
 import { openView } from "./launchRules";
+import { revealLabel } from "../labels";
 import { isSubmitEnter } from "../platform"; // 한글 조합 중 Enter는 제출이 아니다 (B130)
 
 /** 안쪽 창을 레이어 스택에 올린다 — Esc가 관리 화면 전체가 아니라 이 창만 닫는다 (B108).
@@ -241,8 +242,8 @@ export function WorkspaceConnection() {
                               class="ws-row-link"
                               classList={{ off: ws.pathMissing }}
                               disabled={ws.pathMissing}
-                              title={t(ws.pathMissing ? "경로를 찾을 수 없음" : "탐색기에서 열기")}
-                              aria-label={t(ws.pathMissing ? "경로를 찾을 수 없음" : "탐색기에서 열기")}
+                              title={(ws.pathMissing ? t("경로를 찾을 수 없음") : revealLabel())}
+                              aria-label={(ws.pathMissing ? t("경로를 찾을 수 없음") : revealLabel())}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 void reveal(ws.path);
@@ -366,7 +367,7 @@ export function WorkspaceConnection() {
                     onClick={() => void reveal(ws().path)}
                   >
                     <Icon name="folder-open" size={12} />
-                    {t("탐색기에서 열기")}
+                    {revealLabel()}
                   </button>
                   <button
                     class="btn conn-unreg"

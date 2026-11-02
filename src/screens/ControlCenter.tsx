@@ -64,9 +64,11 @@ import { SessionDetailPanel } from "./SessionDetailPanel";
 import { TranscriptPane } from "./TranscriptPane";
 import type { AgentCliId, Session, Workspace } from "../types";
 import { PaneConflictChip } from "../components/EditConflicts";
-import { AGENT_CLI_LABEL, agentAttached, cliOf, statusText, effectiveTitle, nameBesideNo, paneNo, SESSION_NAME_MAX, sessionDisplayName, sessionName, slotNo } from "../types";
+import { AGENT_CLI_LABEL, agentAttached, cliOf, statusText, effectiveTitle, limitHit, nameBesideNo, paneNo, SESSION_NAME_MAX, sessionDisplayName, sessionName, slotNo } from "../types";
+import { CTX_WARN, limitText, resetAt } from "../backend/usage";
 import { Icon } from "../components/icons";
 import { IS_MAC, keyLabel } from "../platform";
+import { jobName as jobLabel } from "../labels";
 
 /** 셸에 에이전트 명령을 쳐 넣는다 — claude 말고는 EQMUX가 관리하는 스폰 경로가 없다
  *  (역할 주입·훅·재개는 agent.rs의 ClaudeCodeAdapter 전용). 사람이 터미널에 직접 치는 것과
@@ -423,7 +425,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
 
   // 역할 없는 셸 세션(기본 터미널)은 페르소나·직무 대신 고정 라벨을 쓴다
   const personaName = (id: string) => persona(id)?.name ?? t("기본 터미널");
-  const jobName = (id: string) => job(id)?.name ?? t("셸");
+  const jobName = (id: string) => jobLabel(job(id), t("셸"));
 
   // 슬롯 단위 세션 추가 — 기본 터미널 / 역할 세션 2택 (C). 캐스팅은 팀 전체 프리셋 도구로 남는다.
   const [addOpen, setAddOpen] = createSignal(false);
@@ -567,6 +569,14 @@ export function ControlCenter(props: { workspace: Workspace }) {
         short: t("멈춤"),
         title: t("일하는 중인데 한동안 훅·출력이 없습니다 — 페인을 확인하세요"),
         onClick: () => focusSession(s),
+      });
+    // 사용 한도 소진 (0.6 F1) — 메시지는 쌓아 두고 재설정 뒤 흘린다
+    if (limitHit(s) && s.rateLimit)
+      out.push({
+        tone: "red",
+        text: resetAt(s.rateLimit) ? tf("한도 소진 · {at} 재설정", { at: resetAt(s.rateLimit)! }) : t("한도 소진"),
+        short: t("한도 소진"),
+        title: `${limitText(s.rateLimit)} — ${t("메시지는 쌓아 두었다가 한도가 풀리면 넣습니다")}`,
       });
     const n = unmanagedAgent(s) ? pendingCount(s.id) : 0;
     if (n > 0)
@@ -923,6 +933,16 @@ export function ControlCenter(props: { workspace: Workspace }) {
               </Show>
               {/* 같은 파일 동시 편집 (0.6 §13-1) — 주의 칩과 따로 둔다. 막지 않고 알리기 초안만 연다 */}
               <PaneConflictChip sessionId={s.id} />
+              {/* 컨텍스트 사용률 (0.6 토큰 #5) — 첫 응답 뒤부터. 높으면 amber: /compact나 넘김을 생각할 때 */}
+              <Show when={s.contextPct !== undefined && agentAttached(s)}>
+                <span
+                  class="ctx-chip mono"
+                  classList={{ warn: s.contextPct! >= CTX_WARN }}
+                  title={tf("컨텍스트 {pct}% 사용 — 높으면 /compact나 다른 세션으로 넘김을 생각하세요", { pct: Math.round(s.contextPct!) })}
+                >
+                  ctx {Math.round(s.contextPct!)}%
+                </span>
+              </Show>
               <StatusLabel session={s} hideExit />
               {/* macOS — 맨 셸이면 실제로 뜬 셸 이름을 붙인다. 고른 셸과 뜬 셸이 다르면 여기서 보인다 (B114) */}
               <Show when={IS_MAC && s.status === "shell" && ptyShells()[s.id]}>

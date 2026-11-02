@@ -9,7 +9,7 @@ import { saveRoleFile } from "./roles";
 import { settings } from "./settings";
 import { beepWaiting } from "./sound";
 import { noteCost } from "./budget";
-import type { AgentCliId, AgentStatus, PendingTool, Permissions, Session } from "../types";
+import type { AgentCliId, AgentStatus, PendingTool, Permissions, RateLimit, Session } from "../types";
 import { agentFlagsToString, cliOf, engineSwitched, sessionName, translatePermissions } from "../types";
 
 export interface AgentStateEvt {
@@ -29,6 +29,8 @@ export interface AgentStateEvt {
   completed?: boolean; // 턴 완료 (0.5 C1) — Rust가 30초+ 턴의 Stop → idle에만 싣는다
   pendingTool?: PendingTool; // 기다리는 도구와 원문 (0.6 §13-4 · C2) — waiting일 때만
   stalled?: boolean; // 멈춘 세션 (0.6 A5 · C2) — busy일 때만
+  contextPct?: number; // 컨텍스트 사용률 0–100 (0.6 토큰 #5 · W2) — 첫 응답 전에는 없다
+  rateLimit?: RateLimit; // 요금제 한도 (0.6 F1 · W2) — API 키 사용자는 없다
 }
 
 const STATUSES: AgentStatus[] = ["starting", "busy", "waiting", "shell", "idle", "dead"];
@@ -88,6 +90,8 @@ function applyEvt(p: AgentStateEvt, fromSnapshot = false): void {
     waitingFor: p.waitingFor ?? undefined,
     pendingTool: p.pendingTool ?? undefined,
     stalled: !!p.stalled,
+    contextPct: p.contextPct,
+    rateLimit: p.rateLimit,
     activity: p.activity ?? undefined,
     subagents: p.subagents,
     costUsd: p.costUsd ?? undefined,

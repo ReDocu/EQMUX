@@ -7202,3 +7202,17 @@ label.inbox-pop-row {
 .panel-files { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .panel-files .msnp-content { grid-template-columns: 1fr; grid-template-rows: minmax(140px, 40%) 1fr; }
 .panel-files .msnp-path { display: none; }
+
+/* ── 컨텍스트 사용률 칩 (0.6 토큰 #5 · W7) ── */
+.ctx-chip {
+  font-size: 10px;
+  padding: 0 5px;
+  border-radius: var(--eq-r-sm);
+  color: var(--eq-text-3);
+  border: 1px solid var(--eq-border);
+  white-space: nowrap;
+}
+.ctx-chip.warn {
+  color: var(--eq-amber);
+  border-color: var(--eq-amber);
+}
