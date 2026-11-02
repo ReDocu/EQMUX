@@ -69,7 +69,7 @@ export function EnvPanelTab(props: { files: EnvFile[]; wsPath?: string; onReload
 
   const hit = (k: string) => k.toLowerCase().includes(q().trim().toLowerCase());
   const copy = (k: string, v: string) => {
-    clipWriteText(v);
+    clipWriteText(v, true); // 클립보드 기록·클라우드 동기화에서 뺀다 (B148)
     notify(tf("{k} 값을 복사했습니다", { k }));
   };
 

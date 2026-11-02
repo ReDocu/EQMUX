@@ -213,12 +213,20 @@ const MARK: &str = "window.__eqnav=1;return 'ok'";
 
 /// 탐색이 가라앉을 때까지 기다린다 — 에이전트가 바로 snapshot을 찍어도 옛 문서를 보지 않게.
 /// 상한을 넘으면 오류가 아니라 현재 상태를 낸다 (느린 페이지도 조종은 계속돼야 한다).
-fn settle(app: &AppHandle) -> Result<String, String> {
+/// opening: open이 요청한 주소. 새로 만든 웹뷰는 첫 탐색이 붙기 전 about:blank를 complete로 보이고,
+/// 패널이 닫혀 있던 open은 표식(MARK)을 심을 문서가 없다 — 그래서 about:blank인 동안은 기다린다.
+/// open은 http·https만 받으므로 about:blank가 목적지일 수 없다 (B156)
+fn settle(app: &AppHandle, opening: Option<&str>) -> Result<String, String> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(SETTLE_SECS);
+    let probe = if opening.is_some() {
+        "return window.__eqnav?'nav':location.href==='about:blank'?'blank':document.readyState"
+    } else {
+        "return window.__eqnav?'nav':document.readyState"
+    };
     loop {
         std::thread::sleep(std::time::Duration::from_millis(150));
         // 웹뷰가 아직 없으면(패널이 지금 뜨는 중) 오류가 온다 — 그대로 다시 돈다
-        if let Ok(s) = eval_text(app, "return window.__eqnav?'nav':document.readyState") {
+        if let Ok(s) = eval_text(app, probe) {
             if s == "complete" {
                 return eval_text(app, DESCRIBE);
             }
@@ -226,8 +234,11 @@ fn settle(app: &AppHandle) -> Result<String, String> {
         if std::time::Instant::now() >= deadline {
             // ponytail: 해시 이동처럼 문서가 안 바뀌는 탐색은 표식이 남아 여기로 온다.
             // 상태 자체는 정확하므로 안내만 붙인다 — 필요해지면 hashchange 감지를 더한다
-            return eval_text(app, DESCRIBE)
-                .map(|d| format!("{d}\n({SETTLE_SECS}초 안에 로딩이 끝나지 않았습니다 — 현재 상태)"));
+            let late = format!("({SETTLE_SECS}초 안에 로딩이 끝나지 않았습니다 — 현재 상태)");
+            return eval_text(app, DESCRIBE).map(|d| match opening {
+                Some(url) => format!("여는 중 → {url}\n{d}\n{late}"),
+                None => format!("{d}\n{late}"),
+            });
         }
     }
 }
@@ -321,12 +332,12 @@ pub fn cli(app: &AppHandle, action: &str, args: &[String]) -> Result<String, Str
             let _ = eval_text(app, MARK); // 패널이 없으면 실패가 정상 — 표식은 최선 노력
             app.emit_to("main", "browser-request", serde_json::json!({ "url": url }))
                 .map_err(|e| format!("패널에 요청하지 못했습니다: {e}"))?;
-            settle(app)?
+            settle(app, Some(&url))?
         }
         "back" | "forward" | "reload" => {
             eval_text(app, MARK)?; // 패널이 없으면 여기서 NO_PANEL로 끊긴다
             nav(app, action)?;
-            settle(app)?
+            settle(app, None)?
         }
         "snapshot" => eval_text(app, SNAPSHOT)?,
         "get-text" => eval_text(
