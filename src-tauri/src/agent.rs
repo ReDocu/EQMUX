@@ -1228,6 +1228,14 @@ fn record_edit(app: &AppHandle, session: &str, payload: &serde_json::Value) {
             serde_json::json!({ "workspace": ws, "path": display_path(&cwd, path), "sessions": sessions, "ts": now }),
         );
     }
+    // 직함별 담당 경로 (§13-1 · W5 owns.rs) — 역할 파일 owns 밖이면 경고만. owns 없음 = 아무것도. (세션, 파일) 10분 1회
+    if let Some((rel, owns)) = crate::owns::edit_warning(&cwd, session, path, now) {
+        let _ = app.emit_to(
+            "main",
+            "edit-outside-owns",
+            serde_json::json!({ "workspace": ws, "session": session, "path": rel, "owns": owns, "ts": now }),
+        );
+    }
 }
 
 // ── 주입 결과 (B10 · B168) ──────────────────────────────────────────────────

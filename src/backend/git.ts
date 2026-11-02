@@ -40,6 +40,14 @@ export interface WorktreeInfo {
   head: string;
   isMain: boolean;
   isSession: boolean; // .eqmux/worktrees/ 아래 — 앱이 만든 것
+  key?: string; // 비교 키 (실경로 · `/` · Windows 소문자) — 세션 cwd는 pathKeys로 같은 키를 받는다 (B132 · B151). 목업엔 없다
+}
+
+/** 경로 비교 키 — 워크트리 key와 같은 규칙. 브라우저 dev는 구분자 · 끝 `/` · 소문자만 맞춘다 */
+export async function pathKeys(paths: string[]): Promise<string[]> {
+  const local = () => paths.map((p) => p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase());
+  if (!isTauri() || paths.length === 0) return local();
+  return invoke<string[]>("path_keys", { paths }).catch(local);
 }
 
 export async function worktreeList(wsPath: string): Promise<WorktreeInfo[] | undefined> {

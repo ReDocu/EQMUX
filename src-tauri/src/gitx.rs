@@ -558,17 +558,8 @@ pub fn range(ws_path: &str, from: &str, to: &str) -> Result<Vec<LogCommit>, Stri
 /// ponytail: 시간 창 추정 — 같은 파일을 여럿이 고쳤으면 다 붙고, Bash · Codex 편집은 못 잡는다. 정확해야 하면 커밋 훅에서 세션을 적는다
 const ATTRIB_WINDOW_MS: i64 = 4 * 60 * 60 * 1000;
 
-/// 편집 기록 경로 → 저장소 기준 상대 경로. 세션 워크트리(`.eqmux/worktrees/<세션>/`) 안이면 그 접두도 뗀다
-fn repo_rel(ws_path: &str, raw: &str) -> String {
-    let norm = |p: &str| p.replace('\\', "/").trim_end_matches('/').to_string();
-    let (root, p) = (norm(ws_path), norm(raw));
-    let key = |x: &str| if cfg!(windows) { x.to_lowercase() } else { x.to_string() }; // Windows 경로는 대소문자를 가리지 않는다
-    let mut rel = if key(&p).starts_with(&(key(&root) + "/")) { p[root.len() + 1..].to_string() } else { p };
-    if let Some(rest) = rel.strip_prefix(".eqmux/worktrees/") {
-        rel = rest.split_once('/').map(|(_, r)| r.to_string()).unwrap_or_default();
-    }
-    rel.trim_start_matches("./").to_string()
-}
+// 편집 기록 경로 → 저장소 기준 상대 경로 — 담당 경로 판정과 같은 함수 (owns.rs)
+use crate::owns::repo_rel;
 
 /// (해시, 커밋 시각 ms, 바뀐 파일) × 편집 기록 → 해시별 세션 (편집 수가 많은 순)
 pub fn attribute(

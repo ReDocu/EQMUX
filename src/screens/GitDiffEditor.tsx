@@ -545,7 +545,7 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
                 </button>
               </Show>
               <button class="btn ghost" classList={{ on: wrap() }} title={t("줄바꿈")} onClick={() => setWrap(!wrap())}>
-                ↩ {t("줄바꿈")}
+                <Icon name="wrap-text" size={11} /> {t("줄바꿈")}
               </button>
               <Show when={standalone()}>
                 <button class="btn ghost" title={t("닫기 (Esc) — 진입한 화면으로 복귀")} onClick={close}>

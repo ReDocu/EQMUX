@@ -27,6 +27,7 @@ mod diff;
 mod extensions; // 엔진 확장 관리 (0.6 §12)
 mod fsx;
 mod gitx; // §17 git 화면 (W5)
+mod owns; // 직함별 담당 경로 (W5)
 mod history; // §4 과거 세션 검색 (W3)
 pub(crate) mod ipc;
 mod job;
@@ -3090,6 +3091,7 @@ pub fn run() {
             session_recaps,
             worktree_ensure,
             git_worktrees,
+            workspace::path_keys,
             ws_checkout,
             cache_get,
             cache_set,

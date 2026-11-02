@@ -437,7 +437,7 @@ fn handle(app: &AppHandle, line: &str) -> Result<serde_json::Value, String> {
         "who" | "list" => {
             let session = req["session"].as_str().ok_or("NO_SESSION")?;
             verify_session(app, session, &req)?;
-            let (ws, _) = crate::session_origin(app, session).ok_or("UNKNOWN_SESSION")?;
+            let (ws, cwd) = crate::session_origin(app, session).ok_or("UNKNOWN_SESSION")?;
             // 직무 칸은 이름으로 (디렉터리에는 id가 온다) — 직무 8종 고정 로스터
             let store: State<crate::StoreState> = app.state();
             let jobs: std::collections::HashMap<String, String> =
@@ -457,6 +457,11 @@ fn handle(app: &AppHandle, line: &str) -> Result<serde_json::Value, String> {
                 })
                 .collect();
             let mut text = who_text(&dir, &ws, session, en);
+            // 직함별 담당 경로 (§13-1 · W5) — 내 역할 파일에 owns가 있으면 한 줄
+            let owns = if cmd == "who" { crate::owns::role_owns(&cwd, session) } else { Vec::new() }; // 못 읽으면 빈 목록 — who는 실패하지 않는다
+            if !owns.is_empty() {
+                text.push_str(&format!("\n{} {}", if en { "You own:" } else { "내 담당:" }, owns.join(" ")));
+            }
             if cmd == "list" && !dir.is_empty() {
                 text.push_str(if en { "\nRead a teammate's screen: eqmux read \"@name\" [--lines N] [--grep text]" } else { "\n팀원 화면 읽기: eqmux read \"@이름\" [--lines N] [--grep 텍스트]" });
             }

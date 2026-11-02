@@ -300,6 +300,29 @@ pub struct WorktreeInfo {
     pub head: String,           // 짧은 해시
     pub is_main: bool,          // 저장소 본체 (porcelain 첫 항목)
     pub is_session: bool,       // .eqmux/worktrees/ 아래 — 앱이 만든 것
+    pub key: String,            // 비교 키 (canon_key) — 세션 cwd는 path_keys로 같은 키를 받아 비교한다 (B132 · B151)
+}
+
+/// 경로 비교 키 (B132 · B151) — 실경로(심링크 · mac `/tmp` → `/private/tmp`), Windows `\\?\` 접두를 벗기고,
+/// 구분자는 `/`, 끝 `/` 없음, Windows만 소문자. 없는 경로는 정규화만 한다.
+/// ponytail: mac 대소문자 무시 볼륨은 철자가 다르면 갈린다 — 실기에서 보이면 그때 접는다
+pub fn canon_key(p: &str) -> String {
+    let real = fs::canonicalize(p).map(|r| r.to_string_lossy().into_owned()).unwrap_or_else(|_| p.to_string());
+    let real = match real.strip_prefix(r"\\?\UNC\") {
+        Some(rest) => format!(r"\\{rest}"),
+        None => real.strip_prefix(r"\\?\").unwrap_or(&real).to_string(),
+    };
+    let k = real.replace('\\', "/");
+    let k = if k.len() > 1 { k.trim_end_matches('/').to_string() } else { k };
+    if cfg!(windows) { k.to_lowercase() } else { k }
+}
+
+/// 세션 cwd 등 여러 경로의 비교 키 — 순서대로 (관제 레일 워크트리 소속 판정)
+#[tauri::command]
+pub async fn path_keys(paths: Vec<String>) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || paths.iter().map(|p| canon_key(p)).collect())
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// `git worktree list --porcelain` 파싱 — 항목은 빈 줄로 구분되고
@@ -315,6 +338,7 @@ pub fn worktree_list(ws_path: &str) -> Result<Vec<WorktreeInfo>, String> {
                 head: String::new(),
                 is_main: items.is_empty(),
                 is_session: p.replace('\\', "/").contains("/.eqmux/worktrees/"),
+                key: canon_key(p),
             });
         } else if let (Some(h), Some(w)) = (line.strip_prefix("HEAD "), items.last_mut()) {
             w.head = h.chars().take(8).collect();
@@ -452,6 +476,29 @@ pub fn entry_name(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// B132 · B151 — 워크트리 경로와 세션 cwd가 철자 · 구분자 · 끝 `/` · 심링크가 달라도 같은 키
+    #[test]
+    fn canon_key_matches_spellings() {
+        let dir = std::env::temp_dir().join(format!("eqmux-canon-{}", std::process::id()));
+        fs::create_dir_all(dir.join("wt")).unwrap();
+        let a = dir.join("wt").to_string_lossy().into_owned();
+        let k = canon_key(&a);
+        assert!(!k.contains('\\') && !k.starts_with("//?/") && !k.ends_with('/'), "{k}");
+        assert_eq!(canon_key(&format!("{a}/")), k, "끝 /");
+        assert_eq!(canon_key(&a.replace('\\', "/")), k, "구분자");
+        assert_eq!(canon_key(&dir.join("wt").join("..").join("wt").to_string_lossy()), k, "..");
+        if cfg!(windows) {
+            assert_eq!(canon_key(&a.to_uppercase()), k, "Windows 대소문자");
+        }
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(dir.join("wt"), dir.join("ln")).unwrap();
+            assert_eq!(canon_key(&dir.join("ln").to_string_lossy()), k, "심링크 (mac /tmp → /private/tmp)");
+        }
+        assert_eq!(canon_key(r"Z:\없는\곳\"), if cfg!(windows) { "z:/없는/곳" } else { "Z:/없는/곳" });
+        fs::remove_dir_all(&dir).ok();
+    }
 
     /// git() 재작성의 유일한 위험 지점 — 파이프를 계속 비우지 않으면 출력이 64KB를 넘는
     /// 순간 git이 write에서 멈춰 이 테스트가 타임아웃까지 걸린다 (교착 회귀 감지).
