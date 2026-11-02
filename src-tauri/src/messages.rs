@@ -44,6 +44,9 @@ pub struct MsgRow {
     /// 회신 연결 (§4 `--re`) — 이 메시지가 답하는 원장 id
     #[serde(skip_serializing_if = "Option::is_none")]
     pub re: Option<i64>,
+    /// escalate 심각도 (§4 `--severity high`) — "high"만 적는다. normal · 다른 타입은 None
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub severity: Option<String>,
 }
 
 /// 원장 행의 0.5 부가 정보 — 없으면 0.4.2 메시지와 같다
@@ -56,6 +59,7 @@ pub struct Extra {
     pub from_name: Option<String>,
     pub to_name: Option<String>,
     pub re: Option<i64>,
+    pub severity: Option<String>,
 }
 
 /// M2 — 자유 텍스트 금지. 타입은 5종뿐이고 본문은 비어 있을 수 없다.
@@ -77,6 +81,17 @@ pub fn check_len(from: &str, body: &str) -> Result<(), String> {
         return Err(format!("TOO_LONG:{n}")); // 글자 수는 CLI 오류 문구가 쓴다 (시안 T36ZZ)
     }
     Ok(())
+}
+
+/// escalate 심각도 (§4) — `--severity high|normal`, 기본 normal. 원장에는 high만 남긴다(None = normal).
+/// high는 escalate에만 — 다른 타입에 붙이면 알림만 시끄러워지고 뜻이 없다
+pub fn severity(kind: &str, raw: Option<&str>) -> Result<Option<String>, String> {
+    match raw.map(str::trim) {
+        None | Some("normal") => Ok(None),
+        Some("high") if kind == "escalate" => Ok(Some("high".into())),
+        Some("high") => Err("SEVERITY_ESCALATE_ONLY".into()),
+        Some(_) => Err("BAD_SEVERITY".into()),
+    }
 }
 
 /// --file 경로 검사 — 세션 작업 폴더(저장소) 안의 실재 파일만. 심볼릭 링크·`..`는 정규화로 푼다
@@ -142,19 +157,21 @@ pub fn send_with(
     // 보낸 때의 이름을 원장에 남긴다 — "나"·"@all"은 디렉터리에 없어 비고, 화면이 원문을 쓴다
     let from_name = extra.from_name.clone().or_else(|| crate::ipc::session_name(from));
     let to_name = extra.to_name.clone().or_else(|| crate::ipc::session_name(to));
-    // re 열이 없는 DB(이전이 v2에서 멈춤)에서는 회신 연결만 빠지고 메시지는 간다
-    let has_re = re_col(&conn) == "re";
-    let re = extra.re.filter(|_| has_re);
-    let sql = format!(
-        "INSERT INTO message (ts, sender, recipient, kind, body, read, done, file_path, file_size, project, sender_name, recipient_name{})
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12{})",
-        if has_re { ", re" } else { "" },
-        if has_re { ", ?13" } else { "" },
-    );
+    // 뒤에 더한 열(re v3 · severity v5)이 없는 DB(이전이 중간에 멈춤)에서는 그 값만 빠지고 메시지는 간다
+    let re = extra.re.filter(|_| opt_col(&conn, "re") != "NULL");
+    let severity = extra.severity.clone().filter(|_| opt_col(&conn, "severity") != "NULL");
+    let mut names = String::from("ts, sender, recipient, kind, body, read, done, file_path, file_size, project, sender_name, recipient_name");
     let mut args: Vec<&dyn rusqlite::ToSql> = vec![&now, &from, &to, &kind, &body, &read, &extra.done, &fpath, &fsize, &extra.project, &from_name, &to_name];
-    if has_re {
+    if re.is_some() {
+        names.push_str(", re");
         args.push(&re);
     }
+    if severity.is_some() {
+        names.push_str(", severity");
+        args.push(&severity);
+    }
+    let marks: Vec<String> = (1..=args.len()).map(|i| format!("?{i}")).collect();
+    let sql = format!("INSERT INTO message ({names}) VALUES ({})", marks.join(", "));
     conn.execute(&sql, args.as_slice()).map_err(|e| e.to_string())?;
     Ok(MsgRow {
         id: conn.last_insert_rowid(),
@@ -170,6 +187,7 @@ pub fn send_with(
         from_name,
         to_name,
         re,
+        severity,
     })
 }
 
@@ -238,17 +256,25 @@ pub fn list(
     Ok(rows.filter_map(|r| r.ok()).collect())
 }
 
-/// re 열 (스키마 v3 · §4 회신) — 이전이 v2에서 멈춘 DB에는 없다. 그때는 NULL로 읽어 버스는 계속 돈다
-fn re_col(conn: &rusqlite::Connection) -> &'static str {
-    if conn.prepare("SELECT re FROM message LIMIT 0").is_ok() {
-        "re"
+/// 뒤에 더한 열 (re 스키마 v3 · severity v5) — 이전이 중간에서 멈춘 DB에는 없다. 그때는 NULL로 읽어 버스는 계속 돈다
+fn opt_col(conn: &rusqlite::Connection, col: &'static str) -> &'static str {
+    if conn.prepare(&format!("SELECT {col} FROM message LIMIT 0")).is_ok() {
+        col
     } else {
         "NULL"
     }
 }
 
+fn re_col(conn: &rusqlite::Connection) -> &'static str {
+    opt_col(conn, "re")
+}
+
 fn cols(conn: &rusqlite::Connection) -> String {
-    format!("id, ts, sender, recipient, kind, body, read, done, file_path, file_size, project, sender_name, recipient_name, {}", re_col(conn))
+    format!(
+        "id, ts, sender, recipient, kind, body, read, done, file_path, file_size, project, sender_name, recipient_name, {}, {}",
+        re_col(conn),
+        opt_col(conn, "severity")
+    )
 }
 
 fn row(r: &rusqlite::Row) -> rusqlite::Result<MsgRow> {
@@ -270,6 +296,7 @@ fn row(r: &rusqlite::Row) -> rusqlite::Result<MsgRow> {
         from_name: r.get(11)?,
         to_name: r.get(12)?,
         re: r.get(13)?,
+        severity: r.get(14)?,
     })
 }
 
@@ -448,6 +475,25 @@ mod tests {
         assert_eq!(r.re, None);
         assert_eq!(list(&dir, "ws1", None, 50).unwrap().len(), 2);
         assert_eq!(reply_to(&dir, "ws1", me, ask.id).unwrap().unwrap().id, r.id); // 완료 보고로 잡힌다
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// §4 escalate 심각도 — high만 원장에 남아 다시 읽힌다. high는 escalate에만, 값은 high|normal
+    #[test]
+    fn escalate_severity_roundtrip() {
+        assert_eq!(severity("escalate", None), Ok(None));
+        assert_eq!(severity("escalate", Some("normal")), Ok(None));
+        assert_eq!(severity("escalate", Some("high")), Ok(Some("high".into())));
+        assert_eq!(severity("ask", Some("high")), Err("SEVERITY_ESCALATE_ONLY".into()));
+        assert_eq!(severity("escalate", Some("urgent")), Err("BAD_SEVERITY".into()));
+        let dir = std::env::temp_dir().join(format!("eqmux-sev-{}", crate::workspace::now_ms()));
+        let hi = Extra { severity: Some("high".into()), ..Default::default() };
+        let r = send_with(&dir, "ws1", "kai@ws1", "나", "escalate", "배포 키가 없다", &hi).unwrap();
+        assert_eq!(r.severity.as_deref(), Some("high"));
+        send(&dir, "ws1", "kai@ws1", "나", "escalate", "보통").unwrap();
+        let rows = list(&dir, "ws1", None, 50).unwrap();
+        let sev: Vec<_> = rows.iter().map(|m| (m.body.as_str(), m.severity.as_deref())).collect();
+        assert!(sev.contains(&("배포 키가 없다", Some("high"))) && sev.contains(&("보통", None)), "{sev:?}");
         std::fs::remove_dir_all(&dir).ok();
     }
 

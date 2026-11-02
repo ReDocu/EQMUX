@@ -335,6 +335,9 @@ fn handle(app: &AppHandle, line: &str) -> Result<serde_json::Value, String> {
             // 원점은 스폰 관문이 남긴다 — 에이전트 추적 맵을 요구하면 셸 세션은 영영 못 보낸다
             let (ws, cwd) = crate::session_origin(app, session).ok_or("UNKNOWN_SESSION")?;
             let mut extra = crate::messages::Extra::default();
+            // escalate 심각도 (§4) — high면 보낸 뒤 알림 센터 + OS 알림 한 번
+            extra.severity = crate::messages::severity(kind, req["severity"].as_str())?;
+            let high = extra.severity.is_some();
             if let Some(f) = req["file"].as_str() {
                 extra.file = Some(crate::messages::attach_file(&cwd, f)?);
             }
@@ -349,17 +352,21 @@ fn handle(app: &AppHandle, line: &str) -> Result<serde_json::Value, String> {
                     let peer = if orig.from == session { orig.to } else { orig.from };
                     if peer == "나" {
                         // 사람이 보낸 것에 대한 회신 — 대화 탭으로 (report와 같은 자리)
-                        return publish(app, &ws, session, "나", kind, body, &extra)
-                            .map(|mut r| {
-                                r["delivery"] = json!(if en { "Sent → human (Conversation tab)" } else { "보냄 → 사람 (대화 탭)" });
-                                r
-                            });
+                        let mut r = publish(app, &ws, session, "나", kind, body, &extra)?;
+                        if high {
+                            crate::agent::notify_escalate(app, session, body);
+                        }
+                        r["delivery"] = json!(if en { "Sent → human (Conversation tab)" } else { "보냄 → 사람 (대화 탭)" });
+                        return Ok(r);
                     }
                     to_raw = format!("@{peer}");
                 }
             }
             let target = resolve_target(app, &ws, &cwd, &to_raw)?;
             let mut resp = send_to(app, &ws, session, target, kind, body, extra, en)?;
+            if high {
+                crate::agent::notify_escalate(app, session, body);
+            }
             if let (Some(a), Some(d)) = (attached, resp["delivery"].as_str().map(str::to_string)) {
                 resp["delivery"] = json!(format!("{d}{a}"));
             }

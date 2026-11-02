@@ -134,6 +134,8 @@ const MIGRATIONS: &[&str] = &[
        usd REAL NOT NULL
      );
      CREATE INDEX IF NOT EXISTS cost_ts ON cost(ts);",
+    // 5 — escalate 심각도 (§4 `eqmux send --type escalate --severity high`, W3). "high"만 적고 normal은 NULL
+    "ALTER TABLE message ADD COLUMN severity TEXT;",
 ];
 
 /// 버전을 하나씩 올린다 — 단계마다 트랜잭션이라 중간에 실패해도 그 앞 버전에 멈춘다.
