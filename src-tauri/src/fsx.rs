@@ -113,7 +113,7 @@ pub fn tree(ws_path: &str) -> FsTree {
         count += items.len();
         truncated |= cut;
         for (is_dir, _, p) in &items {
-            if *is_dir && depth + 1 <= MAX_DEPTH && !ignored.contains(p) {
+            if *is_dir && depth < MAX_DEPTH && !ignored.contains(p) {
                 queue.push_back((p.clone(), depth + 1));
             }
         }
