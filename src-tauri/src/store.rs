@@ -121,6 +121,9 @@ const MIGRATIONS: &[&str] = &[
      );
      CREATE INDEX IF NOT EXISTS file_touch_ts ON file_touch(ts);
      CREATE INDEX IF NOT EXISTS file_touch_session ON file_touch(session, ts);",
+    // 3 — 회신 연결 (§4 `eqmux send --re <id>` · `--wait`, W3). 원 메시지의 원장 id, 회신이 아니면 NULL
+    "ALTER TABLE message ADD COLUMN re INTEGER;
+     CREATE INDEX IF NOT EXISTS message_re ON message(re);",
 ];
 
 /// 버전을 하나씩 올린다 — 단계마다 트랜잭션이라 중간에 실패해도 그 앞 버전에 멈춘다.
@@ -233,7 +236,12 @@ pub(crate) fn open_db(root: &Path, ws: &str) -> rusqlite::Result<Connection> {
     let _ = conn.execute_batch(
         "CREATE VIRTUAL TABLE IF NOT EXISTS scrollback_fts USING fts5(text, session_id UNINDEXED, seq UNINDEXED, ts UNINDEXED)",
     );
-    migrate(&conn)?;
+    // 이전 실패로 DB 전체를 못 쓰게 하지 않는다 — 단계마다 트랜잭션이라 실패한 단계 앞 버전에 멈추고
+    // 그 뒤 기능만 빠진다. 기억(MIGRATED)에 넣지 않으므로 다음 열기에 다시 시도한다
+    if let Err(e) = migrate(&conn) {
+        crate::diag::write(&format!("store: 스키마 이전 실패 {}: {e}", path.display()));
+        return Ok(conn);
+    }
     if let Ok(mut m) = MIGRATED.lock() {
         m.get_or_insert_with(Default::default).insert(path);
     }
