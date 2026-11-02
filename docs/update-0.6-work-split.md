@@ -140,3 +140,5 @@
 | 11-02 | W0 | 분담 문서 | `c17e686` |
 | 11-02 | W1 | 스키마 이전 틀 + `file_touch`(C4) | `2669083` |
 | 11-02 | W0 | CI · 서명 정책 · SECURITY · CONTRIBUTING · 이슈 템플릿 · README · 다른 도구 문서 | `46b8d01` |
+| 11-02 | W2 | 동시 편집 감지 `edit-conflict`(C1, PostToolUse 기준) | `b16b035` |
+| 11-02 | W6 | 기준선 포트 테스트 실패 = 이 PC TCP 표에 LISTENING이 안 나오는 환경 문제. 실기는 다른 PC에서 | — |
