@@ -15,6 +15,7 @@ import { dict as missions } from "./i18n/missions";
 import { dict as session } from "./i18n/session";
 import { dict as shell } from "./i18n/shell";
 import { dict as panels } from "./i18n/panels";
+import { dict as history } from "./i18n/history"; // §4 과거 세션 검색 (W3)
 
 const EN: Record<string, string> = Object.assign(
   {},
@@ -27,6 +28,7 @@ const EN: Record<string, string> = Object.assign(
   session,
   shell,
   panels,
+  history,
 );
 
 /** macOS에서만 문장째 바꾸는 원문 (U67) — 표기 치환(keyLabel)으로는 뜻이 맞지 않는 Windows 전제 설명.

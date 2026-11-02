@@ -24,6 +24,7 @@ export type View =
   | { kind: "gitdiff"; wsId?: string; back?: View; commit?: { hash: string; message: string } }
   // git 화면 (§17 W5) — 그래프 · 브랜치 사이드바 · 상세 · 작업 트리. file이 있으면 그 파일의 히스토리 · blame으로 연다
   | { kind: "git"; wsId?: string; back?: View; file?: string }
+  | { kind: "history"; wsId?: string; back?: View } // 과거 세션 검색 (§4 W3) — ✕/Esc는 back으로
   | { kind: "review"; wsId: string; missionId: string; back?: View }; // 임무 검토 (§13-3 W4)
 // 워크스페이스 연결·역할 라이브러리·설정은 View가 아니라 팝업(OverlayKind)이다 — 아래 overlay 참조
 

@@ -56,6 +56,8 @@ import { Missions } from "./screens/Missions";
 // 열 때 처음 받는다. 관제·워크스페이스·대화는 첫 화면이라 그대로 둔다
 const GitDiffEditor = lazy(() => import("./screens/GitDiffEditor").then((m) => ({ default: m.GitDiffEditor })));
 const GitScreen = lazy(() => import("./screens/GitScreen").then((m) => ({ default: m.GitScreen }))); // §17 W5
+const MissionReview = lazy(() => import("./screens/MissionReview").then((m) => ({ default: m.MissionReview }))); // §13-3 W4
+const HistorySearch = lazy(() => import("./screens/HistorySearch").then((m) => ({ default: m.HistorySearch }))); // §4 W3
 const RoleLibrary = lazy(() => import("./screens/RoleLibrary").then((m) => ({ default: m.RoleLibrary })));
 const Settings = lazy(() => import("./screens/Settings").then((m) => ({ default: m.Settings })));
 const TeamCasting = lazy(() => import("./screens/TeamCasting").then((m) => ({ default: m.TeamCasting })));
@@ -278,6 +280,16 @@ export function App() {
               <GitScreen
                 wsId={(v() as Extract<View, { kind: "git" }>).wsId}
                 file={(v() as Extract<View, { kind: "git" }>).file}
+              />
+            </Match>
+            <Match when={v().kind === "history"}>
+              <HistorySearch wsId={(v() as Extract<View, { kind: "history" }>).wsId} />
+            </Match>
+            <Match when={v().kind === "review"}>
+              <MissionReview
+                wsId={(v() as Extract<View, { kind: "review" }>).wsId}
+                missionId={(v() as Extract<View, { kind: "review" }>).missionId}
+                back={(v() as Extract<View, { kind: "review" }>).back}
               />
             </Match>
             <Match when={v().kind === "gitdiff"}>

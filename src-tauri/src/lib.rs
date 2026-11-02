@@ -26,6 +26,7 @@ mod diag;
 mod diff;
 mod fsx;
 mod gitx; // §17 git 화면 (W5)
+mod history; // §4 과거 세션 검색 (W3)
 pub(crate) mod ipc;
 mod job;
 #[cfg(target_os = "macos")]
@@ -3118,6 +3119,7 @@ pub fn run() {
             msg_mark_read,
             msg_export,
             ipc::directory_set,
+            history::history_search,
             ws_set_cross_project,
             ports::port_ranges,
             ws_pick_folder,
