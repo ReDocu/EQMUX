@@ -284,4 +284,14 @@ export const dict: Record<string, string> = {
   버려짐: "Dropped",
   "받는 세션의 대기가 50건을 넘어 오래된 것부터 버렸습니다 — 원문은 대화 기록에 남아 있습니다":
     "The recipient's queue passed 50, so the oldest were dropped. The original stays in the conversation history",
+  // ── 0.6 W7: 승인함 (§13-4) ──
+  허용: "Allow",
+  거부: "Deny",
+  "페인으로 가기": "Go to pane",
+  "질문에 답 대기 — 페인에서 고릅니다": "Waiting for an answer to a question. Choose in the pane",
+  "계획 승인 대기 — 페인에서 고릅니다": "Waiting for plan approval. Choose in the pane",
+  "답을 넣지 못했습니다 — 페인에서 답하세요": "Couldn't send the answer. Answer in the pane",
+  "이미 답했거나 다른 것을 기다립니다 — 아무것도 넣지 않았습니다": "Already answered, or now waiting on something else. Nothing was sent",
+  "브라우저 dev — 페인에서 답하세요": "Browser dev. Answer in the pane",
+  "앱이 아직 대신 답할 수 없습니다 — 페인에서 답하세요": "The app can't answer for you yet. Answer in the pane",
 };

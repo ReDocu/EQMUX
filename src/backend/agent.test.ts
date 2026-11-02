@@ -3,7 +3,7 @@
 // 화면 반영과 인박스 배출이 이 판정 하나를 공유한다 — 갈리면 버려진 idle로 인박스가 배출돼
 // 이미 busy로 넘어간 세션에 주입이 끼어든다 (P-2).
 import { describe, expect, test } from "vitest";
-import { staleSeq } from "./agent";
+import { canRespondInline, staleSeq, stillWaitingFor } from "./agent";
 
 describe("staleSeq", () => {
   test("순번이 앞으로 가면 받고, 뒤로 가면 버린다", () => {
@@ -27,5 +27,20 @@ describe("staleSeq", () => {
     expect(staleSeq("e@ws", 50)).toBe(false);
     expect(staleSeq("e@ws", undefined)).toBe(false);
     expect(staleSeq("e@ws", 49)).toBe(true); // 하한은 여전히 50
+  });
+});
+
+describe("승인함 (§13-4 · C2)", () => {
+  const bash = { tool: "Bash", input: "npm publish", kind: "tool" as const };
+  test("도구 승인만 바로 답하고, 질문·계획은 페인으로", () => {
+    expect(canRespondInline({ status: "waiting", pendingTool: bash })).toBe(true);
+    expect(canRespondInline({ status: "waiting", pendingTool: { ...bash, kind: "question" } })).toBe(false);
+    expect(canRespondInline({ status: "busy", pendingTool: bash })).toBe(false);
+  });
+  test("누르기 직전 — 같은 도구·원문으로 아직 기다릴 때만 넣는다", () => {
+    expect(stillWaitingFor({ status: "waiting", pendingTool: bash }, bash)).toBe(true);
+    expect(stillWaitingFor({ status: "busy", pendingTool: undefined }, bash)).toBe(false);
+    expect(stillWaitingFor({ status: "waiting", pendingTool: { ...bash, input: "rm -rf x" } }, bash)).toBe(false);
+    expect(stillWaitingFor(undefined, bash)).toBe(false);
   });
 });

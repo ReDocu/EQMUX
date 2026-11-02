@@ -8,7 +8,7 @@ import { isTauri } from "./pty";
 import { saveRoleFile } from "./roles";
 import { settings } from "./settings";
 import { beepWaiting } from "./sound";
-import type { AgentCliId, AgentStatus, Permissions, Session } from "../types";
+import type { AgentCliId, AgentStatus, PendingTool, Permissions, Session } from "../types";
 import { agentFlagsToString, cliOf, engineSwitched, sessionName, translatePermissions } from "../types";
 
 export interface AgentStateEvt {
@@ -26,6 +26,8 @@ export interface AgentStateEvt {
   degraded: boolean; // 관측 저하 (FR-D-62·63, M34) — 낮은 신뢰 표시 (FR-G-27)
   seq?: number; // 순번 (P-4) — 전역 단조 증가. 스냅숏·이벤트 순서 역전 가드
   completed?: boolean; // 턴 완료 (0.5 C1) — Rust가 30초+ 턴의 Stop → idle에만 싣는다
+  pendingTool?: PendingTool; // 기다리는 도구와 원문 (0.6 §13-4 · C2) — waiting일 때만
+  stalled?: boolean; // 멈춘 세션 (0.6 A5 · C2) — busy일 때만
 }
 
 const STATUSES: AgentStatus[] = ["starting", "busy", "waiting", "shell", "idle", "dead"];
@@ -82,6 +84,8 @@ function applyEvt(p: AgentStateEvt, fromSnapshot = false): void {
     agentSession: p.agentSession,
     status: STATUSES.includes(p.status as AgentStatus) ? (p.status as AgentStatus) : undefined,
     waitingFor: p.waitingFor ?? undefined,
+    pendingTool: p.pendingTool ?? undefined,
+    stalled: !!p.stalled,
     activity: p.activity ?? undefined,
     subagents: p.subagents,
     costUsd: p.costUsd ?? undefined,
@@ -223,4 +227,29 @@ export async function restartAgent(
   const fresh = engineSwitched({ ...backend.listSessions().find((x) => x.id === sessionId), cli });
   backend.noteSpawnFlags(sessionId, agentFlagsToString(cli, f, cli === "codex" && fresh ? undefined : uuid), cli);
   return uuid;
+}
+
+// ── 승인함 응답 (0.6 §13-4 · C2 approval_respond — W2) ──
+// 사람이 누른 [허용] · [거부]를 전달만 한다. "항상 허용"은 없다(역할 파일 권한의 일).
+// 누르기 직전에 같은 도구로 아직 기다리는지 본다 — 그사이 페인에서 먼저 답했으면 아무것도 넣지 않는다.
+// Rust도 같은 확인을 한 번 더 한다(키를 넣는 순간 기준).
+
+/** 승인함에서 바로 답할 수 있는가 — 질문 · 계획 승인은 답을 고르는 일이라 페인에서 한다. 순수 함수 */
+export function canRespondInline(s: Pick<Session, "status" | "pendingTool">): boolean {
+  return s.status === "waiting" && s.pendingTool?.kind === "tool";
+}
+
+/** 누르기 직전 확인 — 화면에 보인 도구와 지금 기다리는 도구가 같은가. 순수 함수 */
+export function stillWaitingFor(s: Pick<Session, "status" | "pendingTool"> | undefined, seen: PendingTool): boolean {
+  return !!s && s.status === "waiting" && s.pendingTool?.tool === seen.tool && s.pendingTool.input === seen.input;
+}
+
+export async function approvalRespond(sessionId: string, seen: PendingTool, allow: boolean): Promise<{ ok: boolean; reason?: string }> {
+  const s = backend.listSessions().find((x) => x.id === sessionId);
+  if (!stillWaitingFor(s, seen)) return { ok: false, reason: "이미 답했거나 다른 것을 기다립니다 — 아무것도 넣지 않았습니다" };
+  if (!isTauri()) return { ok: false, reason: "브라우저 dev — 페인에서 답하세요" };
+  return invoke<{ ok: boolean; reason?: string }>("approval_respond", { session: sessionId, allow }).catch(() => ({
+    ok: false,
+    reason: "앱이 아직 대신 답할 수 없습니다 — 페인에서 답하세요",
+  }));
 }

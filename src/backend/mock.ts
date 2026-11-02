@@ -341,6 +341,7 @@ const SESSIONS: Session[] = createMutable<Session[]>([
   s("noel@academy", "academy", 2, "noel", "dev", {
     status: "waiting",
     waitingFor: "Bash(npm publish)",
+    pendingTool: { tool: "Bash", input: "npm publish", kind: "tool" }, // 승인함 목 (0.6 §13-4)
     unseen: true,
     missionId: "auth-refactor",
     agentSessionId: "8d19c2aa",
@@ -1174,6 +1175,8 @@ export class MockBackend implements Backend {
     sess.agentSessionId = evt.agentSession.slice(0, 8);
     if (evt.status) sess.status = evt.status;
     sess.waitingFor = evt.waitingFor;
+    sess.pendingTool = evt.pendingTool; // 승인함 (0.6 §13-4) — waiting이 아니면 Rust가 싣지 않아 지워진다
+    sess.stalled = evt.stalled; // 멈춤 배지 (0.6 A5)
     sess.activity = evt.activity; // 훅 2차 소스 (FR-D-15) — 도구명, 없으면 지운다
     if (evt.subagents !== undefined) sess.subagents = evt.subagents; // FR-D-18
     if (evt.costUsd !== undefined) sess.costUsd = evt.costUsd; // statusLine (FR-D-19)

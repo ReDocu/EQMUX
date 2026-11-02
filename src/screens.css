@@ -6973,3 +6973,31 @@ label.inbox-pop-row {
   margin-bottom: 8px;
   font-size: 11px;
 }
+
+/* 0.6 W7: 승인함 (§13-4) — 대시보드 기다리는 행이 이름 버튼 + 허용·거부·페인으로 */
+.wait-row {
+  cursor: default;
+}
+.wait-row-go {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.wait-row-tool {
+  margin-top: 4px;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wait-row-acts {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}

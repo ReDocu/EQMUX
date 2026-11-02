@@ -115,6 +115,8 @@ export interface Session {
   cwd: string;
   status: AgentStatus;
   waitingFor?: string; // status=waiting 일 때만 (FR-D-14)
+  pendingTool?: PendingTool; // 기다리는 도구와 원문 (0.6 §13-4 · C2) — waiting일 때만
+  stalled?: boolean; // busy인데 오래 훅·출력이 없다 (0.6 A5 · C2)
   activity?: string; // 훅 2차 소스 (FR-D-15)
   costUsd?: number; // statusLine 누적 비용 USD (FR-D-19) — 미보고면 undefined
   subagents: number;
@@ -172,12 +174,22 @@ export interface Session {
   reportProgress?: boolean;
 }
 
+/** 기다리는 도구 (0.6 §13-4 · C2) — tool은 도구명, input은 원문 한 줄(Bash 명령 · 편집 경로).
+ *  question(AskUserQuestion) · plan(ExitPlanMode)은 답을 고르는 일이라 승인함에서 [페인으로 가기]만 둔다 */
+export interface PendingTool {
+  tool: string;
+  input: string;
+  kind: "tool" | "question" | "plan";
+}
+
 /** agent-state 이벤트·스냅숏의 반영 페이로드 (PRD D §7.1) — 인터페이스·구현·수신부가 공유한다 */
 export interface AgentStateApply {
   session: string;
   agentSession: string;
   status?: AgentStatus;
   waitingFor?: string;
+  pendingTool?: PendingTool; // 0.6 §13-4 · C2
+  stalled?: boolean; // 0.6 A5 · C2
   activity?: string; // 훅 2차 소스 (FR-D-15)
   subagents?: number; // FR-D-18
   costUsd?: number; // statusLine 누적 비용 (FR-D-19)

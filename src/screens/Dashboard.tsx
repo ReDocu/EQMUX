@@ -12,11 +12,11 @@ import { t, tf } from "../i18n";
 import { focusSession, jumpToSession, openPanel, setOverlay, setView, tick } from "../state";
 import { Chip, ContextMenu, Identity, notify, PaneNoText, StopConfirm } from "../components/ui";
 import type { ChipTone } from "../components/ui";
-import { canStartFresh, resumeAgent, startFresh } from "../backend/agent";
+import { approvalRespond, canRespondInline, canStartFresh, resumeAgent, startFresh } from "../backend/agent";
 import { attentionRank, inboxWaiting } from "../backend/attention";
 import { ConflictCards } from "../components/EditConflicts";
 import { sessionTermSize } from "../components/TerminalPane";
-import type { Session } from "../types";
+import type { PendingTool, Session } from "../types";
 import { AGENT_CLI_LABEL, ATTENTION_ORDER, cliOf, detectedCli, effectiveTitle, fmtSince, nameBesideNo, paneNo, sessionDisplayName, sessionName, statusText } from "../types";
 
 /** 빈 슬롯 고스트의 열 span — 셀 그리드는 4열 고정이라 마지막 줄의 남은 칸만 채운다 */
@@ -25,6 +25,10 @@ const capFirst = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1);
 
 const ghostSpan = (len: number): number =>
   len % 4 === 0 ? Math.min(4, maxSlots() - len) : 4 - (len % 4);
+
+/** 기다리는 이유 한 마디 — 도구 승인 · 질문 · 계획 승인. 모르면 '승인 대기' */
+const pendingKindText = (p: PendingTool | undefined): string =>
+  p?.kind === "question" ? "질문에 답 대기 — 페인에서 고릅니다" : p?.kind === "plan" ? "계획 승인 대기 — 페인에서 고릅니다" : "승인 대기";
 
 export function Dashboard() {
   const sessions = () => {
@@ -128,9 +132,17 @@ export function Dashboard() {
     return doneChip(s);
   };
   // 기다리는 에이전트 — 열린 모든 워크스페이스의 waiting과 dead, 기다린 순
+  // [허용] · [거부] — 사람이 누를 때만. 실패(그사이 페인에서 답함 · 커맨드 없음)는 이유를 보이고 페인으로 데려간다
+  const [answering, setAnswering] = createSignal<string | undefined>(undefined);
+  const respond = async (s: Session, seen: PendingTool, allow: boolean) => {
+    setAnswering(s.id);
+    const r = await approvalRespond(s.id, seen, allow).finally(() => setAnswering(undefined));
+    if (!r.ok) notify(t(r.reason ?? "답을 넣지 못했습니다 — 페인에서 답하세요"));
+  };
+  // 승인함 (0.6 §13-4) — waiting은 모든 워크스페이스에서(닫아 둔 팀도 기다린다), dead는 열린 것만. 기다린 순
   const waitRows = () => {
-    return openSessions()
-      .filter((s) => s.status === "waiting" || s.status === "dead")
+    return sessions()
+      .filter((s) => s.status === "waiting" || (s.status === "dead" && openSessions().includes(s)))
       .sort((a, b) => (a.status === b.status ? b.sinceMs - a.sinceMs : a.status === "waiting" ? -1 : 1));
   };
   // 주의 필요 순 정렬 (FR-G-07 · 0.5 §주의 신호) — waiting > dead > 확인 신호(메시지·보고 전·완료·턴) >
@@ -425,24 +437,53 @@ export function Dashboard() {
           {/* 행마다 기다리는 이유와 기다린 시간 · 누르면 페인으로 · 기다린 순 */}
           <For each={waitRows()}>
             {(w) => (
-              <button
-                class="wait-row"
-                classList={{ dead: w.status === "dead" }}
-                title={t("Focus — 이 페인을 전체 화면으로 잡고 키보드를 넘깁니다")}
-                onClick={() => (w.status === "waiting" ? focusSession(w.workspaceId, w.id) : jumpToSession(w.workspaceId, w.id))}
-              >
-                <div class="wait-row-top">
-                  <span class="mono wait-row-nm">
-                    <PaneNoText slot={w.slot} no={paneNo(w)} /> {nameBesideNo(paneNo(w), personaName(w))} · {workspaces().find((x) => x.id === w.workspaceId)?.name ?? ""}
-                  </span>
-                  <span class="mono muted wait-row-t">{fmtSince(w.sinceMs)}</span>
-                </div>
-                <div class="muted wait-row-why">
-                  {w.status === "waiting"
-                    ? `${t("승인 대기")}${w.waitingFor ? ` · ${t(w.waitingFor)}` : ""}`
-                    : `${t("종료됨")} · exit ${w.exitCode ?? "?"}${w.resumable ? ` · ${t("재개 가능")}` : ""}`}
-                </div>
-              </button>
+              // 행 = 이름 버튼(누르면 페인) + 승인 버튼들. 버튼 안에 버튼을 넣지 않는다 (U61)
+              <div class="wait-row" classList={{ dead: w.status === "dead" }}>
+                <button
+                  class="wait-row-go"
+                  title={t("Focus — 이 페인을 전체 화면으로 잡고 키보드를 넘깁니다")}
+                  onClick={() => (w.status === "waiting" ? focusSession(w.workspaceId, w.id) : jumpToSession(w.workspaceId, w.id))}
+                >
+                  <div class="wait-row-top">
+                    <span class="mono wait-row-nm">
+                      <PaneNoText slot={w.slot} no={paneNo(w)} /> {nameBesideNo(paneNo(w), personaName(w))} · {workspaces().find((x) => x.id === w.workspaceId)?.name ?? ""}
+                    </span>
+                    <span class="mono muted wait-row-t">{fmtSince(w.sinceMs)}</span>
+                  </div>
+                  <div class="muted wait-row-why">
+                    {w.status === "waiting"
+                      ? `${t(pendingKindText(w.pendingTool))}${!w.pendingTool && w.waitingFor ? ` · ${t(w.waitingFor)}` : ""}`
+                      : `${t("종료됨")} · exit ${w.exitCode ?? "?"}${w.resumable ? ` · ${t("재개 가능")}` : ""}`}
+                  </div>
+                  {/* 기다리는 도구와 원문 — 무엇을 허용하는지 보고 누른다 */}
+                  <Show when={w.status === "waiting" && w.pendingTool}>
+                    {(p) => (
+                      <div class="mono wait-row-tool" title={p().input}>
+                        {p().tool}: {p().input}
+                      </div>
+                    )}
+                  </Show>
+                </button>
+                <Show when={w.status === "waiting"}>
+                  <div class="wait-row-acts">
+                    <Show when={canRespondInline(w) && w.pendingTool}>
+                      {(p) => (
+                        <>
+                          <button class="btn" disabled={answering() === w.id} onClick={() => void respond(w, p(), true)}>
+                            {t("허용")}
+                          </button>
+                          <button class="btn danger" disabled={answering() === w.id} onClick={() => void respond(w, p(), false)}>
+                            {t("거부")}
+                          </button>
+                        </>
+                      )}
+                    </Show>
+                    <button class="btn ghost" onClick={() => focusSession(w.workspaceId, w.id)}>
+                      {t("페인으로 가기")}
+                    </button>
+                  </div>
+                </Show>
+              </div>
             )}
           </For>
           <div class="mono muted dash-feed-t">{t("이벤트")}</div>
