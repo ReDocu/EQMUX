@@ -145,6 +145,55 @@ pub fn normalize_cli(cli: Option<&str>) -> String {
     }
 }
 
+/// 앱이 실측한 엔진 버전의 하한 (§4 CLI 버전 범위) — 이보다 낮으면 경고 한 번. 막지 않는다.
+/// Claude 2.1.316: 승인함 PermissionRequest 훅 · statusLine context_window/rate_limits 실측(2026-11-02).
+/// Codex 0.146.0: 훅 인라인 오버라이드·developer_instructions 실측(M37)
+pub const MIN_CLI: [(&str, &str); 2] = [(CLI_CLAUDE, "2.1.316"), (CLI_CODEX, "0.146.0")];
+
+/// `2.1.316 (Claude Code)` · `codex-cli 0.155.1` → [2,1,316] — 점으로 이은 숫자 낱말 첫 개
+fn parse_version(line: &str) -> Option<Vec<u32>> {
+    line.split_whitespace()
+        .find_map(|w| w.trim_start_matches('v').split('.').map(|p| p.parse().ok()).collect::<Option<Vec<u32>>>())
+        .filter(|v| v.len() >= 2)
+}
+
+/// 버전 줄이 하한보다 낮으면 그 하한 (순수 함수). 못 읽은 줄·모르는 엔진은 None — 모르는 것으로 겁주지 않는다
+pub fn below_min(cli: &str, line: &str) -> Option<&'static str> {
+    let (_, min) = MIN_CLI.iter().find(|(c, _)| *c == cli)?;
+    (parse_version(line)? < parse_version(min)?).then_some(*min)
+}
+
+/// 세션 시작(SessionStart 훅)에서 부른다 — 버전 확인은 프로세스를 띄우므로 배경에서. 엔진·버전당 한 번만 알린다
+fn check_cli_version(app: &AppHandle, session: &str, cli: &str) {
+    static WARNED: Mutex<Option<HashSet<String>>> = Mutex::new(None);
+    let (app, session, cli) = (app.clone(), session.to_string(), cli.to_string());
+    std::thread::spawn(move || {
+        let Some(line) = crate::diag::cli_version(&cli) else { return };
+        let Some(min) = below_min(&cli, &line) else { return };
+        let fresh = WARNED
+            .lock()
+            .map(|mut w| w.get_or_insert_with(HashSet::new).insert(format!("{cli} {line}")))
+            .unwrap_or(false);
+        if !fresh {
+            return;
+        }
+        let en = crate::setting_str(&app, "language").as_deref() == Some("en");
+        let (title, body) = if en {
+            (
+                format!("{cli} is older than tested"),
+                format!("Found {line}; EQMUX was tested with {min} or later. Some features (approval inbox, usage badges) may not work — update {cli}."),
+            )
+        } else {
+            (
+                format!("{cli} 버전이 확인 범위보다 낮습니다"),
+                format!("지금 {line} · EQMUX는 {min} 이상에서 확인했습니다. 일부 기능(승인함·사용량 표시)이 안 될 수 있습니다 — {cli}를 업데이트하세요."),
+            )
+        };
+        emit_item(&app, &session, "cli-version", &title, &body, false);
+        crate::diag::write(&format!("CLI-VERSION-LOW {cli} {line} < {min}"));
+    });
+}
+
 /// 경로가 있고 비어 있지 않은 파일인가 — 재개 가능 판정의 공통 실측 (추정하지 않는다, FR-D-20)
 pub fn path_nonempty(p: Option<&str>) -> bool {
     p.filter(|p| !p.is_empty())
@@ -386,6 +435,9 @@ struct RegistryRecord {
     /// "interactive" = 사람이 쓰는 대화창, "bg" = 부모가 띄운 배경/서브에이전트 (B38)
     #[serde(default)]
     kind: Option<String>,
+    /// 기록을 쓴 프로세스의 시작 epoch ms — pid 재사용으로 남은 옛 기록을 가른다 (record_is_current)
+    #[serde(default)]
+    started_at: Option<i64>,
 }
 
 fn home() -> PathBuf {
@@ -403,24 +455,23 @@ pub(crate) fn peer_name(pids: &[u32]) -> Option<String> {
         if v.get("kind").and_then(|k| k.as_str()).is_some_and(|k| k != "interactive") {
             return None;
         }
-        // B122 — pid 재사용이 잦은 macOS: 지금 그 pid의 프로세스보다 먼저 쓰인 기록은 옛 주인의 것이다
-        #[cfg(target_os = "macos")]
-        {
-            let started = v.get("startedAt").and_then(|s| s.as_i64());
-            if !crate::macproc::info(*pid).is_some_and(|i| record_is_current(started, i.start)) {
-                return None;
-            }
+        // B122 — 지금 그 pid의 프로세스보다 먼저 쓰인 기록은 옛 주인의 것이다 (pid 재사용)
+        let started = v.get("startedAt").and_then(|s| s.as_i64());
+        if !record_is_current(started, crate::job::process_start_ms(*pid)) {
+            return None;
         }
         v.get("name")?.as_str().filter(|n| !n.is_empty()).map(str::to_string)
     })
 }
 
 /// 레지스트리 기록이 지금 그 pid의 프로세스 것인가 (B122) — startedAt(epoch ms)이 프로세스 시작
-/// (epoch µs)보다 앞서면 같은 pid를 먼저 쓰던 프로세스가 남긴 것이다. 시계 오차로 2초는 봐준다.
-/// startedAt이 없는 옛 버전 기록은 판별할 수 없어 받아들인다
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-fn record_is_current(started_at_ms: Option<i64>, proc_start_us: u64) -> bool {
-    started_at_ms.is_none_or(|ms| ms + 2_000 >= (proc_start_us / 1_000) as i64)
+/// (epoch ms)보다 앞서면 같은 pid를 먼저 쓰던 프로세스가 남긴 것이다. 시계 오차로 2초는 봐준다.
+/// startedAt이 없는 옛 버전 기록, 시작 시각을 못 읽는 프로세스는 판별할 수 없어 받아들인다
+fn record_is_current(started_at_ms: Option<i64>, proc_start_ms: Option<i64>) -> bool {
+    match (started_at_ms, proc_start_ms) {
+        (Some(rec), Some(proc)) => rec + 2_000 >= proc,
+        _ => true,
+    }
 }
 
 fn sessions_dir() -> PathBuf {
@@ -1512,6 +1563,16 @@ pub fn apply_hook(app: &AppHandle, session: &str, event: &str, payload: &serde_j
     // Codex의 진짜 세션 id는 여기서 처음 알게 된다 (M37) — 상태 반영보다 먼저 앵커를 옮긴다
     if event == "SessionStart" {
         adopt_codex_session(app, session, payload);
+        // 엔진 버전 하한 (§4) — 이 세션의 엔진으로 한 번 본다. 빈 cli는 Claude다
+        let rt: tauri::State<AgentRt> = app.state();
+        let cli = rt
+            .by_uuid
+            .lock()
+            .ok()
+            .and_then(|m| current_uuid(&m, session).and_then(|u| m.get(&u).map(|t| t.cli.clone())));
+        if let Some(cli) = cli {
+            check_cli_version(app, session, if is_codex(&cli) { CLI_CODEX } else { CLI_CLAUDE });
+        }
     }
     // 턴이 끝나는 자리 — 여기서만 "마지막에 한 작업"이 확정된다 (M35).
     // 상태 반영보다 먼저 한다: effect가 Ignore여도 요약은 남아야 한다
@@ -1944,6 +2005,11 @@ fn scan(app: &AppHandle) {
                 let Some((app_session, gen)) = pane_for_pid(&job_pids, pid) else {
                     continue; // 우리 페인의 자식이 아니다 — 남의 터미널에서 도는 claude
                 };
+                // 죽은 claude의 기록인데 그 pid를 페인 안의 다른 프로세스(node 등)가 물려받았다 —
+                // 채택하면 끝난 대화가 페인에 붙는다. 기록이 지금 프로세스보다 먼저 쓰였으면 버린다
+                if !record_is_current(rec.started_at, crate::job::process_start_ms(pid)) {
+                    continue;
+                }
                 // 같은 페인의 직전 추적은 걷어낸다 — 한 페인의 상태가 둘로 갈리지 않게
                 map.retain(|_, t| keep_on_adopt(t, &app_session));
                 // session_origin과 같은 우선순위(추적 맵 → 원점 → 폴백)를 잠금 재진입 없이 편다.
@@ -2813,11 +2879,21 @@ mod tests {
     /// B122 — 지금 그 pid의 프로세스보다 먼저 쓰인 레지스트리 기록은 옛 주인의 것이다
     #[test]
     fn registry_record_older_than_the_process_is_stale() {
-        let start_us = 1_000_000_000u64 * 1_000; // 프로세스 시작 = 1_000_000_000 ms
-        assert!(super::record_is_current(Some(1_000_000_500), start_us), "시작 직후에 쓴 기록");
-        assert!(super::record_is_current(Some(999_999_000), start_us), "시계 오차 2초 안");
-        assert!(!super::record_is_current(Some(990_000_000), start_us), "10초 먼저 = 옛 주인");
-        assert!(super::record_is_current(None, start_us), "startedAt 없는 옛 버전은 받는다");
+        let start = Some(1_000_000_000i64); // 프로세스 시작 epoch ms
+        assert!(super::record_is_current(Some(1_000_000_500), start), "시작 직후에 쓴 기록");
+        assert!(super::record_is_current(Some(999_999_000), start), "시계 오차 2초 안");
+        assert!(!super::record_is_current(Some(990_000_000), start), "10초 먼저 = 옛 주인");
+        assert!(super::record_is_current(None, start), "startedAt 없는 옛 버전은 받는다");
+        assert!(super::record_is_current(Some(1), None), "시작 시각을 못 읽으면 받는다");
+    }
+
+    /// 실제 OS 값 — 이 테스트 프로세스의 시작 시각은 지금보다 앞이고 하루 안이다 (FILETIME 변환 확인)
+    #[test]
+    #[cfg(any(windows, target_os = "macos"))]
+    fn process_start_ms_is_epoch_ms() {
+        let start = crate::job::process_start_ms(std::process::id()).expect("자기 자신은 읽힌다");
+        let now = crate::workspace::now_ms();
+        assert!(start <= now && now - start < 86_400_000, "start={start} now={now}");
     }
     /// F1 · 토큰 #5 — 실측 statusLine 모양에서 비용·컨텍스트·가장 찬 한도를 싣고, 같은 값은 조용하다
     #[test]
@@ -2892,5 +2968,18 @@ mod tests {
         t.stalled = false;
         assert!(apply_registry(&mut t, Some("idle"), None, 900_000));
         assert_eq!(reason_of(&t), r("registry", 900_000, None));
+    }
+    /// §4 — 실측 하한보다 낮은 버전만 경고한다. 같거나 높으면, 못 읽으면 조용하다
+    #[test]
+    fn cli_version_below_min_warns_only_when_older() {
+        use super::below_min;
+        assert_eq!(below_min("claude", "2.1.316 (Claude Code)"), None);
+        assert_eq!(below_min("claude", "2.1.400 (Claude Code)"), None);
+        assert_eq!(below_min("claude", "2.0.999 (Claude Code)"), Some("2.1.316"));
+        assert_eq!(below_min("claude", "2.1.99 (Claude Code)"), Some("2.1.316"), "자리마다 수로 비교 — 문자열 비교면 99 > 316");
+        assert_eq!(below_min("codex", "codex-cli 0.155.1"), None);
+        assert_eq!(below_min("codex", "codex-cli 0.120.0"), Some("0.146.0"));
+        assert_eq!(below_min("claude", "garbage"), None, "못 읽으면 겁주지 않는다");
+        assert_eq!(below_min("gemini", "1.0.0"), None, "모르는 엔진");
     }
 }

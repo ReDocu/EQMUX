@@ -225,7 +225,7 @@ mod win {
     }
 
     /// 프로세스 시작 시각 (FILETIME 100ns) — pid 재사용을 가르는 근거
-    fn start_time(pid: u32) -> Option<u64> {
+    pub(super) fn start_time(pid: u32) -> Option<u64> {
         unsafe {
             let ph = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
             if ph.is_null() {
@@ -250,6 +250,25 @@ mod win {
 
 #[cfg(windows)]
 pub use win::Job;
+
+/// 프로세스 시작 시각 epoch ms — 레지스트리 기록이 지금 그 pid의 것인지 가르는 근거 (B122 · 레지스트리 stale).
+/// 모르면(권한 없음·없는 프로세스·기타 OS) None
+pub fn process_start_ms(pid: u32) -> Option<i64> {
+    #[cfg(windows)]
+    {
+        // FILETIME(1601년부터 100ns) → epoch ms
+        win::start_time(pid).map(|ft| (ft / 10_000) as i64 - 11_644_473_600_000)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        crate::macproc::info(pid).map(|i| (i.start / 1_000) as i64)
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let _ = pid;
+        None
+    }
+}
 
 /// 잡 pid에서 시작해 부모 pid를 따라 자손을 붙인다 — 앞쪽은 잡 pid 그대로, 뒤쪽이 잡을 벗어난 자손.
 /// 자식으로 인정하는 조건: 부모 pid가 목록에 있고, 자식이 부모보다 늦게 시작했다. 부모 pid 필드는
