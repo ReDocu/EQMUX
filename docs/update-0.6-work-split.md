@@ -73,7 +73,7 @@
 3. **§15-2 기억 싣기**: SessionStart 훅이 역할 · 시트 다음에 frontmatter `memory:`(**C6**)가 가리키는 파일의 뒤 4000자를 싣는다(`MAX_SHEET_CHARS`와 같은 방식). 테스트.
 4. **§4 메시지 버스**: 직함으로 수신자 지정(`--to @클라이언트개발자`), 회신 연결 `--re <id>`, `eqmux send --wait`. `depends_on`은 W4(`missions.rs`)와 맞춘다.
 5. **§3 B7 `eqmux read` · `eqmux list`**: 팀원 스크롤백 읽기. 스크롤백 원천이 프런트에 있으면 리드에게 보고하고 설계부터 한다.
-6. **§2 M3**: 상한으로 버려진 메시지 상태를 바꾼다.
+6. ~~**§2 M3**~~ → W7로 넘김(상한 · 전달 상태가 모두 `conversation.ts`에 있다). 명세: 버려진 '나' 메시지는 Delivery `dropped`, 라벨 `버려짐`/`Dropped`.
 7. **§11-3 버스 · CLI 견고성**: B124 · B125 · B116 · B122 · B156 · B157(연결 고갈, 줄 길이 상한). 원문은 `origin/sub_main`의 `docs/qa-0.5.1-macos-usability.md`.
 8. §2 P26 — 엔진 쪽 규칙이라 고칠 수 있는지만 확인해 보고한다.
 
