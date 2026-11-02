@@ -4,6 +4,7 @@ import { AppBar } from "./components/AppBar";
 import { SidePanel } from "./components/SidePanel";
 import { ensureAgentListeners } from "./backend/agent";
 import { nextUnseen, startConflictFeed, startNotifyFeed } from "./backend/attention";
+import { startAwayWatch } from "./backend/away";
 import { startDirectorySync, startMessageBus } from "./backend/conversation";
 import { backend } from "./backend/mock";
 import { startAgentProbe } from "./backend/agentprobe";
@@ -113,8 +114,9 @@ export function App() {
   onMount(() => startPortWatch());
   // 알림 센터 (0.5 C2) — Rust notify-item을 벨 목록에 쌓는다. 창이 포커스여서 OS 알림이 안 뜬 건도 온다
   onMount(() => startNotifyFeed());
-
   onMount(() => startConflictFeed()); // 같은 파일 동시 편집 (0.6 §13-1 · C1)
+  onMount(() => startAwayWatch()); // 자리 비운 사이 요약 (0.6 §13-5)
+
   // 화면 손상 진단 (임시 계측, backend/diag) — 배율·모니터 변화와 자식 웹뷰 좌표 어긋남을 남긴다.
   // 자동 보정은 하지 않는다: 원인을 확정하기 전에 가리면 원인을 못 찾는다
   onMount(() => startDiagnostics());
@@ -145,8 +147,8 @@ export function App() {
   const [settingsReady, setSettingsReady] = createSignal(false);
   onMount(() => void loadSettings().then(() => setSettingsReady(true)));
   onMount(() => startForeignCheck());
-  // 창 닫기 = 앱 완전 종료 (FR-C-60) — 실행 중 세션이 있으면 확인 다이얼로그 (FR-C-61),
 
+  // 창 닫기 = 앱 완전 종료 (FR-C-60) — 실행 중 세션이 있으면 확인 다이얼로그 (FR-C-61),
   // 없으면 flush 시퀀스만 돌고 조용히 종료된다.
   // macOS ⌘Q·Dock '종료'도 같은 길로 온다 (B112) — 창 닫기를 거치지 않으므로 Rust(quit.rs)가
   // terminate를 취소하고 'app-quit-requested'를 보낸다. 로그아웃은 Rust가 직접 정리한다

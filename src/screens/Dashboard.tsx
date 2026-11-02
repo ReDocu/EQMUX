@@ -13,7 +13,9 @@ import { focusSession, jumpToSession, openPanel, setOverlay, setView, tick } fro
 import { Chip, ContextMenu, Identity, notify, PaneNoText, StopConfirm } from "../components/ui";
 import type { ChipTone } from "../components/ui";
 import { approvalRespond, canRespondInline, canStartFresh, resumeAgent, startFresh } from "../backend/agent";
-import { attentionRank, inboxWaiting } from "../backend/attention";
+import { attentionRank, fmtAgo, inboxWaiting } from "../backend/attention";
+import { awayCard, dismissAway } from "../backend/away";
+import { overBudget, spendText } from "../backend/budget";
 import { ConflictCards } from "../components/EditConflicts";
 import { sessionTermSize } from "../components/TerminalPane";
 import type { PendingTool, Session } from "../types";
@@ -86,6 +88,9 @@ export function Dashboard() {
   const pendingOf = inboxWaiting; // 손으로 띄운 세션의 쌓인 메시지만 (W4 attention.ts와 같은 판정)
   // 셀의 확인 단계 칩 (§주의 신호) — 행동 단계(waiting·dead)는 셀 테두리·상태가 이미 보인다
   const doneChip = (s: Session): { tone: ChipTone; text: string; title?: string } | undefined => {
+    // 멈춘 세션 (0.6 A5) — busy 셀은 테두리로 드러나지 않아 칩이 먼저다
+    if (s.status === "busy" && s.stalled)
+      return { tone: "amber", text: t("멈춤 · 한동안 출력 없음"), title: t("일하는 중인데 한동안 훅·출력이 없습니다 — 페인을 확인하세요") };
     const n = pendingOf(s);
     if (n > 0) return { tone: "blue", text: tf("메시지 {n}건", { n }) };
     if (s.reportPending) return { tone: "blue", text: s.reportProgress ? t("✓ 보고함 · 완료 표시 없음") : t("✓ 턴 끝남 · 보고 전") };
@@ -220,6 +225,8 @@ export function Dashboard() {
             { k: "행동 필요", v: count("waiting") + count("dead"), c: "amber" },
             { k: "확인 필요", v: openSessions().filter((s) => (attentionRank(s, pendingOf(s)) || 0) >= 3).length, c: "blue" },
             { k: "재개 가능", v: openSessions().filter(canResume).length, c: "purple" },
+            // 오늘 비용 (0.6 §13-6) — 예산을 켜면 "$3.20 / $10", 넘으면 amber. 설정 › 알림에서 켠다
+            { k: "오늘 비용", v: spendText(), c: overBudget() ? "amber" : "", tip: t("모든 세션의 statusLine 비용 증분 합계 · 예산은 설정 › 알림") },
           ]}
         >
           {(m) => (
@@ -245,6 +252,44 @@ export function Dashboard() {
             .join(" · ")}{" "}
           ({t("임계")} {(memLimitMb() / 1024).toFixed(0)}GB · {t("소프트 경고")}). {t("세션 상세에서 현재·피크를 확인하세요.")}
         </div>
+      </Show>
+      {/* 자리 비운 사이 요약 (0.6 §13-5) — 창이 다시 포커스를 받았고 그사이 바뀐 것이 있을 때만. 접을 수 있다 */}
+      <Show when={awayCard()}>
+        {(c) => (
+          <details class="card away-card" open>
+            <summary>
+              <span class="away-t">{tf("자리 비운 사이 · {ago}부터 · 세션 {n}개가 바뀌었습니다", { ago: fmtAgo(Date.now() - c().since), n: c().rows.length })}</span>
+              <button class="btn ghost away-x" aria-label={t("닫기")} onClick={(e) => (e.preventDefault(), dismissAway())}>
+                ✕
+              </button>
+            </summary>
+            <For each={c().rows}>
+              {(r) => {
+                const s = () => sessions().find((x) => x.id === r.session);
+                return (
+                  <button class="away-row" onClick={() => jumpToSession(r.workspace, r.session)}>
+                    <span class="mono away-nm">
+                      {s() ? personaName(s()!) : r.session} · {workspaces().find((w) => w.id === r.workspace)?.name ?? ""}
+                    </span>
+                    <span class="mono muted away-facts">
+                      {[
+                        r.was ? `${statusText(r.was)} → ${statusText(r.status)}` : statusText(r.status),
+                        r.msgsIn ? tf("받은 메시지 {n}", { n: r.msgsIn }) : "",
+                        r.msgsOut ? tf("보낸 메시지 {n}", { n: r.msgsOut }) : "",
+                        r.cost >= 0.01 ? `+$${r.cost.toFixed(2)}` : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </span>
+                    <Show when={r.done}>
+                      <span class="away-done">✓ {r.done}</span>
+                    </Show>
+                  </button>
+                );
+              }}
+            </For>
+          </details>
+        )}
       </Show>
       <div class="screen-body dash-body">
         <div class="dash-main">

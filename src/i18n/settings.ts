@@ -246,4 +246,9 @@ export const dict: Record<string, string> = {
   "Dock에 남기기 (기본)": "Keep in Dock (default)",
   "트레이로 숨기기 (기본)": "Hide to tray (default)",
   "앱 종료": "Quit app",
+  // ── 0.6 W7: 하루 비용 예산 (§13-6) ──
+  "하루 비용 예산": "Daily cost budget",
+  "모든 세션의 비용(statusLine) 합계 · 넘으면 하루에 한 번 알린다 · 세션은 멈추지 않는다":
+    "Total cost across all sessions (status line) · notifies once a day when exceeded · sessions keep running",
+  "끔 (기본)": "Off (default)",
 };

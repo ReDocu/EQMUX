@@ -294,4 +294,16 @@ export const dict: Record<string, string> = {
   "이미 답했거나 다른 것을 기다립니다 — 아무것도 넣지 않았습니다": "Already answered, or now waiting on something else. Nothing was sent",
   "브라우저 dev — 페인에서 답하세요": "Browser dev. Answer in the pane",
   "앱이 아직 대신 답할 수 없습니다 — 페인에서 답하세요": "The app can't answer for you yet. Answer in the pane",
+  // ── 0.6 W7: 멈춤 배지 · 자리 비운 사이 요약 (A5 · §13-5) ──
+  "멈춤 · 한동안 출력 없음": "Stalled · no output for a while",
+  멈춤: "Stalled",
+  "일하는 중인데 한동안 훅·출력이 없습니다 — 페인을 확인하세요": "Busy, but no hooks or output for a while. Check the pane",
+  "자리 비운 사이 · {ago}부터 · 세션 {n}개가 바뀌었습니다": "While you were away · since {ago} · {n} sessions changed",
+  "받은 메시지 {n}": "{n} received",
+  "보낸 메시지 {n}": "{n} sent",
+  // ── 0.6 W7: 하루 비용 예산 (§13-6) ──
+  "오늘 비용": "Today's cost",
+  "모든 세션의 statusLine 비용 증분 합계 · 예산은 설정 › 알림": "Sum of status line cost across all sessions · set a budget in Settings › Notifications",
+  "오늘 비용이 예산 ${budget}을 넘었습니다": "Today's cost passed the ${budget} budget",
+  "지금 ${usd} · 세션은 멈추지 않습니다": "Now ${usd} · sessions keep running",
 };

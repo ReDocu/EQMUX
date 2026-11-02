@@ -8,6 +8,7 @@ import { isTauri } from "./pty";
 import { saveRoleFile } from "./roles";
 import { settings } from "./settings";
 import { beepWaiting } from "./sound";
+import { noteCost } from "./budget";
 import type { AgentCliId, AgentStatus, PendingTool, Permissions, Session } from "../types";
 import { agentFlagsToString, cliOf, engineSwitched, sessionName, translatePermissions } from "../types";
 
@@ -79,6 +80,7 @@ function applyEvt(p: AgentStateEvt, fromSnapshot = false): void {
       beepWaiting();
     }
   }
+  noteCost(p.session, p.costUsd); // 하루 예산 (0.6 §13-6) — 스냅숏도 기준선으로 받는다(첫 값은 증분 0)
   backend.applyAgentState({
     session: p.session,
     agentSession: p.agentSession,

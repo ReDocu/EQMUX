@@ -48,7 +48,13 @@ export interface AppSettings {
   closeAction: "tray" | "quit";
   /** 첫 실행 고지를 봤는가 (§10) — 앱이 쓰는 곳 · 쓰지 않는 곳. [확인]을 누르면 true. 다시 보기는 설정 › 정보 */
   firstRunSeen: boolean;
+  /** 하루 비용 예산 USD (0.6 §13-6) — 0 = 꺼짐(기본). 모든 세션의 statusLine 비용 증분 합계가 넘으면 한 번 알린다.
+   *  세션을 멈추지 않는다 */
+  dailyBudgetUsd: number;
 }
+
+/** 하루 예산 옵션 — 설정 화면 · 검증이 공유한다. 0 = 꺼짐 */
+export const BUDGET_OPTIONS = [0, 5, 10, 20, 50] as const;
 
 /** 상태 줄 옵션 — 설정 화면·검증·Rust 주입이 공유한다 */
 export const STATUSLINE_MODES = ["full", "nocost", "off"] as const;
@@ -80,6 +86,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   webOpen: "eqmux", // 에이전트의 eqmux browser 조작(snapshot·click)이 되는 쪽
   closeAction: "tray", // 창을 닫아도 세션은 백그라운드로 산다 — 끝내기는 트레이 [전부 종료]
   firstRunSeen: false,
+  dailyBudgetUsd: 0, // 기본 꺼짐 — 구독 요금제에는 금액보다 한도(F1)가 뜻이 있다
 };
 
 const [settings, setSettings] = createSignal<AppSettings>(DEFAULT_SETTINGS);
@@ -116,6 +123,7 @@ export function sanitize(raw: unknown): AppSettings {
     webOpen: v.webOpen === "chrome" ? "chrome" : "eqmux",
     closeAction: v.closeAction === "quit" ? "quit" : "tray",
     firstRunSeen: v.firstRunSeen === true,
+    dailyBudgetUsd: (BUDGET_OPTIONS as readonly number[]).includes(v.dailyBudgetUsd as number) ? (v.dailyBudgetUsd as number) : 0,
     statusLine: (STATUSLINE_MODES as readonly string[]).includes(v.statusLine as string)
       ? (v.statusLine as AppSettings["statusLine"])
       : "full",

@@ -5,6 +5,7 @@
 // 0.5 시안(mT3kL·fvlW8) — 카테고리 탭 줄 + 카드. 행은 "이름·설명 | 컨트롤" 한 줄이다.
 import { For, Show } from "solid-js";
 import {
+  BUDGET_OPTIONS,
   DEFAULT_SETTINGS,
   PALETTES,
   settings,
@@ -68,6 +69,7 @@ const DONE_NOTI: AppSettings["doneNotifications"][] = ["report", "all", "off"];
 const MANUAL_DELIVERY: AppSettings["manualDelivery"][] = ["park", "auto"];
 const WEB_OPEN: AppSettings["webOpen"][] = ["eqmux", "chrome"];
 const CLOSE_ACTIONS: AppSettings["closeAction"][] = ["tray", "quit"];
+const BUDGETS = [...BUDGET_OPTIONS]; // 0(끔) · 5 · 10 · 20 · 50
 const REPLAY = [250, 500, 1000]; // 저장 상한(세션당 1,000줄)까지만 — 넘는 선택지는 1,000과 같았다 (B78)
 const SLOTS = [...SLOT_OPTIONS]; // 4 · 6 · 8
 const THEMES: AppSettings["theme"][] = ["dark", "light", "system"];
@@ -196,6 +198,14 @@ const SECTIONS: Section[] = [
     cat: "notify",
     title: "알림",
     wired: [
+      {
+        // 0.6 §13-6 — 넘으면 알림 센터 + OS 알림 한 번. 세션은 멈추지 않는다
+        k: "하루 비용 예산",
+        d: "모든 세션의 비용(statusLine) 합계 · 넘으면 하루에 한 번 알린다 · 세션은 멈추지 않는다",
+        labels: ["끔 (기본)", "$5", "$10", "$20", "$50"],
+        current: () => pick(BUDGETS, settings().dailyBudgetUsd),
+        apply: (i) => updateSettings({ dailyBudgetUsd: BUDGETS[i] }),
+      },
       {
         k: "OS 알림",
         d: "사람의 행동이 필요한 상태만 알립니다 · 꺼도 인앱 미확인은 유지됩니다",

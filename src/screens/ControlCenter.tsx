@@ -559,6 +559,15 @@ export function ControlCenter(props: { workspace: Workspace }) {
         short: t("종료됨"),
         title: `exit ${s.exitCode ?? "?"}`,
       });
+    // 멈춘 세션 (0.6 A5 · C2) — busy인데 한동안 훅·출력이 없다. 앱은 아무것도 하지 않고 알리기만 한다
+    if (s.status === "busy" && s.stalled)
+      out.push({
+        tone: "amber",
+        text: t("멈춤 · 한동안 출력 없음"),
+        short: t("멈춤"),
+        title: t("일하는 중인데 한동안 훅·출력이 없습니다 — 페인을 확인하세요"),
+        onClick: () => focusSession(s),
+      });
     const n = unmanagedAgent(s) ? pendingCount(s.id) : 0;
     if (n > 0)
       out.push({

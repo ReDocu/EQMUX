@@ -7001,3 +7001,44 @@ label.inbox-pop-row {
   gap: 6px;
   margin-top: 6px;
 }
+
+/* 0.6 W7: 자리 비운 사이 요약 (§13-5) — 대시보드 맨 위, 접을 수 있다 */
+.away-card {
+  margin: 0 22px 10px;
+  padding: 8px 12px;
+  font-size: 12px;
+}
+.away-card > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.away-t {
+  font-weight: 700;
+}
+.away-x {
+  margin-left: auto;
+}
+.away-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  width: 100%;
+  padding: 5px 0;
+  border: 0;
+  border-top: 1px solid var(--eq-line);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.away-nm {
+  font-weight: 700;
+}
+.away-done {
+  flex-basis: 100%;
+  color: var(--eq-blue);
+}
