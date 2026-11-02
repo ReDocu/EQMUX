@@ -35,6 +35,8 @@ pub struct MissionInfo {
     pub base_commit: Option<String>,
     /// base_commit 뒤 커밋 수 — 목록 때 git으로 센다. 끝난 임무·저장소 아님·base 없음이면 None
     pub commits_since: Option<u32>,
+    /// 선행 임무 (0.6 §4) — frontmatter `depends_on: <id> <id>`. 없으면 빈 목록. 버스 연동은 2라운드
+    pub depends_on: Vec<String>,
 }
 
 fn missions_dir(ws_path: &str) -> PathBuf {
@@ -170,6 +172,9 @@ fn parse_file(path: &Path) -> Option<(String, MissionInfo)> {
             assigned_at: parse_assigned_at(&fm).into_iter().collect(),
             base_commit: roles::fm_value(&fm, "base_commit"),
             commits_since: None,
+            depends_on: roles::fm_value(&fm, "depends_on")
+                .map(|v| v.split_whitespace().map(str::to_string).collect())
+                .unwrap_or_default(),
         },
     ))
 }
@@ -351,6 +356,7 @@ pub fn create(
         assigned_at: HashMap::new(),
         base_commit: None,
         commits_since: None,
+        depends_on: Vec::new(),
     };
     atomic_write(&mission_path(ws_path, &id), &render(&m))?;
     Ok(m)
@@ -553,6 +559,20 @@ mod tests {
         mark_assigned(&ws, &m.id, "hana@w", None).unwrap();
         let text = fs::read_to_string(mission_path(&ws, &m.id)).unwrap();
         assert!(!text.contains("assigned_at"));
+        fs::remove_dir_all(&ws).ok();
+    }
+
+    /// 선행 임무 (§4) — 공백으로 나눈 id 목록, 다른 쓰기(상태 변경)가 보존한다
+    #[test]
+    fn depends_on_parsed_and_preserved() {
+        let ws = temp_ws("depends");
+        let m = create(&ws, "후행", "목표", None, vec![]).unwrap();
+        assert!(m.depends_on.is_empty());
+        let path = mission_path(&ws, &m.id);
+        let text = fs::read_to_string(&path).unwrap().replacen("status: todo\n", "status: todo\ndepends_on: api  db-schema\n", 1);
+        fs::write(&path, text).unwrap();
+        set_status(&ws, &m.id, "in-progress").unwrap();
+        assert_eq!(get(&ws, &m.id).unwrap().depends_on, vec!["api", "db-schema"]);
         fs::remove_dir_all(&ws).ok();
     }
 

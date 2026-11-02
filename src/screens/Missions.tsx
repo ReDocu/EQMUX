@@ -261,6 +261,25 @@ export function Missions(props: { wsId: string }) {
                     </For>
                   </div>
                 </Show>
+                {/* 선행 임무 (0.6 §4) — frontmatter depends_on. 끝난 선행은 ✓. 모르는 id는 그대로 보인다 */}
+                <Show when={(m().dependsOn ?? []).length > 0}>
+                  <div class="ma-field">
+                    <div class="ma-label">{t("선행 임무")}</div>
+                    <div style={{ display: "flex", gap: "6px", "flex-wrap": "wrap" }}>
+                      <For each={m().dependsOn}>
+                        {(id) => {
+                          const dep = () => missions().find((x) => x.id === id);
+                          return (
+                            <span class="badge" classList={{ green: dep()?.status === "done", amber: !!dep() && dep()!.status !== "done" }} title={dep()?.status ?? t("없는 임무")}>
+                              {dep()?.status === "done" ? "✓ " : ""}
+                              {dep()?.name ?? id}
+                            </span>
+                          );
+                        }}
+                      </For>
+                    </div>
+                  </div>
+                </Show>
                 {/* 완료 보고 (작업 완료 신호) — 배정된 세션이 report --done을 보냈다. 상태는 사람이
                     눌러야 in-review가 된다. 앱이 스스로 임무 상태를 바꾸지 않는다 */}
                 <Show when={m().status === "in-progress" && doneReport(m())}>

@@ -94,4 +94,7 @@ export const dict: Record<string, string> = {
   // 0.6 §13-2 임무 시작점
   "시작 {sha}": "Started at {sha}",
   "시작 {sha} · 그 뒤 커밋 {n}개": "Started at {sha} · {n} commits since",
+  // 0.6 §4 선행 임무
+  "선행 임무": "Depends on",
+  "없는 임무": "Unknown mission",
 };

@@ -24,6 +24,7 @@ interface MissionFile {
   assignedAt?: Record<string, number>; // 배정 시각 (B92) — 세션 id → epoch ms, 임무 파일 frontmatter
   baseCommit: string | null; // 임무 시작점 (§13-2)
   commitsSince: number | null;
+  dependsOn: string[]; // 선행 임무 (§4)
 }
 
 function wsPath(wsId: string): string | undefined {

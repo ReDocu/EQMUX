@@ -382,6 +382,7 @@ export interface Mission {
   isDefault?: boolean; // 워크스페이스 기본 임무 (FR-E-56, M33) — frontmatter default: true
   baseCommit?: string; // 임무 시작점 (0.6 §13-2 · W4) — frontmatter base_commit
   commitsSince?: number; // base_commit 뒤 커밋 수 (W4)
+  dependsOn?: string[]; // 선행 임무 id (0.6 §4 · W4) — frontmatter depends_on
 }
 
 export interface Workspace {
