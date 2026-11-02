@@ -22,6 +22,9 @@ pub struct JobInfo {
     /// 직무별 모델 (0.6 §3 · 토큰 #8) — frontmatter `model:`. 빈 값 = 엔진 기본 (키 없음)
     #[serde(default)]
     pub model: String,
+    /// 직함별 담당 경로 (0.6 · W5 owns.rs) — frontmatter `owns: src/git/** docs/**`(공백으로 가른 glob). 빈 값 = 키 없음
+    #[serde(default)]
+    pub owns: String,
     /// 읽은 시점의 파일 mtime (P-7) — 저장 시 외부 변경 충돌 감지에 쓴다 (fsx와 같은 규칙)
     #[serde(default)]
     pub mtime_ms: i64,
@@ -200,6 +203,7 @@ fn parse_job(path: &Path) -> Option<JobInfo> {
         responsibility,
         forbidden,
         model: fm_value(&fm, "model").unwrap_or_default(),
+        owns: fm_value(&fm, "owns").unwrap_or_default(),
         mtime_ms: file_mtime_ms(path),
     })
 }
@@ -484,8 +488,8 @@ fn atomic_write(path: &Path, content: &str) -> Result<(), String> {
 
 fn render_job(j: &JobInfo) -> String {
     format!(
-        "---\nid: {}\nname: {}\n{}default_permissions:\n  write: {}\n  commit: {}\n  push: {}\n---\n\n## 책임\n{}\n\n## 금지\n{}\n",
-        j.id, j.name, model_line(&j.model), j.permissions.write, j.permissions.commit, j.permissions.push, j.responsibility, j.forbidden
+        "---\nid: {}\nname: {}\n{}{}default_permissions:\n  write: {}\n  commit: {}\n  push: {}\n---\n\n## 책임\n{}\n\n## 금지\n{}\n",
+        j.id, j.name, model_line(&j.model), owns_line(&j.owns), j.permissions.write, j.permissions.commit, j.permissions.push, j.responsibility, j.forbidden
     )
 }
 
@@ -493,6 +497,12 @@ fn render_job(j: &JobInfo) -> String {
 fn model_line(m: &str) -> String {
     let m: String = m.split_whitespace().collect();
     if m.is_empty() { String::new() } else { format!("model: {m}\n") }
+}
+
+/// `owns: <glob> <glob>` 줄 — glob 사이 공백은 하나로. 빈 값이면 키를 쓰지 않는다
+fn owns_line(o: &str) -> String {
+    let o = crate::roles::owns_value(o);
+    if o.is_empty() { String::new() } else { format!("owns: {o}\n") }
 }
 
 fn render_profile(out: &mut String, title: &str, p: &PersonaProfile) {
@@ -698,6 +708,7 @@ fn fixed_jobs() -> [JobInfo; 8] {
         responsibility: r.into(),
         forbidden: f.into(),
         model: String::new(),
+        owns: String::new(),
         mtime_ms: 0,
     };
     [
@@ -856,6 +867,7 @@ mod tests {
             responsibility: "최종 판단".into(),
             forbidden: "독단 push".into(),
             model: "opus".into(),
+            owns: String::new(),
             mtime_ms: 0,
         };
         save_job(&root, &lead2, None).unwrap();
@@ -986,6 +998,10 @@ mod tests {
         let lib = list(&root, None);
         assert_eq!(lib.personas.iter().find(|p| p.id == "kai").unwrap().model, "claude-sonnet-5-5");
         assert_eq!(lib.jobs.iter().find(|j| j.id == "dev").unwrap().model, "gpt5");
+        // 담당 경로 (owns) — 같은 흐름, glob 사이 공백만 하나로
+        let dev = lib.jobs.into_iter().find(|j| j.id == "dev").unwrap();
+        save_job(&root, &JobInfo { owns: " src/git/**   docs/** ".into(), ..dev }, None).unwrap();
+        assert_eq!(list(&root, None).jobs.iter().find(|j| j.id == "dev").unwrap().owns, "src/git/** docs/**");
         fs::remove_dir_all(&root).ok();
     }
 

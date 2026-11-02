@@ -284,6 +284,8 @@ export const dict: Record<string, string> = {
   "모델 — 이 직무 세션의 기본 모델. 페르소나 모델이 우선, 비우면 엔진 기본. 다음 기동부터 적용":
     "Model — default for sessions with this job. A persona model wins; empty uses the engine default. Applies from the next launch",
   "Codex 세션이면 Codex 모델 이름을 적습니다 (-m으로 넘어갑니다)": "For Codex sessions, enter a Codex model name (passed as -m)",
+  "담당 경로 — 이 직무가 맡는 파일. 밖을 고치면 알림이 뜹니다": "Owned paths — files this job is responsible for. Editing outside them raises a notice",
+  "워크스페이스 기준 glob을 공백으로 나눠 적습니다. 비우면 검사하지 않습니다": "Space-separated globs relative to the workspace. Leave empty to skip the check",
   // 0.6 §15-4 캐릭터 기억
   "캐릭터 기억 — 워크스페이스마다 따로. 세션이 스스로 덧붙이고 다음 세션 시작에 실립니다":
     "Character memory — one per workspace. The session appends to it and it is loaded at the next session start",

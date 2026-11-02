@@ -311,6 +311,7 @@ export function RoleLibrary() {
     responsibility: "",
     forbidden: "",
     model: "",
+    owns: "",
   });
 
   const [jobMtime, setJobMtime] = createSignal<number | undefined>(undefined); // B41 — 편집 시작 시점 고정
@@ -329,6 +330,7 @@ export function RoleLibrary() {
       responsibility: j.responsibility,
       forbidden: j.forbidden,
       model: j.model ?? "",
+      owns: j.owns ?? "",
     });
     setJobBase(JSON.stringify(jDraft()));
     setJobSaved(false);
@@ -347,10 +349,11 @@ export function RoleLibrary() {
       responsibility: d.responsibility,
       forbidden: d.forbidden,
       model: d.model.trim(),
+      owns: d.owns.trim(),
       mtimeMs: jobMtime(), // 편집 시작 시점의 파일 상태 (P-7 · B41)
     });
     setJobSaveErr(err ?? undefined);
-    if (!err && (j.model ?? "") !== d.model.trim()) resaveTeams(); // 모델 (0.6 §3) — 역할 파일 model: 갱신, 다음 기동부터
+    if (!err && ((j.model ?? "") !== d.model.trim() || (j.owns ?? "") !== d.owns.trim())) resaveTeams(); // 모델 · 담당 경로 — 역할 파일 frontmatter 갱신
     reloadScope();
     if (!err) {
       setJobMtime(jobs().find((x) => x.id === j.id)?.mtimeMs);
@@ -503,6 +506,11 @@ export function RoleLibrary() {
                   <label class="rl-label">{t("모델 — 이 직무 세션의 기본 모델. 페르소나 모델이 우선, 비우면 엔진 기본. 다음 기동부터 적용")}</label>
                   <input class="mono" list="eq-model-suggest" placeholder="opus · sonnet · haiku" value={jDraft().model} onInput={(e) => setJDraft({ ...jDraft(), model: (e.currentTarget.value = modelChars(e.currentTarget.value)) })} />
                   <span class="rl-hint muted">{t("Codex 세션이면 Codex 모델 이름을 적습니다 (-m으로 넘어갑니다)")}</span>
+                </div>
+                <div class="rl-field">
+                  <label class="rl-label">{t("담당 경로 — 이 직무가 맡는 파일. 밖을 고치면 알림이 뜹니다")}</label>
+                  <input class="mono" placeholder="src/git/** docs/**" value={jDraft().owns} onInput={(e) => setJDraft({ ...jDraft(), owns: e.currentTarget.value })} />
+                  <span class="rl-hint muted">{t("워크스페이스 기준 glob을 공백으로 나눠 적습니다. 비우면 검사하지 않습니다")}</span>
                 </div>
                 <div class="rl-field">
                   <label class="rl-label">{t("기본 권한 — 실행 플래그로 번역됩니다")}</label>

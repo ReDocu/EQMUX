@@ -79,6 +79,14 @@ pub struct RolePayload {
     /// 모델 (0.6 §3 · C5) — 프런트가 페르소나 > 직무로 고른 값 하나. 있으면 frontmatter `model:`
     #[serde(default)]
     pub model: Option<String>,
+    /// 직함별 담당 경로 (0.6 · W5 owns.rs) — 직무의 `owns:`. 있으면 frontmatter `owns:`
+    #[serde(default)]
+    pub owns: Option<String>,
+}
+
+/// `owns:` 값 정리 — glob 사이 공백을 하나로 (직무 파일 · 역할 파일 공용)
+pub fn owns_value(o: &str) -> String {
+    o.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// 임무 블록 내용 (FR-E-53) — 원본 정의 파일(.eqmux/missions/*.md)의 포인터를 포함한다
@@ -308,6 +316,10 @@ fn frontmatter_text(p: &RolePayload, mission_id: Option<&str>) -> String {
     let model: String = p.model.as_deref().unwrap_or("").split_whitespace().collect();
     if !model.is_empty() {
         s.push_str(&format!("model: {model}\n"));
+    }
+    let owns = owns_value(p.owns.as_deref().unwrap_or(""));
+    if !owns.is_empty() {
+        s.push_str(&format!("owns: {owns}\n"));
     }
     s.push_str("permissions:\n");
     s.push_str(&format!("  write: {}\n", p.permissions.write));
@@ -625,6 +637,11 @@ mod tests {
         save(&ws, &p).unwrap();
         set_mission(&ws, "kai@ws1", None).unwrap();
         assert_eq!(fm_value(&split_frontmatter(&fs::read_to_string(&path).unwrap()).0, "model").as_deref(), Some("opus"));
+        // owns — 같은 흐름
+        assert_eq!(fm_value(&split_frontmatter(&fs::read_to_string(&path).unwrap()).0, "owns"), None);
+        p.owns = Some(" src/git/**  docs/** ".into());
+        save(&ws, &p).unwrap();
+        assert_eq!(fm_value(&split_frontmatter(&fs::read_to_string(&path).unwrap()).0, "owns").as_deref(), Some("src/git/** docs/**"));
         fs::remove_dir_all(&dir).ok();
     }
 

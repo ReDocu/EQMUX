@@ -41,6 +41,7 @@ export interface Job {
   responsibility: string;
   forbidden: string;
   model?: string; // 직무별 모델 (0.6 §3 · W4) — frontmatter model:, 빈 값 = 엔진 기본
+  owns?: string; // 직함별 담당 경로 (0.6 · W4 · W5) — frontmatter owns: glob 공백 구분, 빈 값 = 키 없음
   mtimeMs?: number; // 읽은 시점의 파일 mtime (P-7) — 저장 시 외부 변경 충돌 감지
 }
 
