@@ -218,12 +218,13 @@ export async function clipReadText(): Promise<string> {
   return invoke<string>("clip_read_text").catch(() => "");
 }
 
-export function clipWriteText(text: string): void {
+/** concealed — 클립보드 기록 · 클라우드 동기화에 남기지 않는다 (B148, 시크릿 복사). 없으면 예전 그대로 */
+export function clipWriteText(text: string, concealed?: boolean): void {
   if (!isTauri()) {
     void navigator.clipboard.writeText(text).catch(() => {});
     return;
   }
-  void invoke("clip_write_text", { text }).catch(() => {});
+  void invoke("clip_write_text", { text, concealed }).catch(() => {});
 }
 
 /** 클립보드에 이미지가 있으면 %TEMP%\eqmux-pastes\*.png로 저장하고 경로를 준다. 없으면 null. */

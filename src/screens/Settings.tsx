@@ -261,6 +261,14 @@ const SECTIONS: Section[] = [
         current: () => (settings().sgrStore ? 0 : 1),
         apply: (i) => updateSettings({ sgrStore: i === 0 }),
       },
+      {
+        // 0.6 E4 (W6) — 끄는 동작은 Rust(W1)가 이 키를 읽는다
+        k: "스크롤백 · 세션 로그 저장",
+        d: "스크롤백과 세션 로그 파일에는 토큰·비밀번호가 평문으로 남을 수 있습니다. 끄면 디스크에 쓰지 않습니다(재시작 뒤 이전 출력을 다시 볼 수 없습니다).",
+        labels: ["켜짐 (기본)", "꺼짐"],
+        current: () => (settings().scrollbackPersist ? 0 : 1),
+        apply: (i) => updateSettings({ scrollbackPersist: i === 0 }),
+      },
     ],
     fixed: [
       { k: "메시지 · 스크롤백 보존", label: "30일" },
