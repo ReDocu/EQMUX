@@ -284,6 +284,23 @@ pub struct WorkStatus {
     /// HEAD가 원격 브랜치 어딘가에 이미 있다 — amend가 푸시한 커밋을 바꾼다 (경고)
     pub head_pushed: bool,
     pub has_head: bool,
+    /// 진행 중인 작업 (§17-4 배너) — merge · rebase · cherry-pick · revert, 없으면 None
+    pub progress: Option<String>,
+}
+
+/// git 디렉터리의 표식으로 진행 중 상태를 판정한다 — 단위 테스트 ③ (§17-8)
+pub fn progress_in(git_dir: &std::path::Path) -> Option<String> {
+    if git_dir.join("rebase-merge").is_dir() || git_dir.join("rebase-apply").is_dir() {
+        Some("rebase".into()) // rebase가 멈춘 자리에도 CHERRY_PICK_HEAD가 있을 수 있어 먼저 본다
+    } else if git_dir.join("MERGE_HEAD").is_file() {
+        Some("merge".into())
+    } else if git_dir.join("CHERRY_PICK_HEAD").is_file() {
+        Some("cherry-pick".into())
+    } else if git_dir.join("REVERT_HEAD").is_file() {
+        Some("revert".into())
+    } else {
+        None
+    }
 }
 
 /// `status --porcelain=v1 -z` — 이름 변경은 다음 NUL 항목이 원래 경로다
@@ -311,7 +328,11 @@ pub fn status(ws_path: &str) -> Result<WorkStatus, String> {
     let has_head = git(&["rev-parse", "--verify", "-q", "HEAD"], ws_path).is_ok();
     let head_pushed = has_head
         && git(&["branch", "-r", "--contains", "HEAD"], ws_path).is_ok_and(|s| !s.trim().is_empty());
-    Ok(WorkStatus { files: parse_status_z(&o.stdout), head_pushed, has_head })
+    // 워크트리의 .git은 파일이다 — 실제 git 디렉터리는 rev-parse가 안다
+    let progress = git(&["rev-parse", "--absolute-git-dir"], ws_path)
+        .ok()
+        .and_then(|d| progress_in(std::path::Path::new(&d)));
+    Ok(WorkStatus { files: parse_status_z(&o.stdout), head_pushed, has_head, progress })
 }
 
 /// 한 파일의 unified diff 원문 — 프런트가 덩어리로 나눠 [스테이지]용 패치를 만든다
@@ -360,11 +381,26 @@ const ALLOWED: &[Spec] = &[
     // 스테이지 내리기만 — `--staged` 없는 restore는 작업 트리 변경을 지운다
     Spec { sub: "restore", flags: &["--staged"], valued: &[], paths: true, required: Some("--staged") },
     Spec { sub: "commit", flags: &["--amend", "--no-edit"], valued: &["-m"], paths: false, required: None },
-    Spec { sub: "switch", flags: &[], valued: &[], paths: false, required: None },
+    // --detach — 커밋 메뉴의 [체크아웃]. 만들기(-c) · 강제(-f · --discard-changes)는 없다
+    Spec { sub: "switch", flags: &["--detach"], valued: &[], paths: false, required: None },
+    // 첫 커밋 전 저장소의 스테이지 내리기 — HEAD가 없어 restore --staged가 안 된다. 인덱스에서만 뺀다
+    Spec { sub: "rm", flags: &["--cached", "-q"], valued: &[], paths: true, required: Some("--cached") },
+    // ── 3단계: 이력 조작. 확인창 · §4-1 경고는 화면이 맡는다. 편집기는 env GIT_EDITOR=true가 막는다 ──
+    Spec { sub: "merge", flags: &["--no-edit", "--no-ff", "--ff-only", "--abort"], valued: &[], paths: false, required: None },
+    // 비대화형만 — -i · --exec(-x) · --onto는 목록에 없다
+    Spec { sub: "rebase", flags: &["--abort", "--continue", "--skip"], valued: &[], paths: false, required: None },
+    Spec { sub: "cherry-pick", flags: &["--abort", "--continue", "--skip"], valued: &[], paths: false, required: None },
+    Spec { sub: "revert", flags: &["--no-edit", "--abort", "--continue", "--skip"], valued: &[], paths: false, required: None },
+    // stash push · apply · pop · drop만 (아래 STASH_ACTIONS). clear는 없다
+    Spec { sub: "stash", flags: &["-u", "--include-untracked", "--index"], valued: &["-m"], paths: false, required: None },
+    // --hard는 화면이 사라질 것과 되돌릴 해시를 보이고 두 번 묻는다 (§17-4). --keep · --merge · 경로는 없다
+    Spec { sub: "reset", flags: &["--soft", "--mixed", "--hard"], valued: &[], paths: false, required: None },
     // -D(병합 안 된 브랜치 삭제)는 화면이 -d 실패 뒤 확인창을 거쳐서만 보낸다
     Spec { sub: "branch", flags: &["-m", "-d", "-D"], valued: &[], paths: false, required: None },
     Spec { sub: "tag", flags: &["-a", "-d"], valued: &["-m"], paths: false, required: None },
 ];
+
+const STASH_ACTIONS: &[&str] = &["push", "apply", "pop", "drop"];
 
 pub fn check_args(args: &[String]) -> Result<(), String> {
     let sub = args.first().ok_or("빈 명령")?;
@@ -399,6 +435,13 @@ pub fn check_args(args: &[String]) -> Result<(), String> {
             return Err(format!("허용하지 않는 refspec: {a}"));
         }
         i += 1;
+    }
+    if sub == "stash" {
+        // 첫 위치 인자가 동작이다 — `stash` 혼자는 push지만 화면은 늘 동작을 적는다
+        let action = args.iter().skip(1).find(|a| !a.starts_with('-')).map(String::as_str);
+        if !action.is_some_and(|a| STASH_ACTIONS.contains(&a)) {
+            return Err(format!("허용하지 않는 stash 동작: {}", action.unwrap_or("(없음)")));
+        }
     }
     if let Some(r) = spec.required {
         if !args.iter().any(|a| a == r) {
@@ -453,7 +496,13 @@ pub fn command_line(args: &[String]) -> String {
 /// 쓰기 상한 — 원격 · pre-commit 훅은 분 단위가 정상이다. 프롬프트로 멈추는 길은 env가 막는다
 const WRITE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 /// 인증 프롬프트를 앱에서 받지 않는다 (G6) — 자격 증명 관리자 · ssh-agent에 이미 있으면 통한다
-const NO_PROMPT: &[(&str, &str)] = &[("GIT_TERMINAL_PROMPT", "0"), ("GCM_INTERACTIVE", "never")];
+/// GIT_EDITOR=true — revert · `--continue`가 여는 편집기가 tty 없는 GUI에서 상한까지 멈추지 않게 기본 메시지를 그대로 받는다
+const NO_PROMPT: &[(&str, &str)] = &[
+    ("GIT_TERMINAL_PROMPT", "0"),
+    ("GCM_INTERACTIVE", "never"),
+    ("GIT_EDITOR", "true"),
+    ("GIT_MERGE_AUTOEDIT", "no"),
+];
 
 pub fn run(ws_path: &str, args: &[String]) -> Result<RunResult, String> {
     need_repo(ws_path)?;
@@ -491,6 +540,84 @@ pub fn apply_patch(ws_path: &str, patch: &str, reverse: bool) -> Result<RunResul
     })
 }
 
+// ── 3단계: 사라질 커밋 미리 보기 (reset --hard) ──
+
+/// `from..to`에 있는 커밋 — HEAD를 from으로 옮기면 어느 브랜치에서도 안 보이게 될 수 있는 것들
+pub fn range(ws_path: &str, from: &str, to: &str) -> Result<Vec<LogCommit>, String> {
+    if !valid_rev(from) || !(valid_rev(to) || to == "HEAD") {
+        return Err("잘못된 커밋 해시".into());
+    }
+    let fmt = format!("--format=%H{US}%P{US}%an{US}%at{US}%s{US}%D{RS}");
+    let out = git(&["log", &fmt, "-n200", &format!("{from}..{to}")], ws_path)?;
+    Ok(parse_log(&out))
+}
+
+// ── §17-3 커밋 ↔ 세션 — 편집 기록(C4 file_touch)으로 추정한다. 커밋 메시지에 트레일러를 넣지 않는다 (G4) ──
+
+/// 커밋 직전 이만큼 안에 그 커밋의 파일을 편집 도구로 고친 세션을 "만든 세션"으로 본다.
+/// ponytail: 시간 창 추정 — 같은 파일을 여럿이 고쳤으면 다 붙고, Bash · Codex 편집은 못 잡는다. 정확해야 하면 커밋 훅에서 세션을 적는다
+const ATTRIB_WINDOW_MS: i64 = 4 * 60 * 60 * 1000;
+
+/// 편집 기록 경로 → 저장소 기준 상대 경로. 세션 워크트리(`.eqmux/worktrees/<세션>/`) 안이면 그 접두도 뗀다
+fn repo_rel(ws_path: &str, raw: &str) -> String {
+    let norm = |p: &str| p.replace('\\', "/").trim_end_matches('/').to_string();
+    let (root, p) = (norm(ws_path), norm(raw));
+    let key = |x: &str| if cfg!(windows) { x.to_lowercase() } else { x.to_string() }; // Windows 경로는 대소문자를 가리지 않는다
+    let mut rel = if key(&p).starts_with(&(key(&root) + "/")) { p[root.len() + 1..].to_string() } else { p };
+    if let Some(rest) = rel.strip_prefix(".eqmux/worktrees/") {
+        rel = rest.split_once('/').map(|(_, r)| r.to_string()).unwrap_or_default();
+    }
+    rel.trim_start_matches("./").to_string()
+}
+
+/// (해시, 커밋 시각 ms, 바뀐 파일) × 편집 기록 → 해시별 세션 (편집 수가 많은 순)
+pub fn attribute(
+    ws_path: &str,
+    commits: &[(String, i64, Vec<String>)],
+    touches: &[crate::store::Touch],
+) -> std::collections::HashMap<String, Vec<String>> {
+    let rel: Vec<(String, &crate::store::Touch)> = touches.iter().map(|t| (repo_rel(ws_path, &t.path), t)).collect();
+    let same = |a: &str, b: &str| if cfg!(windows) { a.eq_ignore_ascii_case(b) } else { a == b };
+    let mut out = std::collections::HashMap::new();
+    for (hash, at, files) in commits {
+        let mut count: Vec<(String, usize)> = Vec::new();
+        for (p, t) in &rel {
+            if t.ts > *at || t.ts < at - ATTRIB_WINDOW_MS || !files.iter().any(|f| same(f, p)) {
+                continue;
+            }
+            match count.iter_mut().find(|(s, _)| *s == t.session) {
+                Some(c) => c.1 += 1,
+                None => count.push((t.session.clone(), 1)),
+            }
+        }
+        if !count.is_empty() {
+            count.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+            out.insert(hash.clone(), count.into_iter().map(|(s, _)| s).collect());
+        }
+    }
+    out
+}
+
+/// 커밋들의 시각과 바뀐 파일 — 한 번의 git 호출 (`--no-walk`)
+fn commit_files(ws_path: &str, hashes: &[String]) -> Result<Vec<(String, i64, Vec<String>)>, String> {
+    let hashes: Vec<&str> = hashes.iter().map(String::as_str).filter(|h| valid_rev(h)).take(500).collect();
+    if hashes.is_empty() {
+        return Ok(vec![]);
+    }
+    let fmt = format!("--format={RS}%H{US}%ct");
+    let mut args = vec!["log", "--no-walk=unsorted", "--name-only", fmt.as_str()];
+    args.extend(hashes);
+    let out = git(&args, ws_path)?;
+    Ok(out
+        .split(RS)
+        .filter_map(|rec| {
+            let mut lines = rec.lines().filter(|l| !l.trim().is_empty());
+            let (h, ct) = lines.next()?.split_once(US)?;
+            Some((h.to_string(), ct.trim().parse::<i64>().ok()? * 1000, lines.map(String::from).collect()))
+        })
+        .collect())
+}
+
 // ── 경로 추적 · 무시 상태 (W6 §16 .env 칩) — 읽기만 ──
 
 #[derive(Serialize, Debug)]
@@ -518,6 +645,29 @@ pub fn path_status(ws_path: &str, paths: &[String]) -> Vec<PathStatus> {
 }
 
 // ── Tauri 커맨드 — git CLI라 blocking 스레드에서 돈다 (git_overview와 같은 이유) ──
+
+#[tauri::command]
+pub async fn git_range(ws_path: String, from: String, to: String) -> Result<Vec<LogCommit>, String> {
+    blocking(move || range(&ws_path, &from, &to)).await
+}
+
+/// §17-3 그래프 세션 배지 — 해시 → 만든 것으로 보이는 세션 id들. 편집 기록이 없으면 빈 맵
+#[tauri::command]
+pub async fn git_commit_sessions(
+    store_state: tauri::State<'_, crate::StoreState>,
+    ws_id: String,
+    ws_path: String,
+    hashes: Vec<String>,
+) -> Result<std::collections::HashMap<String, Vec<String>>, String> {
+    let root = store_state.0.root();
+    blocking(move || {
+        let commits = commit_files(&ws_path, &hashes)?;
+        let Some(since) = commits.iter().map(|c| c.1).min() else { return Ok(Default::default()) };
+        let touches = crate::store::recent_touches(&root, &ws_id, since - ATTRIB_WINDOW_MS);
+        Ok(attribute(&ws_path, &commits, &touches))
+    })
+    .await
+}
 
 #[tauri::command]
 pub async fn git_path_status(ws_path: String, paths: Vec<String>) -> Result<Vec<PathStatus>, String> {
@@ -603,7 +753,7 @@ mod tests {
             &["pull", "--rebase"],
             &["pull", "--ff-only", "--no-verify"],
             &["clean", "-fd"],
-            &["reset", "--hard"],
+            &["reset", "--merge"],
             &["checkout", "main"],
             &["switch", "-f", "main"],
             &["switch", "--discard-changes", "main"],
@@ -768,6 +918,151 @@ mod tests {
         assert!(run(&path, &s(&["clean", "-fd"])).is_err());
         // 원격 없는 push는 실패하지만 멈추지 않는다
         assert!(!run(&path, &s(&["push"])).unwrap().ok);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 3단계 허용 목록 — 비대화형 rebase만, stash는 네 동작만, reset은 경로 없이
+    #[test]
+    fn check_args_stage3() {
+        for bad in [
+            &["rebase", "-i", "main"][..],
+            &["rebase", "--exec", "make", "main"],
+            &["rebase", "-x", "make", "main"],
+            &["rebase", "--onto", "a", "b"],
+            &["stash", "clear"],
+            &["stash"],
+            &["stash", "show", "-p"],
+            &["reset", "--keep", "abc1234"],
+            &["reset", "--", "a.txt"],
+            &["merge", "-X", "theirs", "x"],
+            &["cherry-pick", "-n", "abc1234"],
+            &["rm", "--", "a.txt"],
+            &["rm", "--cached", "-r", "--", "a"],
+            &["switch", "-c", "x"],
+        ] {
+            assert!(check_args(&s(bad)).is_err(), "거부해야 한다: {bad:?}");
+        }
+        for good in [
+            &["merge", "--no-edit", "feat"][..],
+            &["merge", "--abort"],
+            &["rebase", "main"],
+            &["rebase", "--continue"],
+            &["cherry-pick", "abc1234"],
+            &["revert", "--no-edit", "abc1234"],
+            &["stash", "push", "-u", "-m", "작업 중"],
+            &["stash", "pop", "stash@{0}"],
+            &["stash", "drop", "stash@{1}"],
+            &["reset", "--hard", "abc1234"],
+            &["reset", "--soft", "abc1234"],
+            &["switch", "--detach", "abc1234"],
+            &["rm", "--cached", "-q", "--", "a.txt"],
+        ] {
+            assert!(check_args(&s(good)).is_ok(), "받아야 한다: {good:?} — {:?}", check_args(&s(good)));
+        }
+    }
+
+    /// 단위 테스트 ③ (§17-8) — 진행 중 상태 판정, 표본 git 디렉터리
+    #[test]
+    fn progress_markers() {
+        let d = std::env::temp_dir().join(format!("eqmux-gitx-prog-{}", crate::workspace::now_ms()));
+        fs::create_dir_all(&d).unwrap();
+        assert_eq!(progress_in(&d), None);
+        fs::write(d.join("REVERT_HEAD"), "x").unwrap();
+        assert_eq!(progress_in(&d).as_deref(), Some("revert"));
+        fs::write(d.join("CHERRY_PICK_HEAD"), "x").unwrap();
+        assert_eq!(progress_in(&d).as_deref(), Some("cherry-pick"));
+        fs::write(d.join("MERGE_HEAD"), "x").unwrap();
+        assert_eq!(progress_in(&d).as_deref(), Some("merge"));
+        fs::create_dir_all(d.join("rebase-merge")).unwrap();
+        assert_eq!(progress_in(&d).as_deref(), Some("rebase"));
+        fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn attribute_by_touches() {
+        use crate::store::Touch;
+        let ws = if cfg!(windows) { r"D:\w\repo" } else { "/w/repo" };
+        let abs = |rel: &str| format!("{ws}{}{}", std::path::MAIN_SEPARATOR, rel.replace('/', &std::path::MAIN_SEPARATOR.to_string()));
+        let t = |session: &str, path: String, ts: i64| Touch { session: session.into(), path, tool: "Edit".into(), ts };
+        let hour = 3_600_000;
+        let touches = vec![
+            t("kai@w", abs("src/a.ts"), 10 * hour),
+            t("kai@w", abs("src/a.ts"), 10 * hour + 1),
+            t("rin@w", abs(".eqmux/worktrees/rin@w/src/a.ts"), 10 * hour + 2), // 자기 워크트리
+            t("mo@w", abs("src/b.ts"), 10 * hour), // 다른 파일
+            t("old@w", abs("src/a.ts"), 2 * hour), // 창 밖
+            t("late@w", abs("src/a.ts"), 12 * hour), // 커밋 뒤
+        ];
+        let commits = vec![("c1".to_string(), 11 * hour, vec!["src/a.ts".to_string()]), ("c2".to_string(), 11 * hour, vec!["z".to_string()])];
+        let m = attribute(ws, &commits, &touches);
+        assert_eq!(m["c1"], vec!["kai@w", "rin@w"], "편집 수가 많은 순");
+        assert!(!m.contains_key("c2"));
+        assert_eq!(repo_rel(ws, "src/x.ts"), "src/x.ts", "상대 경로는 그대로");
+    }
+
+    /// 3단계 왕복 — 충돌 merge → 진행 중 · 충돌 파일 → 중단, 첫 커밋 전 rm --cached, reset --hard · range
+    #[test]
+    fn stage3_round_trip() {
+        let (dir, path) = temp_repo("s3");
+        let run_ok = |a: &[&str]| {
+            let r = run(&path, &s(a)).unwrap();
+            assert!(r.ok, "{a:?}: {}", r.output);
+            r
+        };
+        fs::write(dir.join("a.txt"), "base\n").unwrap();
+        run_ok(&["add", "--", "a.txt"]);
+        assert!(!status(&path).unwrap().has_head);
+        run_ok(&["rm", "--cached", "-q", "--", "a.txt"]); // 첫 커밋 전 스테이지 내리기
+        assert_eq!(status(&path).unwrap().files[0].x, "?");
+        run_ok(&["add", "--", "a.txt"]);
+        run_ok(&["commit", "-m", "base"]);
+        let base = git(&["rev-parse", "HEAD"], &path).unwrap();
+        run_ok(&["branch", "feat"]);
+        fs::write(dir.join("a.txt"), "main side\n").unwrap();
+        run_ok(&["add", "--", "a.txt"]);
+        run_ok(&["commit", "-m", "main change"]);
+        run_ok(&["switch", "feat"]);
+        fs::write(dir.join("a.txt"), "feat side\n").unwrap();
+        run_ok(&["add", "--", "a.txt"]);
+        run_ok(&["commit", "-m", "feat change"]);
+        run_ok(&["switch", "main"]);
+
+        let r = run(&path, &s(&["merge", "--no-edit", "feat"])).unwrap();
+        assert!(!r.ok, "충돌이 나야 한다");
+        let st = status(&path).unwrap();
+        assert_eq!(st.progress.as_deref(), Some("merge"));
+        assert_eq!((st.files[0].x.as_str(), st.files[0].y.as_str()), ("U", "U"));
+        assert!(fs::read_to_string(dir.join("a.txt")).unwrap().contains("<<<<<<<"));
+        run_ok(&["merge", "--abort"]);
+        assert_eq!(status(&path).unwrap().progress, None);
+        assert_eq!(fs::read_to_string(dir.join("a.txt")).unwrap().replace("\r\n", "\n"), "main side\n", "중단 = 원래 상태");
+
+        // 충돌 해결 후 [계속] — 우리 것 고르고 add → commit --no-edit (편집기 없이 끝난다)
+        assert!(!run(&path, &s(&["merge", "--no-edit", "feat"])).unwrap().ok);
+        fs::write(dir.join("a.txt"), "main side\n").unwrap();
+        run_ok(&["add", "--", "a.txt"]);
+        run_ok(&["commit", "--no-edit"]);
+        assert_eq!(status(&path).unwrap().progress, None);
+
+        // revert — --no-edit 없이도 GIT_EDITOR=true라 편집기에서 멈추지 않는다
+        fs::write(dir.join("b.txt"), "b
+").unwrap();
+        run_ok(&["add", "--", "b.txt"]);
+        run_ok(&["commit", "-m", "add b"]);
+        run_ok(&["revert", "HEAD"]);
+        assert!(!dir.join("b.txt").exists());
+        let gone = range(&path, &base, "HEAD").unwrap();
+        assert!(gone.len() >= 5, "base 뒤 커밋들: {}", gone.len());
+        run_ok(&["reset", "--hard", &base]);
+        assert_eq!(git(&["rev-parse", "HEAD"], &path).unwrap(), base);
+        assert!(range(&path, "--all", "HEAD").is_err());
+
+        // stash push · pop
+        fs::write(dir.join("a.txt"), "dirty\n").unwrap();
+        run_ok(&["stash", "push", "-m", "wip"]);
+        assert_eq!(refs(&path).unwrap().stashes.len(), 1);
+        run_ok(&["stash", "pop", "stash@{0}"]);
+        assert_eq!(fs::read_to_string(dir.join("a.txt")).unwrap().replace("\r\n", "\n"), "dirty\n"); // autocrlf
         fs::remove_dir_all(&dir).ok();
     }
 

@@ -7051,6 +7051,34 @@ label.inbox-pop-row {
   display: block;
 }
 
+/* 0.6 W5: git 화면 3단계 — 세션 배지 · 충돌 고르기 ───────────────────────── */
+.gx-who {
+  flex-shrink: 0;
+  font-size: 9.5px;
+  line-height: 16px;
+  padding: 0 6px;
+  border-radius: 5px;
+  color: var(--eq-cyan);
+  background: var(--eq-cyan-soft);
+}
+.gx-who.warn {
+  color: var(--eq-orange);
+  background: var(--eq-orange-soft);
+}
+.gx-st.conflict {
+  color: var(--eq-red);
+}
+.gx-hunk-head .btn.on {
+  color: var(--eq-blue);
+  border-color: var(--eq-blue-mid);
+}
+.gx-hunk pre.gx-ours {
+  border-left: 3px solid var(--eq-green);
+}
+.gx-hunk pre.gx-theirs {
+  border-left: 3px solid var(--eq-purple);
+}
+
 /* ── 대화 탭 임무 필터 (0.6 §4 · W7) ── */
 .conv-mission {
   max-width: 160px;

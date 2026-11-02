@@ -226,4 +226,85 @@ export const dict: Record<string, string> = {
   "이름이 비었습니다": "Name is empty",
   "이름은 -로 시작할 수 없습니다": "Name cannot start with -",
   "git이 받지 않는 이름입니다": "git does not accept this name",
+
+  // ── 0.6 §17 3단계 (GitScreen.tsx) ──
+  "세션에게 충돌 해결 맡기기": "Hand conflict resolution to a session",
+  "받을 세션": "Session",
+  "ask 메시지 — 고쳐서 보낼 수 있습니다": "ask message — you can edit it before sending",
+  "{h} 되돌리기 (revert)": "Revert {h}",
+  "이 커밋을 거꾸로 적용하는 새 커밋을 만듭니다. 이력은 지우지 않습니다.":
+    "Creates a new commit that undoes this one. History is not rewritten.",
+  "{b}을(를) 현재 브랜치로 merge": "Merge {b} into the current branch",
+  "충돌이 나면 위 배너에서 충돌을 보고 [계속] 또는 [중단]을 고릅니다.":
+    "If it conflicts, review the conflicts from the banner above, then choose [Continue] or [Abort].",
+  "현재 브랜치를 {b} 위로 rebase": "Rebase the current branch onto {b}",
+  "현재 브랜치의 커밋을 새로 만듭니다(해시가 바뀝니다). 이미 푸시한 커밋이면 다음 push에 강제 push가 필요합니다.":
+    "Rewrites the current branch's commits (hashes change). If they were pushed, the next push needs a force push.",
+  "{h} 체크아웃 (브랜치 없이)": "Check out {h} (no branch)",
+  "분리된 HEAD가 됩니다. 여기서 만든 커밋은 브랜치를 만들어 두지 않으면 잃기 쉽습니다.":
+    "You will be on a detached HEAD. Commits made here are easy to lose unless you create a branch.",
+  체크아웃: "Check out",
+  "되돌릴 해시: {h} (git reset --hard {h})": "Hash to restore: {h} (git reset --hard {h})",
+  "브랜치에서 빠지는 커밋 {n}개": "{n} commits leave the branch",
+  "HEAD만 옮깁니다. 변경 내용은 스테이지된 채로 남습니다.": "Moves HEAD only. Changes stay staged.",
+  "HEAD를 옮기고 스테이지를 비웁니다. 작업 트리 파일은 그대로입니다.":
+    "Moves HEAD and clears the stage. Working tree files stay as they are.",
+  "HEAD를 옮기고 스테이지와 작업 트리를 그 커밋으로 덮어씁니다.":
+    "Moves HEAD and overwrites the stage and working tree with that commit.",
+  "{h}로 reset --{m}": "reset --{m} to {h}",
+  "{h}로 reset --hard": "reset --hard to {h}",
+  "커밋 안 된 변경 {n}건이 사라집니다 — 되돌릴 방법이 없습니다.":
+    "{n} uncommitted changes will be lost — there is no way to get them back.",
+  다음: "Next",
+  "정말로 reset --hard 할까요?": "Really reset --hard?",
+  "커밋 안 된 변경 {n}건은 되살릴 수 없습니다. 커밋은 위 해시로 되돌릴 수 있습니다.":
+    "The {n} uncommitted changes cannot be recovered. Commits can be restored with the hash above.",
+  "커밋은 위 해시로 되돌릴 수 있습니다.": "Commits can be restored with the hash above.",
+  "작업 트리를 stash에 넣기 (추적 안 된 파일 포함)": "Stash the working tree (including untracked files)",
+  "{s} 버리기": "Drop {s}",
+  "stash 목록에서 지웁니다. 아래 해시로 한동안 되살릴 수 있습니다(git gc 전까지).":
+    "Removes it from the stash list. It can be restored with the hash below for a while (until git gc).",
+  "되살리기: git stash apply {h}": "Restore: git stash apply {h}",
+  버리기: "Drop",
+  "{op} 중단": "Abort {op}",
+  "시작하기 전 상태로 돌아갑니다. 그사이 고친 충돌 해결은 사라집니다.":
+    "Returns to the state before it started. Conflict fixes made since then are lost.",
+  "중단 (--abort)": "Abort (--abort)",
+  "저장 실패 — 파일이 그사이 바뀌었을 수 있습니다. 다시 여세요": "Save failed — the file may have changed meanwhile. Reopen it",
+  "git {op} 중 충돌이 났습니다. 아래 파일의 충돌 표식(<<<<<<< ======= >>>>>>>)을 고치고 `git add`까지만 해 주세요. 커밋 · --continue는 사람이 git 화면에서 합니다.\n{files}":
+    "git {op} hit conflicts. Please fix the conflict markers (<<<<<<< ======= >>>>>>>) in the files below and stop after `git add`. A person will commit / --continue from the git screen.\n{files}",
+  "{n}에게 보냈습니다": "Sent to {n}",
+  "체크아웃 (브랜치 없이)": "Check out (no branch)",
+  "revert (되돌리는 새 커밋)": "revert (new undo commit)",
+  "여기로 reset": "Reset to here",
+  "--soft (변경을 스테이지에 남김)": "--soft (keep changes staged)",
+  "--mixed (변경을 작업 트리에 남김)": "--mixed (keep changes in the working tree)",
+  "--hard (변경을 버림)…": "--hard (discard changes)…",
+  "현재 브랜치로 merge": "Merge into current branch",
+  "현재 브랜치를 그 위로 rebase": "Rebase current branch onto this",
+  "여러 세션이 이 파일을 동시에 편집 중 (편집 도구 기준)": "Several sessions are editing this file at once (edit tools only)",
+  "작업 트리 변경을 stash에 넣습니다 — 사이드바 Stash에서 적용 · 꺼내기":
+    "Stash working tree changes — apply or pop from Stash in the sidebar",
+  "{op} 진행 중": "{op} in progress",
+  " — 충돌 {n}개": " — {n} conflicts",
+  " — 충돌을 다 풀었습니다. [계속]으로 마칩니다": " — all conflicts resolved. Finish with [Continue]",
+  "충돌 보기": "View conflicts",
+  "세션에게 해결 맡기기": "Hand to a session",
+  "우클릭: 적용 · 꺼내기 · 버리기": "Right-click: apply · pop · drop",
+  "적용 (apply — 목록에 남김)": "Apply (keep in list)",
+  "꺼내기 (pop — 적용하고 목록에서 뺌)": "Pop (apply and remove from list)",
+  "버리기…": "Drop…",
+  "이 커밋의 파일을 편집 도구로 고친 세션 (편집 기록 기준 추정)":
+    "Session that edited this commit's files with edit tools (estimated from edit records)",
+  "충돌 표식이 없습니다 — 한쪽이 지운 파일이거나 이미 고쳤습니다. 남길 내용이면 스테이지하세요.":
+    "No conflict markers — one side deleted the file or it is already fixed. Stage it if you want to keep it.",
+  "충돌 {n}": "Conflict {n}",
+  "우리 것": "Ours",
+  "저쪽 것": "Theirs",
+  "둘 다": "Both",
+  "저장하고 스테이지": "Save and stage",
+  "고른 것만 저장": "Save picked only",
+  // B154 · 탐색기 진입 (GitDiffEditor.tsx · MissionExplorerTab.tsx)
+  ".env 값은 가려서 보입니다 — 화면 공유 주의": ".env values are masked — mind screen sharing",
+  "파일 히스토리 · blame": "File history · blame",
 };

@@ -199,7 +199,9 @@ pub struct GitOut {
 /// 실행 실패(띄우기 실패 · 상한 초과)만 Err — git이 0이 아닌 코드로 끝난 것은 `ok: false`
 pub fn run_git(args: &[&str], cwd: &str, timeout: Duration, env: &[(&str, &str)]) -> Result<GitOut, String> {
     let mut cmd = Command::new("git");
-    cmd.args(["-c", "core.quotepath=off"])
+    // --no-optional-locks — status · diff의 색인 새로 고침이 index.lock을 잡지 않게 한다. 10초 폴링이
+    // 터미널의 git commit과 부딪혀 "index.lock exists"로 실패시키던 길이다. 쓰기는 필요한 잠금을 그대로 잡는다
+    cmd.args(["--no-optional-locks", "-c", "core.quotepath=off"])
         .args(args)
         .current_dir(cwd)
         .envs(env.iter().copied())

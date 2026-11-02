@@ -243,7 +243,11 @@ export interface WorkStatus {
   files: StatusFile[];
   headPushed: boolean; // amend가 푸시한 커밋을 바꾼다
   hasHead: boolean;
+  progress: "merge" | "rebase" | "cherry-pick" | "revert" | null; // §17-4 진행 중 배너
 }
+
+/** 충돌 파일 — 양쪽이 고침(UU) · 둘 다 더함(AA) · 한쪽 지움(UD · DU) 등. Rust is_conflict와 같은 규칙 */
+export const isConflict = (f: StatusFile): boolean => f.x === "U" || f.y === "U" || (f.x === "A" && f.y === "A") || (f.x === "D" && f.y === "D");
 
 export async function gitStatus(wsPath: string): Promise<WorkStatus | undefined> {
   if (!isTauri()) return undefined;
@@ -304,4 +308,18 @@ export async function gitApplyPatch(wsId: string, wsPath: string, patch: string,
     (e): RunResult => ({ ok: false, command: "git apply --cached", output: String(e), auth: false }),
   );
   return record(wsId, r);
+}
+
+// ── §17 3단계 · §17-3 ──
+
+/** `from..to` 커밋 — reset --hard 확인창이 "사라질 수 있는 커밋"으로 보인다 */
+export async function gitRange(wsPath: string, from: string, to = "HEAD"): Promise<LogCommit[]> {
+  if (!isTauri()) return [];
+  return invoke<LogCommit[]>("git_range", { wsPath, from, to }).catch(() => []);
+}
+
+/** 그래프 세션 배지 (§17-3) — 해시 → 만든 것으로 보이는 세션 id들 (편집 기록 C4 기준 추정) */
+export async function gitCommitSessions(wsId: string, wsPath: string, hashes: string[]): Promise<Record<string, string[]>> {
+  if (!isTauri() || hashes.length === 0) return {};
+  return invoke<Record<string, string[]>>("git_commit_sessions", { wsId, wsPath, hashes }).catch(() => ({}));
 }

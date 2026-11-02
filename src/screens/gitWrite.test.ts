@@ -49,10 +49,32 @@ test("덩어리 나누기 — 머리 + 덩어리 2개, 덩어리 하나짜리 �
   expect(splitHunks("diff --git a/x b/x\nBinary files differ\n").hunks).toEqual([]);
 });
 
+test("B154 — 가릴 .env 계열 경로 (예시 파일 제외, 폴더 · 역슬래시 경로)", async () => {
+  const { isDotenvPath } = await import("./gitWrite");
+  for (const yes of [".env", "app/.env.local", "a\\b\\.env.production", ".ENV"]) expect(isDotenvPath(yes), yes).toBe(true);
+  for (const no of [".env.example", "x/.env.sample", "env.ts", ".envrc", "my.env", undefined]) expect(isDotenvPath(no), String(no)).toBe(false);
+});
+
 test("브랜치 이름 — -로 시작 · 공백 · .. · .lock 거부", () => {
   expect(refNameProblem("feature/x")).toBeUndefined();
   expect(refNameProblem("6.0-dev")).toBeUndefined();
   for (const bad of ["", "-x", "a b", "a..b", "x.lock", "a:b", "a/", "/a", "a@{1}", "a~1"]) {
     expect(refNameProblem(bad), bad).toBeDefined();
   }
+});
+
+test("충돌 덩어리 — 나누기 · 우리 것/저쪽 것/둘 다 · diff3 · 미선택은 표식째", async () => {
+  const { conflictParts, resolveConflicts } = await import("./gitWrite");
+  const src = "a\n<<<<<<< HEAD\nours1\n=======\ntheirs1\n>>>>>>> feat\nb\n<<<<<<< HEAD\nx\n||||||| base\nold\n=======\ny\n>>>>>>> feat\nc\n";
+  const p = conflictParts(src);
+  expect(p.map((x) => x.kind)).toEqual(["text", "conflict", "text", "conflict", "text"]);
+  expect(p[3]).toMatchObject({ kind: "conflict", ours: "x\n", theirs: "y\n", oursLabel: "HEAD", theirsLabel: "feat" });
+  expect(resolveConflicts(p, ["ours", "theirs"])).toBe("a\nours1\nb\ny\nc\n");
+  expect(resolveConflicts(p, ["both", "ours"])).toBe("a\nours1\ntheirs1\nb\nx\nc\n");
+  const half = resolveConflicts(p, ["ours", undefined]);
+  expect(conflictParts(half).filter((x) => x.kind === "conflict").length).toBe(1);
+  expect(conflictParts("no markers\n")).toEqual([{ kind: "text", text: "no markers\n" }]);
+  expect(conflictParts("<<<<<<< HEAD\nunterminated\n")).toEqual([{ kind: "text", text: "<<<<<<< HEAD\nunterminated\n" }]);
+  // CRLF 파일 — 줄 끝을 그대로 둔다
+  expect(resolveConflicts(conflictParts("<<<<<<< HEAD\r\no\r\n=======\r\nt\r\n>>>>>>> x\r\n"), ["theirs"])).toBe("t\r\n");
 });

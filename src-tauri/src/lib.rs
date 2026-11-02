@@ -3172,6 +3172,8 @@ pub fn run() {
             gitx::git_run,
             gitx::git_apply_patch,
             gitx::git_path_status,
+            gitx::git_range,
+            gitx::git_commit_sessions,
             shutdown_flush,
             app_exit,
             tray::window_close_to_tray,

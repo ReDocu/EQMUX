@@ -14,6 +14,8 @@ import { isTauri } from "../backend/pty";
 import { t, tf } from "../i18n";
 import { openPanel, scopeWorkspace, setView, tick, view } from "../state";
 import { diffKeyAction } from "./diffKeys";
+import { isDotenvPath } from "./gitWrite";
+import { maskDotenvLine } from "../backend/secrets";
 import { Icon } from "../components/icons";
 
 const FOLD_CONTEXT = 3; // 변경 주변에 남기는 문맥 줄 수 (U10)
@@ -162,8 +164,13 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
 
   // 목 폴백 라인 (브라우저 dev) — 모든 변경 파일이 파일별 내용을 갖는다 (B5)
   const mockDiff = () => (selected() ? DIFF_CONTENT[selected()!] : undefined);
-  const baseLines = (): DiffLine[] => (isTauri() ? (real()?.base ?? []) : (mockDiff()?.base ?? []));
-  const curLines = (): DiffLine[] => (isTauri() ? (real()?.current ?? []) : (mockDiff()?.current ?? []));
+  // B154 — .env 계열은 값을 가린다 (환경변수 탭과 같다). 화면 공유 때 새는 길이었다. [값 보기]로 원문
+  const [revealEnv, setRevealEnv] = createSignal(false);
+  const masking = () => !revealEnv() && isDotenvPath(selected());
+  const masked = (ls: DiffLine[]): DiffLine[] => (masking() ? ls.map((l) => ({ ...l, text: maskDotenvLine(l.text) })) : ls);
+  // 메모 — 행 수 · 블록 계산이 렌더마다 여러 번 부른다. 가린 새 배열을 매번 만들면 안 된다
+  const baseLines = createMemo((): DiffLine[] => masked(isTauri() ? (real()?.base ?? []) : (mockDiff()?.base ?? [])));
+  const curLines = createMemo((): DiffLine[] => masked(isTauri() ? (real()?.current ?? []) : (mockDiff()?.current ?? [])));
   // BASE = HEAD 짧은 해시 — 목에서는 커밋 그래프 최상단에서 파생해 화면 간 해시가 일치한다 (B13)
   const baseLabel = () => (isTauri() ? (real()?.baseLabel ?? "HEAD") : GIT_STATE.commits[0].hash);
 
@@ -508,6 +515,11 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
               >
                 {foldCtx() ? t("전체 문맥") : t("변경만")}
               </button>
+              <Show when={isDotenvPath(selected())}>
+                <button class="btn ghost" classList={{ on: revealEnv() }} title={t(".env 값은 가려서 보입니다 — 화면 공유 주의")} onClick={() => setRevealEnv(!revealEnv())}>
+                  {t(revealEnv() ? "값 가리기" : "값 보기")}
+                </button>
+              </Show>
               <button class="btn ghost" classList={{ on: wrap() }} title={t("줄바꿈")} onClick={() => setWrap(!wrap())}>
                 ↩ {t("줄바꿈")}
               </button>

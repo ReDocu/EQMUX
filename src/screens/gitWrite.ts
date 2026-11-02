@@ -2,6 +2,7 @@
 // · workGuard: §4-1 작업 중 경고 — HEAD · 작업 트리를 바꾸기 전에 그 폴더 세션의 상태를 본다
 // · splitHunks · hunkPatch: 덩어리 스테이징 — `git diff` 원문을 덩어리로 나눠 하나짜리 패치를 만든다
 import type { Session } from "../types";
+import { EXAMPLE_FILES } from "../backend/env";
 
 export type GuardLevel = "busy" | "waiting" | "none";
 
@@ -65,4 +66,68 @@ export function refNameProblem(name: string): string | undefined {
   if (n.startsWith("-")) return "이름은 -로 시작할 수 없습니다";
   if (/[\s~^:?*[\\]|\.\.|@\{|\/\/|^\/|\/$|\.lock$|\.$/.test(n)) return "git이 받지 않는 이름입니다";
   return undefined;
+}
+
+/** B154 — 값을 가려 보일 .env 계열 파일인가. `.env` · `.env.*`, 예시 파일(.env.example · .env.sample)은 뺀다 */
+export function isDotenvPath(path: string | undefined): boolean {
+  const name = path?.split(/[\\/]/).pop()?.toLowerCase() ?? "";
+  return (name === ".env" || name.startsWith(".env.")) && !EXAMPLE_FILES.includes(name);
+}
+
+// ── §17 3단계 충돌 — 작업 트리 파일의 표식(<<<<<<< ======= >>>>>>>)을 덩어리별로 고른다 ──
+
+export type ConflictPick = "ours" | "theirs" | "both";
+
+/** 충돌 표식이 든 원문의 조각 — 그대로인 글과 충돌 덩어리가 번갈아 온다. 줄 끝(\n · \r\n)은 그대로 남긴다 */
+export type ConflictPart = { kind: "text"; text: string } | { kind: "conflict"; ours: string; theirs: string; oursLabel: string; theirsLabel: string };
+
+export function conflictParts(text: string): ConflictPart[] {
+  const parts: ConflictPart[] = [];
+  const lines = text.split(/(?<=\n)/);
+  let plain = "";
+  let i = 0;
+  while (i < lines.length) {
+    const l = lines[i];
+    if (!l.startsWith("<<<<<<< ") && l.replace(/\r?\n$/, "") !== "<<<<<<<") {
+      plain += l;
+      i++;
+      continue;
+    }
+    // 끝 표식이 없으면 충돌이 아니다 — 남은 것을 글로 둔다
+    const end = lines.findIndex((x, j) => j > i && x.startsWith(">>>>>>>"));
+    const mid = lines.findIndex((x, j) => j > i && j < end && x.startsWith("=======") && x.replace(/\r?\n$/, "") === "=======");
+    if (end < 0 || mid < 0) {
+      plain += lines.slice(i).join("");
+      break;
+    }
+    if (plain) parts.push({ kind: "text", text: plain });
+    plain = "";
+    // diff3 꼴 (`||||||| base`) — 공통 조상 쪽은 고를 대상이 아니다
+    const base = lines.findIndex((x, j) => j > i && j < mid && x.startsWith("|||||||"));
+    parts.push({
+      kind: "conflict",
+      ours: lines.slice(i + 1, base < 0 ? mid : base).join(""),
+      theirs: lines.slice(mid + 1, end).join(""),
+      oursLabel: l.slice(8).trim(),
+      theirsLabel: lines[end].slice(8).trim(),
+    });
+    i = end + 1;
+  }
+  if (plain) parts.push({ kind: "text", text: plain });
+  return parts;
+}
+
+/** 덩어리마다 고른 쪽으로 바꾼 원문. 고르지 않은 덩어리는 표식째 남는다 (git이 아직 충돌로 본다) */
+export function resolveConflicts(parts: ConflictPart[], picks: (ConflictPick | undefined)[]): string {
+  let n = 0;
+  return parts
+    .map((p) => {
+      if (p.kind === "text") return p.text;
+      const pick = picks[n++];
+      if (pick === "ours") return p.ours;
+      if (pick === "theirs") return p.theirs;
+      if (pick === "both") return p.ours + p.theirs;
+      return `<<<<<<< ${p.oursLabel}\n${p.ours}=======\n${p.theirs}>>>>>>> ${p.theirsLabel}\n`;
+    })
+    .join("");
 }

@@ -9,7 +9,7 @@ import { markMissionBase, refreshMissions } from "../backend/missions";
 import { sendConversation } from "../backend/conversation";
 import { isTauri, revealPath } from "../backend/pty";
 import { t, tf } from "../i18n";
-import { openPanel, scopeWorkspace, selectedSession, setExplorerTab, setOverlay, tick } from "../state";
+import { openPanel, scopeWorkspace, selectedSession, setExplorerTab, setOverlay, setView, tick, view } from "../state";
 import { Icon } from "./icons";
 import { ContextMenu, notify } from "./ui";
 import { isSubmitEnter } from "../platform"; // 한글 조합 중 Enter는 제출이 아니다 (B130)
@@ -372,6 +372,17 @@ export function MissionExplorerTab() {
                         ),
                     },
                   ],
+                  // §17 W5 — 파일이면 git 화면의 파일 히스토리 · blame으로 연다 (팝업은 setView가 닫는다)
+                  ...(tree().find((n) => n.rel === m().rel)?.dir
+                    ? []
+                    : [
+                        [
+                          {
+                            label: t("파일 히스토리 · blame"),
+                            action: () => setView({ kind: "git", wsId: ws()?.id, file: m().rel.replace(/\\/g, "/"), back: view() }),
+                          },
+                        ],
+                      ]),
                 ]}
               />
             )}

@@ -3,7 +3,9 @@
 // 쓰기(G7′)는 사람이 여기서 누를 때만 실행한다 — backend/git.ts gitRun → Rust 허용 목록.
 // HEAD · 작업 트리를 바꾸는 작업(pull · 전환)은 §4-1 작업 중 경고를 먼저 거친다(gitWrite.ts workGuard).
 // 버튼마다 우클릭 = [명령 복사] — 지금처럼 터미널에서 직접 칠 수도 있다.
-// 3단계(merge · rebase · cherry-pick · revert · stash 쓰기 · reset)는 2라운드다 — 메뉴에 두지 않는다.
+// 3단계: merge · rebase(비대화형) · cherry-pick · revert · stash · reset, 진행 중 배너, 충돌 덩어리 고르기,
+// [세션에게 해결 맡기기](사람이 고른 세션에 ask — 자동으로 보내지 않는다). reset --hard · stash 버리기는
+// 사라질 것과 되돌릴 해시를 보이고, hard는 두 번 묻는다 (§17-4). 기본 버튼은 늘 [취소]다.
 import { batch, createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
 import type { JSX } from "solid-js";
 import {
@@ -13,11 +15,14 @@ import {
   gitBlame,
   gitCommitDetail,
   gitFilePatch,
+  gitCommitSessions,
   gitLog,
+  gitRange,
   gitRefs,
   gitRun,
   gitStatus,
   commandLine,
+  isConflict,
   LOG_PAGE,
   runLog,
 } from "../backend/git";
@@ -26,6 +31,9 @@ import { backend } from "../backend/mock";
 import { clipWriteText, isTauri } from "../backend/pty";
 import { openLink } from "../backend/browser";
 import { sendConversation } from "../backend/conversation";
+import { activeConflicts, conflictName } from "../backend/attention";
+import { fsRead, fsWrite } from "../backend/panels";
+import { maskDotenvLine } from "../backend/secrets";
 import { t, tf } from "../i18n";
 import { openPanel, pushLayer, scopeWorkspace, setView, tick, view } from "../state";
 import type { View } from "../state";
@@ -34,8 +42,19 @@ import { Icon } from "../components/icons";
 import { ConfirmDialog, ContextMenu, notify } from "../components/ui";
 import type { MenuGroup } from "../components/ui";
 import { computeGraph } from "./gitGraph";
-import { guardSessions, guardWorsened, hunkPatch, hunkRange, refNameProblem, splitHunks, workGuard } from "./gitWrite";
-import type { FilePatch, GuardLevel } from "./gitWrite";
+import {
+  conflictParts,
+  guardSessions,
+  guardWorsened,
+  hunkPatch,
+  hunkRange,
+  isDotenvPath,
+  refNameProblem,
+  resolveConflicts,
+  splitHunks,
+  workGuard,
+} from "./gitWrite";
+import type { ConflictPart, ConflictPick, FilePatch, GuardLevel } from "./gitWrite";
 
 const ROW_H = 24;
 const LANE_W = 12;
@@ -68,6 +87,7 @@ function NamePrompt(props: {
   label: string;
   initial?: string;
   withMessage?: boolean; // 태그 — 메시지가 있으면 주석 태그
+  free?: boolean; // 참조 이름이 아니다 (stash 메시지) — 이름 검사를 하지 않는다
   confirmLabel: string;
   onConfirm: (name: string, message: string) => void;
   onCancel: () => void;
@@ -76,7 +96,7 @@ function NamePrompt(props: {
   const [msg, setMsg] = createSignal("");
   let box!: HTMLDivElement;
   let input!: HTMLInputElement;
-  const problem = () => refNameProblem(name());
+  const problem = () => (props.free ? undefined : refNameProblem(name()));
   onMount(() => {
     input.focus();
     input.select();
@@ -121,6 +141,46 @@ function NamePrompt(props: {
   );
 }
 
+/** [세션에게 해결 맡기기] 창 — 받을 세션을 고르고 ask 문구를 고친다. 글 상자의 Enter는 줄바꿈이다 */
+function DelegateDialog(props: {
+  targets: { id: string; name: string }[];
+  to: string;
+  body: string;
+  onChange: (to: string, body: string) => void;
+  onSend: () => void;
+  onCancel: () => void;
+}) {
+  let box!: HTMLDivElement;
+  onMount(() => onCleanup(pushLayer(() => props.onCancel(), () => box)));
+  return (
+    <div class="overlay" onClick={(e) => (e.stopPropagation(), props.onCancel())}>
+      <div ref={box} class="dialog eq-confirm" role="dialog" aria-modal="true" aria-label={t("세션에게 충돌 해결 맡기기")} onClick={(e) => e.stopPropagation()}>
+        <div class="eq-confirm-t">{t("세션에게 충돌 해결 맡기기")}</div>
+        <div class="eq-confirm-b">
+          <label class="gx-field">
+            <span>{t("받을 세션")}</span>
+            <select value={props.to} onChange={(e) => props.onChange(e.currentTarget.value, props.body)}>
+              <For each={props.targets}>{(s) => <option value={s.id}>{s.name}</option>}</For>
+            </select>
+          </label>
+          <label class="gx-field">
+            <span>{t("ask 메시지 — 고쳐서 보낼 수 있습니다")}</span>
+            <textarea class="mono" rows={7} value={props.body} onInput={(e) => props.onChange(props.to, e.currentTarget.value)} />
+          </label>
+        </div>
+        <div class="eq-confirm-f">
+          <button class="btn" onClick={() => props.onCancel()}>
+            {t("취소")}
+          </button>
+          <button class="btn primary" disabled={!props.to || !props.body.trim()} onClick={() => props.onSend()}>
+            {t("보내기")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 interface Confirm {
   title: string;
   body: JSX.Element;
@@ -135,6 +195,7 @@ interface Prompt {
   label: string;
   initial?: string;
   withMessage?: boolean;
+  free?: boolean;
   confirmLabel: string;
   onConfirm: (name: string, message: string) => void;
 }
@@ -157,6 +218,10 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
   const [query, setQuery] = createSignal("");
   const [queryKind, setQueryKind] = createSignal<"message" | "author">("message");
   const [file, setFile] = createSignal<string | undefined>(props.file);
+  // 이미 열린 git 화면에 탐색기가 다른 파일을 보내면 그 파일로 바꾼다 (같은 컴포넌트가 남는다)
+  createEffect(on(() => props.file, (f) => f && setFile(f), { defer: true }));
+  /** §17-3 세션 배지 — 해시 → 세션 id (편집 기록으로 추정). 쪽마다 덧붙인다 */
+  const [bySession, setBySession] = createSignal<Record<string, string[]>>({});
   const [blameOn, setBlameOn] = createSignal(false);
   const filtering = () => !!query().trim();
   // 검색 결과는 부모가 빠져 있어 레인이 거짓말을 한다 — 거를 때는 선 없이 목록만 보인다
@@ -186,7 +251,10 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
       setLogErr(undefined);
       setCommits(reset ? r : [...commits(), ...r]);
       setMore(r.length === LOG_PAGE);
+      if (reset) setBySession({});
     });
+    const tags = await gitCommitSessions(w.id, w.path, r.map((c) => c.hash));
+    if (req === logReq && Object.keys(tags).length) setBySession({ ...bySession(), ...tags });
   };
 
   // ── 사이드바 · 작업 트리 ──
@@ -324,6 +392,210 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
     ask(guardNow());
   };
 
+  // ── 3단계: 이력 조작 ──
+  const short = (h: string) => h.slice(0, 8);
+  const headHash = () => head()?.hash ?? commits().find((c) => c.refs.some((r) => r.startsWith("HEAD")))?.hash ?? "";
+  /** 확인창 하나를 띄우고, 누르면 §4-1 경고를 거쳐 실행한다 */
+  const confirmThen = (c: Omit<Confirm, "onConfirm">, args: string[]) =>
+    setConfirm({ ...c, onConfirm: () => (setConfirm(undefined), guarded(args[0], args)) });
+
+  const cherryPick = (c: LogCommit) =>
+    confirmThen(
+      { title: tf("{h} cherry-pick", { h: short(c.hash) }), body: <p>{c.subject}</p>, info: [commandLine(["cherry-pick", c.hash])], confirmLabel: t("cherry-pick") },
+      ["cherry-pick", c.hash],
+    );
+  const revert = (c: LogCommit) =>
+    confirmThen(
+      {
+        title: tf("{h} 되돌리기 (revert)", { h: short(c.hash) }),
+        body: <p>{t("이 커밋을 거꾸로 적용하는 새 커밋을 만듭니다. 이력은 지우지 않습니다.")}</p>,
+        info: [commandLine(["revert", "--no-edit", c.hash]), c.subject],
+        confirmLabel: t("revert"),
+      },
+      ["revert", "--no-edit", c.hash],
+    );
+  const mergeIn = (name: string) =>
+    confirmThen(
+      {
+        title: tf("{b}을(를) 현재 브랜치로 merge", { b: name }),
+        body: <p>{t("충돌이 나면 위 배너에서 충돌을 보고 [계속] 또는 [중단]을 고릅니다.")}</p>,
+        info: [commandLine(["merge", "--no-edit", name])],
+        confirmLabel: t("merge"),
+      },
+      ["merge", "--no-edit", name],
+    );
+  const rebaseOnto = (name: string) =>
+    confirmThen(
+      {
+        title: tf("현재 브랜치를 {b} 위로 rebase", { b: name }),
+        body: <p>{t("현재 브랜치의 커밋을 새로 만듭니다(해시가 바뀝니다). 이미 푸시한 커밋이면 다음 push에 강제 push가 필요합니다.")}</p>,
+        info: [commandLine(["rebase", name]), tf("되돌릴 해시: {h}", { h: short(headHash()) })],
+        danger: !!head()?.upstream,
+        confirmLabel: t("rebase"),
+      },
+      ["rebase", name],
+    );
+  const checkoutDetached = (c: LogCommit) =>
+    confirmThen(
+      {
+        title: tf("{h} 체크아웃 (브랜치 없이)", { h: short(c.hash) }),
+        body: <p>{t("분리된 HEAD가 됩니다. 여기서 만든 커밋은 브랜치를 만들어 두지 않으면 잃기 쉽습니다.")}</p>,
+        info: [commandLine(["switch", "--detach", c.hash])],
+        confirmLabel: t("체크아웃"),
+      },
+      ["switch", "--detach", c.hash],
+    );
+
+  /** reset — soft · mixed는 한 번, hard는 무엇이 사라지는지 보이고 두 번 묻는다 (§17-4) */
+  const resetTo = async (c: LogCommit, mode: "soft" | "mixed" | "hard") => {
+    const w = ws();
+    if (!w) return;
+    const args = ["reset", `--${mode}`, c.hash];
+    const from = headHash();
+    const lost = from ? await gitRange(w.path, c.hash, from) : [];
+    const dirty = work()?.files.length ?? 0;
+    const info = [
+      commandLine(args),
+      tf("되돌릴 해시: {h} (git reset --hard {h})", { h: short(from) }),
+      ...(lost.length ? [tf("브랜치에서 빠지는 커밋 {n}개", { n: lost.length }), ...lost.slice(0, 8).map((x) => `  ${short(x.hash)} ${x.subject}`)] : []),
+      ...(lost.length > 8 ? [`  …`] : []),
+    ];
+    const what =
+      mode === "soft"
+        ? t("HEAD만 옮깁니다. 변경 내용은 스테이지된 채로 남습니다.")
+        : mode === "mixed"
+          ? t("HEAD를 옮기고 스테이지를 비웁니다. 작업 트리 파일은 그대로입니다.")
+          : t("HEAD를 옮기고 스테이지와 작업 트리를 그 커밋으로 덮어씁니다.");
+    if (mode !== "hard") {
+      return confirmThen({ title: tf("{h}로 reset --{m}", { h: short(c.hash), m: mode }), body: <p>{what}</p>, info, confirmLabel: t("reset") }, args);
+    }
+    setConfirm({
+      title: tf("{h}로 reset --hard", { h: short(c.hash) }),
+      body: (
+        <>
+          <p>{what}</p>
+          <Show when={dirty > 0}>
+            <p class="gx-warn">{tf("커밋 안 된 변경 {n}건이 사라집니다 — 되돌릴 방법이 없습니다.", { n: dirty })}</p>
+          </Show>
+        </>
+      ),
+      info,
+      danger: true,
+      confirmLabel: t("다음"),
+      onConfirm: () => {
+        setConfirm(undefined);
+        setTimeout(() => setConfirm(second), 400);
+      },
+    });
+    const second: Confirm = {
+          title: t("정말로 reset --hard 할까요?"),
+          body: <p>{dirty > 0 ? tf("커밋 안 된 변경 {n}건은 되살릴 수 없습니다. 커밋은 위 해시로 되돌릴 수 있습니다.", { n: dirty }) : t("커밋은 위 해시로 되돌릴 수 있습니다.")}</p>,
+          info: [commandLine(args), tf("되돌릴 해시: {h}", { h: short(from) })],
+          danger: true,
+          confirmLabel: t("reset --hard"),
+          onConfirm: () => (setConfirm(undefined), guarded("reset", args)),
+    };
+  };
+
+  // ── stash ──
+  const stashPush = () =>
+    setPrompt({
+      title: t("작업 트리를 stash에 넣기 (추적 안 된 파일 포함)"),
+      label: t("메시지"),
+      free: true,
+      confirmLabel: t("stash"),
+      onConfirm: (m) => {
+        setPrompt(undefined);
+        guarded("stash", ["stash", "push", "-u", ...(m ? ["-m", m] : [])]);
+      },
+    });
+  /** `stash@{0}: 메시지` → `stash@{0}` */
+  const stashRef = (name: string) => name.split(":")[0];
+  const stashDrop = (r: { name: string; hash: string }) =>
+    setConfirm({
+      title: tf("{s} 버리기", { s: stashRef(r.name) }),
+      body: <p>{t("stash 목록에서 지웁니다. 아래 해시로 한동안 되살릴 수 있습니다(git gc 전까지).")}</p>,
+      info: [commandLine(["stash", "drop", stashRef(r.name)]), tf("되살리기: git stash apply {h}", { h: r.hash.slice(0, 10) })],
+      danger: true,
+      confirmLabel: t("버리기"),
+      onConfirm: () => (setConfirm(undefined), void run(["stash", "drop", stashRef(r.name)])),
+    });
+
+  // ── 진행 중 상태 (§17-4 배너) · 충돌 ──
+  const progress = () => work()?.progress ?? null;
+  const conflicts = () => (work()?.files ?? []).filter(isConflict);
+  const continueArgs = () => (progress() === "merge" ? ["commit", "--no-edit"] : [progress()!, "--continue"]);
+  const doContinue = () => {
+    const w = ws();
+    if (!w) return;
+    // 스테이지된 해결 결과로 merge 커밋을 만든다 — merge는 commit --no-edit, 나머지는 --continue
+    guarded(progress()!, continueArgs());
+  };
+  const doAbort = () =>
+    confirmThen(
+      {
+        title: tf("{op} 중단", { op: progress()! }),
+        body: <p>{t("시작하기 전 상태로 돌아갑니다. 그사이 고친 충돌 해결은 사라집니다.")}</p>,
+        info: [commandLine([progress()!, "--abort"])],
+        confirmLabel: t("중단 (--abort)"),
+      },
+      [progress()!, "--abort"],
+    );
+
+  // 충돌 파일 하나 — 작업 트리 원문의 표식을 덩어리별로 고른다
+  const [conflictText, setConflictText] = createSignal<{ path: string; parts: ConflictPart[]; mtime: number } | undefined>();
+  const [picks, setPicks] = createSignal<(ConflictPick | undefined)[]>([]);
+  const openConflict = async (path: string) => {
+    const w = ws();
+    if (!w) return;
+    setHunkFile({ path, staged: false });
+    const c = await fsRead(w.path, path).catch(() => undefined);
+    setConflictText(c ? { path, parts: conflictParts(c.text), mtime: c.mtimeMs } : { path, parts: [], mtime: 0 });
+    setPicks([]);
+  };
+  const conflictBlocks = () => conflictText()?.parts.filter((p) => p.kind === "conflict") ?? [];
+  const saveConflict = async () => {
+    const w = ws();
+    const c = conflictText();
+    if (!w || !c) return;
+    try {
+      await fsWrite(w.path, c.path, resolveConflicts(c.parts, picks()), c.mtime);
+    } catch (e) {
+      notify(`${t("저장 실패 — 파일이 그사이 바뀌었을 수 있습니다. 다시 여세요")} (${String(e)})`);
+      return;
+    }
+    // 다 골랐으면 스테이지까지 — 남은 표식이 있으면 git이 아직 충돌로 본다
+    if (picks().filter(Boolean).length === conflictBlocks().length) await run(["add", "--", c.path], { quiet: true });
+    setConflictText(undefined);
+    setHunkFile(undefined);
+  };
+
+  // [세션에게 해결 맡기기] — 사람이 세션을 고르고 문구를 고친 뒤 보낸다
+  const [delegate, setDelegate] = createSignal<{ to: string; body: string } | undefined>();
+  const delegateTargets = () => backend.listSessions().filter((s) => s.workspaceId === ws()?.id && s.status !== "dead" && s.status !== "shell");
+  const openDelegate = () =>
+    setDelegate({
+      to: delegateTargets()[0]?.id ?? "",
+      body: tf(
+        "git {op} 중 충돌이 났습니다. 아래 파일의 충돌 표식(<<<<<<< ======= >>>>>>>)을 고치고 `git add`까지만 해 주세요. 커밋 · --continue는 사람이 git 화면에서 합니다.\n{files}",
+        { op: progress() ?? "merge", files: conflicts().map((f) => `- ${f.path}`).join("\n") },
+      ),
+    });
+  const sendDelegate = async () => {
+    const w = ws();
+    const d = delegate();
+    if (!w || !d?.to) return;
+    const err = await sendConversation(w.id, d.to, "ask", d.body);
+    if (err) return notify(err);
+    setDelegate(undefined);
+    notify(tf("{n}에게 보냈습니다", { n: conflictName(d.to) }));
+  };
+
+  // B154 — .env 계열은 덩어리 · blame에서도 값을 가린다
+  const [revealEnv, setRevealEnv] = createSignal(false);
+  const maskFor = (path: string | undefined) => !revealEnv() && isDotenvPath(path);
+  const diffLine = (l: string, mask: boolean) => (mask && /^[ +-]/.test(l) ? l[0] + maskDotenvLine(l.slice(1)) : l);
+
   // ── 툴바 동작 ──
   const doFetch = () => void run(["fetch", "--all", "--prune"]);
   const doPull = () => guarded("pull", ["pull", "--ff-only"]);
@@ -390,8 +662,12 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
   const unstaged = () => (work()?.files ?? []).filter((f) => f.y !== " ");
   const staged = () => (work()?.files ?? []).filter((f) => f.x !== " " && f.x !== "?");
   const stageFiles = (fs: StatusFile[]) => fs.length && void run(["add", "--", ...fs.map((f) => f.path)], { quiet: true });
-  const unstageFiles = (fs: StatusFile[]) =>
-    fs.length && void run(["restore", "--staged", "--", ...fs.flatMap((f) => (f.from ? [f.from, f.path] : [f.path]))], { quiet: true });
+  const unstageFiles = (fs: StatusFile[]) => {
+    if (!fs.length) return;
+    const paths = fs.flatMap((f) => (f.from ? [f.from, f.path] : [f.path]));
+    // HEAD가 없으면(첫 커밋 전) restore --staged가 안 된다 — 인덱스에서만 뺀다
+    void run(work()?.hasHead ? ["restore", "--staged", "--", ...paths] : ["rm", "--cached", "-q", "--", ...paths], { quiet: true });
+  };
 
   const [hunkFile, setHunkFile] = createSignal<{ path: string; staged: boolean } | undefined>();
   const [hunks, setHunks] = createSignal<FilePatch | undefined>();
@@ -465,7 +741,19 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
         ),
         { label: t("부모 커밋과 비교 (diff)"), action: () => openCommitDiff(c.hash, c.subject) },
       ],
-      [{ label: t("cherry-pick · revert · reset은 다음 단계 — 터미널에서"), note: true }],
+      [
+        { label: t("체크아웃 (브랜치 없이)"), action: () => checkoutDetached(c) },
+        { label: t("cherry-pick"), action: () => cherryPick(c) },
+        { label: t("revert (되돌리는 새 커밋)"), action: () => revert(c) },
+        {
+          label: t("여기로 reset"),
+          sub: [
+            { label: t("--soft (변경을 스테이지에 남김)"), action: () => void resetTo(c, "soft") },
+            { label: t("--mixed (변경을 작업 트리에 남김)"), action: () => void resetTo(c, "mixed") },
+            { label: t("--hard (변경을 버림)…"), danger: true, action: () => void resetTo(c, "hard") },
+          ],
+        },
+      ],
     ]);
   const branchMenu = (e: MouseEvent, b: { name: string; hash: string; head: boolean }) =>
     openMenu(e, b.name, [
@@ -475,8 +763,11 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
         { label: t("여기서 브랜치 만들기"), action: () => newBranch(b.hash) },
       ],
       [{ label: t("해시 복사"), action: () => void clipWriteText(b.hash) }],
+      [
+        { label: t("현재 브랜치로 merge"), disabled: b.head, action: () => mergeIn(b.name) },
+        { label: t("현재 브랜치를 그 위로 rebase"), disabled: b.head || !head(), action: () => rebaseOnto(b.name) },
+      ],
       [{ label: t("삭제"), danger: true, disabled: b.head, action: () => void deleteBranch(b.name, b.hash) }],
-      [{ label: t("merge · rebase는 다음 단계 — 터미널에서"), note: true }],
     ]);
 
   // ── 닫기 · 키 ──
@@ -506,10 +797,18 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
       class="gx-wfile mono"
       classList={{ on: hunkFile()?.path === f.path && hunkFile()?.staged === isStaged }}
       title={f.from ? `${f.from} → ${f.path}` : f.path}
-      onClick={() => setHunkFile({ path: f.path, staged: isStaged })}
+      onClick={() => (isConflict(f) ? void openConflict(f.path) : (setConflictText(undefined), setHunkFile({ path: f.path, staged: isStaged })))}
     >
-      <span class="gx-st">{isStaged ? f.x : f.y === "?" ? "?" : f.y}</span>
+      <span class="gx-st" classList={{ conflict: isConflict(f) }}>{isConflict(f) ? "!" : isStaged ? f.x : f.y === "?" ? "?" : f.y}</span>
       <span class="gx-wpath">{f.path}</span>
+      {/* §17-3 동시 편집 표시 — §13-1 경고가 살아 있는 파일 */}
+      <Show when={activeConflicts().find((c) => c.workspace === ws()?.id && c.path === f.path)}>
+        {(c) => (
+          <span class="gx-who warn" title={t("여러 세션이 이 파일을 동시에 편집 중 (편집 도구 기준)")}>
+            ⚠ {c().sessions.map(conflictName).join(" · ")}
+          </span>
+        )}
+      </Show>
       <button
         class="btn ghost gx-mini"
         disabled={!!running()}
@@ -572,6 +871,15 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
         <button class="btn" disabled={!!running() || !ws() || !work()?.hasHead} onClick={() => newTag()}>
           + {t("태그")}
         </button>
+        <button
+          class="btn"
+          disabled={!!running() || !ws() || !work()?.hasHead || !work()?.files.length}
+          title={t("작업 트리 변경을 stash에 넣습니다 — 사이드바 Stash에서 적용 · 꺼내기")}
+          onClick={stashPush}
+          onContextMenu={copyMenu(["stash", "push", "-u"])}
+        >
+          {t("Stash")}
+        </button>
         <span style={{ flex: 1 }} />
         <select class="gx-qkind" value={queryKind()} onChange={(e) => setQueryKind(e.currentTarget.value as "message" | "author")}>
           <option value="message">{t("메시지")}</option>
@@ -615,6 +923,36 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
           </div>
         )}
       </Show>
+      <Show when={progress()}>
+        {(op) => (
+          <div class="gx-banner warn">
+            <span>
+              {tf("{op} 진행 중", { op: op() })}
+              {conflicts().length ? tf(" — 충돌 {n}개", { n: conflicts().length }) : t(" — 충돌을 다 풀었습니다. [계속]으로 마칩니다")}
+            </span>
+            <Show when={conflicts().length}>
+              <button class="btn ghost" onClick={() => void openConflict(conflicts()[0].path)}>
+                {t("충돌 보기")}
+              </button>
+              <button class="btn ghost" disabled={!delegateTargets().length} onClick={openDelegate}>
+                {t("세션에게 해결 맡기기")}
+              </button>
+            </Show>
+            <button
+              class="btn primary"
+              disabled={!!running() || conflicts().length > 0}
+              title={commandLine(continueArgs())}
+              onClick={doContinue}
+              onContextMenu={copyMenu(continueArgs())}
+            >
+              {t("계속")}
+            </button>
+            <button class="btn" disabled={!!running()} onClick={doAbort} onContextMenu={copyMenu([op(), "--abort"])}>
+              {t("중단 (--abort)")}
+            </button>
+          </div>
+        )}
+      </Show>
       <Show when={!ws()}>
         <div class="card conn-error mono">{t("워크스페이스 문맥이 없습니다 — 워크스페이스 탭을 먼저 여세요")}</div>
       </Show>
@@ -651,7 +989,15 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
             <summary class="gx-sec">{tf("원격 ({n})", { n: refs()?.remote.length ?? 0 })}</summary>
             <For each={refs()?.remote ?? []}>
               {(r) => (
-                <div class="gx-ref mono" classList={{ on: sel() === r.hash }} onClick={() => setSel(r.hash)} onContextMenu={(e) => openMenu(e, r.name, [[{ label: t("해시 복사"), action: () => void clipWriteText(r.hash) }, { label: t("여기서 브랜치 만들기"), action: () => newBranch(r.hash) }]])}>
+                <div class="gx-ref mono" classList={{ on: sel() === r.hash }} onClick={() => setSel(r.hash)} onContextMenu={(e) =>
+                    openMenu(e, r.name, [
+                      [{ label: t("해시 복사"), action: () => void clipWriteText(r.hash) }, { label: t("여기서 브랜치 만들기"), action: () => newBranch(r.hash) }],
+                      [
+                        { label: t("현재 브랜치로 merge"), action: () => mergeIn(r.name) },
+                        { label: t("현재 브랜치를 그 위로 rebase"), disabled: !head(), action: () => rebaseOnto(r.name) },
+                      ],
+                    ])
+                  }>
                   <span class="gx-refname">{r.name}</span>
                 </div>
               )}
@@ -681,7 +1027,20 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
             <summary class="gx-sec">{tf("Stash ({n})", { n: refs()?.stashes.length ?? 0 })}</summary>
             <For each={refs()?.stashes ?? []}>
               {(r) => (
-                <div class="gx-ref mono" title={t("적용 · 꺼내기 · 버리기는 다음 단계 — 터미널에서")} onClick={() => setSel(r.hash)}>
+                <div
+                  class="gx-ref mono"
+                  title={t("우클릭: 적용 · 꺼내기 · 버리기")}
+                  onClick={() => setSel(r.hash)}
+                  onContextMenu={(e) =>
+                    openMenu(e, r.name, [
+                      [
+                        { label: t("적용 (apply — 목록에 남김)"), action: () => guarded("stash", ["stash", "apply", stashRef(r.name)]) },
+                        { label: t("꺼내기 (pop — 적용하고 목록에서 뺌)"), action: () => guarded("stash", ["stash", "pop", stashRef(r.name)]) },
+                      ],
+                      [{ label: t("버리기…"), danger: true, action: () => stashDrop(r) }],
+                    ])
+                  }
+                >
                   <span class="gx-refname">{r.name}</span>
                 </div>
               )}
@@ -698,6 +1057,11 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
                 <button class="btn ghost" classList={{ on: blameOn() }} onClick={() => setBlameOn(!blameOn())}>
                   blame
                 </button>
+                <Show when={blameOn() && isDotenvPath(f())}>
+                  <button class="btn ghost" onClick={() => setRevealEnv(!revealEnv())}>
+                    {t(revealEnv() ? "값 가리기" : "값 보기")}
+                  </button>
+                </Show>
                 <button class="btn ghost" onClick={() => (setFile(undefined), setBlameOn(false))}>
                   {t("전체 이력으로")}
                 </button>
@@ -751,6 +1115,13 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
                           </For>
                           {c.subject}
                         </span>
+                        <For each={bySession()[c.hash] ?? []}>
+                          {(sid) => (
+                            <span class="gx-who mono" title={t("이 커밋의 파일을 편집 도구로 고친 세션 (편집 기록 기준 추정)")}>
+                              {conflictName(sid)}
+                            </span>
+                          )}
+                        </For>
                         <span class="gx-meta mono">{c.author}</span>
                         <span class="gx-meta mono">{fmtTime(c.time)}</span>
                         <span class="gx-meta mono muted">{c.hash.slice(0, 7)}</span>
@@ -776,7 +1147,7 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
                         {l.hash} {l.author} {l.time ? fmtTime(l.time) : ""}
                       </span>
                       <span class="gx-bl-no">{i() + 1}</span>
-                      <span class="gx-bl-tx">{l.text}</span>
+                      <span class="gx-bl-tx">{maskFor(file()) ? maskDotenvLine(l.text) : l.text}</span>
                     </div>
                   )}
                 </For>
@@ -869,11 +1240,72 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
               <>
                 <div class="gx-sec mono">
                   {h().path}
-                  <button class="btn ghost gx-mini" onClick={() => setHunkFile(undefined)}>
+                  <Show when={isDotenvPath(h().path)}>
+                    <button class="btn ghost gx-mini" onClick={() => setRevealEnv(!revealEnv())}>
+                      {t(revealEnv() ? "값 가리기" : "값 보기")}
+                    </button>
+                  </Show>
+                  <button class="btn ghost gx-mini" onClick={() => (setHunkFile(undefined), setConflictText(undefined))}>
                     <Icon name="x" size={11} />
                   </button>
                 </div>
-                <Show when={hunks()?.hunks.length} fallback={<div class="muted gx-empty">{t("덩어리가 없습니다 — 새 파일·바이너리는 파일 단위로 스테이지하세요")}</div>}>
+                <Show when={conflictText()?.path === h().path ? conflictText() : undefined}>
+                  {(c) => (
+                    <div class="gx-wlist">
+                      <Show
+                        when={conflictBlocks().length}
+                        fallback={
+                          <div class="muted gx-empty">
+                            {t("충돌 표식이 없습니다 — 한쪽이 지운 파일이거나 이미 고쳤습니다. 남길 내용이면 스테이지하세요.")}{" "}
+                            <button class="btn ghost gx-mini" onClick={() => void run(["add", "--", c().path], { quiet: true })}>
+                              {t("스테이지")}
+                            </button>
+                          </div>
+                        }
+                      >
+                        <For each={conflictBlocks()}>
+                          {(b, i) =>
+                            b.kind === "conflict" && (
+                              <div class="gx-hunk mono">
+                                <div class="gx-hunk-head">
+                                  <span>{tf("충돌 {n}", { n: i() + 1 })}</span>
+                                  <span>
+                                    <For each={["ours", "theirs", "both"] as const}>
+                                      {(k) => (
+                                        <button
+                                          class="btn ghost gx-mini"
+                                          classList={{ on: picks()[i()] === k }}
+                                          onClick={() => setPicks((p) => Object.assign([...p], { [i()]: k }))}
+                                        >
+                                          {t(k === "ours" ? "우리 것" : k === "theirs" ? "저쪽 것" : "둘 다")}
+                                        </button>
+                                      )}
+                                    </For>
+                                  </span>
+                                </div>
+                                <pre class="gx-ours" title={b.oursLabel}>
+                                  {maskFor(c().path) ? b.ours.split("\n").map(maskDotenvLine).join("\n") : b.ours}
+                                </pre>
+                                <pre class="gx-theirs" title={b.theirsLabel}>
+                                  {maskFor(c().path) ? b.theirs.split("\n").map(maskDotenvLine).join("\n") : b.theirs}
+                                </pre>
+                              </div>
+                            )
+                          }
+                        </For>
+                        <button class="btn primary" disabled={!picks().some(Boolean)} onClick={() => void saveConflict()}>
+                          {picks().filter(Boolean).length === conflictBlocks().length ? t("저장하고 스테이지") : t("고른 것만 저장")}
+                        </button>
+                      </Show>
+                    </div>
+                  )}
+                </Show>
+                <Show when={conflictText()?.path !== h().path && hunks()?.hunks.length} fallback={
+                    <Show when={conflictText()?.path !== h().path}>
+                      <div class="muted gx-empty">{t("덩어리가 없습니다 — 새 파일·바이너리는 파일 단위로 스테이지하세요")}</div>
+                    </Show>
+                  }
+                >
                   <div class="gx-wlist">
                     <For each={hunks()!.hunks}>
                       {(hk, i) => (
@@ -886,7 +1318,7 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
                           </div>
                           <pre>
                             <For each={hk.split("\n").slice(1, 40)}>
-                              {(l) => <div classList={{ add: l.startsWith("+"), del: l.startsWith("-") }}>{l}</div>}
+                              {(l) => <div classList={{ add: l.startsWith("+"), del: l.startsWith("-") }}>{diffLine(l, maskFor(h().path))}</div>}
                             </For>
                           </pre>
                         </div>
@@ -943,15 +1375,15 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
         </div>
       </Show>
 
-      <Show when={confirm()}>
+      <Show when={confirm()} keyed>
         {(c) => (
           <ConfirmDialog
-            title={c().title}
-            body={c().body}
-            info={c().info}
-            danger={c().danger}
-            confirmLabel={c().confirmLabel}
-            onConfirm={c().onConfirm}
+            title={c.title}
+            body={c.body}
+            info={c.info}
+            danger={c.danger}
+            confirmLabel={c.confirmLabel}
+            onConfirm={c.onConfirm}
             onCancel={() => setConfirm(undefined)}
           />
         )}
@@ -963,9 +1395,22 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
             label={p().label}
             initial={p().initial}
             withMessage={p().withMessage}
+            free={p().free}
             confirmLabel={p().confirmLabel}
             onConfirm={p().onConfirm}
             onCancel={() => setPrompt(undefined)}
+          />
+        )}
+      </Show>
+      <Show when={delegate()}>
+        {(d) => (
+          <DelegateDialog
+            targets={delegateTargets().map((x) => ({ id: x.id, name: conflictName(x.id) }))}
+            to={d().to}
+            body={d().body}
+            onChange={(to, body) => setDelegate({ to, body })}
+            onSend={() => void sendDelegate()}
+            onCancel={() => setDelegate(undefined)}
           />
         )}
       </Show>
