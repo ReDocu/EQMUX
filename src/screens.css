@@ -7042,3 +7042,11 @@ label.inbox-pop-row {
   flex-basis: 100%;
   color: var(--eq-blue);
 }
+
+/* 0.6 W4: 초상 이미지 (§15-4) — personas/<id>.png가 아바타 칸을 채운다. 없으면 이니셜 그대로 */
+.cast-avatar .eq-portrait {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}

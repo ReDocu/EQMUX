@@ -92,6 +92,9 @@ pub struct PersonaInfo {
     /// 모델 (0.6 §3) — 직무 모델보다 우선. 빈 값 = 직무 → 엔진 기본
     #[serde(default)]
     pub model: String,
+    /// 초상 이미지 (0.6 §15-4) — 같은 디렉터리의 <id>.png mtime. None = 초상 없음(이니셜)
+    #[serde(default)]
+    pub portrait_mtime_ms: Option<i64>,
     /// 읽은 시점의 파일 mtime (P-7) — 저장 시 외부 변경 충돌 감지에 쓴다
     #[serde(default)]
     pub mtime_ms: i64,
@@ -361,6 +364,8 @@ fn parse_persona(path: &Path) -> Option<PersonaInfo> {
         _ => &basic,
     }
     .clone();
+    // 초상 (0.6 §15-4) — 페르소나 파일과 같은 디렉터리의 <id>.png
+    let portrait_mtime_ms = path.parent().map(|d| d.join(format!("{}.png", safe_id(&id)))).filter(|p| p.is_file()).map(|p| file_mtime_ms(&p));
     Some(PersonaInfo {
         id,
         name: fm_value(&fm, "name").unwrap_or(stem),
@@ -378,6 +383,7 @@ fn parse_persona(path: &Path) -> Option<PersonaInfo> {
         character_name,
         character_source,
         character_identity,
+        portrait_mtime_ms,
         remind: fm_value(&fm, "remind").as_deref() == Some("on"),
         model: fm_value(&fm, "model").unwrap_or_default(),
         mtime_ms: file_mtime_ms(path),
@@ -651,6 +657,25 @@ pub fn save_character(app_root: &Path, id: &str, content: &str, expected_mtime_m
     let path = character_path_of(app_root, id);
     check_conflict(&path, expected_mtime_ms)?;
     atomic_write(&path, content)
+}
+
+/// 초상 상한 — 아바타 한 칸에 쓰는 그림이라 이보다 크면 잘못 넣은 파일로 본다
+const MAX_PORTRAIT_BYTES: u64 = 4 * 1024 * 1024;
+
+/// 초상 읽기 (0.6 §15-4) — 전역 personas/<id>.png. id는 safe_id로 걸러 디렉터리 밖을 읽지 못한다
+pub fn read_portrait(app_root: &Path, id: &str) -> Result<Vec<u8>, String> {
+    let path = personas_dir(app_root).join(format!("{}.png", safe_id(id)));
+    let len = fs::metadata(&path).map_err(|_| "초상 없음".to_string())?.len();
+    if len > MAX_PORTRAIT_BYTES {
+        return Err("초상이 4MB를 넘습니다".into());
+    }
+    fs::read(&path).map_err(|e| e.to_string())
+}
+
+/// 초상 커맨드 — 바이트 그대로(ArrayBuffer) 돌려준다. JSON 숫자 배열로 부풀리지 않는다
+#[tauri::command]
+pub fn library_portrait(store_state: tauri::State<crate::StoreState>, id: String) -> Result<tauri::ipc::Response, String> {
+    read_portrait(&store_state.0.root(), &id).map(tauri::ipc::Response::new)
 }
 
 /// 시트 삭제 (중간 이하로 강등) — 없는 파일은 성공으로 친다 (멱등)
@@ -961,6 +986,22 @@ mod tests {
         let lib = list(&root, None);
         assert_eq!(lib.personas.iter().find(|p| p.id == "kai").unwrap().model, "claude-sonnet-5-5");
         assert_eq!(lib.jobs.iter().find(|j| j.id == "dev").unwrap().model, "gpt5");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// 초상 (§15-4) — png가 있으면 mtime이 실리고 읽힌다. 없으면 None · 오류. id로 디렉터리 밖을 못 읽는다
+    #[test]
+    fn portrait_detect_and_read() {
+        let root = temp_root("portrait");
+        seed(&root);
+        let kai = || list(&root, None).personas.into_iter().find(|p| p.id == "kai").unwrap();
+        assert!(kai().portrait_mtime_ms.is_none());
+        fs::write(root.join("personas").join("kai.png"), b"png").unwrap();
+        assert!(kai().portrait_mtime_ms.is_some());
+        assert_eq!(read_portrait(&root, "kai").unwrap(), b"png");
+        assert!(read_portrait(&root, "luca").is_err());
+        fs::write(root.join("secret.png"), b"x").unwrap();
+        assert!(read_portrait(&root, "../secret").is_err()); // safe_id가 / 를 _로 바꾼다
         fs::remove_dir_all(&root).ok();
     }
 

@@ -28,6 +28,7 @@ import { JOB_META, jobMeta, TITLE_SUGGEST } from "../jobs";
 import { cleanTitle, personaLevel, personaProfile, personaTagline, TITLE_MAX } from "../types";
 import type { Job, Persona, PersonaLevel, Workspace } from "../types";
 import { Icon } from "../components/icons";
+import { PersonaAvatar } from "../components/PersonaAvatar";
 
 // 색 팔레트 = 직무 8색 (jobs.ts JOB_META와 1:1) — 점 안 글자는 직무 이름 앞글자
 const JOB_PALETTE: { color: Persona["color"]; letter: string; job: string }[] = [
@@ -45,8 +46,6 @@ const CHAR_BUDGET = 3; // 중간 단계 — 말투·성격 각 3줄 권장, 긴 
 const TONE_PRESETS = ["간결한 존댓말", "친근한 반말", "차분한 설명형", "건조한 보고체"];
 const LEVEL_NAME: Record<"basic" | "mid" | "adv", string> = { basic: "기본", mid: "중급", adv: "고급" };
 
-/** 아바타 글자 — `[강사]실버울프`처럼 기호로 시작하는 이름은 첫 글자·숫자를 쓴다 */
-const initial = (name: string) => name.match(/[\p{L}\p{N}]/u)?.[0] ?? name.slice(0, 1);
 /** 직무 열 순서 — 로스터 순서(jobs.ts JOB_META)를 따른다. 파일 읽는 순서는 OS마다 다르다 */
 const jobRank = (id: string) => {
   const i = Object.keys(JOB_META).indexOf(id);
@@ -443,7 +442,7 @@ export function RoleLibrary() {
             <For each={personas()}>
               {(p) => (
                 <button class="rl-row rl-persona" classList={{ selected: selId() === p.id }} title={personaTagline(p)} onClick={() => guard(() => select(p))}>
-                  <span class={`cast-avatar rl-avatar ${p.color}`}>{initial(p.name)}</span>
+                  <PersonaAvatar persona={p} class="rl-avatar" />
                   <span class="rl-persona-copy">
                     <span class="rl-persona-line">
                       <span class="rl-persona-name">{p.name}</span>

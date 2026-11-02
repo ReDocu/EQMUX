@@ -195,3 +195,20 @@ export async function listPresets(): Promise<CastingPreset[]> {
   if (!isTauri()) return [];
   return invoke<CastingPreset[]>("preset_list").catch(() => []);
 }
+
+/** 초상 이미지 (0.6 §15-4) — personas/<id>.png를 Blob URL로. 키가 id+mtime이라 파일을 바꾸면 새로 읽는다.
+ *  없거나 브라우저 dev면 undefined (이니셜). ponytail: 지난 mtime의 URL은 해제하지 않는다 — 초상 수만큼만 남는다 */
+const portraits = new Map<string, Promise<string | undefined>>();
+export function portraitUrl(p: Pick<Persona, "id" | "portraitMtimeMs">): Promise<string | undefined> {
+  if (!p.portraitMtimeMs || !isTauri()) return Promise.resolve(undefined);
+  const key = `${p.id}:${p.portraitMtimeMs}`;
+  let v = portraits.get(key);
+  if (!v) {
+    v = invoke<ArrayBuffer>("library_portrait", { id: p.id }).then(
+      (b) => URL.createObjectURL(new Blob([b], { type: "image/png" })),
+      () => undefined,
+    );
+    portraits.set(key, v);
+  }
+  return v;
+}

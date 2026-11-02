@@ -17,6 +17,7 @@ import { setView, tick, view } from "../state";
 import { WizardSteps } from "./LaunchMode";
 import { ConfirmDialog, ContextMenu, Identity } from "../components/ui";
 import type { MenuGroup } from "../components/ui";
+import { PersonaAvatar } from "../components/PersonaAvatar";
 import { personaTagline, projectStem, slotNo } from "../types";
 import type { Permissions } from "../types";
 
@@ -29,9 +30,6 @@ const FALLBACK_PRESETS: CastingPreset[] = [
   { id: "product", name: "제품기획", jobs: ["lead", "plan", "design", "dev"] },
   { id: "quality", name: "품질", jobs: ["dev", "debug", "qa", "docs"] },
 ];
-
-/** 아바타 글자 — `[강사]실버울프`처럼 기호로 시작하는 이름은 첫 글자·숫자를 쓴다 */
-const initial = (name: string) => name.match(/[\p{L}\p{N}]/u)?.[0] ?? name.slice(0, 1);
 
 function permText(p: Permissions): string {
   const mark = (b: boolean) => (b ? "✓" : "—");
@@ -298,7 +296,7 @@ export function TeamCasting(props: { wsId: string }) {
                     <span class="cast-slot-no">SLOT {plan()[i()] ? slotNo(plan()[i()]!) : "—"}</span>
                     <span class="muted">{slotNote(i(), slot.personaId)}</span>
                   </div>
-                  <span class={`cast-avatar ${pp()?.color ?? ""}`}>{initial(pp()?.name ?? "")}</span>
+                  <PersonaAvatar persona={pp()} />
                   <div>
                     <Identity name={pp()?.name ?? slot.personaId} title={pp()?.title} job={slot.badge} />
                     {/* 직함 (0.5) — 페르소나 직함. 슬롯 덮어쓰기는 세션 상세에서 */}
