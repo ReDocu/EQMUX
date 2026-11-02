@@ -208,6 +208,8 @@ pub struct AgentRt {
     pub session_origin: Mutex<HashMap<String, (String, String)>>,
     /// 레지스트리 파일 파싱 캐시 (최적화 A5) — 2초마다 전부 다시 읽지 않는다. 스캔 스레드만 쓴다
     registry_cache: Mutex<RegistryCache>,
+    /// 최근 편집 (§13-1) — "ws\n정규화 경로" → 세션 → 마지막 편집 ms. EDIT_WINDOW_MS 지난 것은 편집마다 걷힌다
+    recent_edits: Mutex<HashMap<String, HashMap<String, i64>>>,
 }
 
 /// 레지스트리 파일별 (수정 시각, 크기) → 파싱 결과. 둘이 같으면 다시 읽지 않는다.
@@ -922,6 +924,86 @@ fn apply_effect(
     }
 }
 
+// ── 같은 파일 동시 편집 (§13-1 · 계약 C1) ─────────────────────────────────
+// 편집 도구가 끝난 자리(PostToolUse — 거부된 편집은 세지 않는다)에서 경로를 받아, 다른 세션이
+// 최근 10분(결정 Q3) 안에 같은 파일을 고쳤으면 `edit-conflict`를 낸다. 막거나 메시지를 보내지 않는다.
+// Bash로 고친 파일(sed -i, 리다이렉트)은 잡지 못한다 — 화면 문구가 "편집 도구로 고친 것만"이라고 적는다.
+
+/// 동시 편집 판정 창 (결정 Q3)
+pub const EDIT_WINDOW_MS: i64 = 10 * 60_000;
+
+/// 편집 도구 payload → (도구명, 경로). NotebookEdit만 키가 notebook_path다.
+/// Codex는 apply_patch가 경로를 패치 본문에 싣는다 — 실측 전이라 잡지 않는다
+pub fn edited_path(payload: &serde_json::Value) -> Option<(&str, &str)> {
+    let tool = payload.get("tool_name")?.as_str()?;
+    let key = match tool {
+        "Edit" | "Write" | "MultiEdit" => "file_path",
+        "NotebookEdit" => "notebook_path",
+        _ => return None,
+    };
+    let path = payload.get("tool_input")?.get(key)?.as_str().filter(|p| !p.is_empty())?;
+    Some((tool, path))
+}
+
+/// 판정 키 — 구분자를 하나로, Windows는 대소문자도 접는다 (같은 파일이 두 철자로 오지 않게)
+fn edit_key(path: &str) -> String {
+    let p = path.replace('\\', "/");
+    if cfg!(windows) { p.to_lowercase() } else { p }
+}
+
+/// 화면 표시용 — 워크스페이스 안이면 상대 경로(`src/x.ts`), 밖이면 원문
+fn display_path(cwd: &str, path: &str) -> String {
+    let (k, base) = (edit_key(path), edit_key(cwd));
+    let base = base.trim_end_matches('/');
+    match k.strip_prefix(base).and_then(|r| r.strip_prefix('/')) {
+        // 원문 철자를 살린다. 접기가 ASCII 밖에서 길이를 바꿨으면 접힌 쪽을 그대로 쓴다
+        Some(rest) => match path.get(path.len().saturating_sub(rest.len())..) {
+            Some(orig) if k.len() == path.len() => orig.replace('\\', "/"),
+            _ => rest.to_string(),
+        },
+        None => path.to_string(),
+    }
+}
+
+/// 한 파일의 최근 편집자 집합에 이 편집을 넣는다 (순수 함수 — 테스트 대상).
+/// 낼 것: 이 세션이 창 안에 새로 들어왔고 다른 세션이 이미 있을 때만 — 같은 세션의 연속 편집이
+/// 경고를 반복하지 않는다. 창이 지나 빠졌다가 다시 고치면 다시 알린다.
+fn edit_overlap(seen: &mut HashMap<String, i64>, session: &str, now: i64) -> Option<Vec<String>> {
+    seen.retain(|_, ts| now - *ts < EDIT_WINDOW_MS);
+    let fresh = seen.insert(session.to_string(), now).is_none();
+    if !fresh || seen.len() < 2 {
+        return None;
+    }
+    let mut who: Vec<String> = seen.keys().cloned().collect();
+    who.sort();
+    Some(who)
+}
+
+/// PostToolUse마다 부른다 — 편집 도구가 아니면 곧바로 끝난다
+fn record_edit(app: &AppHandle, session: &str, payload: &serde_json::Value) {
+    let Some((tool, path)) = edited_path(payload) else { return };
+    let Some((ws, cwd)) = crate::session_origin(app, session) else { return };
+    let now = crate::workspace::now_ms();
+    let rt: tauri::State<AgentRt> = app.state();
+    let hit = {
+        let Ok(mut all) = rt.recent_edits.lock() else { return };
+        let key = format!("{ws}\n{}", edit_key(path));
+        let hit = edit_overlap(all.entry(key).or_default(), session, now);
+        all.retain(|_, s| s.values().any(|ts| now - *ts < EDIT_WINDOW_MS)); // 다른 파일의 낡은 칸도 걷는다
+        hit
+    };
+    // 13-3 · 13-5가 쓸 기록 (C4) — 쓰기 스레드로 넘길 뿐 막지 않는다
+    let store: tauri::State<crate::StoreState> = app.state();
+    store.0.touch_file(&ws, session, path, tool, now);
+    if let Some(sessions) = hit {
+        let _ = app.emit_to(
+            "main",
+            "edit-conflict",
+            serde_json::json!({ "workspace": ws, "path": display_path(&cwd, path), "sessions": sessions, "ts": now }),
+        );
+    }
+}
+
 /// 훅 2차 소스 — 레지스트리 스캔(1차)과 같은 diff 경로로 emit_state 한 곳에 합류한다.
 /// 레지스트리보다 빠르게 도착하므로 waiting 알림·인박스 전달의 지연이 줄어든다.
 // ── 마지막 한 줄 요약 (M35) ────────────────────────────────────────────────
@@ -1095,6 +1177,9 @@ pub fn apply_hook(app: &AppHandle, session: &str, event: &str, payload: &serde_j
     // 턴이 끝나는 자리 — 여기서만 "마지막에 한 작업"이 확정된다 (M35).
     // 상태 반영보다 먼저 한다: effect가 Ignore여도 요약은 남아야 한다
     let recap = if event == "Stop" { record_recap(app, session, payload) } else { None };
+    if event == "PostToolUse" {
+        record_edit(app, session, payload); // §13-1 — 상태와 무관한 부연이라 효과 판정과 따로 간다
+    }
     let effect = hook_effect(event, payload);
     if matches!(effect, HookEffect::Ignore) {
         return;
@@ -2228,5 +2313,53 @@ mod tests {
         t.cli = String::new();
         assert!(!super::resumable_of(&t, "no-such-uuid"));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// §13-1 — 편집 도구 payload에서만 경로가 나온다
+    #[test]
+    fn edited_path_reads_edit_tools_only() {
+        let p = |tool: &str, input: serde_json::Value| serde_json::json!({ "tool_name": tool, "tool_input": input });
+        let fp = serde_json::json!({ "file_path": "D:/w/src/x.ts" });
+        for tool in ["Edit", "Write", "MultiEdit"] {
+            assert_eq!(super::edited_path(&p(tool, fp.clone())), Some((tool, "D:/w/src/x.ts")));
+        }
+        assert_eq!(
+            super::edited_path(&p("NotebookEdit", serde_json::json!({ "notebook_path": "a.ipynb" }))),
+            Some(("NotebookEdit", "a.ipynb"))
+        );
+        assert_eq!(super::edited_path(&p("Read", fp.clone())), None);
+        assert_eq!(super::edited_path(&p("Bash", serde_json::json!({ "command": "sed -i x" }))), None);
+        assert_eq!(super::edited_path(&p("Edit", serde_json::json!({ "file_path": "" }))), None);
+        assert_eq!(super::edited_path(&nil()), None);
+    }
+
+    /// 10분 창 — 다른 세션이 들어온 그 한 번만 알린다. 창이 지나면 다시 알린다
+    #[test]
+    fn edit_overlap_warns_once_per_newcomer_within_ten_minutes() {
+        use super::{edit_overlap, EDIT_WINDOW_MS};
+        let mut seen = HashMap::new();
+        assert_eq!(edit_overlap(&mut seen, "kai", 0), None, "혼자 고치면 조용하다");
+        assert_eq!(edit_overlap(&mut seen, "kai", 1_000), None);
+        assert_eq!(edit_overlap(&mut seen, "rin", 2_000), Some(vec!["kai".into(), "rin".into()]));
+        assert_eq!(edit_overlap(&mut seen, "rin", 3_000), None, "같은 세션의 연속 편집은 반복하지 않는다");
+        assert_eq!(edit_overlap(&mut seen, "kai", 4_000), None, "kai도 이미 창 안에 있다");
+        // kai의 마지막 편집(4초)에서 10분이 지나면 빠진다 — rin 혼자 남는다
+        assert_eq!(edit_overlap(&mut seen, "rin", 4_000 + EDIT_WINDOW_MS), None);
+        assert_eq!(
+            edit_overlap(&mut seen, "kai", 5_000 + EDIT_WINDOW_MS),
+            Some(vec!["kai".into(), "rin".into()]),
+            "다시 들어오면 다시 알린다"
+        );
+    }
+
+    #[test]
+    fn display_path_is_workspace_relative() {
+        assert_eq!(super::display_path("D:/w/app", "D:/w/app/src/x.ts"), "src/x.ts");
+        assert_eq!(super::display_path("D:/w/app/", "D:/w/app/src/x.ts"), "src/x.ts");
+        assert_eq!(super::display_path("D:/w/app", "D:/w/apple/x.ts"), "D:/w/apple/x.ts", "접두어만 같은 형제 폴더");
+        assert_eq!(super::display_path("D:/w/app", "E:/other.ts"), "E:/other.ts");
+        if cfg!(windows) {
+            assert_eq!(super::display_path(r"d:\W\App", r"D:\w\app\Src\X.ts"), "Src/X.ts", "철자는 원문대로");
+        }
     }
 }
