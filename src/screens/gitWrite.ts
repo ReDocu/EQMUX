@@ -131,3 +131,10 @@ export function resolveConflicts(parts: ConflictPart[], picks: (ConflictPick | u
     })
     .join("");
 }
+
+/** 업스트림 없는 브랜치를 올릴 원격 — origin이 있거나 원격을 모르면 origin, 원격이 하나뿐이면 그것.
+ *  remoteRefs = 원격 브랜치 이름(`upstream/main`). ponytail: 한 번도 fetch 안 한 원격은 목록에 없다 — 그때는 origin */
+export function pushRemote(remoteRefs: string[]): string {
+  const names = [...new Set(remoteRefs.map((r) => r.split("/")[0]).filter(Boolean))];
+  return names.length === 1 ? names[0] : "origin";
+}

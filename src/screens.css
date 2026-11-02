@@ -7328,3 +7328,17 @@ label.inbox-pop-row {
   flex: 1;
   min-width: 0;
 }
+
+/* 0.6 W5: 긴 브랜치 · 태그 이름 — 라벨이 커밋 메시지를 밀어내거나 툴바가 넘치지 않게 (전체 이름은 title) ── */
+.gitp-ref {
+  max-width: 18em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gx-head {
+  max-width: 28em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

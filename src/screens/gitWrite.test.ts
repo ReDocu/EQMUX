@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { guardWorsened, hunkPatch, hunkRange, refNameProblem, splitHunks, workGuard } from "./gitWrite";
+import { guardWorsened, hunkPatch, hunkRange, pushRemote, refNameProblem, splitHunks, workGuard } from "./gitWrite";
 
 test("§4-1 작업 중 경고 — busy > waiting > 없음, 다른 워크스페이스 · 자기 워크트리 세션은 뺀다", () => {
   const s = (workspaceId: string, status: "busy" | "waiting" | "idle" | "starting" | "shell", wt = false, missing = false) => ({
@@ -77,4 +77,12 @@ test("충돌 덩어리 — 나누기 · 우리 것/저쪽 것/둘 다 · diff3 �
   expect(conflictParts("<<<<<<< HEAD\nunterminated\n")).toEqual([{ kind: "text", text: "<<<<<<< HEAD\nunterminated\n" }]);
   // CRLF 파일 — 줄 끝을 그대로 둔다
   expect(resolveConflicts(conflictParts("<<<<<<< HEAD\r\no\r\n=======\r\nt\r\n>>>>>>> x\r\n"), ["theirs"])).toBe("t\r\n");
+});
+
+test("업스트림 없는 push — 원격이 하나뿐이면 그 이름, 아니면 origin", () => {
+  expect(pushRemote([])).toBe("origin");
+  expect(pushRemote(["origin/main", "origin/HEAD"])).toBe("origin");
+  expect(pushRemote(["upstream/main", "upstream/dev"])).toBe("upstream");
+  expect(pushRemote(["origin/main", "fork/main"])).toBe("origin");
+  expect(pushRemote(["fork/main", "gh/main"])).toBe("origin");
 });

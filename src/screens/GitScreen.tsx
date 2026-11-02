@@ -49,6 +49,7 @@ import {
   hunkPatch,
   hunkRange,
   isDotenvPath,
+  pushRemote,
   refNameProblem,
   resolveConflicts,
   splitHunks,
@@ -601,7 +602,7 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
   const doPull = () => guarded("pull", ["pull", "--ff-only"]);
   const pushArgs = () => {
     const b = head();
-    return b && !b.upstream ? ["push", "-u", "origin", b.name] : ["push"];
+    return b && !b.upstream ? ["push", "-u", pushRemote((refs()?.remote ?? []).map((r) => r.name)), b.name] : ["push"];
   };
   const doPush = () => void run(pushArgs());
   const doForcePush = () =>
@@ -827,7 +828,9 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
         <span class="gx-title">
           <Icon name="git-branch" size={14} /> {ws()?.name ?? "—"}
         </span>
-        <span class="mono muted gx-head">⎇ {head()?.name ?? headLabel()}</span>
+        <span class="mono muted gx-head" title={head()?.name}>
+          ⎇ {head()?.name ?? headLabel()}
+        </span>
         <Show when={head()}>
           {(b) => (
             <span class="mono gx-sync" title={b().upstream || t("업스트림 없음")}>
@@ -865,7 +868,7 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
           ▾
         </button>
         <span class="gx-sep" />
-        <button class="btn" disabled={!!running() || !ws()} onClick={() => newBranch()}>
+        <button class="btn" disabled={!!running() || !ws() || !work()?.hasHead} onClick={() => newBranch()}>
           + {t("브랜치")}
         </button>
         <button class="btn" disabled={!!running() || !ws() || !work()?.hasHead} onClick={() => newTag()}>
@@ -1107,6 +1110,7 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
                             {(ref) => (
                               <span
                                 class="gitp-ref mono"
+                                title={ref}
                                 classList={{ remote: !ref.startsWith("tag: ") && ref.includes("/") && !ref.startsWith("HEAD -> "), tag: ref.startsWith("tag: "), headref: ref.startsWith("HEAD") }}
                               >
                                 {ref.replace(/^HEAD -> /, "● ")}
