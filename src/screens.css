@@ -6473,3 +6473,21 @@ label.inbox-pop-row {
   align-self: flex-start;
   margin-top: 12vh;
 }
+
+/* 0.6 W6: 환경변수 CRUD (§16) — 줄 편집 · 원문 편집 · 빈 상태 */
+.env-file-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.env-file-actions { margin-left: auto; display: flex; gap: 4px; }
+.env-row .k { display: flex; align-items: center; gap: 6px; cursor: copy; }
+.env-row .v { flex: 1; cursor: copy; }
+.env-row-actions { display: flex; gap: 2px; flex-shrink: 0; opacity: 0.5; }
+.env-row:hover .env-row-actions, .env-row-actions:focus-within { opacity: 1; }
+.env-edit { display: flex; gap: 4px; padding: 4px 0; }
+.env-edit input { flex: 1; min-width: 0; font-size: 12px; }
+.env-edit input:first-child { flex: 0 1 40%; }
+.env-add { margin-top: 4px; }
+.env-raw { margin: 4px 0 8px; display: flex; flex-direction: column; gap: 4px; }
+.env-raw > :first-child { height: 240px; border: 1px solid var(--eq-line); }
+.env-raw-actions { display: flex; gap: 4px; justify-content: flex-end; }
+.env-err { color: var(--eq-red); font-size: 12px; margin: 6px 0; }
+.env-note { font-size: 11px; margin: 4px 0; }
+.env-empty-actions { display: flex; gap: 6px; margin-top: 6px; }

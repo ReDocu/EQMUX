@@ -1,6 +1,6 @@
 // 사이드 패널 (화면 #10) — 도구 서랍. 페인이 아니라 분할 그리드 밖에 있다 (§2.1).
 // 0.5 탭 구성 — 그룹 4개: 대화[대화|로그] · 코드[git|문서] · 실행[서버|포트|환경변수] · 브라우저.
-// 환경변수는 워크스페이스 루트에 .env 계열 파일이 있을 때만 보인다.
+// 환경변수 탭은 늘 보인다 — .env가 없을 때 만들기의 입구가 그 탭이다 (§16 V2).
 // 하위 키(PanelTab)는 그대로라 openPanel("git") 같은 호출부가 그대로 그 하위 탭을 연다.
 // 임무(탐색기)는 M25에서 전체 화면 팝업으로 승격 — 앱 바의 임무 버튼이 연다.
 // 위치 전환 — 플렉스 order로 좌/우를 오간다 (app-row · tf-body 양쪽 컨테이너 공용).
@@ -60,15 +60,11 @@ const dismissNotice = () => {
 };
 
 export function SidePanel() {
-  // .env 계열 — 있을 때만 '환경변수' 탭을 보인다. 워크스페이스가 바뀌면 다시 읽고, 탭의 [다시 읽기]도 같은 결과를 고친다
+  // .env 계열 — 워크스페이스가 바뀌면 다시 읽고, 탭의 [다시 읽기]·저장도 같은 결과를 고친다
   const [envFiles, { refetch: reloadEnv }] = createResource(
     () => scopeWorkspace()?.path,
     (p) => loadEnvFiles(p),
   );
-  const hasEnv = () => (envFiles()?.length ?? 0) > 0;
-  const tabsOf = (g: (typeof GROUPS)[number]) => g.tabs.filter((x) => x.key !== "env" || hasEnv());
-  // 보던 워크스페이스에서 .env가 사라졌으면 포트로 물러난다
-  createEffect(() => panelTab() === "env" && envFiles.state === "ready" && !hasEnv() && setPanelTab("ports"));
   const active = () => groupOf(panelTab());
   createEffect(() => lastSub.set(groupOf(panelTab()).key, panelTab()));
   // 새 사용자(이전 layout.json 없음)는 묶이기 전 탭을 본 적이 없다 — 안내 없이 본 것으로 적어 둔다 (U40)
@@ -114,11 +110,11 @@ export function SidePanel() {
           </button>
         </div>
       </Show>
-      <Show when={tabsOf(active()).length > 1}>
+      <Show when={active().tabs.length > 1}>
         <div class="panel-seg">
           <Segmented
             label={t(active().label)}
-            items={tabsOf(active()).map((x) => ({
+            items={active().tabs.map((x) => ({
               value: x.key,
               label: x.key === "ports" && unseenPortCount() > 0 ? tf("포트 · {n}", { n: unseenPortCount() }) : t(x.label),
             }))}
@@ -150,8 +146,8 @@ export function SidePanel() {
         <Show when={panelTab() === "mdview"}>
           <MdViewTab />
         </Show>
-        <Show when={panelTab() === "env" && hasEnv()}>
-          <EnvPanelTab files={envFiles() ?? []} onReload={() => void reloadEnv()} />
+        <Show when={panelTab() === "env"}>
+          <EnvPanelTab files={envFiles() ?? []} wsPath={scopeWorkspace()?.path} onReload={() => void reloadEnv()} />
         </Show>
       </div>
     </div>
