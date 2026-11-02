@@ -55,6 +55,9 @@ const jobRank = (id: string) => {
 type SJob = Job & { source?: LibSource };
 type SPersona = Persona & { source?: LibSource };
 
+// C5 모델 이름 — W2가 cmd.exe 때문에 이 범위 밖 글자가 든 값은 버리므로 입력에서부터 거른다 (값이 그대로면 Solid가 다시 안 그리므로 입력 칸에도 직접 쓴다)
+const modelChars = (v: string) => v.replace(/[^A-Za-z0-9._\-:/[\]]/g, "");
+
 export function RoleLibrary() {
   // ── 스코프 (FR-E-21, M30) — 전역 / 워크스페이스 병합. 병합에서 같은 id는 ws가 이긴다 (P2) ──
   // 스코프 칩 UI는 제거됨 — 항상 전역 보기. 병합 로직은 남겨둔다 (되살릴 때 UI만 붙이면 됨)
@@ -498,7 +501,7 @@ export function RoleLibrary() {
                 </div>
                 <div class="rl-field">
                   <label class="rl-label">{t("모델 — 이 직무 세션의 기본 모델. 페르소나 모델이 우선, 비우면 엔진 기본. 다음 기동부터 적용")}</label>
-                  <input class="mono" list="eq-model-suggest" placeholder="opus · sonnet · haiku" value={jDraft().model} onInput={(e) => setJDraft({ ...jDraft(), model: e.currentTarget.value })} />
+                  <input class="mono" list="eq-model-suggest" placeholder="opus · sonnet · haiku" value={jDraft().model} onInput={(e) => setJDraft({ ...jDraft(), model: (e.currentTarget.value = modelChars(e.currentTarget.value)) })} />
                   <span class="rl-hint muted">{t("Codex 세션이면 Codex 모델 이름을 적습니다 (-m으로 넘어갑니다)")}</span>
                 </div>
                 <div class="rl-field">
@@ -744,7 +747,7 @@ export function RoleLibrary() {
             {/* 모델 (0.6 §3 · C5) — 직무 모델보다 우선. 스폰 인자라 다음 기동부터 */}
             <div class="rl-field">
               <label class="rl-label">{t("모델 — 비우면 직무 모델, 그것도 비면 엔진 기본. 다음 기동부터 적용")}</label>
-              <input class="mono" list="eq-model-suggest" placeholder="opus · sonnet · haiku" value={draftModel()} onInput={(e) => setDraftModel(e.currentTarget.value)} />
+              <input class="mono" list="eq-model-suggest" placeholder="opus · sonnet · haiku" value={draftModel()} onInput={(e) => setDraftModel((e.currentTarget.value = modelChars(e.currentTarget.value)))} />
             </div>
             {/* 말투·성격은 중급 전용 — 고급은 시트의 말투 규칙·성격 섹션이 담당한다 */}
             <Show when={editLevel() === "mid"}>

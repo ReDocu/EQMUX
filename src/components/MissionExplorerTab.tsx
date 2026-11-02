@@ -9,7 +9,7 @@ import { markMissionBase, refreshMissions } from "../backend/missions";
 import { sendConversation } from "../backend/conversation";
 import { isTauri, revealPath } from "../backend/pty";
 import { t, tf } from "../i18n";
-import { openPanel, scopeWorkspace, selectedSession, setExplorerTab, setOverlay, setView, tick, view } from "../state";
+import { openPanel, scopeWorkspace, selectedSession, setOverlay, setView, tick, toggleExplorer, view } from "../state";
 import { Icon } from "./icons";
 import { ContextMenu, notify } from "./ui";
 import { isSubmitEnter } from "../platform"; // 한글 조합 중 Enter는 제출이 아니다 (B130)
@@ -283,7 +283,7 @@ export function MissionExplorerTab() {
   return (
     <div class="msnp">
       {/* 머리 줄 (0.5 시안 uOK9M) — 왼쪽은 브리프를 받을 세션, 오른쪽은 저장소 경로와 탐색기 열기.
-          팝업 제목이 이미 "임무 · 파일 탐색기"라 패널 제목 줄은 두지 않는다 */}
+          사이드 패널 코드 그룹 [git | 파일 | 문서]의 "파일" 탭에 들어가 그 탭 이름이 제목이라 제목 줄은 두지 않는다 (0.6 결정 21) */}
       <div class="msnp-bar">
         <span class="msnp-status-dot" />
         <span class="msnp-target">
@@ -566,9 +566,9 @@ export function MissionExplorerTab() {
           </div>
         </div>
         <div style={{ display: "flex", gap: "6px" }}>
-          {/* 임무로 전환 — 팝업을 닫지 않는다 (헤더 세그먼트의 "임무"와 같은 자리).
-              활성 조건도 세그먼트와 같다: 팝업이 임무를 그릴 수 있는 워크스페이스 문맥일 때만 */}
-          <button class="btn" disabled={!scopeWorkspace()} onClick={() => setExplorerTab("missions")}>
+          {/* 임무 팝업 열기 — 팝업은 이제 임무만 그린다 (0.6 결정 21).
+              워크스페이스 문맥이 있을 때만 — 없으면 toggleExplorer가 파일 패널로 착지한다 */}
+          <button class="btn" disabled={!scopeWorkspace()} onClick={() => toggleExplorer("missions")}>
             {t("임무 관리")}
           </button>
           <button class="btn primary" onClick={sendBrief}>
