@@ -72,6 +72,21 @@ pub struct Tracked {
     pub signal_ms: i64,
     /// busy인데 STALL_MS 넘게 신호가 없다 (A5 · C2) — 다음 신호가 오면 풀린다
     pub stalled: bool,
+    /// statusLine 컨텍스트 사용률 % (토큰 #5) — 첫 응답 전에는 없다
+    pub context_pct: Option<i64>,
+    /// statusLine 한도 중 가장 찬 창 (F1) — 구독 요금제에서만 온다
+    pub rate_limit: Option<RateLimit>,
+}
+
+/// 사용 한도 한 창 (F1) — statusLine `rate_limits.<window>` 중 사용률이 가장 높은 것
+#[derive(Clone, Serialize, PartialEq, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct RateLimit {
+    /// "five_hour" · "seven_day" 등 — 원문 키 그대로
+    pub window: String,
+    pub used_pct: i64,
+    /// 초기화 시각 epoch 초
+    pub resets_at: Option<i64>,
 }
 
 /// 승인함 한 줄 (C2) — 도구명, 원문 요약, 응답 종류(질문·계획은 페인에서만 답한다)
@@ -253,8 +268,8 @@ pub fn forget_session(app: &AppHandle, id: &str) {
     };
 }
 
-/// §7.1 상태 신호 스키마
-#[derive(Clone, Serialize)]
+/// §7.1 상태 신호 스키마. Default는 새 칸이 생겨도 호출부(lib.rs 기동 등)를 안 건드리게 하려는 것
+#[derive(Clone, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentStateEvt {
     pub session: String,
@@ -285,6 +300,12 @@ pub struct AgentStateEvt {
     /// 멈춘 세션 (A5 · C2)
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub stalled: bool,
+    /// 컨텍스트 사용률 % (토큰 #5)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_pct: Option<i64>,
+    /// 가장 찬 사용 한도 창 (F1)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rate_limit: Option<RateLimit>,
 }
 
 /// 추적 → 방송 한 건. 호출부는 다른 칸만 `..evt_of(t, uuid)`로 덮어쓴다
@@ -306,6 +327,8 @@ pub fn evt_of(t: &Tracked, uuid: &str) -> AgentStateEvt {
         completed: false,
         pending_tool: t.pre_tool.clone().filter(|_| t.last_status == "waiting"),
         stalled: t.stalled && t.last_status == "busy",
+        context_pct: t.context_pct,
+        rate_limit: t.rate_limit.clone(),
     }
 }
 
@@ -1486,30 +1509,52 @@ pub fn apply_hook(app: &AppHandle, session: &str, event: &str, payload: &serde_j
     }
 }
 
-/// statusLine 채널 (FR-D-19 · §10.4) — 세션 누적 비용. 상태를 바꾸지 않는 부연이라
-/// activity와 같은 규칙으로 이벤트 기록 없이 방송만 한다. 1센트 단위 변화만 방송해
+/// statusLine 한 번을 추적에 싣는다 (순수 함수) — 비용(1센트 단위), 컨텍스트 %(토큰 #5),
+/// 가장 찬 한도 창(F1). 실측 payload(2.1.316): `cost.total_cost_usd`, `context_window.used_percentage`
+/// (첫 응답 전 null), `rate_limits.seven_day.{used_percentage, resets_at}`(구독 요금제).
+/// 반환: 방송할 만큼 바뀌었다. 없는 값은 이전 값을 지우지 않는다
+fn apply_usage(t: &mut Tracked, payload: &serde_json::Value) -> bool {
+    let mut changed = false;
+    if let Some(cost) = payload.pointer("/cost/total_cost_usd").and_then(|v| v.as_f64()) {
+        if t.cost_usd.is_none_or(|prev| (cost - prev).abs() >= 0.01) {
+            t.cost_usd = Some(cost);
+            changed = true;
+        }
+    }
+    let ctx = payload.pointer("/context_window/used_percentage").and_then(|v| v.as_f64()).map(|p| p.round() as i64);
+    if ctx.is_some() && ctx != t.context_pct {
+        t.context_pct = ctx;
+        changed = true;
+    }
+    let limit = payload
+        .get("rate_limits")
+        .and_then(|r| r.as_object())
+        .into_iter()
+        .flatten()
+        .filter_map(|(window, w)| {
+            let used_pct = w.get("used_percentage")?.as_f64()?.round() as i64;
+            Some(RateLimit { window: window.clone(), used_pct, resets_at: w.get("resets_at").and_then(|v| v.as_i64()) })
+        })
+        .max_by_key(|l| l.used_pct);
+    if limit.is_some() && limit != t.rate_limit {
+        t.rate_limit = limit;
+        changed = true;
+    }
+    changed
+}
+
+/// statusLine 채널 (FR-D-19 · §10.4) — 비용·컨텍스트·한도. 상태를 바꾸지 않는 부연이라
+/// activity와 같은 규칙으로 이벤트 기록 없이 방송만 한다. 바뀐 만큼만 방송해
 /// 주기 호출(수 초 간격)이 방송 폭주가 되지 않게 한다.
 pub fn apply_statusline(app: &AppHandle, session: &str, payload: &serde_json::Value) {
-    let Some(cost) = payload
-        .get("cost")
-        .and_then(|c| c.get("total_cost_usd"))
-        .and_then(|v| v.as_f64())
-    else {
-        return;
-    };
     let rt: tauri::State<AgentRt> = app.state();
     let mut evt = None;
     if let Ok(mut map) = rt.by_uuid.lock() {
         if let Some(uuid) = current_uuid(&map, session) {
             let Some(t) = map.get_mut(&uuid) else { return };
-            let changed = match t.cost_usd {
-                Some(prev) => (cost - prev).abs() >= 0.01,
-                None => true,
-            };
-            if !changed {
+            if !apply_usage(t, payload) {
                 return;
             }
-            t.cost_usd = Some(cost);
             t.seq = next_seq();
             evt = Some(evt_of(t, &uuid));
         }
@@ -1827,9 +1872,7 @@ fn scan(app: &AppHandle) {
                     seq,
                     // 앱이 붙기 전부터 그 상태였다 — 레코드가 쓰인 시각이 전이 시각이다 (B19)
                     since_ms: Some(*mtime_ms),
-                    completed: false,
-                    pending_tool: None,
-                    stalled: false,
+                    ..Default::default()
                 });
                 let name = app_session.split('@').next().unwrap_or(&app_session).to_string();
                 map.insert(
@@ -2668,5 +2711,30 @@ mod tests {
         assert!(super::record_is_current(Some(999_999_000), start_us), "시계 오차 2초 안");
         assert!(!super::record_is_current(Some(990_000_000), start_us), "10초 먼저 = 옛 주인");
         assert!(super::record_is_current(None, start_us), "startedAt 없는 옛 버전은 받는다");
+    }
+    /// F1 · 토큰 #5 — 실측 statusLine 모양에서 비용·컨텍스트·가장 찬 한도를 싣고, 같은 값은 조용하다
+    #[test]
+    fn statusline_carries_context_and_the_fullest_limit() {
+        let mut t = tracked("busy");
+        let early = serde_json::json!({ "cost": { "total_cost_usd": 0 }, "context_window": { "used_percentage": null } });
+        assert!(super::apply_usage(&mut t, &early), "첫 비용");
+        assert_eq!(t.context_pct, None, "첫 응답 전에는 null");
+        let p = serde_json::json!({
+            "cost": { "total_cost_usd": 0.0034 },
+            "context_window": { "used_percentage": 5 },
+            "rate_limits": { "seven_day": { "used_percentage": 18, "resets_at": 1793869200 },
+                             "five_hour": { "used_percentage": 42.6, "resets_at": 1793700000 } }
+        });
+        assert!(super::apply_usage(&mut t, &p));
+        assert_eq!(t.context_pct, Some(5));
+        assert_eq!(
+            t.rate_limit,
+            Some(super::RateLimit { window: "five_hour".into(), used_pct: 43, resets_at: Some(1793700000) })
+        );
+        assert!(!super::apply_usage(&mut t, &p), "같은 값이면 방송하지 않는다 (비용은 1센트 단위)");
+        let e = super::evt_of(&t, "u");
+        assert_eq!((e.context_pct, e.rate_limit.map(|l| l.used_pct)), (Some(5), Some(43)));
+        assert!(!super::apply_usage(&mut t, &serde_json::json!({})), "빈 payload는 이전 값을 지우지 않는다");
+        assert_eq!(t.context_pct, Some(5));
     }
 }

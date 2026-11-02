@@ -1493,9 +1493,7 @@ fn agent_spawn_inner(
             degraded: false,
             seq,
             since_ms: Some(workspace::now_ms()),
-            completed: false,
-            pending_tool: None,
-            stalled: false,
+            ..Default::default() // 나머지(완료·승인함·멈춤·컨텍스트·한도)는 기동 순간 비어 있다
         },
     );
     Ok(uuid)
