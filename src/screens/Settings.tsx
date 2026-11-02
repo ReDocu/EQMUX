@@ -66,6 +66,7 @@ const NOTI: AppSettings["notifications"][] = ["waiting-dead", "waiting", "off"];
 const DONE_NOTI: AppSettings["doneNotifications"][] = ["report", "all", "off"];
 const MANUAL_DELIVERY: AppSettings["manualDelivery"][] = ["park", "auto"];
 const WEB_OPEN: AppSettings["webOpen"][] = ["eqmux", "chrome"];
+const CLOSE_ACTIONS: AppSettings["closeAction"][] = ["tray", "quit"];
 const REPLAY = [250, 500, 1000]; // 저장 상한(세션당 1,000줄)까지만 — 넘는 선택지는 1,000과 같았다 (B78)
 const SLOTS = [...SLOT_OPTIONS]; // 4 · 6 · 8
 const THEMES: AppSettings["theme"][] = ["dark", "light", "system"];
@@ -136,6 +137,16 @@ const SECTIONS: Section[] = [
         labels: ["EQMUX 브라우저 (기본)", "Chrome"],
         current: () => pick(WEB_OPEN, settings().webOpen),
         apply: (i) => updateSettings({ webOpen: WEB_OPEN[i] }),
+      },
+      {
+        // W1 트레이 (§1-1 · §10) — Rust window_close_to_tray가 읽는다. 돌고 있는 세션이 없으면 어느 쪽이든 종료한다
+        k: "창을 닫으면",
+        d: IS_MAC
+          ? "Dock에 남기면 세션은 계속 돈다 · 끝내기는 앱 메뉴 [종료]"
+          : "트레이로 숨기면 세션은 계속 돈다 · 끝내기는 트레이 메뉴 [전부 종료]",
+        labels: [IS_MAC ? "Dock에 남기기 (기본)" : "트레이로 숨기기 (기본)", "앱 종료"],
+        current: () => pick(CLOSE_ACTIONS, settings().closeAction),
+        apply: (i) => updateSettings({ closeAction: CLOSE_ACTIONS[i] }),
       },
       {
         k: "스크롤백 재생",

@@ -234,4 +234,12 @@ export const dict: Record<string, string> = {
   "이벤트 방송 범위": "Event broadcast scope",
   "PTY 출력·메시지·상태 이벤트는 main 창에만": "PTY output, message and state events go to the main window only",
   "단축키 (읽기 전용)": "Shortcuts (read-only)",
+
+  // ── 0.6 W7: 창 닫기 (W1 트레이 §1-1 · §10) ──
+  "창을 닫으면": "Closing the window",
+  "Dock에 남기면 세션은 계속 돈다 · 끝내기는 앱 메뉴 [종료]": "Sessions keep running while the app stays in the Dock · Quit from the app menu",
+  "트레이로 숨기면 세션은 계속 돈다 · 끝내기는 트레이 메뉴 [전부 종료]": "Sessions keep running while hidden in the tray · Quit everything from the tray menu",
+  "Dock에 남기기 (기본)": "Keep in Dock (default)",
+  "트레이로 숨기기 (기본)": "Hide to tray (default)",
+  "앱 종료": "Quit app",
 };

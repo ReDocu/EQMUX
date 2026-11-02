@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { createEffect, createSignal, lazy, Match, onCleanup, onMount, Show, Switch } from "solid-js";
 import { AppBar } from "./components/AppBar";
 import { SidePanel } from "./components/SidePanel";
@@ -153,6 +154,8 @@ export function App() {
     void import("@tauri-apps/api/window").then(({ getCurrentWindow }) =>
       getCurrentWindow().onCloseRequested(async (e) => {
         e.preventDefault();
+        // 트레이로 숨겼으면 끝 (W1 §1-1) — Rust는 closeAction이 quit가 아니고 PTY가 돌 때만 true다
+        if (await invoke<boolean>("window_close_to_tray").catch(() => false)) return;
         await requestQuit();
       }),
     );
