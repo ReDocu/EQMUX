@@ -37,6 +37,9 @@ export function MissionReview(props: { wsId: string; missionId: string; back?: V
 
   // ② diff 필터 — 기본은 이 임무 담당 세션이 편집 도구로 고친 파일. 한 폴더를 같이 쓰므로 필터가 없으면 남의 변경이 섞인다
   const [touched, setTouched] = createSignal<string[] | undefined>(undefined);
+  const [showAll, setShowAll] = createSignal(false);
+  // 편집 기록이 없으면(빈 목록 · 브라우저) 거를 것이 없다 — 전체를 보인다
+  const only = () => (showAll() || !touched()?.length ? undefined : touched());
   // ③ 저장 명령 중 kind "test" (C7). 없으면 버튼을 숨긴다
   const [tests, setTests] = createSignal<SavedCommand[]>([]);
   const [pick, setPick] = createSignal(0);
@@ -162,6 +165,10 @@ export function MissionReview(props: { wsId: string; missionId: string; back?: V
                     <div class="mrv-files mono">
                       <For each={touched()}>{(f) => <div>{f}</div>}</For>
                     </div>
+                    <label class="mrv-hint">
+                      <input type="checkbox" checked={showAll()} onChange={(e) => setShowAll(e.currentTarget.checked)} />{" "}
+                      {t("전체 변경 보기 — 한 폴더를 같이 쓰므로 다른 세션의 변경도 섞인다")}
+                    </label>
                   </Show>
                 </div>
                 <Show when={tests().length > 0}>
@@ -185,10 +192,10 @@ export function MissionReview(props: { wsId: string; missionId: string; back?: V
                   </div>
                 </Show>
               </div>
-              {/* ② diff — base_commit 기준 · 담당 파일 필터는 W5의 GitDiffEditor base/only가 들어오면 붙인다.
-                  그 전에는 HEAD ↔ 작업 트리 전체를 보인다 */}
+              {/* ② diff — base_commit 뒤 커밋 + 작업 트리, 기본은 담당 세션이 고친 파일만. 시작점이 없으면 HEAD ↔ 작업 트리.
+                  base가 있으면 GitDiffEditor는 ✕ · Esc를 숨기고 닫기를 이 화면에 맡긴다 */}
               <div class="mrv-diff">
-                <GitDiffEditor wsId={props.wsId} />
+                <GitDiffEditor wsId={props.wsId} base={mm().baseCommit} only={only()} />
               </div>
             </div>
             <Show when={sendBackOpen()}>
