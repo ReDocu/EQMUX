@@ -107,7 +107,7 @@ pub fn is_cli_command(cmd: &str) -> bool {
 /// 붙여 사람이 친 `eqmux 오타`도 이유를 볼 수 있게 한다 (에이전트는 파이프라 원래 받는다).
 pub fn usage_exit() -> i32 {
     attach_parent_console();
-    eprintln!("{}", usage_for(english()).all);
+    say(true, usage_for(english()).all);
     2
 }
 
@@ -119,6 +119,78 @@ fn attach_parent_console() {
 
 #[cfg(not(windows))]
 fn attach_parent_console() {}
+
+/// 사람이 읽는 출력 한 줄 (stdout, `err`면 stderr). 파이프를 읽는 쪽이 PowerShell이면 콘솔 코드
+/// 페이지로 바꿔 쓴다 — PowerShell은 네이티브 출력을 [Console]::OutputEncoding(한국어 Windows는
+/// 949)으로 풀어서 UTF-8 그대로면 `eqmux who | Select-Object`의 한글·—가 깨진다. pwsh 7은 BOM도
+/// 보지 않는다(실측). 콘솔이면 Rust가 WriteConsoleW로 쓰고, Node·Codex처럼 바이트를 그대로
+/// 받는 쪽은 UTF-8을 기대하므로 둘 다 손대지 않는다.
+fn say(err: bool, text: &str) {
+    use std::io::Write;
+    let line = format!("{text}\n");
+    let bytes = powershell_pipe_cp(err).and_then(|cp| encode_cp(&line, cp)).unwrap_or_else(|| line.into_bytes());
+    let _ = if err { std::io::stderr().write_all(&bytes) } else { std::io::stdout().write_all(&bytes) };
+}
+
+/// 표준 출력(err면 오류)이 PowerShell이 읽는 파이프면 그 콘솔 코드 페이지 (UTF-8이면 None)
+#[cfg(windows)]
+fn powershell_pipe_cp(err: bool) -> Option<u32> {
+    use windows_sys::Win32::Storage::FileSystem::{GetFileType, FILE_TYPE_PIPE};
+    use windows_sys::Win32::System::Console::{GetConsoleOutputCP, GetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE};
+    use windows_sys::Win32::System::Pipes::GetNamedPipeServerProcessId;
+    unsafe {
+        let h = GetStdHandle(if err { STD_ERROR_HANDLE } else { STD_OUTPUT_HANDLE });
+        if GetFileType(h) != FILE_TYPE_PIPE {
+            return None;
+        }
+        let cp = GetConsoleOutputCP();
+        if cp == 0 || cp == 65001 {
+            return None;
+        }
+        // 파이프를 만든 쪽 = 읽는 쪽. PowerShell이 자기 stdout을 물려준 경우(Codex의 `pwsh -c "eqmux who"`)는
+        // 만든 쪽이 Codex라 UTF-8 그대로 간다
+        let mut pid = 0u32;
+        (GetNamedPipeServerProcessId(h, &mut pid) != 0 && is_powershell(&crate::ports::process_name(pid))).then_some(cp)
+    }
+}
+
+#[cfg(not(windows))]
+fn powershell_pipe_cp(_err: bool) -> Option<u32> {
+    None
+}
+
+fn is_powershell(exe_stem: &str) -> bool {
+    exe_stem.eq_ignore_ascii_case("pwsh") || exe_stem.eq_ignore_ascii_case("powershell")
+}
+
+/// UTF-8 → 코드 페이지 바이트. 그 코드 페이지에 없는 글자는 Windows 기본 대체(best-fit · ?)
+#[cfg(windows)]
+fn encode_cp(s: &str, cp: u32) -> Option<Vec<u8>> {
+    // Win32_Globalization 기능을 켜지 않으려고 직접 선언한다 (Cargo.toml은 W1 소유)
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn WideCharToMultiByte(cp: u32, flags: u32, w: *const u16, wlen: i32, out: *mut u8, outlen: i32, def: *const u8, used: *mut i32) -> i32;
+    }
+    // 949에는 —(U+2014)가 없고 ―(U+2015)는 있다 — 그대로 두면 ?가 된다
+    let w: Vec<u16> = s.replace('—', "―").encode_utf16().collect();
+    unsafe {
+        let n = WideCharToMultiByte(cp, 0, w.as_ptr(), w.len() as i32, std::ptr::null_mut(), 0, std::ptr::null(), std::ptr::null_mut());
+        if n <= 0 {
+            return None;
+        }
+        let mut out = vec![0u8; n as usize];
+        let n = WideCharToMultiByte(cp, 0, w.as_ptr(), w.len() as i32, out.as_mut_ptr(), n, std::ptr::null(), std::ptr::null_mut());
+        (n > 0).then(|| {
+            out.truncate(n as usize);
+            out
+        })
+    }
+}
+
+#[cfg(not(windows))]
+fn encode_cp(_s: &str, _cp: u32) -> Option<Vec<u8>> {
+    None
+}
 
 /// 한국어 안내로 파싱 — 테스트가 쓰는 꼴
 #[cfg(test)]
@@ -516,7 +588,7 @@ pub fn run(args: Vec<String>) -> i32 {
     let req = match parse_in(&args, session.as_deref(), en) {
         Ok(Req::Help(text)) => {
             attach_parent_console(); // 콘솔에서 사람이 친 `eqmux --help`도 보이게 (usage_exit와 같은 이유)
-            println!("{text}");
+            say(false, &text);
             return 0;
         }
         Ok(r) => r,
@@ -524,7 +596,7 @@ pub fn run(args: Vec<String>) -> i32 {
             if silent {
                 return 0;
             }
-            eprintln!("{e}");
+            say(true, &e);
             return 2;
         }
     };
@@ -544,14 +616,14 @@ pub fn run(args: Vec<String>) -> i32 {
                 if !silent {
                     match &req {
                         Req::Ping => {
-                            println!("{} · v{}", if en { "EQMUX is up" } else { "EQMUX 응답" }, v["version"].as_str().unwrap_or("?"))
+                            say(false, &format!("{} · v{}", if en { "EQMUX is up" } else { "EQMUX 응답" }, v["version"].as_str().unwrap_or("?")))
                         }
-                        Req::Send { .. } => println!("{}", v["delivery"].as_str().unwrap_or(if en { "Sent" } else { "전송됨" })),
-                        Req::Report { .. } => println!("{}", v["result"].as_str().unwrap_or(if en { "Reported" } else { "보고함" })),
-                        Req::Who { .. } => println!("{}", v["result"].as_str().unwrap_or("")),
+                        Req::Send { .. } => say(false, v["delivery"].as_str().unwrap_or(if en { "Sent" } else { "전송됨" })),
+                        Req::Report { .. } => say(false, v["result"].as_str().unwrap_or(if en { "Reported" } else { "보고함" })),
+                        Req::Who { .. } => say(false, v["result"].as_str().unwrap_or("")),
                         // 브라우저는 결과가 곧 답이다 — 페이지가 만든 문자열이므로
                         // 지시가 아니라 자료로 읽어야 한다 (프롬프트 주입면)
-                        Req::Browser { .. } => println!("{}", v["result"].as_str().unwrap_or("")),
+                        Req::Browser { .. } => say(false, v["result"].as_str().unwrap_or("")),
                         Req::Hook { .. } | Req::StatusLine { .. } | Req::Help(_) => {}
                     }
                 }
@@ -566,7 +638,7 @@ pub fn run(args: Vec<String>) -> i32 {
             } else {
                 let to = if let Req::Send { to, .. } = &req { to.as_str() } else { "" };
                 let err = v["error"].as_str().unwrap_or(if en { "Send failed" } else { "전송 실패" });
-                eprintln!("{}", friendly(err, to, matches!(req, Req::Report { .. }), en));
+                say(true, &friendly(err, to, matches!(req, Req::Report { .. }), en));
                 1
             }
         }
@@ -574,10 +646,7 @@ pub fn run(args: Vec<String>) -> i32 {
             if silent {
                 return 0;
             }
-            eprintln!(
-                "{}",
-                if en { "The EQMUX app is not running (pipe connection failed)" } else { "EQMUX 앱이 실행 중이 아닙니다 (파이프 연결 실패)" }
-            );
+            say(true, if en { "The EQMUX app is not running (pipe connection failed)" } else { "EQMUX 앱이 실행 중이 아닙니다 (파이프 연결 실패)" });
             1
         }
     }
@@ -657,6 +726,15 @@ mod tests {
 
     /// GUI/CLI 분기 (main.rs) — parse가 아는 서브커맨드는 전부 파이프로 가야 한다.
     /// 하나라도 빠지면 그 채널은 사용법으로 떨어진다 (예전에는 앱 창이 새로 떴다).
+    /// §2 PowerShell 파이프 인코딩 — 949로 바꿀 대상과 바이트
+    #[test]
+    fn powershell_pipe_gets_console_codepage() {
+        assert!(is_powershell("pwsh") && is_powershell("PowerShell"));
+        assert!(!is_powershell("node") && !is_powershell("codex") && !is_powershell("?"));
+        #[cfg(windows)]
+        assert_eq!(encode_cp("한 —\n", 949).unwrap(), vec![0xC7, 0xD1, b' ', 0xA1, 0xAA, b'\n']);
+    }
+
     #[test]
     fn cli_branch_covers_every_subcommand() {
         for cmd in ["ping", "send", "report", "who", "browser", "_hook", "_statusline"] {
