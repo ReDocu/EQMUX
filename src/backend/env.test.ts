@@ -126,3 +126,9 @@ describe("예시 · .gitignore", () => {
     expect(withIgnore("", ".env.local")).toBe(".env.local\n");
   });
 });
+
+test("BOM이 붙은 첫 줄 — 키에 섞이지 않고, 고쳐도 BOM이 남는다", () => {
+  const text = "\uFEFFA=1\r\nB=2\r\n";
+  expect(parseDotenv(text).map((v) => v.key)).toEqual(["A", "B"]);
+  expect(setLine(text, 0, "A", "9")).toBe("\uFEFFA=9\r\nB=2\r\n");
+});

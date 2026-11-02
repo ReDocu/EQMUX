@@ -38,6 +38,8 @@ export interface EnvFile {
   mtimeMs?: number;
   /** .env.example 계열 — 읽기 전용 */
   example?: boolean;
+  /** 있는데 못 읽었다(1MB 초과 · UTF-8 아님 · 권한) — 카드에 이유만 보이고 고치지 않는다 */
+  error?: string;
 }
 
 /** dotenv 한 파일 → 변수 목록. 주석·빈 줄·`export ` 머리를 걸러내고, 따옴표 값은 벗긴다.
@@ -173,7 +175,8 @@ function readText(wsPath: string, file: string): Promise<FileContent> {
   return text === undefined ? Promise.reject(new Error("없음")) : Promise.resolve({ text, mtimeMs: 0 });
 }
 
-/** 워크스페이스 루트의 .env 계열 중 있는 것만 — 없거나 못 읽는 파일은 조용히 건너뛴다 */
+/** 워크스페이스 루트의 .env 계열 중 있는 것만. 없는 파일은 건너뛰고, 있는데 못 읽은 파일은 이유를 담아 남긴다 —
+ *  숨기면 빈 상태의 [.env 만들기]가 떠서 "같은 이름이 이미 있습니다"로 실패한다 */
 export async function loadEnvFiles(wsPath: string): Promise<EnvFile[]> {
   const read = await Promise.all(
     [...ENV_FILES, ...EXAMPLE_FILES].map((file) =>
@@ -184,7 +187,9 @@ export async function loadEnvFiles(wsPath: string): Promise<EnvFile[]> {
           mtimeMs: c.mtimeMs,
           ...(EXAMPLE_FILES.includes(file) ? { example: true } : {}),
         }),
-        () => undefined,
+        // "대상 없음"(fsx resolve_existing) · 목 모드 "없음" = 파일이 없다
+        (e): EnvFile | undefined =>
+          /없음$/.test(String(e)) ? undefined : { file, vars: [], error: String(e), ...(EXAMPLE_FILES.includes(file) ? { example: true } : {}) },
       ),
     ),
   );

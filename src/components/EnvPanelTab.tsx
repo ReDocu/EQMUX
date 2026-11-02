@@ -59,7 +59,7 @@ export function EnvPanelTab(props: { files: EnvFile[]; wsPath?: string; onReload
   );
 
   const envs = () => props.files.filter((f) => !f.example);
-  const example = () => props.files.find((f) => f.example);
+  const example = () => props.files.find((f) => f.example && !f.error);
   const missing = () => ENV_FILES.filter((n) => !props.files.some((f) => f.file === n));
   const [git, { refetch: refetchGit }] = createResource(
     () => props.wsPath && envs().map((f) => f.file).join("\n"),
@@ -273,7 +273,7 @@ export function EnvPanelTab(props: { files: EnvFile[]; wsPath?: string; onReload
               <div class="eyebrow mono env-file-head">
                 <span>
                   {f.file} · {tf("변수 {n}개", { n: f.vars.length })}
-                  {f.example ? ` · ${t("읽기 전용")}` : ""}
+                  {f.example || f.error ? ` · ${t("읽기 전용")}` : ""}
                 </span>
                 <Show when={g()?.tracked}>
                   <Chip tone="red" text={t("git에 추적됨")} title={t("이 파일은 커밋되어 있습니다 — 값이 저장소에 남습니다")} />
@@ -286,9 +286,11 @@ export function EnvPanelTab(props: { files: EnvFile[]; wsPath?: string; onReload
                   />
                 </Show>
                 <span class="env-file-actions">
-                  <button class="btn ghost" onClick={() => void openRaw(f.file)}>
-                    {t("원문 편집")}
-                  </button>
+                  <Show when={!f.error}>
+                    <button class="btn ghost" onClick={() => void openRaw(f.file)}>
+                      {t("원문 편집")}
+                    </button>
+                  </Show>
                   <Show when={!f.example}>
                     <button class="btn ghost" onClick={() => setConfirm({ file: f.file })}>
                       {t("파일 삭제")}
@@ -316,7 +318,7 @@ export function EnvPanelTab(props: { files: EnvFile[]; wsPath?: string; onReload
                 </div>
               </Show>
 
-              <Show when={f.vars.length > 0 || f.example} fallback={<div class="muted">{t("이 파일에 변수가 없습니다")}</div>}>
+              <Show when={f.vars.length > 0 || f.example} fallback={<div class="muted">{f.error ?? t("이 파일에 변수가 없습니다")}</div>}>
                 <For each={f.vars.filter((v) => hit(v.key))}>
                   {(v) => (
                     <Show
@@ -353,7 +355,7 @@ export function EnvPanelTab(props: { files: EnvFile[]; wsPath?: string; onReload
                   )}
                 </For>
               </Show>
-              <Show when={!f.example}>
+              <Show when={!f.example && !f.error}>
                 <Show
                   when={edit()?.file === f.file && edit()?.line === undefined}
                   fallback={
