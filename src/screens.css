@@ -7317,3 +7317,14 @@ label.inbox-pop-row {
   margin-right: 6px;
   vertical-align: -3px;
 }
+
+/* 0.6 W7: 자리 비운 카드 — 완료 보고 행 옆 [검토 →] (§13-3) */
+.away-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.away-line .away-row {
+  flex: 1;
+  min-width: 0;
+}
