@@ -266,7 +266,26 @@ fn handle(app: &AppHandle, line: &str) -> Result<serde_json::Value, String> {
                 extra.file = Some(crate::messages::attach_file(&cwd, f)?);
             }
             let attached = extra.file.as_ref().map(|f| format!(" · {} {} ({})", if en { "attached" } else { "첨부" }, rel_path(&cwd, &f.path), fmt_size(f.size)));
-            let target = resolve_target(app, &ws, &cwd, to_raw)?;
+            // 회신 (§4 `--re`) — 원 메시지는 내 원장에 있어야 한다. 받는 사람을 안 주면 원 발신자에게
+            let mut to_raw = to_raw.to_string();
+            if let Some(id) = req["re"].as_i64() {
+                let store: State<crate::StoreState> = app.state();
+                let orig = crate::messages::get(&store.0.root(), &ws, id)?.ok_or(format!("BAD_RE:{id}"))?;
+                extra.re = Some(id);
+                if to_raw.is_empty() {
+                    let peer = if orig.from == session { orig.to } else { orig.from };
+                    if peer == "나" {
+                        // 사람이 보낸 것에 대한 회신 — 대화 탭으로 (report와 같은 자리)
+                        return publish(app, &ws, session, "나", kind, body, &extra)
+                            .map(|mut r| {
+                                r["delivery"] = json!(if en { "Sent → human (Conversation tab)" } else { "보냄 → 사람 (대화 탭)" });
+                                r
+                            });
+                    }
+                    to_raw = format!("@{peer}");
+                }
+            }
+            let target = resolve_target(app, &ws, &cwd, &to_raw)?;
             let mut resp = send_to(app, &ws, session, target, kind, body, extra, en)?;
             if let (Some(a), Some(d)) = (attached, resp["delivery"].as_str().map(str::to_string)) {
                 resp["delivery"] = json!(format!("{d}{a}"));
@@ -356,6 +375,20 @@ fn handle(app: &AppHandle, line: &str) -> Result<serde_json::Value, String> {
                 })
                 .collect();
             Ok(json!({"ok": true, "result": who_text(&dir, &ws, session, en)}))
+        }
+        "reply" => {
+            // send --wait (§4) — CLI가 2초마다 묻는다. 연결을 붙잡아 두지 않는다 (파이프 인스턴스 고갈, B124)
+            let session = req["session"].as_str().ok_or("NO_SESSION")?;
+            verify_session(app, session, &req)?;
+            let id = req["id"].as_i64().ok_or("BAD_RE")?;
+            let (ws, _) = crate::session_origin(app, session).ok_or("UNKNOWN_SESSION")?;
+            let store: State<crate::StoreState> = app.state();
+            let Some(m) = crate::messages::reply_to(&store.0.root(), &ws, session, id)? else { return Ok(json!({"ok": true})) };
+            let who = m.from_name.clone().unwrap_or_else(|| m.from.split('@').next().unwrap_or(&m.from).to_string());
+            let file = m.file.as_ref().map(|f| format!(" ({}: {})", if en { "file" } else { "파일" }, f.path)).unwrap_or_default();
+            // 대화 탭 주입과 같은 꼴 (conversation.ts fmt) — 프런트가 같은 회신을 턴 끝에 다시 넣지 않게 알린다
+            let _ = app.emit_to("main", "message-taken", json!({ "workspace": ws, "session": session, "id": m.id }));
+            Ok(json!({"ok": true, "reply": format!("[EQ·{} #{}] {who}: {}{file}", m.kind, m.id, m.body), "replyId": m.id}))
         }
         "hook" => {
             // 훅 2차 상태 소스 (D3 · FR-D-30 계열) — 모르는 이벤트는 조용히 무시
@@ -527,15 +560,28 @@ fn resolve_in(dir: &[DirEntry], my_ws: &str, raw: &str) -> Result<Option<DirEntr
     if let Some(e) = dir.iter().find(|e| e.session == m) {
         return Ok(Some(e.clone()));
     }
-    let hit = if let Some((n, p)) = m.rsplit_once('@') {
-        pick(dir.iter().filter(|e| e.project == p && name_matches(e, n)).collect())?
-    } else {
-        match pick(dir.iter().filter(|e| e.workspace == my_ws && name_matches(e, m)).collect())? {
-            Some(e) => Some(e),
-            None => pick(dir.iter().filter(|e| name_matches(e, m)).collect())?,
+    let find = |is: fn(&DirEntry, &str) -> bool| -> Result<Option<DirEntry>, String> {
+        if let Some((n, p)) = m.rsplit_once('@') {
+            pick(dir.iter().filter(|e| e.project == p && is(e, n)).collect())
+        } else {
+            match pick(dir.iter().filter(|e| e.workspace == my_ws && is(e, m)).collect())? {
+                Some(e) => Ok(Some(e)),
+                None => pick(dir.iter().filter(|e| is(e, m)).collect()),
+            }
         }
     };
-    hit.map(Some).ok_or_else(|| "UNKNOWN_RECIPIENT".into())
+    // 이름이 먼저, 없으면 직함 (§4 `--to "@클라이언트 개발자"`) — 같은 직함이 둘이면 모호성 오류로 고르게 한다
+    match find(name_matches)? {
+        Some(e) => Ok(Some(e)),
+        None => find(title_matches)?.map(Some).ok_or_else(|| "UNKNOWN_RECIPIENT".into()),
+    }
+}
+
+/// 직함은 띄어쓰기를 빼고 비교한다 — `@클라이언트개발자`도 "클라이언트 개발자"에 닿는다
+/// (PowerShell에서 띄어쓰기 든 주소는 따옴표가 하나 더 필요해 붙여 쓰기 쉽다)
+fn title_matches(e: &DirEntry, n: &str) -> bool {
+    let squash = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>();
+    e.title.as_deref().map(squash).is_some_and(|t| !t.is_empty() && t == squash(n))
 }
 
 fn resolve_target(app: &AppHandle, ws: &str, cwd: &str, raw: &str) -> Result<Target, String> {
@@ -591,7 +637,8 @@ fn send_to(
         let resp = publish(app, ws, from, &to, kind, body, &out)?;
         // 받는 쪽 원장 — 상한은 위에서 이미 한 번 셌다
         let store: State<crate::StoreState> = app.state();
-        let inn = crate::messages::Extra { project: Some(mine.clone()), ..extra };
+        // re는 이 원장의 id라 받는 쪽 원장에서는 다른 메시지를 가리킨다 — 비운다
+        let inn = crate::messages::Extra { project: Some(mine.clone()), re: None, ..extra };
         let row = crate::messages::send_with(&store.0.root(), &target_ws, from, &to, kind, body, &inn)?;
         let _ = app.emit_to("main", "message-new", json!({ "workspace": target_ws, "message": row }));
         resp
@@ -816,6 +863,23 @@ mod tests {
         assert_eq!(sid(resolve_in(&d, "w1", "@카이@app-2")), Some("kai@w2".into()));
         assert_eq!(sid(resolve_in(&d, "w1", "kai@w3")), Some("kai@w3".into())); // 세션 id 그대로
         assert_eq!(sid(resolve_in(&d, "w1", "@kai@tool")), Some("kai@w3".into())); // 페르소나 id도
+    }
+
+    /// §4 직함으로 받는 사람 — 이름이 먼저, 띄어쓰기 무시, 같은 직함 둘이면 모호성
+    #[test]
+    fn resolves_titles_after_names() {
+        let mut d = dir();
+        d[0].title = Some("클라이언트 개발자".into());
+        d[1].title = Some("서버 개발자".into());
+        d[2].title = Some("서버 개발자".into());
+        assert_eq!(sid(resolve_in(&d, "w1", "@클라이언트개발자")), Some("kai@w1".into()));
+        assert_eq!(sid(resolve_in(&d, "w1", "@서버 개발자")), Some("noel@w1".into())); // 내 프로젝트가 이긴다
+        assert_eq!(sid(resolve_in(&d, "w1", "@서버개발자@app-2")), Some("kai@w2".into()));
+        assert!(resolve_in(&d, "w9", "@서버개발자").unwrap_err().starts_with("AMBIGUOUS:"));
+        d[1].title = Some("카이".into()); // 이름과 겹치는 직함 — 이름이 이긴다
+        assert_eq!(sid(resolve_in(&d, "w1", "@카이")), Some("kai@w1".into()));
+        d[0].title = Some(" ".into());
+        assert_eq!(resolve_in(&d, "w1", "@").ok().flatten().map(|e| e.session), None); // 빈 직함은 @all과 섞이지 않는다
     }
 
     #[test]

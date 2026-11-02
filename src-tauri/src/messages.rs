@@ -41,6 +41,9 @@ pub struct MsgRow {
     pub from_name: Option<String>,
     #[serde(rename = "toName", skip_serializing_if = "Option::is_none")]
     pub to_name: Option<String>,
+    /// 회신 연결 (§4 `--re`) — 이 메시지가 답하는 원장 id
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub re: Option<i64>,
 }
 
 /// 원장 행의 0.5 부가 정보 — 없으면 0.4.2 메시지와 같다
@@ -52,6 +55,7 @@ pub struct Extra {
     /// 이름을 직접 줄 때만 (테스트) — 없으면 send_with가 C4 디렉터리에서 찾는다
     pub from_name: Option<String>,
     pub to_name: Option<String>,
+    pub re: Option<i64>,
 }
 
 /// M2 — 자유 텍스트 금지. 타입은 5종뿐이고 본문은 비어 있을 수 없다.
@@ -139,9 +143,9 @@ pub fn send_with(
     let from_name = extra.from_name.clone().or_else(|| crate::ipc::session_name(from));
     let to_name = extra.to_name.clone().or_else(|| crate::ipc::session_name(to));
     conn.execute(
-        "INSERT INTO message (ts, sender, recipient, kind, body, read, done, file_path, file_size, project, sender_name, recipient_name)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-        params![now, from, to, kind, body, read as i64, extra.done as i64, fpath, fsize, extra.project, from_name, to_name],
+        "INSERT INTO message (ts, sender, recipient, kind, body, read, done, file_path, file_size, project, sender_name, recipient_name, re)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+        params![now, from, to, kind, body, read as i64, extra.done as i64, fpath, fsize, extra.project, from_name, to_name, extra.re],
     )
     .map_err(|e| e.to_string())?;
     Ok(MsgRow {
@@ -157,6 +161,7 @@ pub fn send_with(
         project: extra.project.clone(),
         from_name,
         to_name,
+        re: extra.re,
     })
 }
 
@@ -214,35 +219,65 @@ pub fn list(
     }
     let conn = crate::store::open_db(root, ws).map_err(|e| e.to_string())?;
     let mut stmt = conn
-        .prepare(
-            "SELECT id, ts, sender, recipient, kind, body, read, done, file_path, file_size, project, sender_name, recipient_name FROM
-               (SELECT * FROM message WHERE id < ?1 ORDER BY id DESC LIMIT ?2)
-             ORDER BY id ASC",
-        )
+        .prepare(&format!(
+            "SELECT {COLS} FROM (SELECT * FROM message WHERE id < ?1 ORDER BY id DESC LIMIT ?2) ORDER BY id ASC"
+        ))
         .map_err(|e| e.to_string())?;
     let rows = stmt
-        .query_map(params![before_id.unwrap_or(i64::MAX), limit.min(500) as i64], |r| {
-            let file = r.get::<_, Option<String>>(8)?.map(|path| FileRef {
-                path,
-                size: r.get::<_, Option<i64>>(9).ok().flatten().unwrap_or(0) as u64,
-            });
-            Ok(MsgRow {
-                id: r.get(0)?,
-                ts: r.get(1)?,
-                from: r.get(2)?,
-                to: r.get(3)?,
-                kind: r.get(4)?,
-                body: r.get(5)?,
-                read: r.get::<_, i64>(6)? != 0,
-                done: r.get::<_, i64>(7)? != 0,
-                file,
-                project: r.get(10)?,
-                from_name: r.get(11)?,
-                to_name: r.get(12)?,
-            })
-        })
+        .query_map(params![before_id.unwrap_or(i64::MAX), limit.min(500) as i64], row)
         .map_err(|e| e.to_string())?;
     Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+const COLS: &str = "id, ts, sender, recipient, kind, body, read, done, file_path, file_size, project, sender_name, recipient_name, re";
+
+fn row(r: &rusqlite::Row) -> rusqlite::Result<MsgRow> {
+    let file = r.get::<_, Option<String>>(8)?.map(|path| FileRef {
+        path,
+        size: r.get::<_, Option<i64>>(9).ok().flatten().unwrap_or(0) as u64,
+    });
+    Ok(MsgRow {
+        id: r.get(0)?,
+        ts: r.get(1)?,
+        from: r.get(2)?,
+        to: r.get(3)?,
+        kind: r.get(4)?,
+        body: r.get(5)?,
+        read: r.get::<_, i64>(6)? != 0,
+        done: r.get::<_, i64>(7)? != 0,
+        file,
+        project: r.get(10)?,
+        from_name: r.get(11)?,
+        to_name: r.get(12)?,
+        re: r.get(13)?,
+    })
+}
+
+fn one(root: &Path, ws: &str, sql_where: &str, args: impl rusqlite::Params) -> Result<Option<MsgRow>, String> {
+    if !crate::store::db_path(root, ws).exists() {
+        return Ok(None);
+    }
+    let conn = crate::store::open_db(root, ws).map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare(&format!("SELECT {COLS} FROM message WHERE {sql_where} ORDER BY id LIMIT 1")).map_err(|e| e.to_string())?;
+    let mut rows = stmt.query_map(args, row).map_err(|e| e.to_string())?;
+    rows.next().transpose().map_err(|e| e.to_string())
+}
+
+/// 원장 id로 한 건 (§4 `--re` 검증 · 회신 받는 사람)
+pub fn get(root: &Path, ws: &str, id: i64) -> Result<Option<MsgRow>, String> {
+    one(root, ws, "id = ?1", params![id])
+}
+
+/// `send --wait` (§4) — 내가 보낸 `id`에 온 첫 회신. `--re id`로 이은 것, 또는 그 메시지를 받은 사람이
+/// 그 뒤 나에게 낸 report --done (회신 고리를 쓰지 않아도 완료 보고는 맡긴 쪽에 자동으로 온다)
+pub fn reply_to(root: &Path, ws: &str, me: &str, id: i64) -> Result<Option<MsgRow>, String> {
+    one(
+        root,
+        ws,
+        "id > ?1 AND recipient = ?2 AND (re = ?1 OR (kind = 'report' AND done = 1 AND sender =
+           (SELECT recipient FROM message WHERE id = ?1 AND sender = ?2)))",
+        params![id, me],
+    )
 }
 
 /// ms 에포크 → 로컬 시각 문자열. 깨진 값이면 원본 숫자를 그대로 둔다 (원장을 각색하지 않는다).
@@ -352,6 +387,30 @@ mod tests {
         assert_eq!(attach_file(&r, &repo.join("none.md").to_string_lossy()), Err("FILE_NOT_FOUND".into()));
         assert_eq!(attach_file(&r, &r), Err("FILE_NOT_FOUND".into())); // 폴더는 첨부가 아니다
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// §4 `--re` · `--wait` — re 왕복, 회신은 re로 이은 것 또는 받은 사람의 report --done만
+    #[test]
+    fn reply_to_matches_re_or_done_report_from_recipient() {
+        let dir = std::env::temp_dir().join(format!("eqmux-re-{}", crate::workspace::now_ms()));
+        let me = "kai@ws1";
+        assert!(reply_to(&dir, "ws1", me, 1).unwrap().is_none()); // DB 없음
+        let ask = send(&dir, "ws1", me, "lin@ws1", "ask", "스키마?").unwrap();
+        assert_eq!(get(&dir, "ws1", ask.id).unwrap().unwrap().to, "lin@ws1");
+        assert!(get(&dir, "ws1", 999).unwrap().is_none());
+        // 다른 사람의 완료 보고 · 받은 사람의 진척 보고 · 남에게 간 회신은 회신이 아니다
+        send_with(&dir, "ws1", "noel@ws1", me, "report", "남의 완료", &Extra { done: true, ..Default::default() }).unwrap();
+        send(&dir, "ws1", "lin@ws1", me, "report", "절반").unwrap();
+        send_with(&dir, "ws1", "lin@ws1", "noel@ws1", "report", "남에게", &Extra { re: Some(ask.id), ..Default::default() }).unwrap();
+        assert!(reply_to(&dir, "ws1", me, ask.id).unwrap().is_none());
+        let r = send_with(&dir, "ws1", "lin@ws1", me, "report", "답", &Extra { re: Some(ask.id), ..Default::default() }).unwrap();
+        assert_eq!(reply_to(&dir, "ws1", me, ask.id).unwrap().unwrap().id, r.id);
+        assert_eq!(list(&dir, "ws1", None, 50).unwrap().last().unwrap().re, Some(ask.id)); // 원장 왕복
+        // --re 없이도 받은 사람의 report --done이면 회신이다
+        let ask2 = send(&dir, "ws1", me, "lin@ws1", "handoff", "로그인").unwrap();
+        let d = send_with(&dir, "ws1", "lin@ws1", me, "report", "완료", &Extra { done: true, ..Default::default() }).unwrap();
+        assert_eq!(reply_to(&dir, "ws1", me, ask2.id).unwrap().unwrap().id, d.id);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// 열린 handoff·ask — 보고 뒤에는 닫히고, @all·"나"는 회신 대상이 아니다
