@@ -97,7 +97,6 @@ export const dict: Record<string, string> = {
   "메시지 복사": "Copy message",
   "부모 커밋과 비교 (diff)": "Diff vs parent commit",
   "워크트리 diff 열기": "Open worktree diff",
-  "checkout · revert는 두지 않는다 — 터미널에서": "checkout · revert are not offered — use the terminal",
   // ── 0.5 바로 가기 · BR-11 ──
   "원격 저장소": "Remote repository",
   "원격에서 보기 (푸시 안 한 커밋은 없을 수 있음)": "View on remote (unpushed commits may be missing)",
@@ -156,10 +155,8 @@ export const dict: Record<string, string> = {
   "명령 복사 — {cmd}": "Copy command — {cmd}",
   "여기서 브랜치 만들기": "Create branch here",
   "여기에 태그 달기": "Tag this commit",
-  "cherry-pick · revert · reset은 다음 단계 — 터미널에서": "cherry-pick · revert · reset come later — use the terminal",
   전환: "Switch",
   "이름 변경": "Rename",
-  "merge · rebase는 다음 단계 — 터미널에서": "merge · rebase come later — use the terminal",
   "스테이지 내리기": "Unstage",
   스테이지: "Stage",
   "업스트림 없음": "No upstream",
@@ -184,7 +181,6 @@ export const dict: Record<string, string> = {
   "원격 ({n})": "Remote ({n})",
   "태그 ({n})": "Tags ({n})",
   "태그 삭제": "Delete tag",
-  "적용 · 꺼내기 · 버리기는 다음 단계 — 터미널에서": "apply · pop · drop come later — use the terminal",
   "파일 히스토리 — {f}": "File history — {f}",
   "전체 이력으로": "Back to full history",
   "커밋을 고르세요": "Select a commit",
@@ -221,8 +217,8 @@ export const dict: Record<string, string> = {
   "누를 때만 실행 · pull은 --ff-only · 우클릭하면 명령 복사":
     "Runs only when you click · pull is --ff-only · right-click to copy the command",
   "git 화면 열기": "Open git screen",
-  "브랜치 · 태그는 git 화면 · cherry-pick · revert는 다음 단계":
-    "Branches · tags in the git screen · cherry-pick · revert come later",
+  "브랜치 · 태그 · merge · rebase · cherry-pick · revert · reset은 git 화면에서":
+    "Branches · tags · merge · rebase · cherry-pick · revert · reset are in the git screen",
   "이름이 비었습니다": "Name is empty",
   "이름은 -로 시작할 수 없습니다": "Name cannot start with -",
   "git이 받지 않는 이름입니다": "git does not accept this name",

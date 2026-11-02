@@ -447,8 +447,8 @@ export function GitPanelTab() {
                 { label: t("워크트리 diff 열기"), action: openDiff },
                 { label: t("git 화면 열기"), action: openGitScreen },
               ],
-              // 메뉴에 없는 것 = 아직 없는 것 — 브랜치 · 태그는 git 화면, 이력 조작은 §17 3단계
-              [{ label: t("브랜치 · 태그는 git 화면 · cherry-pick · revert는 다음 단계"), note: true }],
+              // 메뉴에 없는 것은 git 화면에 있다 — 이 메뉴는 보기 · 복사만
+              [{ label: t("브랜치 · 태그 · merge · rebase · cherry-pick · revert · reset은 git 화면에서"), note: true }],
             ]}
           />
         )}
