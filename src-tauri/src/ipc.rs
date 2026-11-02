@@ -568,6 +568,54 @@ fn untrusted(label: &str, lines: &[String], en: bool) -> String {
     format!("<untrusted source=\"eqmux read {label}\">\n{body}\n</untrusted>\n{note}")
 }
 
+/// 선행 임무가 끝났다는 알림 (§4 depends_on) — (받는 세션, 본문). 끝난 임무를 `depends_on`에 둔,
+/// 아직 끝나지 않은 임무의 배정 세션마다 한 건. 남은 선행 임무가 있으면 함께 적는다.
+/// 일을 시작시키지는 않는다 — 알리기만 한다
+fn dependents_notice(missions: &[crate::missions::MissionInfo], done_id: &str, en: bool) -> Vec<(String, String)> {
+    let Some(done) = missions.iter().find(|m| m.id == done_id) else { return Vec::new() };
+    let name_of = |id: &str| missions.iter().find(|m| m.id == id).map(|m| m.name.clone()).unwrap_or_else(|| id.to_string());
+    let mut out = Vec::new();
+    for m in missions.iter().filter(|m| m.status != "done" && m.depends_on.iter().any(|d| d == done_id)) {
+        // 목록에 없는 id는 건너뛴다 (부분 파싱) — 지워진 선행 임무가 영영 "남음"으로 보이지 않게
+        let left: Vec<String> = m
+            .depends_on
+            .iter()
+            .filter(|d| missions.iter().any(|x| &x.id == *d && x.status != "done"))
+            .map(|d| name_of(d))
+            .collect();
+        let body = match (left.is_empty(), en) {
+            (true, false) => format!("선행 임무 '{}' 끝남 — '{}'의 선행 임무가 모두 끝났다", done.name, m.name),
+            (true, true) => format!("Prerequisite mission '{}' is done — all prerequisites of '{}' are done", done.name, m.name),
+            (false, false) => format!("선행 임무 '{}' 끝남 — '{}'은(는) 아직 {}를 기다린다", done.name, m.name, left.join(", ")),
+            (false, true) => format!("Prerequisite mission '{}' is done — '{}' still waits on {}", done.name, m.name, left.join(", ")),
+        };
+        out.extend(m.assigned.iter().map(|s| (s.clone(), body.clone())));
+    }
+    out
+}
+
+/// 임무가 done이 되면 부른다 (lib.rs mission_set_status). 보낸 사람은 "나" — 사람이 상태를 바꿨다.
+/// 사람 발신 상한(분당 10건)은 쓰지 않는다 — 사람이 보낸 것이 아니라 상태 변경의 알림이다
+pub fn notify_dependents(app: &AppHandle, ws_path: &str, done_id: &str) {
+    let en = crate::setting_str(app, "language").as_deref() == Some("en");
+    let notes = dependents_notice(&crate::missions::list(ws_path), done_id, en);
+    if notes.is_empty() {
+        return;
+    }
+    let store: State<crate::StoreState> = app.state();
+    let root = store.0.root();
+    let ws = crate::workspace::load(&root)
+        .into_iter()
+        .find(|w| w.path.eq_ignore_ascii_case(ws_path))
+        .map(|w| w.id)
+        .unwrap_or_else(|| crate::workspace::make_id(ws_path));
+    for (to, body) in notes {
+        if let Ok(row) = crate::messages::send(&root, &ws, "나", &to, "report", &body) {
+            let _ = app.emit_to("main", "message-new", json!({ "workspace": ws, "message": row }));
+        }
+    }
+}
+
 /// report 결과 줄 — 누가 받았는지 · 못 간 회신 (B105) · --done 없이 열린 요청이 남았으면 그 안내 (P25:
 /// ask를 받은 에이전트가 report로 답하고는 질문자에게 갔는지 몰라 사람에게 되물었다)
 fn report_result(sent: &[String], missed: &[String], done: bool, open: &[String], en: bool) -> String {
@@ -975,6 +1023,45 @@ fn resolve_recipient(ws: &str, ws_path: &str, raw: &str) -> Result<String, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn mission(id: &str, status: &str, deps: &[&str], assigned: &[&str]) -> crate::missions::MissionInfo {
+        crate::missions::MissionInfo {
+            id: id.into(),
+            name: id.to_uppercase(),
+            status: status.into(),
+            branch: None,
+            goal: String::new(),
+            outputs: Vec::new(),
+            outputs_done: Vec::new(),
+            file: String::new(),
+            assigned: assigned.iter().map(|s| s.to_string()).collect(),
+            is_default: false,
+            assigned_at: Default::default(),
+            base_commit: None,
+            commits_since: None,
+            depends_on: deps.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    /// §4 depends_on — 끝난 임무를 선행으로 둔, 끝나지 않은 임무의 배정 세션에만. 남은 선행 · 모두 끝남 구분
+    #[test]
+    fn dependents_notice_reaches_assignees_of_waiting_missions() {
+        let ms = vec![
+            mission("api", "done", &[], &["kai@w"]),
+            mission("db", "in-progress", &[], &[]),
+            mission("ui", "todo", &["api", "db", "gone"], &["lin@w", "noel@w"]),
+            mission("docs", "todo", &["api"], &["hana@w"]),
+            mission("old", "done", &["api"], &["kai@w"]), // 이미 끝난 후행은 알리지 않는다
+            mission("other", "todo", &["db"], &["rin@w"]),
+        ];
+        let n = dependents_notice(&ms, "api", false);
+        let to: Vec<&str> = n.iter().map(|(s, _)| s.as_str()).collect();
+        assert_eq!(to, ["lin@w", "noel@w", "hana@w"]);
+        assert!(n[0].1.contains("'API' 끝남") && n[0].1.contains("아직 DB를 기다린다")); // 없는 id(gone)는 남은 것으로 안 센다
+        assert!(n[2].1.contains("모두 끝났다"));
+        assert!(dependents_notice(&ms, "없는임무", false).is_empty());
+        assert!(dependents_notice(&ms, "api", true)[2].1.contains("all prerequisites"));
+    }
 
     fn e(session: &str, ws: &str, project: &str, name: &str) -> DirEntry {
         DirEntry {

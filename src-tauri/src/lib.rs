@@ -1965,8 +1965,14 @@ fn mission_create(
 
 #[tauri::command]
 fn mission_set_status(app: AppHandle, ws_path: String, id: String, status: String) -> Result<(), String> {
+    let was_done = missions::get(&ws_path, &id).is_some_and(|m| m.status == "done");
     missions::set_status(&ws_path, &id, &status)?;
-    let name = missions::get(&ws_path, &id).map(|m| m.name).unwrap_or(id);
+    let m = missions::get(&ws_path, &id);
+    // §4 depends_on — done으로 바뀔 때 한 번만 후행 임무 세션에 알린다 (W3 ipc)
+    if let (true, Some(m)) = (status == "done" && !was_done, &m) {
+        ipc::notify_dependents(&app, &ws_path, &m.id);
+    }
+    let name = m.map(|m| m.name).unwrap_or(id);
     missions::log_event(&app, &ws_path, None, format!("임무 상태 · {name} → {status}")); // C1 — W2
     Ok(())
 }
