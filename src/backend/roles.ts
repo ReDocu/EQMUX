@@ -34,6 +34,7 @@ export interface RolePayload {
   characterName?: string;
   characterSource?: string;
   title?: string; // 유효 직함 (0.5) — 없으면 역할 파일이 0.4.2와 같다
+  model?: string; // 모델 (0.6 §3 · C5) — 페르소나 > 직무. 없으면 엔진 기본
   remind: boolean; // 매 턴 캐릭터 상기 (0.6 §15-3) — Rust가 단계별 문장을 frontmatter remind:에 쓴다 (C6)
   /** name = 세션 이름, personaName은 세션 이름과 다를 때만, title = 유효 직함 (0.5) */
   teammates: { slot: number; name: string; personaName?: string; title?: string; identity?: string; jobName: string; me: boolean }[];
@@ -87,6 +88,7 @@ export function buildRolePayload(s: Session): RolePayload | undefined {
     forbidden: job.forbidden,
     teammates,
     remind: !!persona.remind,
+    ...(persona.model?.trim() || job.model?.trim() ? { model: persona.model?.trim() || job.model?.trim() } : {}),
   };
 }
 

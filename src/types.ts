@@ -40,6 +40,7 @@ export interface Job {
   permissions: Permissions;
   responsibility: string;
   forbidden: string;
+  model?: string; // 직무별 모델 (0.6 §3 · W4) — frontmatter model:, 빈 값 = 엔진 기본
   mtimeMs?: number; // 읽은 시점의 파일 mtime (P-7) — 저장 시 외부 변경 충돌 감지
 }
 
@@ -70,6 +71,7 @@ export interface Persona {
   characterIdentity?: string; // 시트 `## 정체성` 첫 줄 (0.6 §15-3 · W4) — 팀원 표 정체성 열
   title?: string; // 직함 (0.5) — 직무 안에서 맡는 영역 이름. 있을 때만 frontmatter에 쓴다
   remind?: boolean; // 매 턴 캐릭터 상기 (0.6 §15-3 · W4) — frontmatter remind: on
+  model?: string; // 모델 (0.6 §3 · W4) — 직무 모델보다 우선
   mtimeMs?: number; // 읽은 시점의 파일 mtime (P-7) — 저장 시 외부 변경 충돌 감지
 }
 

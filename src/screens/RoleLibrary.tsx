@@ -95,6 +95,7 @@ export function RoleLibrary() {
   const [draftJob, setDraftJob] = createSignal(""); // 기본 직무 — 역할 부여가 따라간다. "" = 미지정
   const [draftTitle, setDraftTitle] = createSignal(""); // 직함 (0.5) — "" = 직함 없음
   const [draftRemind, setDraftRemind] = createSignal(false); // 매 턴 캐릭터 상기 (0.6 §15-3)
+  const [draftModel, setDraftModel] = createSignal(""); // 모델 (0.6 §3) — "" = 직무 → 엔진 기본
   // 캐릭터 기억 (0.6 §15-4) — 워크스페이스마다 .eqmux/memory/<id>.md. 파일이 있는 워크스페이스만 보인다
   const [memories, setMemories] = createSignal<{ ws: Workspace; lines: number }[]>([]);
   const [askClear, setAskClear] = createSignal<Workspace | undefined>(undefined);
@@ -141,6 +142,7 @@ export function RoleLibrary() {
     setDraftJob(p.job ?? "");
     setDraftTitle(p.title ?? "");
     setDraftRemind(!!p.remind);
+    setDraftModel(p.model ?? "");
     void loadMemories(p.id);
     setDraftProfiles({ basic: profileOf(p, "basic"), mid: profileOf(p, "mid"), adv: profileOf(p, "adv") });
     setEditLevel(personaLevel(p));
@@ -150,7 +152,7 @@ export function RoleLibrary() {
     closeSheet();
   };
   // 편집 여부 (B95 · U57) — 고른/저장한 시점의 draft와 다르면 dirty. '저장됨 ✓'과 이탈 확인이 이 값을 본다
-  const personaKey = () => JSON.stringify([draftName(), draftColor(), draftJob(), draftTitle(), draftProfiles(), editLevel(), draftRemind()]);
+  const personaKey = () => JSON.stringify([draftName(), draftColor(), draftJob(), draftTitle(), draftProfiles(), editLevel(), draftRemind(), draftModel()]);
   const [personaBase, setPersonaBase] = createSignal("");
   const personaDirty = () => !!sel() && !selIsWs() && personaKey() !== personaBase();
   const nameErr = () => (sel() ? libNameError(draftName(), sel()!.id, personas()) : undefined);
@@ -176,12 +178,14 @@ export function RoleLibrary() {
       job: draftJob(),
       title: draftTitle().trim() || undefined,
       remind: draftRemind(),
+      model: draftModel().trim(),
       mtimeMs: editMtime(),
     });
     setSaveErr(err ?? undefined);
     // 상기를 켜고 껐다 — 역할 파일의 remind: 줄만 다시 만든다. 훅이 매 프롬프트마다 파일을 다시 읽으니
     // '다시 읽기' 안내도 재시작도 필요 없다 (§15-3 반영 시점)
-    if (!err && !!p.remind !== draftRemind()) resaveTeams();
+    // 모델은 스폰 인자라 다음 기동부터 — 역할 파일만 다시 쓴다
+    if (!err && (!!p.remind !== draftRemind() || (p.model ?? "") !== draftModel().trim())) resaveTeams();
     // 직함이 바뀌었다 — 역할 파일은 팀 동기화(500ms 디바운스)가 다시 만든다. 그 페르소나가 있는
     // 워크스페이스의 살아 있는 팀원 모두에게 '다시 읽기' 한 줄 (팀 관계 표도 바뀌므로). 재시작 없음
     if (!err && (p.title ?? "").trim() !== draftTitle().trim()) {
@@ -304,6 +308,7 @@ export function RoleLibrary() {
     push: false,
     responsibility: "",
     forbidden: "",
+    model: "",
   });
 
   const [jobMtime, setJobMtime] = createSignal<number | undefined>(undefined); // B41 — 편집 시작 시점 고정
@@ -321,6 +326,7 @@ export function RoleLibrary() {
       push: j.permissions.push,
       responsibility: j.responsibility,
       forbidden: j.forbidden,
+      model: j.model ?? "",
     });
     setJobBase(JSON.stringify(jDraft()));
     setJobSaved(false);
@@ -338,9 +344,11 @@ export function RoleLibrary() {
       permissions: { write: d.write, commit: d.commit, push: d.push },
       responsibility: d.responsibility,
       forbidden: d.forbidden,
+      model: d.model.trim(),
       mtimeMs: jobMtime(), // 편집 시작 시점의 파일 상태 (P-7 · B41)
     });
     setJobSaveErr(err ?? undefined);
+    if (!err && (j.model ?? "") !== d.model.trim()) resaveTeams(); // 모델 (0.6 §3) — 역할 파일 model: 갱신, 다음 기동부터
     reloadScope();
     if (!err) {
       setJobMtime(jobs().find((x) => x.id === j.id)?.mtimeMs);
@@ -488,6 +496,11 @@ export function RoleLibrary() {
                   <Show when={jobNameErr()}>
                     <span class="rl-hint st-waiting">{t(jobNameErr()!)}</span>
                   </Show>
+                </div>
+                <div class="rl-field">
+                  <label class="rl-label">{t("모델 — 이 직무 세션의 기본 모델. 페르소나 모델이 우선, 비우면 엔진 기본. 다음 기동부터 적용")}</label>
+                  <input class="mono" list="eq-model-suggest" placeholder="opus · sonnet · haiku" value={jDraft().model} onInput={(e) => setJDraft({ ...jDraft(), model: e.currentTarget.value })} />
+                  <span class="rl-hint muted">{t("Codex 세션이면 Codex 모델 이름을 적습니다 (-m으로 넘어갑니다)")}</span>
                 </div>
                 <div class="rl-field">
                   <label class="rl-label">{t("기본 권한 — 실행 플래그로 번역됩니다")}</label>
@@ -729,6 +742,11 @@ export function RoleLibrary() {
                 </For>
               </div>
             </div>
+            {/* 모델 (0.6 §3 · C5) — 직무 모델보다 우선. 스폰 인자라 다음 기동부터 */}
+            <div class="rl-field">
+              <label class="rl-label">{t("모델 — 비우면 직무 모델, 그것도 비면 엔진 기본. 다음 기동부터 적용")}</label>
+              <input class="mono" list="eq-model-suggest" placeholder="opus · sonnet · haiku" value={draftModel()} onInput={(e) => setDraftModel(e.currentTarget.value)} />
+            </div>
             {/* 말투·성격은 중급 전용 — 고급은 시트의 말투 규칙·성격 섹션이 담당한다 */}
             <Show when={editLevel() === "mid"}>
               <div class="rl-field">
@@ -894,6 +912,12 @@ export function RoleLibrary() {
           </Show>
         </div>
       </div>
+      {/* 모델 제안 (0.6 §3) — Claude Code 별칭. 아무 값이나 적어도 된다 */}
+      <datalist id="eq-model-suggest">
+        <option value="opus" />
+        <option value="sonnet" />
+        <option value="haiku" />
+      </datalist>
       <Show when={askClear()}>
         {(ws) => (
           <ConfirmDialog

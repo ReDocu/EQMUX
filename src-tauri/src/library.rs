@@ -19,6 +19,9 @@ pub struct JobInfo {
     pub permissions: crate::roles::RolePermissions,
     pub responsibility: String,
     pub forbidden: String,
+    /// 직무별 모델 (0.6 §3 · 토큰 #8) — frontmatter `model:`. 빈 값 = 엔진 기본 (키 없음)
+    #[serde(default)]
+    pub model: String,
     /// 읽은 시점의 파일 mtime (P-7) — 저장 시 외부 변경 충돌 감지에 쓴다 (fsx와 같은 규칙)
     #[serde(default)]
     pub mtime_ms: i64,
@@ -86,6 +89,9 @@ pub struct PersonaInfo {
     /// 매 턴 캐릭터 상기 (0.6 §15-3) — frontmatter `remind: on`. 꺼짐이 기본이고 키도 없다
     #[serde(default)]
     pub remind: bool,
+    /// 모델 (0.6 §3) — 직무 모델보다 우선. 빈 값 = 직무 → 엔진 기본
+    #[serde(default)]
+    pub model: String,
     /// 읽은 시점의 파일 mtime (P-7) — 저장 시 외부 변경 충돌 감지에 쓴다
     #[serde(default)]
     pub mtime_ms: i64,
@@ -190,6 +196,7 @@ fn parse_job(path: &Path) -> Option<JobInfo> {
         },
         responsibility,
         forbidden,
+        model: fm_value(&fm, "model").unwrap_or_default(),
         mtime_ms: file_mtime_ms(path),
     })
 }
@@ -372,6 +379,7 @@ fn parse_persona(path: &Path) -> Option<PersonaInfo> {
         character_source,
         character_identity,
         remind: fm_value(&fm, "remind").as_deref() == Some("on"),
+        model: fm_value(&fm, "model").unwrap_or_default(),
         mtime_ms: file_mtime_ms(path),
     })
 }
@@ -470,9 +478,15 @@ fn atomic_write(path: &Path, content: &str) -> Result<(), String> {
 
 fn render_job(j: &JobInfo) -> String {
     format!(
-        "---\nid: {}\nname: {}\ndefault_permissions:\n  write: {}\n  commit: {}\n  push: {}\n---\n\n## 책임\n{}\n\n## 금지\n{}\n",
-        j.id, j.name, j.permissions.write, j.permissions.commit, j.permissions.push, j.responsibility, j.forbidden
+        "---\nid: {}\nname: {}\n{}default_permissions:\n  write: {}\n  commit: {}\n  push: {}\n---\n\n## 책임\n{}\n\n## 금지\n{}\n",
+        j.id, j.name, model_line(&j.model), j.permissions.write, j.permissions.commit, j.permissions.push, j.responsibility, j.forbidden
     )
+}
+
+/// `model: <값>` 줄 — 공백은 걷는다(CLI 인자 한 개). 빈 값이면 키를 쓰지 않는다
+fn model_line(m: &str) -> String {
+    let m: String = m.split_whitespace().collect();
+    if m.is_empty() { String::new() } else { format!("model: {m}\n") }
 }
 
 fn render_profile(out: &mut String, title: &str, p: &PersonaProfile) {
@@ -504,8 +518,8 @@ fn render_persona(p: &PersonaInfo) -> String {
     let title_line = if title.is_empty() { String::new() } else { format!("title: {title}\n") };
     let remind_line = if p.remind { "remind: on\n" } else { "" };
     let mut s = format!(
-        "---\nid: {}\nname: {}\ncolor: {}\n{}{}{}{}---\n",
-        p.id, p.name, p.color, level_line, job_line, title_line, remind_line
+        "---\nid: {}\nname: {}\ncolor: {}\n{}{}{}{}{}---\n",
+        p.id, p.name, p.color, level_line, job_line, title_line, remind_line, model_line(&p.model)
     );
     // 저장의 원본은 프로필 3벌 — 최상위 편의 필드(hint 등)는 쓰지 않는다.
     // 단, 구 호출 경로(프로필 없이 hint만 온 페이로드)는 세 프로필에 복사해 받아준다.
@@ -658,6 +672,7 @@ fn fixed_jobs() -> [JobInfo; 8] {
         permissions: p,
         responsibility: r.into(),
         forbidden: f.into(),
+        model: String::new(),
         mtime_ms: 0,
     };
     [
@@ -815,6 +830,7 @@ mod tests {
             permissions: crate::roles::RolePermissions { write: true, commit: true, push: true },
             responsibility: "최종 판단".into(),
             forbidden: "독단 push".into(),
+            model: "opus".into(),
             mtime_ms: 0,
         };
         save_job(&root, &lead2, None).unwrap();
@@ -927,6 +943,24 @@ mod tests {
         let luca = list(&root, None).personas.into_iter().find(|p| p.id == "luca").unwrap();
         assert_eq!(luca.character_identity.as_deref(), Some("사용자의 여정을 지도로 그리는 등대지기 — 따뜻하고 관찰력이 좋다"));
         assert_eq!(sheet_identity("## 정체성 (필수 · 1줄)\n\n\n## 배경\n내용"), None); // 빈 템플릿
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// 직무별 모델 (0.6 §3 · C5) — 값이 있을 때만 `model:` 키, 공백은 걷는다, 다시 읽으면 그대로
+    #[test]
+    fn model_roundtrip() {
+        let root = temp_root("model");
+        seed(&root);
+        let lib = list(&root, None);
+        let kai = lib.personas.into_iter().find(|p| p.id == "kai").unwrap();
+        let dev = lib.jobs.into_iter().find(|j| j.id == "dev").unwrap();
+        assert!(kai.model.is_empty() && dev.model.is_empty());
+        assert!(!fs::read_to_string(root.join("jobs").join("dev.md")).unwrap().contains("model:"));
+        save_persona(&root, &PersonaInfo { model: " claude-sonnet-5-5 ".into(), ..kai }, None).unwrap();
+        save_job(&root, &JobInfo { model: "gpt 5".into(), ..dev }, None).unwrap();
+        let lib = list(&root, None);
+        assert_eq!(lib.personas.iter().find(|p| p.id == "kai").unwrap().model, "claude-sonnet-5-5");
+        assert_eq!(lib.jobs.iter().find(|j| j.id == "dev").unwrap().model, "gpt5");
         fs::remove_dir_all(&root).ok();
     }
 

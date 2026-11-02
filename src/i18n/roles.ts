@@ -278,6 +278,12 @@ export const dict: Record<string, string> = {
   "버리고 이동": "Discard and move on",
   // 0.6 §15-3 매 턴 캐릭터 상기
   "매 턴 캐릭터 상기": "Remind character every turn",
+  // 0.6 §3 직무별 모델
+  "모델 — 비우면 직무 모델, 그것도 비면 엔진 기본. 다음 기동부터 적용":
+    "Model — empty uses the job model, then the engine default. Applies from the next launch",
+  "모델 — 이 직무 세션의 기본 모델. 페르소나 모델이 우선, 비우면 엔진 기본. 다음 기동부터 적용":
+    "Model — default for sessions with this job. A persona model wins; empty uses the engine default. Applies from the next launch",
+  "Codex 세션이면 Codex 모델 이름을 적습니다 (-m으로 넘어갑니다)": "For Codex sessions, enter a Codex model name (passed as -m)",
   // 0.6 §15-4 캐릭터 기억
   "캐릭터 기억 — 워크스페이스마다 따로. 세션이 스스로 덧붙이고 다음 세션 시작에 실립니다":
     "Character memory — one per workspace. The session appends to it and it is loaded at the next session start",

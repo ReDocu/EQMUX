@@ -76,6 +76,9 @@ pub struct RolePayload {
     /// 매 턴 캐릭터 상기 (0.6 §15-3) — 켜져 있으면 frontmatter `remind: <한 줄>`(C6)
     #[serde(default)]
     pub remind: bool,
+    /// 모델 (0.6 §3 · C5) — 프런트가 페르소나 > 직무로 고른 값 하나. 있으면 frontmatter `model:`
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 /// 임무 블록 내용 (FR-E-53) — 원본 정의 파일(.eqmux/missions/*.md)의 포인터를 포함한다
@@ -299,6 +302,11 @@ fn frontmatter_text(p: &RolePayload, mission_id: Option<&str>) -> String {
     }
     if let Some(r) = remind_line(p) {
         s.push_str(&format!("remind: {r}\n"));
+    }
+    // C5 — W2가 스폰 인자(--model / -m)로 넘긴다. 공백을 걷어 인자 한 개로
+    let model: String = p.model.as_deref().unwrap_or("").split_whitespace().collect();
+    if !model.is_empty() {
+        s.push_str(&format!("model: {model}\n"));
     }
     s.push_str("permissions:\n");
     s.push_str(&format!("  write: {}\n", p.permissions.write));
@@ -610,6 +618,12 @@ mod tests {
         let m = MissionBlock { id: "m1".into(), name: "임무".into(), status: "todo".into(), goal: String::new(), outputs: vec![], branch: None };
         set_mission(&ws, "kai@ws1", Some(&m)).unwrap();
         assert!(remind(&path).unwrap().contains("별지기 루카"));
+        // C5 model — 값이 있을 때만, set_mission 뒤에도 남는다
+        assert_eq!(fm_value(&split_frontmatter(&fs::read_to_string(&path).unwrap()).0, "model"), None);
+        p.model = Some("opus".into());
+        save(&ws, &p).unwrap();
+        set_mission(&ws, "kai@ws1", None).unwrap();
+        assert_eq!(fm_value(&split_frontmatter(&fs::read_to_string(&path).unwrap()).0, "model").as_deref(), Some("opus"));
         fs::remove_dir_all(&dir).ok();
     }
 
