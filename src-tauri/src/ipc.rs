@@ -11,6 +11,49 @@ use tauri::{AppHandle, Emitter, Manager, State};
 const MAX_CONNS: usize = 32;
 static CONN_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
+/// 요청 한 줄 상한 (CPU·RAM O5 · B125) — 본문은 800자, 긴 내용은 --file이라 훅 payload(64KB)가 가장 크다
+const MAX_LINE: usize = 1 << 20;
+
+/// 요청 한 줄 읽기 (B125) — 상한을 넘거나 UTF-8이 아니면 BAD_LINE으로 답한다 (예전에는 말없이 끊어
+/// CLI가 '전송 실패'만 봤다). Ok(None)은 아무것도 오지 않은 채 끝난 연결(시한·끊김) — 답 없이 닫는다
+fn read_request(r: impl std::io::Read) -> Result<Option<String>, &'static str> {
+    use std::io::BufRead;
+    let mut buf = Vec::new();
+    match std::io::BufReader::new(r.take(MAX_LINE as u64 + 1)).read_until(b'\n', &mut buf) {
+        Ok(0) => return Ok(None),
+        Err(_) if buf.is_empty() => return Ok(None),
+        Err(_) => return Err("BAD_LINE"), // 줄 중간에 시한 — 반쪽 요청은 처리하지 않는다
+        Ok(_) => {}
+    }
+    if buf.len() > MAX_LINE {
+        return Err("BAD_LINE");
+    }
+    String::from_utf8(buf).map(Some).map_err(|_| "BAD_LINE")
+}
+
+/// 연결 하나의 응답 줄. 상한을 넘은 연결(busy)은 줄을 읽은 뒤 처리하지 않고 BUSY로 답한다 (B124) —
+/// 예전에는 응답 없이 닫아 CLI가 원인 모를 '전송 실패'를 찍었다. BUSY는 처리하지 않았다는 뜻이라
+/// CLI가 다시 보내도 중복이 생기지 않는다. None이면 답하지 않는다
+fn respond(app: &AppHandle, r: impl std::io::Read, busy: bool) -> Option<String> {
+    let line = match read_request(r) {
+        Ok(None) => return None,
+        Ok(Some(l)) => l,
+        Err(code) => return Some(json!({"ok": false, "error": code}).to_string()),
+    };
+    if busy {
+        return Some(json!({"ok": false, "error": "BUSY"}).to_string());
+    }
+    Some(match handle(app, line.trim()) {
+        Ok(v) => v.to_string(),
+        Err(e) => json!({"ok": false, "error": e}).to_string(),
+    })
+}
+
+/// BUSY면 잠깐 쉬고 다시 — 처리 전에 거절된 것이라 send도 두 번 적히지 않는다 (B124)
+fn is_busy(resp: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(resp).is_ok_and(|v| v["error"] == "BUSY")
+}
+
 #[cfg(windows)]
 fn pipe_path() -> String {
     let user: String = std::env::var("USERNAME")
@@ -33,7 +76,11 @@ pub fn request(line: &str) -> std::io::Result<String> {
                 writeln!(f, "{line}")?;
                 let mut resp = String::new();
                 BufReader::new(f).read_line(&mut resp)?;
-                return Ok(resp.trim().to_string());
+                if !is_busy(&resp) {
+                    return Ok(resp.trim().to_string());
+                }
+                last = Some(std::io::Error::other(resp.trim().to_string()));
+                std::thread::sleep(std::time::Duration::from_millis(300));
             }
             Err(e) => {
                 last = Some(e); // 인스턴스 교체 사이의 짧은 창 — 잠깐 쉬고 재시도
@@ -41,7 +88,7 @@ pub fn request(line: &str) -> std::io::Result<String> {
             }
         }
     }
-    Err(last.unwrap_or_else(|| std::io::Error::other("pipe open failed")))
+    busy_or(last, "pipe open failed")
 }
 
 /// 소켓 경로 — 로그와 같은 ~/.eqmux 아래. 홈 디렉터리는 사용자 전용이라 파이프 기본 DACL과
@@ -62,7 +109,11 @@ pub fn request(line: &str) -> std::io::Result<String> {
                 writeln!(s, "{line}")?;
                 let mut resp = String::new();
                 BufReader::new(s).read_line(&mut resp)?;
-                return Ok(resp.trim().to_string());
+                if !is_busy(&resp) {
+                    return Ok(resp.trim().to_string());
+                }
+                last = Some(std::io::Error::other(resp.trim().to_string()));
+                std::thread::sleep(std::time::Duration::from_millis(300));
             }
             Err(e) => {
                 last = Some(e); // 앱 기동 직후 바인드 전의 짧은 창 — 잠깐 쉬고 재시도
@@ -70,7 +121,16 @@ pub fn request(line: &str) -> std::io::Result<String> {
             }
         }
     }
-    Err(last.unwrap_or_else(|| std::io::Error::other("socket connect failed")))
+    busy_or(last, "socket connect failed")
+}
+
+/// 재시도가 다 BUSY였으면 그 응답 줄을 그대로 돌려준다 — CLI가 '앱이 바쁩니다'로 읽는다 (연결 실패와 구분)
+fn busy_or(last: Option<std::io::Error>, fallback: &str) -> std::io::Result<String> {
+    match last {
+        Some(e) if is_busy(&e.to_string()) => Ok(e.to_string()),
+        Some(e) => Err(e),
+        None => Err(std::io::Error::other(fallback.to_string())),
+    }
 }
 
 // ── 서버 (앱) ──
@@ -115,33 +175,31 @@ pub fn start_server(app: AppHandle) {
     std::thread::spawn(move || {
         for stream in listener.incoming() {
             let Ok(stream) = stream else { continue };
-            if CONN_COUNT.load(std::sync::atomic::Ordering::Relaxed) >= MAX_CONNS {
-                continue; // drop이 연결을 닫는다
+            // 상한을 넘은 연결도 BUSY 한 줄은 받는다 (B124). 그 스레드는 3초 시한이 거둔다
+            let busy = CONN_COUNT.load(std::sync::atomic::Ordering::Relaxed) >= MAX_CONNS;
+            if !busy {
+                CONN_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
-            CONN_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let app2 = app.clone();
             std::thread::spawn(move || {
-                handle_conn(&app2, stream);
-                CONN_COUNT.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                handle_conn(&app2, stream, busy);
+                if !busy {
+                    CONN_COUNT.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                }
             });
         }
     });
 }
 
 #[cfg(not(windows))]
-fn handle_conn(app: &AppHandle, stream: std::os::unix::net::UnixStream) {
-    use std::io::{BufRead, BufReader, Write};
-    // 파이프 쪽과 달리 읽기 시한을 걸 수 있다 — 한 줄도 안 보내는 클라이언트가 스레드를 쥐지 않게
-    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(10)));
-    let mut line = String::new();
-    if BufReader::new(&stream).read_line(&mut line).is_err() {
-        return;
+fn handle_conn(app: &AppHandle, stream: std::os::unix::net::UnixStream, busy: bool) {
+    use std::io::Write;
+    // 파이프 쪽과 달리 읽기 시한을 걸 수 있다 — 한 줄도 안 보내는 클라이언트가 스레드를 쥐지 않게.
+    // 요청은 한 줄이라 3초면 넉넉하다 (B124 — 10초는 말없는 연결이 버스를 너무 오래 막았다)
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(3)));
+    if let Some(resp) = respond(app, &stream, busy) {
+        let _ = writeln!(&stream, "{resp}");
     }
-    let resp = match handle(app, line.trim()) {
-        Ok(v) => v.to_string(),
-        Err(e) => json!({"ok": false, "error": e}).to_string(),
-    };
-    let _ = writeln!(&stream, "{resp}");
 }
 
 #[cfg(windows)]
@@ -178,41 +236,35 @@ fn server_loop(app: AppHandle) {
             unsafe { CloseHandle(h) };
             continue;
         }
-        // 동시 연결 상한 — 한 줄도 안 보내는 클라이언트가 read_line에 영구 블록되면
-        // 스레드+핸들이 무한 누적된다. ponytail: 상한 거부로 막는다, read 타임아웃이 필요해지면 그때
-        if CONN_COUNT.load(std::sync::atomic::Ordering::Relaxed) >= MAX_CONNS {
-            unsafe { CloseHandle(h) };
-            continue;
+        // 동시 연결 상한 — 넘은 연결은 처리하지 않고 BUSY 한 줄로 답한다 (B124). CLI가 잠깐 쉬고 다시 보낸다.
+        // ponytail: 파이프 읽기에 시한이 없어 한 줄도 안 보내는 연결은 스레드를 쥔다(같은 OS 사용자만 가능).
+        // 막아야 하면 CancelSynchronousIo 감시 스레드로 시한을 건다
+        let busy = CONN_COUNT.load(std::sync::atomic::Ordering::Relaxed) >= MAX_CONNS;
+        if !busy {
+            CONN_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
-        CONN_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let app2 = app.clone();
         let h_addr = h as usize; // HANDLE(*mut c_void)은 Send가 아니라 usize로 건넨다
         // 연결당 스레드 — 요청 한 줄이라 수명이 짧다. 파일 래핑으로 drop 시 핸들이 닫힌다.
         std::thread::spawn(move || {
             let file = unsafe { std::fs::File::from_raw_handle(h_addr as _) };
-            handle_conn(&app2, file);
-            CONN_COUNT.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            handle_conn(&app2, file, busy);
+            if !busy {
+                CONN_COUNT.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            }
         });
     }
 }
 
 #[cfg(windows)]
-fn handle_conn(app: &AppHandle, file: std::fs::File) {
-    use std::io::{BufRead, BufReader, Read, Write};
+fn handle_conn(app: &AppHandle, file: std::fs::File, busy: bool) {
+    use std::io::Write;
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Storage::FileSystem::FlushFileBuffers;
     use windows_sys::Win32::System::Pipes::DisconnectNamedPipe;
 
-    let mut line = String::new();
-    // 요청 한 줄 상한 1MB (CPU·RAM O5) — 개행을 안 보내는 클라이언트가 연결마다(최대 32개) 끝없이
-    // 버퍼를 키우지 않게. 잘린 줄은 JSON 해석에서 실패해 오류 응답이 나간다
-    if BufReader::new(&file).take(1 << 20).read_line(&mut line).is_err() {
-        return;
-    }
-    let resp = match handle(app, line.trim()) {
-        Ok(v) => v.to_string(),
-        Err(e) => json!({"ok": false, "error": e}).to_string(),
-    };
+    // 요청 한 줄 상한 1MB — 개행을 안 보내는 클라이언트가 연결마다 끝없이 버퍼를 키우지 않게 (read_request)
+    let Some(resp) = respond(app, &file, busy) else { return };
     let _ = writeln!(&file, "{resp}");
     // Disconnect가 미수신 데이터를 버리므로 클라이언트가 읽을 때까지 flush로 기다린다
     unsafe {
@@ -931,7 +983,24 @@ mod tests {
         assert_eq!(sid(resolve_in(&d, "w1", "@kai@tool")), Some("kai@w3".into())); // 페르소나 id도
     }
 
-    /// B7 eqmux read — 그 세션의 마지막 n줄, grep(%·_는 글자 그대로), 감싸기를 빠져나가는 줄은 무력화
+    /// B125 — 요청 줄: 1MB 상한 · UTF-8만, 빈 연결은 답하지 않는다. B124 — BUSY만 재시도 대상
+    #[test]
+    fn request_line_limits_and_busy() {
+        use std::io::Cursor;
+        assert_eq!(read_request(Cursor::new(b"{\"cmd\":\"ping\"}\nsecond\n".to_vec())), Ok(Some("{\"cmd\":\"ping\"}\n".into())));
+        assert_eq!(read_request(Cursor::new(Vec::new())), Ok(None));
+        assert_eq!(read_request(Cursor::new(b"\xff\xfe ping\n".to_vec())), Err("BAD_LINE"));
+        let mut big = vec![b'a'; MAX_LINE + 10];
+        big.push(b'\n');
+        assert_eq!(read_request(Cursor::new(big)), Err("BAD_LINE"));
+        assert!(read_request(Cursor::new(vec![b'a'; MAX_LINE])).is_ok()); // 상한 그대로는 받는다
+        assert!(is_busy(r#"{"ok":false,"error":"BUSY"}"#));
+        assert!(!is_busy(r#"{"ok":false,"error":"RATE_LIMIT"}"#) && !is_busy(""));
+        assert!(busy_or(Some(std::io::Error::other(r#"{"ok":false,"error":"BUSY"}"#)), "x").is_ok());
+        assert!(busy_or(None, "x").is_err());
+    }
+
+    /// B7 eqmux read —그 세션의 마지막 n줄, grep(%·_는 글자 그대로), 감싸기를 빠져나가는 줄은 무력화
     #[test]
     fn read_returns_tail_and_wraps_untrusted() {
         let root = std::env::temp_dir().join(format!("eqmux-read-{}", crate::workspace::now_ms()));

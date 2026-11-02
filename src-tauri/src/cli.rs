@@ -533,6 +533,18 @@ fn friendly(err: &str, to: &str, report: bool, en: bool) -> String {
     let arg = |code: &str| err.split_once(&format!("{code}:")).map(|(_, v)| v.to_string()).unwrap_or_default();
     let pick = |ko: String, eng: String| if en { eng } else { ko };
     match err {
+        e if e.contains("BUSY") => pick(
+            "EQMUX 앱이 바빠 받지 못했습니다 (동시 연결 상한) — 잠시 뒤 다시".into(),
+            "The EQMUX app is too busy to take this (connection limit) — try again shortly".into(),
+        ),
+        "NO_RESPONSE" => pick(
+            "EQMUX 앱이 답하지 않았습니다 — 보낸 것이 처리됐는지 eqmux who·대화 탭으로 확인하세요".into(),
+            "The EQMUX app did not answer — check with eqmux who or the Conversation tab whether it went through".into(),
+        ),
+        e if e.contains("BAD_LINE") => pick(
+            "요청 줄이 너무 길거나 UTF-8이 아닙니다".into(),
+            "The request line is too long or not UTF-8".into(),
+        ),
         e if e.contains("RATE_LIMIT") => pick(
             "분당 발신 상한(10건)에 닿았습니다 — 잠시 후 다시".into(),
             "Hit the send limit (10 per minute) — try again shortly".into(),
@@ -731,8 +743,8 @@ fn wait_reply(session: &str, token: Option<&str>, id: i64, en: bool) -> i32 {
             say(false, text);
             return 0;
         }
-        if !v["ok"].as_bool().unwrap_or(false) {
-            say(true, &friendly(v["error"].as_str().unwrap_or(""), "", false, en));
+        if !v["ok"].as_bool().unwrap_or(false) && v["error"] != "BUSY" {
+            say(true, &friendly(v["error"].as_str().unwrap_or("NO_RESPONSE"), "", false, en));
             return 1;
         }
     }
@@ -819,7 +831,8 @@ pub fn run(args: Vec<String>) -> i32 {
                 0
             } else {
                 let to = if let Req::Send { to, .. } = &req { to.as_str() } else { "" };
-                let err = v["error"].as_str().unwrap_or(if en { "Send failed" } else { "전송 실패" });
+                // 빈 응답 = 앱이 줄을 받고도 답하지 못했다 (B124) — 원인 없는 '전송 실패' 대신 그렇게 말한다
+                let err = v["error"].as_str().unwrap_or("NO_RESPONSE");
                 say(true, &friendly(err, to, matches!(req, Req::Report { .. }), en));
                 1
             }
