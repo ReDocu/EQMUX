@@ -6,7 +6,7 @@
 
 ### 새 기능
 
-- **git 화면**: 브랜치 그래프 · 커밋 상세 · 파일 히스토리 · blame, 파일 · 덩어리 단위 스테이징, 커밋 · amend, 브랜치 · 태그, fetch · pull(`--ff-only`) · push. git 쓰기는 사람이 버튼을 눌러야 실행됩니다. 에이전트가 작업 중이면 pull · 브랜치 전환 전에 경고합니다. `reset` · `clean` · `--force` · `--no-verify`는 막혀 있습니다.
+- **git 화면**: 브랜치 그래프 · 커밋 상세 · 파일 히스토리 · blame, 파일 · 덩어리 단위 스테이징, 커밋 · amend, 브랜치 · 태그, fetch · pull(`--ff-only`) · push, merge · rebase · cherry-pick · revert · stash · reset, 충돌 덩어리 고르기, 커밋마다 고친 세션 배지. git 쓰기는 사람이 버튼을 눌러야 실행됩니다. 에이전트가 작업 중이면 pull · 브랜치 전환 전에 경고합니다. `clean` · `--force` · `--no-verify` · 대화형 rebase는 막혀 있고, `reset --hard`는 두 번 묻습니다. diff의 `.env` 값은 가려집니다.
 - **승인함**: 대시보드에서 Claude Code의 도구 승인 요청에 [허용] · [거부]로 답합니다. 답은 Claude Code 권한 훅으로 전합니다.
 - **동시 편집 경고**: 두 세션이 같은 파일을 고치면 페인 머리 · 대시보드 · 알림 센터에 알립니다.
 - **관제**: 멈춘 세션 배지, 자리 비운 사이 요약, 하루 비용 예산 알림(기본 꺼짐).
