@@ -364,6 +364,19 @@ export const [focusRequest, setFocusRequest] = createSignal<{ session: string } 
 
 /** 세션 상세 열기 요청 (U63) — 상세 팝업의 열림은 컨트롤 센터의 지역 상태라, 밖(복구 창)에서는
  *  요청만 남기고 그 탭이 이펙트로 받는다. focusRequest와 같은 꼴 — 받은 쪽이 비운다 */
+/** 대화 초안 요청 (0.6 §13-1) — 밖(동시 편집 경고)에서 '이 세션에게 ask'를 채워 대화 탭을 연다.
+ *  보내지는 않는다 — 사람이 고치고 Enter를 누른다. 받은 대화 탭이 비운다 */
+export const [draftRequest, setDraftRequest] = createSignal<
+  { session: string; type: "ask" | "handoff" | "report" | "review" | "escalate"; text: string } | undefined
+>(undefined);
+export function openDraft(workspaceId: string, session: string, text: string): void {
+  if (!setOverlay(undefined)) return;
+  backend.openWorkspace(workspaceId);
+  setView({ kind: "workspace", id: workspaceId });
+  setDraftRequest({ session, type: "ask", text });
+  openPanel("conversation");
+}
+
 export const [detailRequest, setDetailRequest] = createSignal<{ session: string } | undefined>(undefined);
 export function openSessionDetail(workspaceId: string, sessionId: string): boolean {
   if (!jumpToSession(workspaceId, sessionId)) return false;
