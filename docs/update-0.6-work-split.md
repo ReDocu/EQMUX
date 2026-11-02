@@ -127,7 +127,7 @@
 - **C1 `edit-conflict` 이벤트**(W2 → W7), `emit_to("main")`: `{ workspace: string, path: string, sessions: string[], ts: number }`.
 - **C2 AgentStateEvt 확장**(W2 → W7): `pendingTool?: { tool: string, input: string, kind: "tool" | "question" | "plan" }`, `stalled?: boolean`. 커맨드 `approval_respond({ session, allow })` → `{ ok: boolean, reason?: string }`.
 - **C3 진단 커맨드**(W2 → W7): `diag_foreign_tools()` → `{ tool: string, file: string, kind: "block" | "hook" | "sentence", count: number }[]`, `diag_bundle()` → `string`(가린 뒤).
-- **C4 `file_touch`**(W1 → W2): `store::touch_file(ws, session, path, tool, ts)`, `store::recent_touches(ws, since_ms)`.
+- **C4 `file_touch`**(W1 → W2, 완료 `2669083`): 쓰기 `Store::touch_file(ws, session, path, tool, ts)`(writer 스레드 배치), 읽기 `store::recent_touches(root, ws, since_ms)` · `store::touches_for(root, ws, session, since_ms)`. DB가 워크스페이스마다 따로라 workspace 열은 없다.
 - **C5 역할 frontmatter `model:`**(W4 쓴다 → W2 읽는다). 값이 없으면 키를 쓰지 않는다.
 - **C6 역할 frontmatter `remind:` · `memory:`**(W4 쓴다 → W3 읽는다). `remind:`는 한 줄 문장, 꺼짐이면 키 없음. `memory:`는 워크스페이스 기준 상대 경로 `.eqmux/memory/<persona id>.md`.
 - **C7 `.eqmux/commands.json`**(W6 정한다 → 2라운드 §13-3).
@@ -137,3 +137,6 @@
 
 | 날짜 | 스트림 | 항목 | 커밋 |
 |---|---|---|---|
+| 11-02 | W0 | 분담 문서 | `c17e686` |
+| 11-02 | W1 | 스키마 이전 틀 + `file_touch`(C4) | `2669083` |
+| 11-02 | W0 | CI · 서명 정책 · SECURITY · CONTRIBUTING · 이슈 템플릿 · README · 다른 도구 문서 | `46b8d01` |
