@@ -21,7 +21,9 @@ export type View =
   | { kind: "missions"; wsId: string } // 임무 배정 (화면 #8)
   // Git Diff (AXXhV) — wsId 없으면 활성 워크스페이스, ✕/Esc는 back으로 복귀 (U11).
   // commit이 있으면 부모 커밋 ↔ 이 커밋 비교(UI 리파인 §git), 없으면 HEAD ↔ 워크트리
-  | { kind: "gitdiff"; wsId?: string; back?: View; commit?: { hash: string; message: string } };
+  | { kind: "gitdiff"; wsId?: string; back?: View; commit?: { hash: string; message: string } }
+  // git 화면 (§17 W5) — 그래프 · 브랜치 사이드바 · 상세 · 작업 트리. file이 있으면 그 파일의 히스토리 · blame으로 연다
+  | { kind: "git"; wsId?: string; back?: View; file?: string };
 // 워크스페이스 연결·역할 라이브러리·설정은 View가 아니라 팝업(OverlayKind)이다 — 아래 overlay 참조
 
 /** 전체 화면 팝업 (M25 확장) — NAV 도구 4종(임무·워크스페이스·역할·설정)이 전부 팝업이다.

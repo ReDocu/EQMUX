@@ -31,3 +31,9 @@ test("커밋 주소 — GitHub·GitLab·Bitbucket만", () => {
   expect(commitWebUrl("git@github.com:a/b.git", "not-a-hash")).toBeUndefined();
   expect(commitWebUrl(undefined, "a1b2c3d")).toBeUndefined();
 });
+
+test("명령 문자열 — 빈칸 · 따옴표가 든 인자만 감싼다 (Rust command_line과 같다)", async () => {
+  const { commandLine } = await import("./git");
+  expect(commandLine(["pull", "--ff-only"])).toBe("git pull --ff-only");
+  expect(commandLine(["commit", "-m", '고침 "a"'])).toBe('git commit -m "고침 \\"a\\""');
+});

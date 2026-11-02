@@ -1,6 +1,8 @@
-// git 패널 브리지 (PRD H) — 활성 워크스페이스의 저장소 개요를 읽기 전용으로 실측한다.
-// 쓰기 작업(pull·push·commit)은 제공하지 않는다 — 실행은 터미널 페인에서 사람이 한다 (G7과 같은 원칙).
+// git 패널 · git 화면 브리지 (PRD H · §17). 읽기는 실측 그대로다.
+// 쓰기(§17 G7′)는 gitRun 하나로만 간다 — 사람이 git 화면 · 패널에서 누를 때만 부르고, Rust가
+// 허용 목록(gitx.rs check_args)으로 한 번 더 거른다. 에이전트 · 메시지 · 자동 규칙은 부르지 않는다.
 import { invoke } from "@tauri-apps/api/core";
+import { createSignal } from "solid-js";
 import { t } from "../i18n";
 import { MOCK_WORKTREES } from "./mock";
 import { isTauri } from "./pty";
@@ -138,4 +140,168 @@ export function commitWebUrl(remote: string | undefined, hash: string): string |
   if (host === "github.com" || host.includes("gitlab")) return `${base}/commit/${hash}`;
   if (host === "bitbucket.org") return `${base}/commits/${hash}`;
   return undefined;
+}
+
+// ── §17 git 화면 — 1단계 읽기 ──
+
+export interface LogCommit {
+  hash: string;
+  parents: string[];
+  author: string;
+  time: number; // 유닉스 초
+  subject: string;
+  refs: string[]; // `HEAD -> main` · `origin/main` · `tag: v1`
+}
+
+export const LOG_PAGE = 300; // §17-5 — 처음 300개, 스크롤하면 더
+
+export interface LogQuery {
+  all: boolean;
+  grep?: string;
+  author?: string;
+  file?: string; // 파일 히스토리 — 현재 브랜치, --follow
+}
+
+export async function gitLog(wsPath: string, skip: number, q: LogQuery): Promise<LogCommit[] | string> {
+  if (!isTauri()) return t("브라우저 dev — 실측 없음");
+  return invoke<LogCommit[]>("git_log", {
+    wsPath,
+    skip,
+    limit: LOG_PAGE,
+    all: q.all,
+    grep: q.grep || null,
+    author: q.author || null,
+    file: q.file || null,
+  }).catch((e) => String(e));
+}
+
+export interface BranchRef {
+  name: string;
+  hash: string;
+  upstream: string;
+  ahead: number;
+  behind: number;
+  gone: boolean;
+  head: boolean;
+}
+
+export interface NamedRef {
+  name: string;
+  hash: string;
+}
+
+export interface GitRefs {
+  local: BranchRef[];
+  remote: NamedRef[];
+  tags: NamedRef[];
+  stashes: NamedRef[];
+}
+
+export async function gitRefs(wsPath: string): Promise<GitRefs | undefined> {
+  if (!isTauri()) return undefined;
+  return invoke<GitRefs>("git_refs", { wsPath }).catch(() => undefined);
+}
+
+export interface CommitDetail {
+  hash: string;
+  parents: string[];
+  author: string;
+  email: string;
+  authorTime: number;
+  committer: string;
+  commitTime: number;
+  body: string;
+}
+
+export async function gitCommitDetail(wsPath: string, hash: string): Promise<CommitDetail | undefined> {
+  if (!isTauri()) return undefined;
+  return invoke<CommitDetail>("git_commit_detail", { wsPath, hash }).catch(() => undefined);
+}
+
+export interface BlameLine {
+  hash: string;
+  author: string;
+  time: number;
+  text: string;
+}
+
+export async function gitBlame(wsPath: string, file: string): Promise<BlameLine[] | string> {
+  if (!isTauri()) return t("브라우저 dev — 실측 없음");
+  return invoke<BlameLine[]>("git_blame", { wsPath, file }).catch((e) => String(e));
+}
+
+// ── §17 2단계 — 작업 트리 · 쓰기 ──
+
+export interface StatusFile {
+  path: string;
+  from: string | null;
+  x: string; // 인덱스 쪽 — " "면 스테이지된 것 없음
+  y: string; // 작업 트리 쪽 — "?"는 추적 안 됨
+}
+
+export interface WorkStatus {
+  files: StatusFile[];
+  headPushed: boolean; // amend가 푸시한 커밋을 바꾼다
+  hasHead: boolean;
+}
+
+export async function gitStatus(wsPath: string): Promise<WorkStatus | undefined> {
+  if (!isTauri()) return undefined;
+  return invoke<WorkStatus>("git_status", { wsPath }).catch(() => undefined);
+}
+
+export async function gitFilePatch(wsPath: string, file: string, staged: boolean): Promise<string> {
+  if (!isTauri()) return "";
+  return invoke<string>("git_file_patch", { wsPath, file, staged }).catch(() => "");
+}
+
+export interface RunResult {
+  ok: boolean;
+  command: string;
+  output: string;
+  auth: boolean; // 자격 증명 프롬프트가 필요했다 — "터미널에서 한 번 로그인" 안내
+}
+
+export interface RunLogEntry extends RunResult {
+  ts: number;
+  wsId: string;
+}
+
+/** 실행 로그 (§17-4) — 이번 실행 동안 앱이 돌린 git 쓰기. 로그 패널(event 테이블)에도 한 줄씩 남긴다 */
+const [runLog, setRunLog] = createSignal<RunLogEntry[]>([]);
+export { runLog };
+
+function record(wsId: string, r: RunResult): RunResult {
+  setRunLog((l) => [{ ...r, ts: Date.now(), wsId }, ...l].slice(0, 200));
+  const head = r.output.split("\n").find((x) => x.trim()) ?? "";
+  void invoke("events_log", {
+    workspace: wsId,
+    session: null,
+    kind: "git",
+    message: `${r.ok ? "" : "실패 · "}${r.command}${head ? ` — ${head}` : ""}`,
+  }).catch(() => {});
+  return r;
+}
+
+/** 사람이 보는 명령 문자열 — Rust command_line과 같은 규칙 ([명령 복사]용, 실행 전에 필요하다) */
+export function commandLine(args: string[]): string {
+  return ["git", ...args.map((a) => (a === "" || /[\s"'&|<>;]/.test(a) ? `"${a.replace(/"/g, '\\"')}"` : a))].join(" ");
+}
+
+/** G7′ 쓰기 — 허용 목록 밖이면 Rust가 실행하지 않고 거부한다. 결과는 실행 로그에 남는다 */
+export async function gitRun(wsId: string, wsPath: string, args: string[]): Promise<RunResult> {
+  if (!isTauri()) return { ok: false, command: commandLine(args), output: t("브라우저 dev — 실측 없음"), auth: false };
+  const r = await invoke<RunResult>("git_run", { wsPath, args }).catch(
+    (e): RunResult => ({ ok: false, command: commandLine(args), output: String(e), auth: false }),
+  );
+  return record(wsId, r);
+}
+
+/** 덩어리 스테이징 — reverse = 스테이지 내리기. 작업 트리는 건드리지 않는다 */
+export async function gitApplyPatch(wsId: string, wsPath: string, patch: string, reverse: boolean): Promise<RunResult> {
+  if (!isTauri()) return { ok: false, command: "git apply --cached", output: t("브라우저 dev — 실측 없음"), auth: false };
+  const r = await invoke<RunResult>("git_apply_patch", { wsPath, patch, reverse }).catch(
+    (e): RunResult => ({ ok: false, command: "git apply --cached", output: String(e), auth: false }),
+  );
+  return record(wsId, r);
 }

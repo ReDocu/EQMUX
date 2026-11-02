@@ -25,6 +25,7 @@ mod clip;
 mod diag;
 mod diff;
 mod fsx;
+mod gitx; // §17 git 화면 (W5)
 pub(crate) mod ipc;
 mod job;
 #[cfg(target_os = "macos")]
@@ -3114,9 +3115,19 @@ pub fn run() {
             diff_file,
             commit_changed_files,
             commit_file_diff,
+            // §17 git 화면 (W5)
+            gitx::git_log,
+            gitx::git_refs,
+            gitx::git_commit_detail,
+            gitx::git_blame,
+            gitx::git_status,
+            gitx::git_file_patch,
+            gitx::git_run,
+            gitx::git_apply_patch,
+            gitx::git_path_status,
             shutdown_flush,
-            tray::window_close_to_tray,
             app_exit,
+            tray::window_close_to_tray,
             recovery::crash_recovery,
             agent_snapshot,
             layout_load,

@@ -1,11 +1,11 @@
 // git 패널 (PAlmZ) — 타이틀바 + 저장소·브랜치 툴바 + 커밋 그래프.
 // Tauri에서는 활성 워크스페이스의 저장소를 실측한다 (PRD H). 브랜치는 표시만 한다.
-// pull·push·commit 버튼(UI 리파인 §git)은 실행하지 않는다 — 명령을
-// 클립보드에 복사할 뿐, 실행은 터미널에서 사람이 한다 (G7 유지).
+// §17 G7′ — pull · push는 누르면 실행한다(허용 목록 · pull은 §4-1 작업 중 경고). commit은
+// git 화면(스테이징 · 메시지)을 연다. 버튼 우클릭 = [명령 복사] — 터미널에서 직접 칠 수도 있다.
 // UI 리파인 §git: 카드 스택 → 한 줄 툴바 · 밀도 높은 커밋 행(뱃지 복수 + 우측 메타) ·
 // 커밋 행 클릭 = 부모 커밋 ↔ 이 커밋 diff.
 import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
-import { commitWebUrl, gitOverview, remoteWebUrl } from "../backend/git";
+import { commandLine, commitWebUrl, gitOverview, gitRun, remoteWebUrl } from "../backend/git";
 import type { GitOverview } from "../backend/git";
 import { GIT_STATE, backend } from "../backend/mock";
 import { clipWriteText, isTauri, revealPath } from "../backend/pty";
@@ -13,7 +13,9 @@ import { openLink } from "../backend/browser";
 import { t, tf } from "../i18n";
 import { scopeWorkspace, setPanelNote, setPanelOpen, setView, tick, view } from "../state";
 import { Icon } from "./icons";
-import { ContextMenu, Eyebrow, notify } from "./ui";
+import { ConfirmDialog, ContextMenu, Eyebrow, notify } from "./ui";
+import { sessionDisplayName } from "../types";
+import { guardSessions, guardWorsened, workGuard } from "../screens/gitWrite";
 
 interface CommitRow {
   hash: string;
@@ -144,14 +146,54 @@ export function GitPanelTab() {
     setPanelOpen(false);
   };
 
-  // ── pull·push·commit 버튼 (UI 리파인 §git) — 실행하지 않는다. 명령 복사 + 터미널 안내 (G7 유지) ──
+  /** git 화면 열기 (§17) — 진입 시점 뷰를 기억해 ✕/Esc가 여기로 돌아온다 (diff와 같은 규칙) */
+  const openGitScreen = () => {
+    const cur = view();
+    setView({ kind: "git", wsId: ws()?.id, back: cur.kind === "git" ? cur.back : cur });
+    setPanelOpen(false);
+  };
+
+  // ── pull · push 버튼 (§17 G7′) — 누르면 실행. pull은 §4-1 작업 중 경고를 거친다 ──
   const [actNote, setActNote] = createSignal<string | undefined>(undefined);
-  let actTimer: ReturnType<typeof setTimeout> | undefined;
-  const copyCmd = (cmd: string) => {
-    void clipWriteText(cmd);
-    clearTimeout(actTimer);
-    setActNote(tf("`{cmd}` 복사됨 — 실행은 터미널에서", { cmd }));
-    actTimer = setTimeout(() => setActNote(undefined), 3000);
+  const [running, setRunning] = createSignal(false);
+  const [guardAsk, setGuardAsk] = createSignal<{ level: "busy" | "waiting"; names: string[] } | undefined>();
+  const runCmd = async (args: string[]) => {
+    const w = ws();
+    if (!w || running()) return;
+    setRunning(true);
+    setActNote(tf("실행 중 — {cmd}", { cmd: commandLine(args) }));
+    const r = await gitRun(w.id, w.path, args);
+    setRunning(false);
+    setActNote(
+      r.ok
+        ? tf("{cmd} 완료", { cmd: r.command })
+        : r.auth
+          ? t("로그인이 필요합니다 — 터미널에서 `git fetch`를 한 번 실행해 로그인하세요")
+          : `${r.command} — ${r.output.split("\n").find((l) => l.trim()) ?? t("실패")}`,
+    );
+    void load();
+  };
+  const guardNames = () => {
+    const w = ws();
+    if (!w) return [];
+    return guardSessions(backend.listSessions(), w.id).map(
+      (s) =>
+        `${sessionDisplayName(s, backend.listPersonas().find((p) => p.id === s.personaId)?.name ?? s.id)} · ${t(s.status === "waiting" ? "승인 대기" : "작업 중")}`,
+    );
+  };
+  const PULL = ["pull", "--ff-only"];
+  const pull = () => {
+    const w = ws();
+    if (!w) return;
+    const g = workGuard(backend.listSessions(), w.id);
+    if (g.level === "none") return void runCmd(PULL);
+    setGuardAsk({ level: g.level, names: guardNames() });
+  };
+  /** 버튼 우클릭 = [명령 복사] (§17-4) */
+  const [copyMenuAt, setCopyMenu] = createSignal<{ x: number; y: number; cmd: string } | undefined>();
+  const copyMenu = (args: string[]) => (e: MouseEvent) => {
+    e.preventDefault();
+    setCopyMenu({ x: e.clientX, y: e.clientY, cmd: commandLine(args) });
   };
 
   // ── 저장소 드롭다운 (UI 리파인 §git) — 워크스페이스 전환 = 패널 스코프 전환 ──
@@ -244,17 +286,25 @@ export function GitPanelTab() {
         </span>
         <span style={{ flex: 1 }} />
         {/* diff는 목록 아래 "변경 N건 diff" 막대가 맡는다 (0.5 시안) — 툴바에서 빼야 한 줄에 들어간다 */}
-        <button class="gitp-act mono" title={t("`git pull` 복사 — 실행은 터미널에서")} onClick={() => copyCmd("git pull")}>
+        <button
+          class="gitp-act mono"
+          disabled={!ws() || running()}
+          title={t("git pull --ff-only 실행 — 우클릭: 명령 복사")}
+          onClick={pull}
+          onContextMenu={copyMenu(PULL)}
+        >
           ↓ pull
+        </button>
+        <button class="gitp-act mono" disabled={!ws()} title={t("git 화면에서 스테이지하고 커밋합니다")} onClick={openGitScreen}>
+          commit
         </button>
         <button
           class="gitp-act mono"
-          title={t("`git add -A && git commit` 복사 — 실행은 터미널에서")}
-          onClick={() => copyCmd("git add -A && git commit")}
+          disabled={!ws() || running()}
+          title={t("git push 실행 — 우클릭: 명령 복사")}
+          onClick={() => void runCmd(["push"])}
+          onContextMenu={copyMenu(["push"])}
         >
-          commit
-        </button>
-        <button class="gitp-act mono" title={t("`git push` 복사 — 실행은 터미널에서")} onClick={() => copyCmd("git push")}>
           ↑ push
           <Show when={g().ahead > 0}>
             <span class="n">{g().ahead}</span>
@@ -277,7 +327,7 @@ export function GitPanelTab() {
         </div>
       </div>
 
-      {/* 명령 복사 안내 — 한 줄 */}
+      {/* 실행 결과 — 한 줄 */}
       <Show when={actNote()}>
         <div class="mono muted" style={{ "font-size": "10px" }}>
           {actNote()}
@@ -334,8 +384,45 @@ export function GitPanelTab() {
         <Icon name="arrow-right" size={12} />
       </button>
 
-      {/* 정책 고지 1회 — G7. 버튼은 복사만 한다는 것을 여기서 못박는다 */}
-      <div class="gitp-foot mono muted">{t("pull · push · commit 버튼은 명령 복사만 — 실행은 터미널에서")}</div>
+      <button class="gitp-diff-bar" disabled={!ws()} onClick={openGitScreen}>
+        <span>{t("git 화면 열기 — 그래프 · 브랜치 · 스테이징")}</span>
+        <Icon name="arrow-right" size={12} />
+      </button>
+
+      {/* 정책 고지 1회 — G7′. 사람이 누를 때만 실행한다 */}
+      <div class="gitp-foot mono muted">{t("누를 때만 실행 · pull은 --ff-only · 우클릭하면 명령 복사")}</div>
+
+      <Show when={guardAsk()}>
+        {(a) => (
+          <ConfirmDialog
+            title={a().level === "busy" ? t("에이전트가 작업 중입니다") : t("승인을 기다리는 에이전트가 있습니다")}
+            body={<p>{t("이 폴더의 모든 세션 발밑 파일이 바뀝니다.")}</p>}
+            info={[commandLine(PULL), ...a().names]}
+            danger={a().level === "busy"}
+            confirmLabel={t("그래도 실행")}
+            onCancel={() => setGuardAsk(undefined)}
+            onConfirm={() => {
+              const before = a().level;
+              setGuardAsk(undefined);
+              const w = ws();
+              const now = w ? workGuard(backend.listSessions(), w.id) : undefined;
+              // 확인창이 떠 있는 사이 더 나빠졌으면 다시 묻는다 (§4-1 경쟁 조건)
+              if (now && now.level !== "none" && guardWorsened(before, now.level)) setGuardAsk({ level: now.level, names: guardNames() });
+              else void runCmd(PULL);
+            }}
+          />
+        )}
+      </Show>
+      <Show when={copyMenuAt()}>
+        {(m) => (
+          <ContextMenu
+            x={m().x}
+            y={m().y}
+            onClose={() => setCopyMenu(undefined)}
+            groups={[[{ label: tf("명령 복사 — {cmd}", { cmd: m().cmd }), action: () => void clipWriteText(m().cmd) }]]}
+          />
+        )}
+      </Show>
 
       <Show when={cmMenu()}>
         {(m) => (
@@ -358,9 +445,10 @@ export function GitPanelTab() {
                 // 커밋 기준 diff (UI 리파인 §git) — 행 클릭과 같은 동작. B11의 "워크트리 비교만"은 여기서 풀렸다
                 { label: t("부모 커밋과 비교 (diff)"), action: () => openCommitDiff(m().c) },
                 { label: t("워크트리 diff 열기"), action: openDiff },
+                { label: t("git 화면 열기"), action: openGitScreen },
               ],
-              // 메뉴에 없는 것 = 정책상 없는 것 (G7)
-              [{ label: t("checkout · revert는 두지 않는다 — 터미널에서"), note: true }],
+              // 메뉴에 없는 것 = 아직 없는 것 — 브랜치 · 태그는 git 화면, 이력 조작은 §17 3단계
+              [{ label: t("브랜치 · 태그는 git 화면 · cherry-pick · revert는 다음 단계"), note: true }],
             ]}
           />
         )}

@@ -314,7 +314,7 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
     const v = view();
     const back = v.kind === "gitdiff" ? v.back : undefined;
     setView(back ?? { kind: "control" });
-    if (back) openPanel("git");
+    if (back && back.kind !== "git") openPanel("git"); // git 화면에서 왔으면 패널 없이 그 화면으로
   };
 
   // 키보드 (U10·U11·U66) — n/p 변경 점프 · Alt+↑↓·[ ] 파일 이동 · Esc 닫기 (diffKeys.ts)

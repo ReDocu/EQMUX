@@ -54,6 +54,7 @@ import { Missions } from "./screens/Missions";
 // 첫 화면 밖 화면은 나눠 싣는다 (최적화 D6) — 설정·역할 라이브러리·diff 편집기·캐스팅 등은
 // 열 때 처음 받는다. 관제·워크스페이스·대화는 첫 화면이라 그대로 둔다
 const GitDiffEditor = lazy(() => import("./screens/GitDiffEditor").then((m) => ({ default: m.GitDiffEditor })));
+const GitScreen = lazy(() => import("./screens/GitScreen").then((m) => ({ default: m.GitScreen }))); // §17 W5
 const RoleLibrary = lazy(() => import("./screens/RoleLibrary").then((m) => ({ default: m.RoleLibrary })));
 const Settings = lazy(() => import("./screens/Settings").then((m) => ({ default: m.Settings })));
 const TeamCasting = lazy(() => import("./screens/TeamCasting").then((m) => ({ default: m.TeamCasting })));
@@ -270,6 +271,12 @@ export function App() {
             </Match>
             <Match when={v().kind === "missions"}>
               <Missions wsId={(v() as { kind: "missions"; wsId: string }).wsId} />
+            </Match>
+            <Match when={v().kind === "git"}>
+              <GitScreen
+                wsId={(v() as Extract<View, { kind: "git" }>).wsId}
+                file={(v() as Extract<View, { kind: "git" }>).file}
+              />
             </Match>
             <Match when={v().kind === "gitdiff"}>
               <GitDiffEditor

@@ -6601,3 +6601,375 @@ label.inbox-pop-row {
 .conv-delivery.dropped {
   color: var(--eq-red);
 }
+
+/* 0.6 W5: git 화면 (§17 — GitScreen.tsx) · 패널 실행 버튼 ───────────────────────── */
+.gx {
+  font-size: 12px;
+  overflow: hidden;
+}
+.gx-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--eq-line);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+.gx-toolbar .btn .n {
+  margin-left: 4px;
+  font-size: 10px;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: var(--eq-amber-soft);
+  color: var(--eq-amber);
+}
+.gx-toolbar .btn.on {
+  color: var(--eq-blue);
+  border-color: var(--eq-blue-mid);
+}
+.gx-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 800;
+}
+.gx-head {
+  font-size: 11px;
+}
+.gx-sync {
+  font-size: 11px;
+  color: var(--eq-amber);
+}
+.gx-sep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--eq-line);
+  margin: 0 4px;
+}
+.gx-mini {
+  padding: 0 5px;
+  min-height: 0;
+  font-size: 11px;
+}
+.gx-search {
+  width: 200px;
+}
+.gx-qkind {
+  font-size: 11px;
+}
+.gx-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  font-size: 11px;
+  background: var(--eq-blue-soft);
+  border-bottom: 1px solid var(--eq-line);
+}
+.gx-banner.warn {
+  background: var(--eq-amber-soft);
+}
+.gx-banner.warn span {
+  flex: 1;
+}
+.gx-body {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr) 280px;
+  flex: 1;
+  min-height: 0;
+}
+.gx-side,
+.gx-detail {
+  overflow: auto;
+  padding: 6px 8px;
+  border-right: 1px solid var(--eq-line);
+}
+.gx-detail {
+  border-right: 0;
+  border-left: 1px solid var(--eq-line);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.gx-sec {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: space-between;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--eq-muted);
+  text-transform: uppercase;
+  padding: 6px 2px 3px;
+  cursor: default;
+}
+.gx-group summary {
+  cursor: pointer;
+  justify-content: flex-start;
+}
+.gx-ref {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  padding: 2px 4px;
+  border-radius: var(--eq-r-sm);
+  cursor: pointer;
+}
+.gx-ref:hover,
+.gx-row:hover,
+.gx-wfile:hover {
+  background: var(--eq-surface-2);
+}
+.gx-ref.on,
+.gx-row.on,
+.gx-wfile.on {
+  background: var(--eq-blue-soft);
+}
+.gx-ref.head .gx-refname {
+  font-weight: 800;
+}
+.gx-dot {
+  width: 9px;
+  color: var(--eq-blue);
+}
+.gx-refname,
+.gx-wpath {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gx-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.gx-filebar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  font-size: 11px;
+  border-bottom: 1px solid var(--eq-line);
+}
+.gx-filebar span {
+  flex: 1;
+}
+.gx-filebar .btn.on {
+  color: var(--eq-blue);
+}
+.gx-graph,
+.gx-blame {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+}
+.gx-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.gx-svg {
+  flex-shrink: 0;
+  margin-left: 4px;
+}
+.gx-subject {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.gx-meta {
+  font-size: 10.5px;
+  flex-shrink: 0;
+  color: var(--eq-dim);
+}
+.gitp-ref.tag {
+  color: var(--eq-amber);
+  border-color: var(--eq-amber-soft);
+  background: var(--eq-amber-soft);
+}
+.gitp-ref.headref {
+  color: var(--eq-green);
+  border-color: var(--eq-green-soft);
+  background: var(--eq-green-soft);
+}
+.gx-empty {
+  padding: 10px;
+  font-size: 11px;
+}
+.gx-bl {
+  display: flex;
+  font-size: 11px;
+  line-height: 18px;
+}
+.gx-bl-who {
+  width: 230px;
+  flex-shrink: 0;
+  padding: 0 6px;
+  color: var(--eq-dim);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  border-top: 1px solid var(--eq-line);
+}
+.gx-bl.cont .gx-bl-who {
+  color: transparent;
+  border-top-color: transparent;
+}
+.gx-bl-no {
+  width: 40px;
+  flex-shrink: 0;
+  text-align: right;
+  padding-right: 8px;
+  color: var(--eq-muted);
+}
+.gx-bl-tx {
+  white-space: pre;
+}
+.gx-d-hash {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 700;
+}
+.gx-d-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.gx-d-meta {
+  font-size: 10.5px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.gx-dfile,
+.gx-wfile {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  padding: 1px 4px;
+  border-radius: var(--eq-r-sm);
+}
+.gx-dfile .gx-wpath {
+  cursor: pointer;
+}
+.gx-wfile {
+  cursor: pointer;
+}
+.gx-st {
+  width: 12px;
+  font-weight: 700;
+  color: var(--eq-amber);
+}
+.gx-work {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1.4fr 260px;
+  height: 210px;
+  flex-shrink: 0;
+  border-top: 1px solid var(--eq-line);
+}
+.gx-wcol {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  padding: 4px 8px;
+  border-right: 1px solid var(--eq-line);
+}
+.gx-wcol:last-child {
+  border-right: 0;
+}
+.gx-wlist {
+  flex: 1;
+  overflow: auto;
+}
+.gx-hunk {
+  border: 1px solid var(--eq-line);
+  border-radius: var(--eq-r-sm);
+  margin-bottom: 6px;
+  font-size: 10.5px;
+}
+.gx-hunk-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 2px 6px;
+  background: var(--eq-surface-2);
+}
+.gx-hunk pre {
+  margin: 0;
+  padding: 2px 6px;
+  overflow-x: auto;
+}
+.gx-hunk .add {
+  color: var(--eq-green);
+}
+.gx-hunk .del {
+  color: var(--eq-red);
+}
+.gx-commit {
+  gap: 6px;
+}
+.gx-commit textarea {
+  flex: 1;
+  min-height: 60px;
+  resize: none;
+  font-size: 11px;
+}
+.gx-check {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+}
+.gx-warn {
+  color: var(--eq-red);
+  font-size: 11px;
+}
+.gx-foot {
+  font-size: 10px;
+}
+.gx-runlog {
+  max-height: 180px;
+  overflow: auto;
+  padding: 6px 12px;
+  font-size: 11px;
+  border-top: 1px solid var(--eq-line);
+  flex-shrink: 0;
+}
+.gx-runrow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+}
+.gx-runrow.fail .gx-runcmd {
+  color: var(--eq-red);
+}
+.gx-runrow pre {
+  flex-basis: 100%;
+  margin: 0 0 4px;
+  color: var(--eq-dim);
+  white-space: pre-wrap;
+}
+.gx-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+  font-size: 11px;
+}

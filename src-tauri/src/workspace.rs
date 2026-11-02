@@ -180,10 +180,29 @@ fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> std::thread::JoinHandle<V
 const POLL: Duration = Duration::from_millis(20);
 
 fn git_within(args: &[&str], cwd: &str, timeout: Duration) -> Result<String, String> {
+    let o = run_git(args, cwd, timeout, &[])?;
+    if o.ok {
+        Ok(o.stdout.trim().to_string())
+    } else {
+        Err(o.stderr.trim().to_string())
+    }
+}
+
+/// git 한 번의 원래 결과 — 앞 공백을 지우면 안 되는 출력(`status --porcelain`의 ` M`)과
+/// 성공해도 stderr에 남는 훅 출력을 그대로 받는다 (§17 git 화면)
+pub struct GitOut {
+    pub ok: bool,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+/// 실행 실패(띄우기 실패 · 상한 초과)만 Err — git이 0이 아닌 코드로 끝난 것은 `ok: false`
+pub fn run_git(args: &[&str], cwd: &str, timeout: Duration, env: &[(&str, &str)]) -> Result<GitOut, String> {
     let mut cmd = Command::new("git");
     cmd.args(["-c", "core.quotepath=off"])
         .args(args)
         .current_dir(cwd)
+        .envs(env.iter().copied())
         // output()의 기본값과 같게 stdin을 막는다 — 상속하면 자격증명 프롬프트가 즉시
         // 실패하지 않고 입력을 기다리며 멈춘다 (상한이 있어도 그 시간을 통째로 쓴다)
         .stdin(Stdio::null())
@@ -218,11 +237,11 @@ fn git_within(args: &[&str], cwd: &str, timeout: Duration) -> Result<String, Str
     };
     let stdout = out_t.join().unwrap_or_default();
     let stderr = err_t.join().unwrap_or_default();
-    if status.success() {
-        Ok(String::from_utf8_lossy(&stdout).trim().to_string())
-    } else {
-        Err(String::from_utf8_lossy(&stderr).trim().to_string())
-    }
+    Ok(GitOut {
+        ok: status.success(),
+        stdout: String::from_utf8_lossy(&stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&stderr).into_owned(),
+    })
 }
 
 pub fn is_repo(path: &str) -> bool {
@@ -318,7 +337,7 @@ pub fn inspect(entry: &WsEntry) -> WsInfo {
     WsInfo { entry: e, exists, is_repo: repo }
 }
 
-// ── git 패널 실데이터 (PRD H) — 읽기 전용 관측. 쓰기 작업(pull·push·commit)은 제공하지 않는다 ──
+// ── git 패널 실데이터 (PRD H) — 읽기 전용 관측. 쓰기는 gitx.rs (§17 G7′ — git 화면에서 사람이 누를 때만) ──
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
