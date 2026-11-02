@@ -14,6 +14,8 @@ import { isServerTermId, startPortWatch } from "./backend/ports";
 import { startRecapUpdates } from "./backend/recap";
 import { ensurePtyListeners, isTauri, listAlivePty, setPtyExitHook } from "./backend/pty";
 import { crashOpen, crashReport, loadCrashRecovery, setCrashOpen } from "./backend/recovery";
+import { loadSettings } from "./backend/settings";
+import { FirstRunNotice, firstRunPending, startForeignCheck } from "./components/FirstRunNotice";
 import { performShutdown } from "./backend/shutdown";
 import { startTeamSync } from "./backend/team";
 import { startFileWatch } from "./backend/watch";
@@ -137,6 +139,11 @@ export function App() {
   // 보고는 recovery.ts가 들고 있다 — 닫아도 알림 센터에서 다시 연다 (U63)
   onMount(() => void loadCrashRecovery());
 
+  // 첫 실행 고지 (§10) — 저장본을 읽은 뒤에만 판정한다(로드 전 기본값은 '안 봤음'이라 매번 번쩍인다).
+  // 다른 도구 전역 지시 점검(§14)은 기동 때 한 번 — 찾으면 알림 센터에 한 건
+  const [settingsReady, setSettingsReady] = createSignal(false);
+  onMount(() => void loadSettings().then(() => setSettingsReady(true)));
+  onMount(() => startForeignCheck());
   // 창 닫기 = 앱 완전 종료 (FR-C-60) — 실행 중 세션이 있으면 확인 다이얼로그 (FR-C-61),
   // 없으면 flush 시퀀스만 돌고 조용히 종료된다.
   // macOS ⌘Q·Dock '종료'도 같은 길로 온다 (B112) — 창 닫기를 거치지 않으므로 Rust(quit.rs)가
@@ -333,3 +340,7 @@ export function App() {
     </div>
   );
 }
+      {/* 복구 창이 먼저다 — 두 모달이 겹치지 않게 그것이 닫힌 뒤에 뜬다 */}
+      <Show when={settingsReady() && firstRunPending() && !crashOpen()}>
+        <FirstRunNotice />
+      </Show>

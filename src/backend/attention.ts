@@ -73,7 +73,8 @@ export interface NotifyItem {
   id: string;
   session: string;
   workspace: string;
-  kind: "waiting" | "dead" | "report" | "turn" | "message";
+  /** app = 세션이 아닌 앱 알림(다른 도구 전역 지시 등) · conflict = 같은 파일 동시 편집 (0.6 W7) */
+  kind: "waiting" | "dead" | "report" | "turn" | "message" | "app" | "conflict";
   title: string;
   body: string;
   ts: number;
@@ -81,6 +82,8 @@ export interface NotifyItem {
   os: boolean;
   /** 같은 세션 연속 알림을 묶은 수 (프런트가 센다) */
   count: number;
+  /** 누르면 할 일 — 있으면 세션 점프 대신 이것. 앱 알림은 session이 앱 키(`app:…`)라 점프할 곳이 없다 */
+  open?: () => void;
 }
 
 export const NOTIFY_MAX = 50;

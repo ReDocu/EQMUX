@@ -1,0 +1,192 @@
+// 첫 실행 고지 (0.6 §10 · §9-2 · §14) — 앱이 쓰는 곳 · 쓰지 않는 곳과 다른 도구 전역 지시 점검 결과.
+// 고치는 것이 없으므로 [되돌리기]는 없다. 같은 내용을 설정 › 정보에서 다시 본다(WhereCard).
+// 진단 정보 복사(§9-3)도 여기 둔다 — 설정 › 정보 카드와 README가 같은 자리를 가리킨다.
+import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { notifyLocal } from "../backend/attention";
+import { diagBundle, foreignSummary, foreignTools } from "../backend/diag";
+import type { ForeignFinding } from "../backend/diag";
+import { openLink } from "../backend/browser";
+import { clipWriteText, revealPath } from "../backend/pty";
+import { settings, updateSettings } from "../backend/settings";
+import { t, tf } from "../i18n";
+import { IS_MAC } from "../platform";
+import { pushLayer, setOverlay, setSettingsCat } from "../state";
+import { notify } from "./ui";
+
+const HOWTO_URL = "https://github.com/ReDocu/EQMUX/blob/main/docs/site/docs.md";
+const APP_DATA = IS_MAC ? "~/Library/Application Support/com.eqment.eqmux" : "%APPDATA%\\com.eqment.eqmux";
+
+/** 점검 결과 — 앱 수명 동안 한 번 잰다(기동 때). 설정 › 정보의 [다시 점검]이 다시 잰다 */
+const [findings, setFindings] = createSignal<ForeignFinding[] | undefined>(undefined);
+
+async function check(): Promise<ForeignFinding[]> {
+  const list = await foreignTools();
+  setFindings(list);
+  return list;
+}
+
+/** 기동 점검 (§14) — 찾으면 알림 센터에 한 건. 파일을 고치지 않는다. App이 1회 부른다 */
+export function startForeignCheck(): void {
+  void check().then((list) => {
+    for (const g of foreignSummary(list))
+      notifyLocal({
+        session: `app:foreign:${g.tool}`,
+        workspace: "",
+        kind: "app",
+        title: tf("{tool}의 전역 지시가 EQMUX 세션에도 실립니다", { tool: g.tool }),
+        body: t("세션 안내문으로 덮어 두었습니다 · 누르면 자세히"),
+        open: openWhere,
+      });
+  });
+}
+
+/** 설정 › 정보로 데려간다 — 알림 센터 항목이 누르면 오는 곳 */
+function openWhere(): void {
+  setSettingsCat("about");
+  setOverlay("settings");
+}
+
+const kindText = (k: ForeignFinding["kind"], n: number) =>
+  k === "block" ? t("자동 관리 구역") : k === "hook" ? tf("도구를 쓸 때마다 도는 훅 {n}개", { n }) : t("\"You are running inside …\" 문장");
+
+/** 앱이 쓰는 곳 · 쓰지 않는 곳 (§9-2와 같은 문구) */
+function WhereList() {
+  return (
+    <div class="frn-where">
+      <div class="frn-h">{t("쓰는 곳")}</div>
+      <div class="frn-row">
+        <span class="mono">{APP_DATA}</span>
+        <span class="muted">{t("설정 · 워크스페이스 목록 · 세션 기록 · 훅과 상태 줄 합성 설정(hook-settings.json)")}</span>
+      </div>
+      <div class="frn-row">
+        <span class="mono">~/.eqmux/logs</span>
+        <span class="muted">{t("진단 로그")}</span>
+      </div>
+      <div class="frn-row">
+        <span class="mono">{t("<저장소>/.eqmux/")}</span>
+        <span class="muted">{t("팀 편성 · 역할 파일 · 임무. 커밋하지 않으려면 .gitignore에 .eqmux/를 넣으세요")}</span>
+      </div>
+      <div class="frn-h">{t("쓰지 않는 곳")}</div>
+      <div class="frn-row">
+        <span class="mono">~/.claude · ~/.codex</span>
+        <span class="muted">{t("엔진 설정은 고치지 않습니다. 훅은 세션을 띄울 때 인자(--settings, Codex는 -c)로만 싣습니다")}</span>
+      </div>
+      <div class="frn-row">
+        <span class="mono">{t("저장소의 .claude/ · .codex/ · CLAUDE.md")}</span>
+        <span class="muted">{t("읽기만 합니다")}</span>
+      </div>
+      <div class="muted frn-net">{t("요청하지 않으면 다른 시스템으로 아무것도 보내지 않습니다. 진단 정보도 사람이 복사해 붙일 때만 나갑니다.")}</div>
+    </div>
+  );
+}
+
+/** 다른 도구 전역 지시 점검 결과 (§14) — 없으면 한 줄, 있으면 도구별로 파일과 종류 */
+function ForeignList() {
+  const reveal = async (file: string) => {
+    if (!(await revealPath(file))) notify(t("파일을 열 수 없습니다"));
+  };
+  return (
+    <div class="frn-foreign">
+      <div class="frn-h">{t("다른 도구의 전역 지시")}</div>
+      <Show when={findings()} fallback={<div class="muted">{t("점검 중…")}</div>}>
+        {(list) => (
+          <Show when={list().length > 0} fallback={<div class="muted">{t("찾지 못했습니다 — EQMUX 세션에 다른 도구의 지시가 실리지 않습니다")}</div>}>
+            <For each={foreignSummary(list())}>
+              {(g) => (
+                <div class="frn-tool">
+                  <div class="frn-tool-t">
+                    {tf("{tool}의 전역 지시가 EQMUX 세션에도 실립니다 — 세션 안내문으로 덮어 두었습니다", { tool: g.tool })}
+                  </div>
+                  <For each={list().filter((f) => f.tool === g.tool)}>
+                    {(f) => (
+                      <div class="frn-row">
+                        <button class="wizard-link mono" title={t("탐색기에서 열기")} onClick={() => void reveal(f.file)}>
+                          {f.file}
+                        </button>
+                        <span class="muted">{kindText(f.kind, f.count)}</span>
+                      </div>
+                    )}
+                  </For>
+                </div>
+              )}
+            </For>
+            <div class="muted frn-note">
+              {t("EQMUX는 이 파일을 고치지 않습니다. 그 도구가 다시 써 넣기 때문입니다.")}{" "}
+              <button class="wizard-link" onClick={() => openLink(HOWTO_URL, true)}>
+                {t("끄는 방법 →")}
+              </button>
+            </div>
+          </Show>
+        )}
+      </Show>
+    </div>
+  );
+}
+
+/** [진단 정보 복사] (§9-3) — 앱 버전 · OS · 엔진 CLI 버전 · 로그 꼬리. 가린 뒤의 글만 클립보드로 */
+export function DiagCopyButton() {
+  const [busy, setBusy] = createSignal(false);
+  const copy = async () => {
+    setBusy(true);
+    try {
+      clipWriteText(await diagBundle());
+      notify(t("진단 정보를 복사했습니다 — GitHub 이슈에 붙여 주세요"));
+    } catch (e) {
+      notify(tf("진단 정보를 만들지 못했습니다 · {err}", { err: String(e) }));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button class="btn" disabled={busy()} onClick={() => void copy()}>
+      {t(busy() ? "모으는 중…" : "진단 정보 복사")}
+    </button>
+  );
+}
+
+/** 설정 › 정보 카드 본문 — 고지와 같은 내용 + [다시 점검] · [진단 정보 복사] */
+export function WhereCard() {
+  onMount(() => findings() === undefined && void check());
+  return (
+    <div class="frn-card">
+      <WhereList />
+      <ForeignList />
+      <div class="frn-actions">
+        <button class="btn" onClick={() => (setFindings(undefined), void check())}>
+          {t("다시 점검")}
+        </button>
+        <DiagCopyButton />
+      </div>
+      <div class="muted frn-note">{t("진단 정보에서 경로의 사용자 이름과 토큰은 가립니다. 앱이 보내지 않습니다 — 복사해서 직접 붙입니다.")}</div>
+    </div>
+  );
+}
+
+/** 첫 실행 고지 — settings.firstRunSeen이 거짓일 때 한 번. [확인]이 저장한다 */
+export function FirstRunNotice() {
+  let box: HTMLDivElement | undefined;
+  let ok: HTMLButtonElement | undefined;
+  const close = () => updateSettings({ firstRunSeen: true });
+  onMount(() => {
+    onCleanup(pushLayer(close, () => box));
+    ok?.focus();
+  });
+  return (
+    <div class="overlay">
+      <div ref={box} class="dialog frn" role="dialog" aria-modal="true" aria-label={t("EQMUX가 쓰는 곳 · 쓰지 않는 곳")}>
+        <div class="eq-confirm-t">{t("EQMUX가 쓰는 곳 · 쓰지 않는 곳")}</div>
+        <div class="muted frn-sub">{t("처음 한 번만 보입니다. 설정 › 정보에서 다시 볼 수 있습니다.")}</div>
+        <WhereList />
+        <ForeignList />
+        <div class="eq-confirm-f">
+          <button ref={ok} class="btn primary" onClick={close}>
+            {t("확인")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** 지금 고지를 띄울까 — 설정 로드 뒤에만 의미가 있다(로드 전 기본값은 거짓) */
+export const firstRunPending = (): boolean => !settings().firstRunSeen;

@@ -21,6 +21,7 @@ import { defaultShell, setDefaultShell, setSettingsCat, settingsCat, SHELLS } fr
 import { t } from "../i18n";
 import { Segmented } from "../components/ui";
 import { Icon } from "../components/icons";
+import { WhereCard } from "../components/FirstRunNotice";
 import { IS_MAC } from "../platform";
 
 type Wired = {
@@ -363,10 +364,11 @@ function RowCopy(props: { k: string; d?: string }) {
 export function Settings() {
   // 음소거(FR-G-35)는 이 화면에 행이 없다 — 세션 상세에서만 켜고 끈다. 비교와 복원 양쪽에서
   // 빼야 '보이는 값이 전부 기본값이면 버튼이 꺼진다'가 성립하고, 복원이 보이지 않는 목록을
-  // 조용히 지우지 않는다 (B53)
-  const visible = (x: AppSettings) => JSON.stringify({ ...x, muted: [] });
+  // 조용히 지우지 않는다 (B53). 첫 실행 고지를 봤다는 표시도 같다 — 복원이 고지를 다시 띄우지 않게
+  const visible = (x: AppSettings) => JSON.stringify({ ...x, muted: [], firstRunSeen: false });
   const isDefault = () => visible(settings()) === visible(DEFAULT_SETTINGS);
-  const restoreDefaults = () => updateSettings({ ...DEFAULT_SETTINGS, muted: settings().muted });
+  const restoreDefaults = () =>
+    updateSettings({ ...DEFAULT_SETTINGS, muted: settings().muted, firstRunSeen: settings().firstRunSeen });
   // 카테고리는 앱 셸 상태다 — 벨의 [알림 설정]이 알림 탭을 지정해 연다 (U34)
   const cat = () => settingsCat() as Cat;
   const setCat = (c: Cat) => setSettingsCat(c);
@@ -485,6 +487,13 @@ export function Settings() {
           </For>
           <Show when={cat() === "runtime"}>
             <CliAgentsCard />
+          </Show>
+          {/* 첫 실행 고지 다시 보기 · 다른 도구 전역 지시 점검 · 진단 정보 복사 (0.6 §10 · §14 · §9-3) */}
+          <Show when={cat() === "about"}>
+            <div class="card set-card">
+              <div class="set-card-title">{t("앱이 쓰는 곳 · 진단")}</div>
+              <WhereCard />
+            </div>
           </Show>
         </div>
       </div>

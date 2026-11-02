@@ -6492,6 +6492,79 @@ label.inbox-pop-row {
 .env-note { font-size: 11px; margin: 4px 0; }
 .env-empty-actions { display: flex; gap: 6px; margin-top: 6px; }
 
+/* 0.6 W7: 앱 알림 · 동시 편집 — 벨 줄 색 (§14 · §13-1) */
+.bell-dot.app {
+  background: var(--eq-blue);
+}
+.bell-title.app {
+  color: var(--eq-blue);
+}
+.bell-dot.conflict {
+  background: var(--eq-amber);
+}
+.bell-title.conflict {
+  color: var(--eq-amber);
+}
+
 /* 0.6 W6: 서버 탭 저장 명령 (D2) */
 .srvp-saved { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 6px; font-size: 11px; }
 .srvp-saved-warn { color: var(--eq-amber, var(--eq-muted)); }
+
+/* 0.6 W7: 첫 실행 고지 · 설정 › 정보 '앱이 쓰는 곳 · 진단' (§10 · §9-2 · §14 · §9-3) */
+.frn {
+  width: 600px;
+  max-height: 86vh;
+  overflow: auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.frn-sub {
+  font-size: 11px;
+  margin-top: -6px;
+}
+.frn-where,
+.frn-foreign,
+.frn-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+}
+.frn-card {
+  gap: 12px;
+}
+.frn-h {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--eq-muted);
+  margin-top: 4px;
+}
+.frn-row {
+  display: grid;
+  grid-template-columns: minmax(0, 240px) minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+}
+.frn-row > .mono {
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+.frn-tool {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.frn-tool-t {
+  color: var(--eq-amber);
+  font-weight: 600;
+}
+.frn-net,
+.frn-note {
+  font-size: 11px;
+}
+.frn-actions {
+  display: flex;
+  gap: 8px;
+}

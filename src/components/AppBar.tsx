@@ -118,6 +118,7 @@ export function AppBar() {
     return backend.listSessions().find((s) => s.id === it.session);
   };
   const itemRead = (it: NotifyItem) => {
+    if (it.open) return false; // 앱 알림 · 동시 편집 — 세션 신호가 아니라 늘 눈에 띄게 둔다 (목록 50건 상한이 걷는다)
     const s = itemSession(it);
     return !s || !sessionNeedsLook(s);
   };
@@ -125,7 +126,7 @@ export function AppBar() {
     `${paneNo(s)} ${nameBesideNo(paneNo(s), sessionName(s, backend.listPersonas().find((p) => p.id === s.personaId)))}`;
   const itemName = (it: NotifyItem) => {
     const s = itemSession(it);
-    return s ? sessName(s) : it.session;
+    return s ? sessName(s) : it.kind === "app" ? "EQMUX" : it.session;
   };
   // 지금 보고 있는 워크스페이스가 아니면 어디 것인지 붙인다
   const wsLabel = (wsId: string) => {
@@ -512,7 +513,7 @@ export function AppBar() {
                     <button
                       class="bell-item"
                       classList={{ read: itemRead(it) }}
-                      onClick={() => openSession(it.workspace, it.session)}
+                      onClick={() => (it.open ? it.open() : openSession(it.workspace, it.session))}
                     >
                       <span class={`bell-dot ${itemRead(it) ? "" : it.kind}`} />
                       <span class="bell-body">

@@ -243,4 +243,44 @@ export const dict: Record<string, string> = {
   "워크스페이스 열기": "Open workspace",
   "기동 없이 열기": "Open without launching",
   "{n}개 모두 기동 → 워크스페이스": "Launch all {n} → Workspace",
+
+  // ── 0.6 W7: 첫 실행 고지 · 다른 도구 전역 지시 · 진단 정보 복사 (§10 · §14 · §9-3) ──
+  "EQMUX가 쓰는 곳 · 쓰지 않는 곳": "Where EQMUX writes, and where it doesn't",
+  "처음 한 번만 보입니다. 설정 › 정보에서 다시 볼 수 있습니다.": "Shown once. You can see it again in Settings › About.",
+  "쓰는 곳": "Writes to",
+  "설정 · 워크스페이스 목록 · 세션 기록 · 훅과 상태 줄 합성 설정(hook-settings.json)":
+    "Settings · workspace list · session history · generated hook and status line settings (hook-settings.json)",
+  "진단 로그": "Diagnostic logs",
+  "<저장소>/.eqmux/": "<repo>/.eqmux/",
+  "팀 편성 · 역할 파일 · 임무. 커밋하지 않으려면 .gitignore에 .eqmux/를 넣으세요":
+    "Team setup · role files · missions. Add .eqmux/ to .gitignore if you don't want to commit them",
+  "쓰지 않는 곳": "Never writes to",
+  "엔진 설정은 고치지 않습니다. 훅은 세션을 띄울 때 인자(--settings, Codex는 -c)로만 싣습니다":
+    "Engine settings are never changed. Hooks are passed only as launch arguments (--settings, or -c for Codex)",
+  "저장소의 .claude/ · .codex/ · CLAUDE.md": "The repo's .claude/ · .codex/ · CLAUDE.md",
+  "읽기만 합니다": "Read only",
+  "요청하지 않으면 다른 시스템으로 아무것도 보내지 않습니다. 진단 정보도 사람이 복사해 붙일 때만 나갑니다.":
+    "Nothing is sent to other systems unless you ask. Diagnostic info leaves only when you copy and paste it yourself.",
+  "다른 도구의 전역 지시": "Global instructions from other tools",
+  "점검 중…": "Checking…",
+  "찾지 못했습니다 — EQMUX 세션에 다른 도구의 지시가 실리지 않습니다":
+    "None found. No other tool's instructions are loaded into EQMUX sessions",
+  "{tool}의 전역 지시가 EQMUX 세션에도 실립니다": "{tool}'s global instructions also load into EQMUX sessions",
+  "{tool}의 전역 지시가 EQMUX 세션에도 실립니다 — 세션 안내문으로 덮어 두었습니다":
+    "{tool}'s global instructions also load into EQMUX sessions. The session briefing overrides them",
+  "세션 안내문으로 덮어 두었습니다 · 누르면 자세히": "Overridden by the session briefing · click for details",
+  "자동 관리 구역": "Auto-managed block",
+  "도구를 쓸 때마다 도는 훅 {n}개": "{n} hooks that run on every tool call",
+  '"You are running inside …" 문장': '"You are running inside …" sentence',
+  "EQMUX는 이 파일을 고치지 않습니다. 그 도구가 다시 써 넣기 때문입니다.":
+    "EQMUX doesn't edit these files, because that tool would write them back.",
+  "끄는 방법 →": "How to turn it off →",
+  "앱이 쓰는 곳 · 진단": "Where the app writes · Diagnostics",
+  "다시 점검": "Check again",
+  "진단 정보 복사": "Copy diagnostic info",
+  "모으는 중…": "Collecting…",
+  "진단 정보를 복사했습니다 — GitHub 이슈에 붙여 주세요": "Diagnostic info copied. Paste it into a GitHub issue",
+  "진단 정보를 만들지 못했습니다 · {err}": "Couldn't collect diagnostic info · {err}",
+  "진단 정보에서 경로의 사용자 이름과 토큰은 가립니다. 앱이 보내지 않습니다 — 복사해서 직접 붙입니다.":
+    "User names in paths and tokens are masked. The app never sends this; you copy and paste it yourself.",
 };

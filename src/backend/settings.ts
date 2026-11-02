@@ -46,6 +46,8 @@ export interface AppSettings {
   /** 창 닫기 (§1-1 · §10) — tray=돌고 있는 세션이 있으면 창만 숨긴다(macOS는 Dock에 남는다, 기본) ·
    *  quit=앱 종료 경로. Rust window_close_to_tray가 이 키를 읽는다(없으면 tray) */
   closeAction: "tray" | "quit";
+  /** 첫 실행 고지를 봤는가 (§10) — 앱이 쓰는 곳 · 쓰지 않는 곳. [확인]을 누르면 true. 다시 보기는 설정 › 정보 */
+  firstRunSeen: boolean;
 }
 
 /** 상태 줄 옵션 — 설정 화면·검증·Rust 주입이 공유한다 */
@@ -77,6 +79,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   manualDelivery: "park", // 승인 창을 모르는 페인에는 사람이 넣는다 (BR-02)
   webOpen: "eqmux", // 에이전트의 eqmux browser 조작(snapshot·click)이 되는 쪽
   closeAction: "tray", // 창을 닫아도 세션은 백그라운드로 산다 — 끝내기는 트레이 [전부 종료]
+  firstRunSeen: false,
 };
 
 const [settings, setSettings] = createSignal<AppSettings>(DEFAULT_SETTINGS);
@@ -112,6 +115,7 @@ export function sanitize(raw: unknown): AppSettings {
     manualDelivery: v.manualDelivery === "auto" ? "auto" : "park",
     webOpen: v.webOpen === "chrome" ? "chrome" : "eqmux",
     closeAction: v.closeAction === "quit" ? "quit" : "tray",
+    firstRunSeen: v.firstRunSeen === true,
     statusLine: (STATUSLINE_MODES as readonly string[]).includes(v.statusLine as string)
       ? (v.statusLine as AppSettings["statusLine"])
       : "full",
