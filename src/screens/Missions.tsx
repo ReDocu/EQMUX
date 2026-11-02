@@ -16,6 +16,8 @@ import { nameOf } from "../backend/conversation";
 import { isTauri, revealPath } from "../backend/pty";
 import { checkoutBranch } from "../backend/workspaces";
 import { t, tf } from "../i18n";
+import { revealLabel } from "../labels";
+import { Icon } from "../components/icons";
 import { setView, tick } from "../state";
 import { Chip, ConfirmDialog, Eyebrow, Identity, notify, Segmented } from "../components/ui";
 import { effectiveTitle, paneNo, sessionName } from "../types";
@@ -105,7 +107,7 @@ export function Missions(props: { wsId: string }) {
       <div class="screen-head">
         <div>
           <h1>{t("임무 배정")} · {ws()?.name}</h1>
-          <div class="sub">{t(".eqmux/missions/*.md 가 원본 · 배정하면 역할 파일 임무 블록에 반영 · 세션 클릭 = 배정 토글")}</div>
+          <div class="sub">{t("임무 파일(.eqmux/missions/*.md)이 원본입니다. 세션을 누르면 배정하거나 빼고, 배정은 그 세션의 역할 파일에 적힙니다")}</div>
         </div>
         <div class="ma-head-r">
           <Chip text={t("자동 저장됨")} />
@@ -122,7 +124,7 @@ export function Missions(props: { wsId: string }) {
           <div class="ma-list-head">
             <span class="ma-list-t">{t("임무")}</span>
             <span class="ma-list-n mono">
-              {missions().length} · in-progress {missions().filter((m) => m.status === "in-progress").length}
+              {missions().length} · {tf("진행 중 {n}", { n: missions().filter((m) => m.status === "in-progress").length })}
             </span>
           </div>
           <For each={missions()}>
@@ -182,7 +184,7 @@ export function Missions(props: { wsId: string }) {
                   </button>
                 </div>
                 <div class="ma-hint muted">
-                  {t("생성하면 .eqmux/missions/<id>.md 파일이 만들어지고 DB는 캐시로 따라갑니다. 불일치 시 파일이 이깁니다 (불변 규칙 4).")}
+                  {t("만들면 .eqmux/missions/<id>.md 파일이 생깁니다. 이 파일이 원본이고, 앱의 목록은 파일을 따라갑니다.")}
                 </div>
               </>
             }
@@ -292,7 +294,7 @@ export function Missions(props: { wsId: string }) {
                 <Show when={m().status === "in-progress" && doneReport(m())}>
                   {(d) => (
                     <div class="card inset mission-done">
-                      <span class="badge blue">✓</span>
+                      <span class="badge blue"><Icon name="check" size={12} /></span>
                       <span class="muted">
                         {t("완료 보고")} · {d().name}
                         <Show when={d().text}>: {d().text}</Show>
@@ -305,7 +307,7 @@ export function Missions(props: { wsId: string }) {
                     class="btn"
                     onClick={() => void revealPath(m().file, ws()?.path).then((ok) => ok || notify(t("파일을 열 수 없습니다")))}
                   >
-                    {t("탐색기에서 열기")}
+                    {revealLabel()}
                   </button>
                   <Show when={m().status === "in-progress" && doneReport(m())}>
                     <button class="btn primary" onClick={() => void setMissionStatus(props.wsId, m().id, "in-review")}>
@@ -345,7 +347,7 @@ export function Missions(props: { wsId: string }) {
                         {(o) => <span class="muted ma-assignee-cur">{tf("현재: {name}", { name: o().name })}</span>}
                       </Show>
                       <span class={`exit-state mono ${ST_CLASS[s.status] ?? "muted"}`}>{s.status.toUpperCase()}</span>
-                      <span class="ma-toggle">{on() ? "✓" : ""}</span>
+                      <span class="ma-toggle">{on() && <Icon name="check" size={12} />}</span>
                     </span>
                   </button>
                 );

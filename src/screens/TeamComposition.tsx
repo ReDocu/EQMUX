@@ -8,6 +8,7 @@ import { backend } from "../backend/mock";
 import { maxSlots } from "../backend/settings";
 import { castingConfirmLines } from "../backend/team";
 import { t, tf } from "../i18n";
+import { jobName } from "../labels";
 import { setFocusRequest, setSelectedSession, setView, tick, view } from "../state";
 import { launchRoleAgents } from "../components/TerminalPane";
 import { WizardSteps } from "./LaunchMode";
@@ -88,7 +89,7 @@ export function TeamComposition(props: { wsId: string }) {
       if (!n.has(j)) order.push(j);
       n.set(j, (n.get(j) ?? 0) + 1);
     }
-    return order.map((j) => `${job(j)?.name ?? j}${n.get(j)! > 1 ? ` ${n.get(j)}` : ""}`).join(" · ");
+    return order.map((j) => `${jobName(job(j), j)}${n.get(j)! > 1 ? ` ${n.get(j)}` : ""}`).join(" · ");
   };
 
   // 기본 편성 = 첫 프리셋(presets/*.json 실측)의 직무 구성 + 라이브러리 페르소나 순서대로 중복 없이.
@@ -213,7 +214,7 @@ export function TeamComposition(props: { wsId: string }) {
                     </span>
                     <span title={nameOf(m)}>{nameBesideNo(m.slot, nameOf(m))}</span>
                     <span>{effectiveTitle(m, persona(m.personaId)) ?? "—"}</span>
-                    <span>{m.personaId ? (job(m.jobId)?.name ?? m.jobId) : t("기본 터미널")}</span>
+                    <span>{m.personaId ? jobName(job(m.jobId), m.jobId) : t("기본 터미널")}</span>
                     <span class="muted" title={permTip(m)}>
                       {permText(m)}
                     </span>

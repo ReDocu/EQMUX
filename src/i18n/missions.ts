@@ -5,8 +5,6 @@ export const dict: Record<string, string> = {
   "검토 중으로": "Move to review",
   "임무 저장 실패 — {err}": "Mission save failed — {err}",
   "임무 배정": "Mission assignment",
-  ".eqmux/missions/*.md 가 원본 · 상태 뱃지 클릭 = 단계 전환 · 세션 클릭 = 배정 토글":
-    ".eqmux/missions/*.md is the source of truth · click status badge = next stage · click session = toggle assignment",
   "← 컨트롤 센터": "← Control center",
   "클릭하면 다음 단계로": "Click for next stage",
   "기본 임무 해제": "Unset default mission",
@@ -25,8 +23,8 @@ export const dict: Record<string, string> = {
   "목표 — 완료 조건을 측정 가능하게": "Goal — make the completion criteria measurable",
   "브랜치 (선택)": "Branch (optional)",
   "임무 생성": "Create mission",
-  "생성하면 .eqmux/missions/<id>.md 파일이 만들어지고 DB는 캐시로 따라갑니다. 불일치 시 파일이 이깁니다 (불변 규칙 4).":
-    "Creating writes .eqmux/missions/<id>.md; the DB follows as a cache. On mismatch the file wins (invariant 4).",
+  "만들면 .eqmux/missions/<id>.md 파일이 생깁니다. 이 파일이 원본이고, 앱의 목록은 파일을 따라갑니다.":
+    "Creating makes .eqmux/missions/<id>.md. That file is the source; the list in the app follows it.",
 
   // ── 임무 · 파일 탐색기 (MissionExplorerTab.tsx) ──
   "임무 · 파일 탐색기": "Missions · File explorer",
@@ -75,8 +73,8 @@ export const dict: Record<string, string> = {
 
   // ── 0.5 시안 jc2Fm (목록 | 편집 | 배정) ──
   "+ 새 임무": "+ New mission",
-  ".eqmux/missions/*.md 가 원본 · 배정하면 역할 파일 임무 블록에 반영 · 세션 클릭 = 배정 토글":
-    ".eqmux/missions/*.md is the source · assigning updates the role file's mission block · click a session to toggle",
+  "임무 파일(.eqmux/missions/*.md)이 원본입니다. 세션을 누르면 배정하거나 빼고, 배정은 그 세션의 역할 파일에 적힙니다":
+    "Mission files (.eqmux/missions/*.md) are the source. Click a session to assign or unassign; assignments go into that session's role file",
   "배정 없음": "unassigned",
   "임무가 없습니다 — + 새 임무로 만드세요": "No missions — create one with + New mission",
   "임무 상태": "Mission status",
@@ -97,6 +95,7 @@ export const dict: Record<string, string> = {
   // 0.6 §4 선행 임무
   "선행 임무": "Depends on",
   "없는 임무": "Unknown mission",
+  "진행 중 {n}": "In progress {n}",
   // 0.6 §13-3 임무 검토
   검토하기: "Review",
   "임무 검토": "Mission review",
@@ -108,7 +107,7 @@ export const dict: Record<string, string> = {
   "편집 도구로 고친 것만": "edit-tool changes only",
   "편집 기록이 없습니다 — 전체 변경을 보세요": "No edit records — review all changes",
   "비용 {usd}": "Cost {usd}",
-  "전체 변경 보기 — 한 폴더를 같이 쓰므로 다른 세션의 변경도 섞인다": "Show all changes — the folder is shared, so other sessions' changes mix in",
+  "전체 변경 보기 — 한 폴더를 같이 쓰므로 다른 세션의 변경도 섞입니다": "Show all changes — the folder is shared, so other sessions' changes mix in",
   "테스트 실행 — 서버 탭 셸에서 돕니다": "Run tests — runs in the server tab shell",
   "테스트 실행": "Run tests",
   "실행 중 — 서버 탭에서 출력을 볼 수 있습니다": "Running — output is in the server tab",

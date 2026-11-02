@@ -171,7 +171,7 @@ export function MissionReview(props: { wsId: string; missionId: string; back?: V
                     </div>
                     <label class="mrv-hint">
                       <input type="checkbox" checked={showAll()} onChange={(e) => setShowAll(e.currentTarget.checked)} />{" "}
-                      {t("전체 변경 보기 — 한 폴더를 같이 쓰므로 다른 세션의 변경도 섞인다")}
+                      {t("전체 변경 보기 — 한 폴더를 같이 쓰므로 다른 세션의 변경도 섞입니다")}
                     </label>
                   </Show>
                 </div>

@@ -11,6 +11,8 @@ import { backend } from "../backend/mock";
 import { isTauri } from "../backend/pty";
 import { maxSlots } from "../backend/settings";
 import { t, tf } from "../i18n";
+import { jobName } from "../labels";
+import { Icon } from "../components/icons";
 import { jobMeta } from "../jobs";
 import type { JobBadgeColor } from "../jobs";
 import { setView, tick, view } from "../state";
@@ -159,7 +161,7 @@ export function TeamCasting(props: { wsId: string }) {
   const leadElsewhere = (i: number) => slots().some((sl, k) => k !== i && sl.jobId === "lead");
   const jobGroups = (i: number): MenuGroup[] => [
     backend.listJobs().map((j) => ({
-      label: j.id === "lead" && leadElsewhere(i) ? `${j.name} — ${t("리드는 1명")}` : j.name,
+      label: j.id === "lead" && leadElsewhere(i) ? `${jobName(j)} — ${t("리드는 1명")}` : jobName(j),
       checked: slots()[i].jobId === j.id,
       disabled: j.id === "lead" && leadElsewhere(i),
       action: () => {
@@ -218,7 +220,7 @@ export function TeamCasting(props: { wsId: string }) {
         n,
         text: s
           ? tf("기본 터미널 · {name}", { name: s.name ?? "" })
-          : tf("빈 슬롯 · 기본 터미널은 관제에서 만든다 (자동 이름 {name})", { name: `${projectStem(ws()?.name ?? "")}${slotNo(n)}` }),
+          : tf("빈 슬롯 · 기본 터미널은 관제에서 만듭니다 (자동 이름 {name})", { name: `${projectStem(ws()?.name ?? "")}${slotNo(n)}` }),
       });
     }
     return out;
@@ -236,7 +238,7 @@ export function TeamCasting(props: { wsId: string }) {
             {t("팀 캐스팅")} · {ws()?.name}
           </h1>
           <div class="sub mono">
-            {tf("페르소나를 {n}개 슬롯에 배정한다 · 다시 적용해도 남은 세션의 슬롯 번호는 그대로, 새 페르소나만 빈 슬롯에 들어간다", {
+            {tf("페르소나를 {n}개 슬롯에 배정합니다. 다시 적용해도 남은 세션의 슬롯 번호는 그대로이고, 새 페르소나만 빈 슬롯에 들어갑니다", {
               n: maxSlots(),
             })}
           </div>
@@ -267,7 +269,7 @@ export function TeamCasting(props: { wsId: string }) {
             <button
               class="btn"
               classList={{ primary: preset() === "" }}
-              title={t("지금 돌고 있는 편성으로 되돌린다")}
+              title={t("지금 돌고 있는 편성으로 되돌립니다")}
               onClick={() => {
                 setPreset("");
                 setSlots(currentSlots());
@@ -301,7 +303,7 @@ export function TeamCasting(props: { wsId: string }) {
                     <Identity name={pp()?.name ?? slot.personaId} title={pp()?.title} job={slot.badge} />
                     {/* 직함 (0.5) — 페르소나 직함. 슬롯 덮어쓰기는 세션 상세에서 */}
                     <Show when={!pp()?.title}>
-                      <div class="cast-note">{t("직함 없음 — 역할 파일에 추가 토큰 0")}</div>
+                      <div class="cast-note">{t("직함 없음 · 역할 파일 그대로")}</div>
                     </Show>
                   </div>
                   <div class="cast-field">
@@ -312,7 +314,8 @@ export function TeamCasting(props: { wsId: string }) {
                       onClick={(e) => openMenu(e, setJobMenu, i())}
                     >
                       <span class={`badge ${slot.badgeColor}`}>{slot.badge}</span>
-                      <span>{job(slot.jobId)?.name ?? `${slot.jobId} ${t("(라이브러리에 없음)")}`} ▾</span>
+                      <span>{jobName(job(slot.jobId), `${slot.jobId} ${t("(라이브러리에 없음)")}`)}</span>
+                      <Icon name="chevron-down" size={12} class="muted" />
                     </button>
                   </div>
                   <div class="cast-note">{pp() ? personaTagline(pp()!) : ""}</div>
@@ -409,7 +412,7 @@ export function TeamCasting(props: { wsId: string }) {
         <div class="cast-info">
           <span class="launch-info">ⓘ</span>
           <span>
-            {t("편성은 저장하거나 편성 선택으로 넘어갈 때 .eqmux/team.json과 team.md에 적힌다. 직함은 페르소나 직함을 쓰고, 슬롯만 바꾸려면 세션 상세에서 덮어쓴다. roles/는 합성 후 gitignore · 사용자의 CLAUDE.md는 수정하지 않음.")}
+            {t("편성은 저장하거나 편성 선택으로 넘어갈 때 .eqmux/team.json과 team.md에 적힙니다. 직함은 페르소나 직함을 쓰고, 한 슬롯만 바꾸려면 세션 상세에서 덮어씁니다. roles/는 합성 뒤 gitignore에 들어가고, 사용자의 CLAUDE.md는 고치지 않습니다.")}
           </span>
         </div>
       </div>

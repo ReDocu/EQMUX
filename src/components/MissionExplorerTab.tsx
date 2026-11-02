@@ -9,6 +9,7 @@ import { markMissionBase, refreshMissions } from "../backend/missions";
 import { sendConversation } from "../backend/conversation";
 import { isTauri, revealPath } from "../backend/pty";
 import { t, tf } from "../i18n";
+import { jobName, revealLabel } from "../labels";
 import { openPanel, scopeWorkspace, selectedSession, setOverlay, setView, tick, toggleExplorer, view } from "../state";
 import { Icon } from "./icons";
 import { ContextMenu, notify } from "./ui";
@@ -287,7 +288,7 @@ export function MissionExplorerTab() {
       <div class="msnp-bar">
         <span class="msnp-status-dot" />
         <span class="msnp-target">
-          {persona()?.name ?? t("세션 없음")} · {job()?.name ?? "—"}
+          {persona()?.name ?? t("세션 없음")} · {jobName(job())}
         </span>
         <span class="badge blue mono">⎇ {ws()?.branch ?? "—"}</span>
         <span class="msnp-path mono muted" title={ws()?.path}>
@@ -296,7 +297,7 @@ export function MissionExplorerTab() {
         {/* 워크스페이스 경로 → Windows 탐색기 (앱 안 트리는 아래에 이미 있으므로 여기는 OS로 나간다) */}
         <button class="btn" disabled={!isTauri() || !ws()} onClick={() => void revealPath(ws()!.path)}>
           <Icon name="folder-open" size={12} />
-          {t("탐색기에서 열기")}
+          {revealLabel()}
         </button>
       </div>
 
@@ -365,7 +366,7 @@ export function MissionExplorerTab() {
                 groups={[
                   [
                     {
-                      label: t("탐색기에서 열기"),
+                      label: revealLabel(),
                       action: () =>
                         void revealPath(m().rel, ws()?.path).then(
                           (ok) => ok || notify(t("폴더를 열 수 없습니다 — 경로가 없어졌습니다")),

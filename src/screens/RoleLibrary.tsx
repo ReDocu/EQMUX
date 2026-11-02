@@ -19,6 +19,7 @@ import { backend } from "../backend/mock";
 import { isTauri, revealPath } from "../backend/pty";
 import { fsDelete, fsRead } from "../backend/panels";
 import { t, tf } from "../i18n";
+import { fileManagerName, jobName as labelJob } from "../labels";
 import { memoryRel, nudgeRoleReload, nudgeTeamReload, saveRoleFile } from "../backend/roles";
 import { resaveTeams } from "../backend/team";
 import { fileChangeTick } from "../backend/watch";
@@ -374,14 +375,14 @@ export function RoleLibrary() {
     const mates = backend.listSessions().filter((s) => wss.has(s.workspaceId) && s.personaId && s.personaId !== p.id);
     return { name: draftName() || p.name, n: mine.length, m: mates.length };
   };
-  const jobName = (id: string) => jobs().find((j) => j.id === id)?.name ?? id;
+  const jobName = (id: string) => labelJob(jobs().find((j) => j.id === id), id);
 
   return (
     <div class="screen">
       <div class="screen-head">
         <div>
           <h1>{t("역할 라이브러리")}</h1>
-          <div class="sub mono">{t("직무 8종 고정 · 세분화는 직함으로 · 직함은 권한·책임·금지를 바꾸지 않는다")}</div>
+          <div class="sub mono">{t("직무는 8종 고정입니다. 세분화는 직함으로 하고, 직함은 권한 · 책임 · 금지를 바꾸지 않습니다")}</div>
         </div>
         <div style={{ display: "flex", gap: "8px", "align-items": "center", "flex-wrap": "wrap" }}>
           {/* 3단계 생성 — 단계는 폼 깊이 선택일 뿐, 저장 상태가 아니다 (채워진 내용이 단계를 정한다) */}
@@ -425,7 +426,7 @@ export function RoleLibrary() {
             <For each={[...jobs()].sort((a, b) => jobRank(a.id) - jobRank(b.id))}>
               {(j) => (
                 <button class="rl-row rl-job" classList={{ selected: selJobId() === j.id }} title={j.responsibility} onClick={() => guard(() => selectJob(j))}>
-                  <span class="rl-job-name">{j.name}</span>
+                  <span class="rl-job-name">{labelJob(j)}</span>
                   <Show when={j.source === "ws"}>
                     <span class="badge purple" title={t("워크스페이스 오버라이드 — .eqmux/jobs가 원본")}>
                       WS
@@ -487,10 +488,10 @@ export function RoleLibrary() {
             {(j) => (
               <>
                 <div class="rl-scope mono">
-                  JOB · {selJobIsWs() ? `.eqmux/jobs/${j().id}.md` : `jobs/${j().id}.md`} · {t("8종 고정 — 문구·권한만 고친다")}
+                  JOB · {selJobIsWs() ? `.eqmux/jobs/${j().id}.md` : `jobs/${j().id}.md`} · {t("8종 고정 — 문구 · 권한만 편집")}
                 </div>
                 <div class="rl-name-row">
-                  <span class="rl-big-name">{j().name}</span>
+                  <span class="rl-big-name">{labelJob(j())}</span>
                   <span class={`badge ${jobMeta(j().id, j().name).color}`}>{jobMeta(j().id, j().name).badge}</span>
                 </div>
                 <div class="rl-field">
@@ -552,7 +553,7 @@ export function RoleLibrary() {
                   />
                 </div>
                 <div class="rl-field">
-                  <label class="rl-label">{tf("추천 직함 — 직무 '{job}'", { job: j().name })}</label>
+                  <label class="rl-label">{tf("추천 직함 — 직무 '{job}'", { job: labelJob(j()) })}</label>
                   <div class="title-chips">
                     <For each={TITLE_SUGGEST[j().id] ?? []}>{(c) => <span class="eq-chip info title-chip">{t(c)}</span>}</For>
                   </div>
@@ -565,8 +566,8 @@ export function RoleLibrary() {
                 <Show when={selJobIsWs()}>
                   <div class="mono st-waiting" style={{ "font-size": "10px" }}>
                     {tf(
-                      "오버라이드 항목 — 원본은 워크스페이스 .eqmux/jobs/{id}.md 파일입니다. 편집 커맨드는 전역에만 씁니다 — 파일을 직접 고치거나 탐색기에서 편집하세요",
-                      { id: j().id },
+                      "오버라이드 항목 — 원본은 워크스페이스 .eqmux/jobs/{id}.md 파일입니다. 편집 커맨드는 전역에만 씁니다 — 파일을 직접 고치거나 {fm}에서 편집하세요",
+                      { id: j().id, fm: fileManagerName() },
                     )}
                   </div>
                 </Show>
@@ -589,7 +590,7 @@ export function RoleLibrary() {
           <Show when={sel()}>
             <div class="rl-scope mono">
               PERSONA · {selIsWs() ? `.eqmux/personas/${sel()!.id}.md` : `personas/${sel()!.id}.md`} ·{" "}
-              {t(selIsWs() ? "이 워크스페이스만 쓴다" : "모든 워크스페이스가 함께 쓴다")}
+              {t(selIsWs() ? "이 워크스페이스 전용" : "모든 워크스페이스 공용")}
             </div>
             <div class="rl-name-row">
               <span class="rl-big-name">{draftName() || sel()!.name}</span>
@@ -604,7 +605,7 @@ export function RoleLibrary() {
               <label class="rl-label">{t("기본 직무")}</label>
               <select value={draftJob()} onChange={(e) => setDraftJob(e.currentTarget.value)}>
                 <option value="">{t("미지정")}</option>
-                <For each={jobs()}>{(j) => <option value={j.id}>{j.name}</option>}</For>
+                <For each={jobs()}>{(j) => <option value={j.id}>{labelJob(j)}</option>}</For>
               </select>
               <span class="rl-hint">{t("역할 부여가 직무 선택 없이 이 값을 따릅니다 (미지정이면 부여 시 개발)")}</span>
             </div>
@@ -620,14 +621,14 @@ export function RoleLibrary() {
               />
               <FieldHint count={draftTitle().length} max={TITLE_MAX} />
               <span class="rl-hint">
-                {tf("한 줄 · 24자까지 · 직무 '{job}'의 책임·금지·권한은 그대로, 맡는 영역만 정한다. 모든 워크스페이스의 이 페르소나에 쓰인다", {
+                {tf("한 줄 · 24자까지. 직무 '{job}'의 책임 · 금지 · 권한은 그대로 두고 맡는 영역만 정합니다. 모든 워크스페이스의 이 페르소나에 쓰입니다", {
                   job: jobName(draftJob() || "dev"),
                 })}
               </span>
             </div>
             <div class="rl-field">
               <label class="rl-label">
-                {tf("추천 직함 — 직무 '{job}' · 누른 말이 그대로 직함이 된다", { job: jobName(draftJob() || "dev") })}
+                {tf("추천 직함 — 직무 '{job}' · 누른 말이 그대로 직함이 됩니다", { job: jobName(draftJob() || "dev") })}
               </label>
               <div class="title-chips">
                 <For each={TITLE_SUGGEST[draftJob() || "dev"] ?? []}>
@@ -659,7 +660,7 @@ export function RoleLibrary() {
                   <span class="launch-info">↻</span>
                   <span>
                     {tf(
-                      "저장하면 {name}가 들어간 세션 {n}개의 역할 파일과 팀원 {m}명의 팀 관계 표를 다시 만들고 '[EQ] 역할 갱신 — .eqmux/roles/<세션>.md 다시 읽기' 한 줄을 보낸다. 재시작 배지는 뜨지 않는다.",
+                      "저장하면 {name}가 들어간 세션 {n}개의 역할 파일과 팀원 {m}명의 팀 관계 표를 다시 만들고 '[EQ] 역할 갱신 — .eqmux/roles/<세션>.md 다시 읽기' 한 줄을 보냅니다. 재시작 배지는 뜨지 않습니다.",
                       { name: im().name, n: im().n, m: im().m },
                     )}
                   </span>
@@ -890,7 +891,7 @@ export function RoleLibrary() {
             <Show when={selIsWs()}>
               <div class="mono st-waiting" style={{ "font-size": "10px" }}>
                 {tf(
-                  "오버라이드 항목 — 원본은 워크스페이스 .eqmux/personas/{id}.md 파일입니다. 편집 커맨드는 전역에만 씁니다 — 파일을 직접 고치거나 탐색기에서 편집하세요",
+                  "오버라이드 항목 — 원본은 워크스페이스 .eqmux/personas/{id}.md 파일입니다. 편집 커맨드는 전역에만 씁니다 — 파일을 직접 고치거나 {fm}에서 편집하세요",
                   { id: sel()!.id },
                 )}
               </div>
