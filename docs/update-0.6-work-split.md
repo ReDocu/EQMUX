@@ -144,3 +144,4 @@
 | 11-02 | W6 | 기준선 포트 테스트 실패 = 이 PC TCP 표에 LISTENING이 안 나오는 환경 문제. 실기는 다른 PC에서 | — |
 | 11-02 | W3 | PowerShell 파이프 인코딩(콘솔 CP 변환). 실기: 한국어 Windows 기본 pwsh에서 `eqmux who \| Select-Object` | `be185da` |
 | 11-02 | W4 | 임무 시작점 `base_commit` + 카드 "그 뒤 커밋 N개" | `deafa88` |
+| 11-02 | W3 | 매 턴 상기 `remind:` 훅 출력 · 기억 `memory:` 싣기(C6). 실기: 30턴 말투, 끈 뒤 빠짐, Codex 무해, 기억 언급 | `babd05a` |
