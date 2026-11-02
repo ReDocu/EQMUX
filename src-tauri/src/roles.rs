@@ -34,6 +34,9 @@ pub struct Teammate {
     /// 유효 직함 (0.5) — 있으면 직무 칸이 `직함 (직무)`
     #[serde(default)]
     pub title: Option<String>,
+    /// 정체성 한 줄 (0.6 §15-3) — 고급은 시트 정체성, 기본·중급은 판단 성향 첫 줄. 비면 빈 칸
+    #[serde(default)]
+    pub identity: Option<String>,
 }
 
 /// 합성 입력 — 라이브러리(직무·페르소나)는 프런트가 소유하므로 값으로 받는다
@@ -49,6 +52,9 @@ pub struct RolePayload {
     pub tone: String,
     #[serde(default)]
     pub personality: String,
+    /// 대사 예시 (0.6 §15-5 · 중급) — 비면 섹션이 출력되지 않는다
+    #[serde(default)]
+    pub examples: String,
     pub job: String,
     pub job_name: String,
     /// 유효 직함 (0.5) — 슬롯 덮어쓰기, 없으면 페르소나 직함. 없으면 제목·섹션·frontmatter 모두 0.4.2 그대로
@@ -323,6 +329,9 @@ pub fn save(ws_path: &str, p: &RolePayload) -> Result<String, String> {
     if !p.personality.is_empty() {
         out.push_str(&format!("\n## 성격\n{}\n", p.personality));
     }
+    if !p.examples.trim().is_empty() {
+        out.push_str(&format!("\n## 대사 예시\n{}\n", p.examples.trim()));
+    }
     // 고급 단계 — 시트는 전재하지 않는다. 정체성 1줄 + 경로 + 우선순위 문장이 전부다.
     if let Some(sheet) = p.character_path.as_deref().filter(|s| !s.is_empty()) {
         let who = character_who(p);
@@ -337,14 +346,22 @@ pub fn save(ws_path: &str, p: &RolePayload) -> Result<String, String> {
         out.push_str(&format!("\n## 금지\n{}\n", p.forbidden));
     }
     if !p.teammates.is_empty() {
-        out.push_str("\n## 팀 관계 (team.md 참조)\n| 슬롯 | 팀원 | 직무 |\n|---|---|---|\n");
+        // 정체성 열 (0.6 §15-3) — 한 명이라도 있을 때만. 없으면 0.5 표 그대로
+        let ident = |t: &Teammate| clean_title(t.identity.as_deref());
+        let with_id = p.teammates.iter().any(|t| ident(t).is_some());
+        out.push_str(if with_id {
+            "\n## 팀 관계 (team.md 참조)\n| 슬롯 | 팀원 | 직무 | 정체성 |\n|---|---|---|---|\n"
+        } else {
+            "\n## 팀 관계 (team.md 참조)\n| 슬롯 | 팀원 | 직무 |\n|---|---|---|\n"
+        });
         for t in &p.teammates {
             let me = if t.me { " (나)" } else { "" };
             let job = match clean_title(t.title.as_deref()) {
                 Some(tt) => format!("{} ({})", cell(&tt), cell(&t.job_name)),
                 None => cell(&t.job_name),
             };
-            out.push_str(&format!("| {} | {}{} | {} |\n", t.slot, cell(&teammate_label(t)), me, job));
+            let id_cell = if with_id { format!(" {} |", cell(&ident(t).unwrap_or_default())) } else { String::new() };
+            out.push_str(&format!("| {} | {}{} | {} |{}\n", t.slot, cell(&teammate_label(t)), me, job, id_cell));
         }
     }
     out.push_str(COMMS_RULES);
@@ -462,7 +479,7 @@ mod tests {
     }
 
     fn mate(slot: u8, name: &str, job_name: &str, me: bool) -> Teammate {
-        Teammate { slot, name: name.into(), job_name: job_name.into(), me, persona_name: None, title: None }
+        Teammate { slot, name: name.into(), job_name: job_name.into(), me, persona_name: None, title: None, identity: None }
     }
 
     fn titled_payload() -> RolePayload {
@@ -577,6 +594,23 @@ mod tests {
         let m = MissionBlock { id: "m1".into(), name: "임무".into(), status: "todo".into(), goal: String::new(), outputs: vec![], branch: None };
         set_mission(&ws, "kai@ws1", Some(&m)).unwrap();
         assert!(remind(&path).unwrap().contains("별지기 루카"));
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 정체성 열 (§15-3) · 대사 예시 (§15-5) — 있을 때만 열·섹션이 생긴다
+    #[test]
+    fn identity_column_and_examples() {
+        let dir = std::env::temp_dir().join(format!("eqmux-roles-ident-{}", crate::workspace::now_ms()));
+        let ws = dir.to_string_lossy().into_owned();
+        let mut p = titled_payload();
+        p.teammates[0].identity = Some("등대지기 | 관찰자\n둘째 줄".into());
+        p.tone = "존댓말".into();
+        p.examples = "- 빌드 실패 → \"어디가 막혔는지 봅시다.\"\n".into();
+        let text = read_without_stamp(&save(&ws, &p).unwrap());
+        assert!(text.contains("| 슬롯 | 팀원 | 직무 | 정체성 |\n|---|---|---|---|\n"));
+        assert!(text.contains("| 1 | 린 | 리드 | 등대지기 \\| 관찰자 둘째 줄 |\n"));
+        assert!(text.contains("| 2 | 카이 (나) | 개발 |  |\n"));
+        assert!(text.contains("## 말투\n존댓말\n\n## 대사 예시\n- 빌드 실패 → \"어디가 막혔는지 봅시다.\"\n"));
         fs::remove_dir_all(&dir).ok();
     }
 }

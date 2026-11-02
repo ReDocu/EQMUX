@@ -35,6 +35,9 @@ pub struct PersonaProfile {
     pub tone: String,
     #[serde(default)]
     pub personality: String,
+    /// 대사 예시 (0.6 §15-5 · 중급 전용) — `상황 → 응답` 2~3줄. 비면 토큰 0
+    #[serde(default)]
+    pub examples: String,
 }
 
 /// 페르소나 — frontmatter(id·name·color·level) + 본문(단계별 프로필 섹션) (FR-E-23).
@@ -77,6 +80,9 @@ pub struct PersonaInfo {
     pub character_name: Option<String>,
     #[serde(default)]
     pub character_source: Option<String>,
+    /// 시트의 `## 정체성` 첫 줄 (0.6 §15-3) — 팀원 표 정체성 열에 쓴다
+    #[serde(default)]
+    pub character_identity: Option<String>,
     /// 매 턴 캐릭터 상기 (0.6 §15-3) — frontmatter `remind: on`. 꺼짐이 기본이고 키도 없다
     #[serde(default)]
     pub remind: bool,
@@ -227,16 +233,28 @@ fn parse_persona_body(body: &str) -> (String, String, String) {
 
 /// 고급 캐릭터 시트 검출 — 페르소나 파일과 같은 디렉터리의 <id>.character.md.
 /// 존재가 곧 고급 단계다. frontmatter의 name·source는 역할 파일 캐릭터 블록의 정체성 줄에 쓴다.
-fn character_info(dir: Option<&Path>, id: &str) -> (Option<String>, Option<String>, Option<String>) {
-    let Some(dir) = dir else { return (None, None, None) };
+/// 반환: (경로, name, source, `## 정체성` 아래 첫 글줄)
+type CharInfo = (Option<String>, Option<String>, Option<String>, Option<String>);
+fn character_info(dir: Option<&Path>, id: &str) -> CharInfo {
+    let Some(dir) = dir else { return (None, None, None, None) };
     let path = dir.join(format!("{}.character.md", safe_id(id)));
-    let Ok(text) = fs::read_to_string(&path) else { return (None, None, None) };
-    let (fm, _) = split_frontmatter(&text);
+    let Ok(text) = fs::read_to_string(&path) else { return (None, None, None, None) };
+    let (fm, body) = split_frontmatter(&text);
     (
         Some(path.to_string_lossy().into_owned()),
         fm_value(&fm, "name"),
         fm_value(&fm, "source"),
+        sheet_identity(&body),
     )
+}
+
+/// 시트 본문의 `## 정체성` 섹션 첫 글줄 — 인용(`>`)·빈 줄은 건너뛰고, 다음 섹션이 나오면 없음
+fn sheet_identity(body: &str) -> Option<String> {
+    let mut lines = body.lines().skip_while(|l| !l.trim_start().starts_with("## 정체성")).skip(1);
+    lines
+        .find(|l| !l.trim().is_empty() && !l.trim_start().starts_with('>'))
+        .filter(|l| !l.starts_with("## "))
+        .map(|l| l.trim().to_string())
 }
 
 const LEVELS: [&str; 3] = ["basic", "mid", "adv"];
@@ -269,6 +287,8 @@ fn parse_profiles(body: &str) -> Option<[PersonaProfile; 3]> {
                 "t"
             } else if h.starts_with("성격") {
                 "p"
+            } else if h.starts_with("대사") {
+                "e"
             } else {
                 ""
             };
@@ -282,6 +302,7 @@ fn parse_profiles(body: &str) -> Option<[PersonaProfile; 3]> {
             "h" => &mut profiles[i].hint,
             "t" => &mut profiles[i].tone,
             "p" => &mut profiles[i].personality,
+            "e" => &mut profiles[i].examples,
             _ => continue,
         };
         if !target.is_empty() {
@@ -301,20 +322,19 @@ fn parse_persona(path: &Path) -> Option<PersonaInfo> {
         .unwrap_or_else(|| "blue".into());
     // 프로필 3벌 — 새 포맷이 원본. 구 포맷(단일 본문)은 세 프로필에 복사해 마이그레이션한다:
     // 어느 단계로 전환해도 기존 내용이 그대로 남는 것이 사용자 기대에 가깝다.
-    let [mut basic, mid, mut adv] = parse_profiles(&body).unwrap_or_else(|| {
+    let [mut basic, mid, _] = parse_profiles(&body).unwrap_or_else(|| {
         let (hint, tone, personality) = parse_persona_body(&body);
-        let p = PersonaProfile { hint, tone, personality };
+        let p = PersonaProfile { hint, tone, personality, ..Default::default() };
         [p.clone(), p.clone(), p]
     });
     // 단계별 구성 정규화 (단일 지점 — 표시·주입·재저장 전부에 적용):
     // 기본 = 판단 성향만 · 중급 = 성향+말투+성격 · 고급 = 캐릭터 시트가 전부 (텍스트 프로필 없음)
     basic.tone.clear();
     basic.personality.clear();
-    adv.hint.clear();
-    adv.tone.clear();
-    adv.personality.clear();
+    basic.examples.clear();
+    let adv = PersonaProfile::default();
     let id = fm_value(&fm, "id").unwrap_or(stem.clone());
-    let (character_path, character_name, character_source) = character_info(path.parent(), &id);
+    let (character_path, character_name, character_source, character_identity) = character_info(path.parent(), &id);
     // 단계 — frontmatter가 원본. 없거나 깨진 값이면 내용으로 유추한다 (구 파일 하위호환)
     let level = fm_value(&fm, "level")
         .filter(|l| LEVELS.contains(&l.as_str()))
@@ -350,6 +370,7 @@ fn parse_persona(path: &Path) -> Option<PersonaInfo> {
         character_path,
         character_name,
         character_source,
+        character_identity,
         remind: fm_value(&fm, "remind").as_deref() == Some("on"),
         mtime_ms: file_mtime_ms(path),
     })
@@ -455,7 +476,7 @@ fn render_job(j: &JobInfo) -> String {
 }
 
 fn render_profile(out: &mut String, title: &str, p: &PersonaProfile) {
-    if p.hint.is_empty() && p.tone.is_empty() && p.personality.is_empty() {
+    if p.hint.is_empty() && p.tone.is_empty() && p.personality.is_empty() && p.examples.is_empty() {
         return; // 빈 프로필은 섹션을 만들지 않는다 — 그 단계는 아직 안 쓴 것
     }
     out.push_str(&format!("\n## {title}\n"));
@@ -467,6 +488,9 @@ fn render_profile(out: &mut String, title: &str, p: &PersonaProfile) {
     }
     if !p.personality.is_empty() {
         out.push_str(&format!("### 성격\n{}\n", p.personality));
+    }
+    if !p.examples.is_empty() {
+        out.push_str(&format!("### 대사 예시\n{}\n", p.examples));
     }
 }
 
@@ -487,7 +511,7 @@ fn render_persona(p: &PersonaInfo) -> String {
     // 단, 구 호출 경로(프로필 없이 hint만 온 페이로드)는 세 프로필에 복사해 받아준다.
     // 고급 섹션은 쓰지 않는다 — 고급은 캐릭터 시트(<id>.character.md)가 전부다
     if p.basic.hint.is_empty() && p.mid.hint.is_empty() && !p.hint.is_empty() {
-        let legacy = PersonaProfile { hint: p.hint.clone(), tone: p.tone.clone(), personality: p.personality.clone() };
+        let legacy = PersonaProfile { hint: p.hint.clone(), tone: p.tone.clone(), personality: p.personality.clone(), ..Default::default() };
         // 기본은 판단 성향만 — 말투·성격은 중급부터
         render_profile(&mut s, "기본", &PersonaProfile { hint: legacy.hint.clone(), ..Default::default() });
         render_profile(&mut s, "중급", &legacy);
@@ -884,6 +908,25 @@ mod tests {
         save_persona(&root, &titled, None).unwrap();
         let again = list(&root, None).personas.into_iter().find(|p| p.id == "kai").unwrap();
         assert_eq!(again.title, "UI | C# 개발자");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// 대사 예시 (§15-5) — 중급 프로필에만 남고 왕복된다. 시트 정체성 (§15-3) — `## 정체성` 첫 글줄
+    #[test]
+    fn examples_roundtrip_and_sheet_identity() {
+        let root = temp_root("examples");
+        seed(&root);
+        let kai = list(&root, None).personas.into_iter().find(|p| p.id == "kai").unwrap();
+        let mut p = kai.clone();
+        p.mid.examples = "- 빌드 실패 → \"봅시다.\"".into();
+        p.basic.examples = "버려진다".into();
+        save_persona(&root, &p, None).unwrap();
+        let again = list(&root, None).personas.into_iter().find(|p| p.id == "kai").unwrap();
+        assert_eq!(again.mid.examples, "- 빌드 실패 → \"봅시다.\"");
+        assert!(again.basic.examples.is_empty());
+        let luca = list(&root, None).personas.into_iter().find(|p| p.id == "luca").unwrap();
+        assert_eq!(luca.character_identity.as_deref(), Some("사용자의 여정을 지도로 그리는 등대지기 — 따뜻하고 관찰력이 좋다"));
+        assert_eq!(sheet_identity("## 정체성 (필수 · 1줄)\n\n\n## 배경\n내용"), None); // 빈 템플릿
         fs::remove_dir_all(&root).ok();
     }
 

@@ -477,6 +477,7 @@ mod tests {
                 me: true,
                 persona_name: None,
                 title: None,
+                identity: None,
             }],
             ..Default::default()
         }

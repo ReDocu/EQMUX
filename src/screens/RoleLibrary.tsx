@@ -95,11 +95,11 @@ export function RoleLibrary() {
   const [draftTitle, setDraftTitle] = createSignal(""); // 직함 (0.5) — "" = 직함 없음
   const [draftRemind, setDraftRemind] = createSignal(false); // 매 턴 캐릭터 상기 (0.6 §15-3)
   // ── 단계별 독립 프로필 3벌 — 단계 전환은 편집 대상 교체일 뿐, 다른 단계 값은 그대로 남는다 ──
-  type DraftProfile = { hint: string; tone: string; personality: string };
-  const emptyProf = (): DraftProfile => ({ hint: "", tone: "", personality: "" });
+  type DraftProfile = { hint: string; tone: string; personality: string; examples: string };
+  const emptyProf = (): DraftProfile => ({ hint: "", tone: "", personality: "", examples: "" });
   const profileOf = (p: Persona, lvl: PersonaLevel): DraftProfile => {
     const src = personaProfile(p, lvl);
-    return { hint: src.hint ?? "", tone: src.tone ?? "", personality: src.personality ?? "" };
+    return { hint: src.hint ?? "", tone: src.tone ?? "", personality: src.personality ?? "", examples: src.examples ?? "" };
   };
   const [draftProfiles, setDraftProfiles] = createSignal<Record<PersonaLevel, DraftProfile>>({
     basic: emptyProf(),
@@ -724,6 +724,16 @@ export function RoleLibrary() {
                     {tf("예산 — 말투·성격 각 {max}줄 권장. 긴 캐릭터 묘사는 토큰만 먹습니다", { max: CHAR_BUDGET })}
                   </div>
                 </Show>
+              </div>
+              {/* 대사 예시 (0.6 §15-5) — 캐릭터 가이드가 말투 재현에 가장 효과가 크다고 한 칸. 비면 토큰 0 */}
+              <div class="rl-field">
+                <label class="rl-label">{t("대사 예시 (중급 프로필) — 상황 → 응답 2~3줄. 말투 재현에 가장 효과가 큽니다")}</label>
+                <textarea
+                  rows={3}
+                  placeholder={t('예: - 빌드 실패 보고 → "어디가 막혔는지 같이 봅시다."')}
+                  value={prof().examples}
+                  onInput={(e) => setProf({ examples: e.currentTarget.value })}
+                />
               </div>
             </Show>
             {/* ── 고급 — 캐릭터 시트가 페르소나의 전부다. Tauri 전용 (실파일이 원본) ── */}

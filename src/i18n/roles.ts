@@ -278,6 +278,9 @@ export const dict: Record<string, string> = {
   "버리고 이동": "Discard and move on",
   // 0.6 §15-3 매 턴 캐릭터 상기
   "매 턴 캐릭터 상기": "Remind character every turn",
+  "대사 예시 (중급 프로필) — 상황 → 응답 2~3줄. 말투 재현에 가장 효과가 큽니다":
+    "Sample lines (Mid profile) — 2–3 lines of situation → reply. The most effective way to keep the voice",
+  '예: - 빌드 실패 보고 → "어디가 막혔는지 같이 봅시다."': 'e.g. - Build failure report → "Where did it get stuck? Let us look together."',
   "프롬프트마다 캐릭터 한 줄을 다시 싣습니다 — 턴당 수십 토큰. Claude Code만 (Codex는 나가지 않음)":
     "Re-adds one character line on every prompt — a few dozen tokens per turn. Claude Code only (not sent to Codex)",
 };

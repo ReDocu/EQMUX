@@ -48,6 +48,7 @@ export interface PersonaProfile {
   hint: string;
   tone?: string;
   personality?: string;
+  examples?: string; // 대사 예시 (0.6 §15-5 · W4) — 중급 전용
 }
 
 export interface Persona {
@@ -66,6 +67,7 @@ export interface Persona {
   characterPath?: string; // 고급 캐릭터 시트 절대 경로 — personas/<id>.character.md, 존재가 곧 고급
   characterName?: string; // 시트 frontmatter name — 역할 파일 정체성 줄에 쓴다
   characterSource?: string; // 시트 frontmatter source (원전 — 게임·역사·창작)
+  characterIdentity?: string; // 시트 `## 정체성` 첫 줄 (0.6 §15-3 · W4) — 팀원 표 정체성 열
   title?: string; // 직함 (0.5) — 직무 안에서 맡는 영역 이름. 있을 때만 frontmatter에 쓴다
   remind?: boolean; // 매 턴 캐릭터 상기 (0.6 §15-3 · W4) — frontmatter remind: on
   mtimeMs?: number; // 읽은 시점의 파일 mtime (P-7) — 저장 시 외부 변경 충돌 감지
