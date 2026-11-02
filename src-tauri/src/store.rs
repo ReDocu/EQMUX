@@ -25,6 +25,8 @@ pub enum StoreMsg {
     Recap { ws: String, id: String, text: String },
     /// 편집 도구로 고친 파일 (§13-1 · C4) — 훅이 보낸다. 배치에 실려 쓴다
     Touch { ws: String, session: String, path: String, tool: String, ts: i64 },
+    /// 비용 증분 (§13-6, W2) — 양수만 온다. mission None = 임무 밖
+    Cost { ws: String, session: String, mission: Option<String>, ts: i64, usd: f64 },
     /// 종료 flush (FR-C-62②) — 대기 배치를 즉시 커밋하고 ack를 보낸다
     Flush(Sender<()>),
 }
@@ -124,6 +126,14 @@ const MIGRATIONS: &[&str] = &[
     // 3 — 회신 연결 (§4 `eqmux send --re <id>` · `--wait`, W3). 원 메시지의 원장 id, 회신이 아니면 NULL
     "ALTER TABLE message ADD COLUMN re INTEGER;
      CREATE INDEX IF NOT EXISTS message_re ON message(re);",
+    // 4 — 임무별 비용 (§13-6, W2). 증분 한 건 = 한 행(대략 1센트마다), mission NULL = 임무 밖
+    "CREATE TABLE IF NOT EXISTS cost (
+       session TEXT NOT NULL,
+       mission TEXT,
+       ts INTEGER NOT NULL,
+       usd REAL NOT NULL
+     );
+     CREATE INDEX IF NOT EXISTS cost_ts ON cost(ts);",
 ];
 
 /// 버전을 하나씩 올린다 — 단계마다 트랜잭션이라 중간에 실패해도 그 앞 버전에 멈춘다.
@@ -336,6 +346,7 @@ fn maintain(conn: &Connection) {
     // 세션 상세가 세션별로 최신순 조회하므로 (session_id, id) 인덱스를 둔다 (SCHEMA)
     let _ = conn.execute("DELETE FROM event WHERE ts < ?1", params![cutoff]);
     let _ = conn.execute("DELETE FROM file_touch WHERE ts < ?1", params![cutoff]);
+    let _ = conn.execute("DELETE FROM cost WHERE ts < ?1", params![cutoff]);
     // 세션당 상한도 열 때 한 번 적용한다 — 상한을 낮춘 뒤 처음 여는 DB에는 옛 상한으로 쌓인
     // 줄이 남아 있고, 그 세션이 다시 살아나지 않으면 적재 경로의 정리는 영영 돌지 않는다.
     // 검색이 최신 SCROLLBACK_CAP_PER_SESSION줄만 보게 하려면 여는 김에 여기서 끊어 준다.
@@ -476,6 +487,45 @@ impl Store {
             ts,
         });
     }
+
+    /// 비용 증분 한 건 (§13-6) — touch_file과 같이 쓰기 스레드 배치로 넘긴다
+    #[allow(dead_code)] // W2가 agent.rs에 붙이면 뗀다
+    pub fn cost_delta(&self, ws: &str, session: &str, mission: Option<&str>, ts: i64, usd: f64) {
+        let _ = self.tx.send(StoreMsg::Cost {
+            ws: ws.into(),
+            session: session.into(),
+            mission: mission.map(Into::into),
+            ts,
+            usd,
+        });
+    }
+}
+
+/// 임무별 비용 합 (§13-6) — mission None = 임무 밖
+#[allow(dead_code)] // W2가 agent.rs에 붙이면 뗀다
+#[derive(serde::Serialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MissionCost {
+    pub mission: Option<String>,
+    pub usd: f64,
+}
+
+/// since_ms 이후 비용을 임무별로 합친다. DB·테이블이 없으면 빈 목록
+#[allow(dead_code)] // W2가 agent.rs에 붙이면 뗀다
+pub fn cost_by_mission(root: &Path, ws: &str, since_ms: i64) -> Vec<MissionCost> {
+    let path = db_path(root, ws);
+    if !path.exists() {
+        return Vec::new();
+    }
+    let Ok(conn) = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY) else {
+        return Vec::new();
+    };
+    let _ = conn.busy_timeout(Duration::from_secs(2));
+    let Ok(mut stmt) = conn.prepare("SELECT mission, SUM(usd) FROM cost WHERE ts >= ?1 GROUP BY mission ORDER BY mission") else {
+        return Vec::new();
+    };
+    let rows = stmt.query_map(params![since_ms], |r| Ok(MissionCost { mission: r.get(0)?, usd: r.get(1)? }));
+    rows.map(|it| it.flatten().collect()).unwrap_or_default()
 }
 
 /// 편집 기록 행 (C4)
@@ -586,7 +636,8 @@ fn ws_of(msg: &StoreMsg) -> &str {
         | StoreMsg::AgentSession { ws, .. }
         | StoreMsg::ForgetAgentSession { ws, .. }
         | StoreMsg::Recap { ws, .. }
-        | StoreMsg::Touch { ws, .. } => ws,
+        | StoreMsg::Touch { ws, .. }
+        | StoreMsg::Cost { ws, .. } => ws,
         StoreMsg::Flush(_) => "default", // 도달 불가 — run 루프가 pending에 넣지 않는다
     }
 }
@@ -717,6 +768,12 @@ fn flush(
                     let _ = tx.execute(
                         "INSERT INTO file_touch (session, path, tool, ts) VALUES (?1, ?2, ?3, ?4)",
                         params![session, path, tool, ts],
+                    );
+                }
+                StoreMsg::Cost { session, mission, ts, usd, .. } => {
+                    let _ = tx.execute(
+                        "INSERT INTO cost (session, mission, ts, usd) VALUES (?1, ?2, ?3, ?4)",
+                        params![session, mission, ts, usd],
                     );
                 }
                 StoreMsg::Flush(_) => {} // pending에 들어오지 않는다 (run 루프에서 즉시 처리)
@@ -1242,6 +1299,20 @@ mod tests {
         assert_eq!(all.iter().map(|t| t.ts).collect::<Vec<_>>(), [200, 300]);
         let kai = touches_for(&dir, "ws", "kai@ws", 0);
         assert_eq!(kai.iter().map(|t| t.path.as_str()).collect::<Vec<_>>(), ["src/x.ts", "src/y.ts"]);
+
+        // §13-6 — 비용 증분이 임무별로 합쳐진다 (since 이전은 빠진다)
+        assert!(cost_by_mission(&dir, "nows", 0).is_empty());
+        store.cost_delta("ws", "kai@ws", Some("m1"), 100, 0.25);
+        store.cost_delta("ws", "kai@ws", Some("m1"), 200, 0.5);
+        store.cost_delta("ws", "rin@ws", None, 300, 0.125);
+        store.cost_delta("ws", "rin@ws", Some("m1"), 50, 9.0);
+        let (ack, done) = std::sync::mpsc::channel();
+        store.sender().send(StoreMsg::Flush(ack)).unwrap();
+        done.recv_timeout(Duration::from_secs(10)).unwrap();
+        assert_eq!(
+            cost_by_mission(&dir, "ws", 100),
+            [MissionCost { mission: None, usd: 0.125 }, MissionCost { mission: Some("m1".into()), usd: 0.75 }]
+        );
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);
     }
