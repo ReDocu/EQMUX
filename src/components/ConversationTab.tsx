@@ -21,7 +21,7 @@ import {
 import { backend } from "../backend/mock";
 import { isTauri, revealPath } from "../backend/pty";
 import { t, tf } from "../i18n";
-import { focusSession, jumpToSession, scopeWorkspace, tick } from "../state";
+import { draftRequest, focusSession, jumpToSession, scopeWorkspace, setDraftRequest, tick } from "../state";
 import { ContextMenu, Eyebrow, notify } from "./ui";
 import { effectiveTitle, sessionName as sessionNameOf } from "../types";
 import type { ConversationMessage, Session } from "../types";
@@ -125,6 +125,15 @@ export function ConversationTab() {
   const [draft, setDraft] = createSignal("");
   let draftEl: HTMLInputElement | undefined;
   const [error, setError] = createSignal<string | null>(null);
+  // 밖에서 온 초안 (0.6 §13-1 [○○에게 알리기]) — 채우고 입력칸에 커서만 둔다. 보내기는 사람의 Enter
+  createEffect(() => {
+    const r = draftRequest();
+    if (!r) return;
+    setDraftRequest(undefined);
+    setDraft(`@${label(r.session)} ${r.text}`);
+    setSelType(r.type);
+    queueMicrotask(() => draftEl?.focus());
+  });
 
   const shown = createMemo(() => {
     tick();

@@ -3,7 +3,7 @@ import { createEffect, createSignal, lazy, Match, onCleanup, onMount, Show, Swit
 import { AppBar } from "./components/AppBar";
 import { SidePanel } from "./components/SidePanel";
 import { ensureAgentListeners } from "./backend/agent";
-import { nextUnseen, startNotifyFeed } from "./backend/attention";
+import { nextUnseen, startConflictFeed, startNotifyFeed } from "./backend/attention";
 import { startDirectorySync, startMessageBus } from "./backend/conversation";
 import { backend } from "./backend/mock";
 import { startAgentProbe } from "./backend/agentprobe";
@@ -113,6 +113,7 @@ export function App() {
   // 알림 센터 (0.5 C2) — Rust notify-item을 벨 목록에 쌓는다. 창이 포커스여서 OS 알림이 안 뜬 건도 온다
   onMount(() => startNotifyFeed());
 
+  onMount(() => startConflictFeed()); // 같은 파일 동시 편집 (0.6 §13-1 · C1)
   // 화면 손상 진단 (임시 계측, backend/diag) — 배율·모니터 변화와 자식 웹뷰 좌표 어긋남을 남긴다.
   // 자동 보정은 하지 않는다: 원인을 확정하기 전에 가리면 원인을 못 찾는다
   onMount(() => startDiagnostics());
@@ -138,13 +139,13 @@ export function App() {
   // 비정상 종료 복구 (FR-C-35) — 직전 실행이 크래시였으면 직전 세션 목록을 1회 보여준다
   // 보고는 recovery.ts가 들고 있다 — 닫아도 알림 센터에서 다시 연다 (U63)
   onMount(() => void loadCrashRecovery());
-
   // 첫 실행 고지 (§10) — 저장본을 읽은 뒤에만 판정한다(로드 전 기본값은 '안 봤음'이라 매번 번쩍인다).
   // 다른 도구 전역 지시 점검(§14)은 기동 때 한 번 — 찾으면 알림 센터에 한 건
   const [settingsReady, setSettingsReady] = createSignal(false);
   onMount(() => void loadSettings().then(() => setSettingsReady(true)));
   onMount(() => startForeignCheck());
   // 창 닫기 = 앱 완전 종료 (FR-C-60) — 실행 중 세션이 있으면 확인 다이얼로그 (FR-C-61),
+
   // 없으면 flush 시퀀스만 돌고 조용히 종료된다.
   // macOS ⌘Q·Dock '종료'도 같은 길로 온다 (B112) — 창 닫기를 거치지 않으므로 Rust(quit.rs)가
   // terminate를 취소하고 'app-quit-requested'를 보낸다. 로그아웃은 Rust가 직접 정리한다
@@ -337,10 +338,10 @@ export function App() {
       <Show when={layoutPickerOpen()}>
         <LayoutPicker />
       </Show>
-    </div>
-  );
-}
       {/* 복구 창이 먼저다 — 두 모달이 겹치지 않게 그것이 닫힌 뒤에 뜬다 */}
       <Show when={settingsReady() && firstRunPending() && !crashOpen()}>
         <FirstRunNotice />
       </Show>
+    </div>
+  );
+}

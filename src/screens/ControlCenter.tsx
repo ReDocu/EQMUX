@@ -63,6 +63,7 @@ import { t, tf } from "../i18n";
 import { SessionDetailPanel } from "./SessionDetailPanel";
 import { TranscriptPane } from "./TranscriptPane";
 import type { AgentCliId, Session, Workspace } from "../types";
+import { PaneConflictChip } from "../components/EditConflicts";
 import { AGENT_CLI_LABEL, agentAttached, cliOf, statusText, effectiveTitle, nameBesideNo, paneNo, SESSION_NAME_MAX, sessionDisplayName, sessionName, slotNo } from "../types";
 import { Icon } from "../components/icons";
 import { IS_MAC, keyLabel } from "../platform";
@@ -911,6 +912,8 @@ export function ControlCenter(props: { workspace: Workspace }) {
                   }}
                 />
               </Show>
+              {/* 같은 파일 동시 편집 (0.6 §13-1) — 주의 칩과 따로 둔다. 막지 않고 알리기 초안만 연다 */}
+              <PaneConflictChip sessionId={s.id} />
               <StatusLabel session={s} hideExit />
               {/* macOS — 맨 셸이면 실제로 뜬 셸 이름을 붙인다. 고른 셸과 뜬 셸이 다르면 여기서 보인다 (B114) */}
               <Show when={IS_MAC && s.status === "shell" && ptyShells()[s.id]}>

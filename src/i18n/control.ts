@@ -269,4 +269,15 @@ export const dict: Record<string, string> = {
   "저장 —": "WAL —",
   "메모리 {mb} MB": "MEM {mb} MB",
   "세션 {n}/{max} · 터미널 집중": "{n}/{max} SESSIONS · TERMINAL FOCUS",
+
+  // ── 0.6 W7: 같은 파일 동시 편집 (§13-1) ──
+  "편집 도구로 고친 것만 잡습니다 (Bash · Codex 제외)": "Only catches edits made with edit tools (not Bash or Codex)",
+  "{names}이(가) 동시에 편집 중": "{names} are editing the same file",
+  "{names}이(가) {path}를 동시에 편집 중": "{names} are editing {path} at the same time",
+  "{name}에게 알리기": "Tell {name}",
+  "같은 파일에 새 편집이 오면 다시 뜹니다": "Comes back if the same file is edited again",
+  "동시 편집 · {path}": "Concurrent edit · {path}",
+  "동시 편집": "Concurrent edit",
+  "{path}를 {others}도 방금 편집했습니다. 서로 덮어쓰지 않게 {others}와 나눠 맡아 주세요.":
+    "{others} also just edited {path}. Split the work with {others} so you don't overwrite each other.",
 };

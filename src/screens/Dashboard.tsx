@@ -14,6 +14,7 @@ import { Chip, ContextMenu, Identity, notify, PaneNoText, StopConfirm } from "..
 import type { ChipTone } from "../components/ui";
 import { canStartFresh, resumeAgent, startFresh } from "../backend/agent";
 import { attentionRank, inboxWaiting } from "../backend/attention";
+import { ConflictCards } from "../components/EditConflicts";
 import { sessionTermSize } from "../components/TerminalPane";
 import type { Session } from "../types";
 import { AGENT_CLI_LABEL, ATTENTION_ORDER, cliOf, detectedCli, effectiveTitle, fmtSince, nameBesideNo, paneNo, sessionDisplayName, sessionName, statusText } from "../types";
@@ -419,6 +420,8 @@ export function Dashboard() {
               </button>
             </Show>
           </div>
+          {/* 같은 파일 동시 편집 (0.6 §13-1) — 기다리는 행보다 위. 사람이 알리기·닫기를 고른다 */}
+          <ConflictCards />
           {/* 행마다 기다리는 이유와 기다린 시간 · 누르면 페인으로 · 기다린 순 */}
           <For each={waitRows()}>
             {(w) => (

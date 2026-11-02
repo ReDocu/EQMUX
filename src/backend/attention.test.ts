@@ -6,6 +6,8 @@ vi.mock("./conversation", () => ({
 }));
 vi.mock("../state", () => ({ jumpToSession: () => true, modalOpen: () => false, setFocusRequest: () => {} }));
 import {
+  CONFLICT_WINDOW_MS,
+  mergeConflict,
   attentionOrder,
   attentionRank,
   fmtAgo,
@@ -100,5 +102,17 @@ describe("attention", () => {
     expect(fmtAgo(5 * 60_000)).toBe("5분 전");
     expect(fmtAgo(3 * 3_600_000)).toBe("3시간 전");
     expect(fmtAgo(2 * 86_400_000)).toBe("2일 전");
+  });
+});
+
+describe("같은 파일 동시 편집 (§13-1 · C1)", () => {
+  const c = (path: string, sessions: string[], ts: number) => ({ workspace: "w", path, sessions, ts });
+  test("같은 파일은 세션을 합치고 맨 앞으로, 창(10분)이 지난 것은 걷는다", () => {
+    const old = c("a.ts", ["kai", "rin"], 0);
+    const other = c("b.ts", ["kai", "sol"], 1000);
+    const l = mergeConflict([other, old], c("a.ts", ["noel", "rin"], 2000));
+    expect(l[0]).toEqual(c("a.ts", ["kai", "noel", "rin"], 2000));
+    expect(l).toHaveLength(2);
+    expect(mergeConflict(l, c("z.ts", ["x", "y"], 2000 + CONFLICT_WINDOW_MS + 1))).toHaveLength(1);
   });
 });

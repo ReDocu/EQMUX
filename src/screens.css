@@ -6568,3 +6568,31 @@ label.inbox-pop-row {
   display: flex;
   gap: 8px;
 }
+
+/* 0.6 W7: 같은 파일 동시 편집 — 대시보드 주의 카드 (§13-1) */
+.conflict-card {
+  margin-bottom: 6px;
+  padding: 8px 10px;
+  border-color: var(--eq-amber);
+  background: var(--eq-amber-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+.conflict-t {
+  font-weight: 700;
+  color: var(--eq-amber);
+}
+.conflict-path {
+  overflow-wrap: anywhere;
+}
+.conflict-why {
+  font-size: 11px;
+}
+.conflict-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}

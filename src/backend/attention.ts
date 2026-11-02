@@ -10,6 +10,7 @@ import { isTauri } from "./pty";
 import { jumpToSession, modalOpen, setFocusRequest } from "../state";
 import { t, tf } from "../i18n";
 import type { Session } from "../types";
+import { sessionName } from "../types";
 
 /** 주의 순위 — 작을수록 급하다. 0은 봐야 할 것이 없다.
  *  1 waiting · 2 dead(본 적 없음) · 3 메시지 대기 · 4 보고 전 · 5 완료 보고 · 6 턴 완료 */
@@ -165,4 +166,78 @@ export function fmtAgo(ms: number): string {
   if (m < 60) return tf("{m}분 전", { m });
   if (m < 1440) return tf("{h}시간 전", { h: Math.floor(m / 60) });
   return tf("{d}일 전", { d: Math.floor(m / 1440) });
+}
+
+// ── 같은 파일 동시 편집 (0.6 §13-1 · C1 edit-conflict — W2 agent.rs) ──
+// 에이전트를 막거나 메시지를 자동으로 보내지 않는다. 페인 머리 · 대시보드 · 알림 센터에 보이기만 하고,
+// [○○에게 알리기]는 사람이 고칠 수 있는 ask 초안을 연다. Bash로 고친 파일과 Codex는 잡지 못한다.
+
+/** C1 payload — path는 워크스페이스 안이면 상대 경로(`/`), 밖이면 절대 경로. sessions는 정렬된 앱 세션 id */
+export interface EditConflict {
+  workspace: string;
+  path: string;
+  sessions: string[];
+  ts: number;
+}
+/** 경고 창 (결정 Q3) — Rust 판정과 같은 10분. 그 뒤로는 화면에서도 걷는다 */
+export const CONFLICT_WINDOW_MS = 10 * 60_000;
+
+/** 새 이벤트를 목록에 합친다 — 같은 파일이면 세션을 합치고 시각을 새로. 창이 지난 것은 뺀다. 순수 함수 */
+export function mergeConflict(list: readonly EditConflict[], c: EditConflict): EditConflict[] {
+  const live = list.filter((x) => x.ts > c.ts - CONFLICT_WINDOW_MS);
+  const same = live.find((x) => x.workspace === c.workspace && x.path === c.path);
+  if (!same) return [c, ...live];
+  const merged = { ...c, sessions: [...new Set([...same.sessions, ...c.sessions])].sort() };
+  return [merged, ...live.filter((x) => x !== same)];
+}
+
+const [conflictList, setConflictList] = createSignal<EditConflict[]>([]);
+/** 걷기용 시계 — 경고가 있을 때만 의미가 있어 1분 간격이면 충분하다 */
+const [conflictClock, setConflictClock] = createSignal(Date.now());
+
+/** 지금 살아 있는 동시 편집 — 최신 순 */
+export function activeConflicts(): EditConflict[] {
+  const now = conflictClock();
+  return conflictList().filter((c) => c.ts > now - CONFLICT_WINDOW_MS);
+}
+/** 이 세션이 걸린 동시 편집 — 페인 머리가 본다 */
+export const conflictsOf = (sessionId: string): EditConflict[] =>
+  activeConflicts().filter((c) => c.sessions.includes(sessionId));
+/** 사람이 [닫기]를 눌렀다 — 같은 파일에 새 이벤트가 오면 다시 뜬다 */
+export function dismissConflict(c: EditConflict): void {
+  setConflictList((l) => l.filter((x) => !(x.workspace === c.workspace && x.path === c.path)));
+}
+/** 이벤트 하나를 받는다 — 목록에 합치고 알림 센터에 한 건 (Rust가 새로 끼어든 세션마다 한 번만 낸다) */
+export function receiveConflict(c: EditConflict, open?: () => void): void {
+  setConflictList((l) => mergeConflict(l, c));
+  setConflictClock(Date.now());
+  const names = c.sessions.map(conflictName).join(" · ");
+  notifyLocal({
+    session: `app:conflict:${c.workspace}:${c.path}`,
+    workspace: c.workspace,
+    kind: "conflict",
+    title: tf("{names}이(가) {path}를 동시에 편집 중", { names, path: c.path }),
+    body: t("편집 도구로 고친 것만 잡습니다 (Bash · Codex 제외)"),
+    open,
+  });
+}
+/** 세션 이름 — 없어진 세션이면 id 앞부분 */
+export function conflictName(id: string): string {
+  const s = backend.listSessions().find((x) => x.id === id);
+  return s ? sessionName(s, backend.listPersonas().find((p) => p.id === s.personaId)) : id.split("@")[0];
+}
+
+let conflictFeed = false;
+/** 앱 셸이 1회 켠다 — open은 알림 항목을 눌렀을 때 갈 곳(첫 세션 페인) */
+export function startConflictFeed(): void {
+  if (conflictFeed || !isTauri()) return;
+  conflictFeed = true;
+  setInterval(() => conflictList().length > 0 && setConflictClock(Date.now()), 60_000);
+  void listen<EditConflict>("edit-conflict", (e) => {
+    const c = e.payload;
+    receiveConflict(c, () => {
+      const first = c.sessions[0];
+      if (first && !modalOpen() && jumpToSession(c.workspace, first)) setFocusRequest({ session: first });
+    });
+  });
 }
