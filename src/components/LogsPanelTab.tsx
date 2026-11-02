@@ -24,6 +24,10 @@ const shortId = (id: string) => (isServerTermId(id) ? t("서버") : id.split("@"
 
 const LEVELS = ["전체", "INFO", "WARN", "ERROR"] as const;
 
+/** 분류 표시 이름 — 원값(store · agent)은 영문, 나머지는 한국어라 섞여 보였다 (P88). t()는 렌더에서 */
+const TYPE_LABEL: Record<string, string> = { store: "앱 기록", agent: "에이전트" };
+const typeLabel = (type: string) => TYPE_LABEL[type] ?? type;
+
 // 이벤트 → 로그 행 변환 — 레벨은 내용에서 추정한다 (waiting=warn · dead/비정상 종료=error)
 function toLog(e: FeedEvent): ServerLog {
   const level: ServerLog["level"] =
@@ -54,20 +58,30 @@ export function LogsPanelTab() {
   const [searching, setSearching] = createSignal(false);
   const [ctx, setCtx] = createSignal<{ wsId: string; session: string; hitSeq: number; lines: ScrollbackHit[] } | null>(null);
 
+  // 읽지 못한 워크스페이스 이름 (B244) — 한 곳이 실패해도 나머지 결과는 보인다
+  const [searchFailed, setSearchFailed] = createSignal<string[]>([]);
   const runDiskSearch = async () => {
     const q = query().trim();
     if (!q || !isTauri()) return;
+    // 첫 검색부터 결과 화면으로 바꿔 '검색 중…'이 보이게 한다 (B244)
+    setHits([]);
+    setSearchFailed([]);
     setSearching(true);
     setCtx(null);
-    const wss = backend.listWorkspaces();
-    const all = await Promise.all(
-      wss.map(async (w) => (await searchScrollback(w.id, q)).map((h) => ({ ...h, wsId: w.id }))),
-    );
-    setHits(all.flat().sort((a, b) => b.ts - a.ts).slice(0, 100));
-    setSearching(false);
+    try {
+      const wss = backend.listWorkspaces();
+      const rs = await Promise.allSettled(
+        wss.map(async (w) => (await searchScrollback(w.id, q)).map((h) => ({ ...h, wsId: w.id }))),
+      );
+      setHits(rs.flatMap((r) => (r.status === "fulfilled" ? r.value : [])).sort((a, b) => b.ts - a.ts).slice(0, 100));
+      setSearchFailed(wss.filter((_, i) => rs[i].status === "rejected").map((w) => w.name));
+    } finally {
+      setSearching(false);
+    }
   };
 
-  // 히트 문맥 열람 (FR-C-13·14) — 그 지점 앞뒤 ~60줄을 디스크에서 조각 로드
+  // 히트 문맥 열람 (FR-C-13·14) — 그 지점 앞뒤 ~60줄을 디스크에서 조각 로드.
+  // pageScrollback은 실패를 빈 배열로 돌려준다 — 0줄이면 아래에서 '읽지 못했습니다'로 적는다
   const openContext = async (h: DiskHit) => {
     const lines = await pageScrollback(h.wsId, h.sessionId, h.seq + 31, 60);
     setCtx({ wsId: h.wsId, session: h.sessionId, hitSeq: h.seq, lines });
@@ -99,29 +113,31 @@ export function LogsPanelTab() {
     });
   });
   const source = () => (isTauri() ? realLogs() : SERVER_LOGS);
+  // 숫자는 지금 들고 있는 행(실앱은 최근 200개)에서 센다 (P88) — 목의 고정 숫자는 목록과 맞지 않았다
   const metrics = createMemo(() => {
-    if (!isTauri()) return LOG_METRICS;
     const all = source();
     const info = all.filter((l) => l.level === "info").length;
     const warn = all.filter((l) => l.level === "warn").length;
     const error = all.filter((l) => l.level === "error").length;
-    return { info, warn, error, total: all.length, rate: "앱 기록" };
+    return { info, warn, error, total: all.length, rate: isTauri() ? "앱 기록" : LOG_METRICS.rate };
   });
+  const levelCount = (l: (typeof LEVELS)[number]) =>
+    l === "전체" ? metrics().total : metrics()[l.toLowerCase() as "info" | "warn" | "error"];
 
   const logs = createMemo(() =>
     source().filter((l) => {
       if (level() !== "전체" && l.level !== level().toLowerCase()) return false;
-      const q = query().trim();
-      if (q && !`${l.type} ${l.message}`.includes(q)) return false;
+      const q = query().trim().toLowerCase(); // 대소문자 무시 (P84 — 환경변수 검색과 같게)
+      if (q && !`${l.type} ${t(typeLabel(l.type))} ${l.message}`.toLowerCase().includes(q)) return false;
       return true;
     }),
   );
 
-  // 표시 중인 로그를 텍스트 파일로 내보내기 (필터 반영)
-  // 세그먼트 줄 오른쪽 요약 (0.5 시안) — `128 LINES`
-  createEffect(() => setPanelNote(`${metrics().total} LINES`));
+  // 세그먼트 줄 오른쪽 요약 — 최근 몇 개를 들고 있고 그중 몇 개가 보이는지 (P88)
+  createEffect(() => setPanelNote(tf("최근 {n}개 · 표시 {m}개", { n: metrics().total, m: logs().length })));
   onCleanup(() => setPanelNote(""));
 
+  // 표시 중인 로그를 텍스트 파일로 내보내기 (필터 반영) — 내용은 앱 이벤트다 (P88, 서버 탭 출력이 아니다)
   const exportLogs = () => {
     const text = logs()
       .map((l) => `${l.time} [${l.level.toUpperCase()}] [${l.type}] ${maskSecrets(l.message)}`)
@@ -129,7 +145,7 @@ export function LogsPanelTab() {
     const url = URL.createObjectURL(new Blob([text + "\n"], { type: "text/plain" }));
     const a = document.createElement("a");
     a.href = url;
-    a.download = "eqmux-server-logs.txt";
+    a.download = `eqmux-app-events-${new Date().toISOString().slice(0, 10)}.txt`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -141,7 +157,7 @@ export function LogsPanelTab() {
         <For each={LEVELS}>
           {(l) => (
             <button class="logsp-chip mono" classList={{ on: level() === l }} aria-pressed={level() === l} onClick={() => setLevel(l)}>
-              {t(l)}
+              {t(l)} {levelCount(l)}
             </button>
           )}
         </For>
@@ -166,20 +182,7 @@ export function LogsPanelTab() {
         onKeyDown={(e) => isSubmitEnter(e) && void runDiskSearch()}
       />
 
-      <div class="logsp-metrics">
-        <div class="logsp-metric">
-          <div class="logsp-metric-k mono">INFO</div>
-          <div class="logsp-metric-v mono">{metrics().info}</div>
-        </div>
-        <div class="logsp-metric warn">
-          <div class="logsp-metric-k mono">WARN</div>
-          <div class="logsp-metric-v mono">{metrics().warn}</div>
-        </div>
-        <div class="logsp-metric error">
-          <div class="logsp-metric-k mono">ERROR</div>
-          <div class="logsp-metric-v mono">{metrics().error}</div>
-        </div>
-      </div>
+      {/* 레벨 숫자는 위 칩에 합쳤다 (P88) — 눌리지 않는 숫자 카드가 칩과 같은 일을 두 번 보였다 */}
 
       <Show
         when={hits() === null}
@@ -201,11 +204,18 @@ export function LogsPanelTab() {
                   </div>
                 )}
               </For>
-              <Show when={hits()!.length === 0}>
+              <Show when={hits()!.length === 0 && searchFailed().length === 0}>
                 <div class="muted" style={{ padding: "12px", "font-size": "11px" }}>
                   {t("디스크 스크롤백에서 찾지 못했습니다")}
                 </div>
               </Show>
+              <For each={searchFailed()}>
+                {(name) => (
+                  <div class="st-dead" style={{ padding: "4px 8px", "font-size": "11px" }}>
+                    {tf("{ws} 스크롤백을 읽지 못했습니다", { ws: name })}
+                  </div>
+                )}
+              </For>
             </Show>
             <Show when={ctx()}>
               {(c) => (
@@ -222,6 +232,9 @@ export function LogsPanelTab() {
                     ▲ {t("더 이전 60줄")}
                   </button>
                   <div class="mono" style={{ "max-height": "180px", overflow: "auto", "font-size": "10.5px", "line-height": "1.5" }}>
+                    <Show when={c().lines.length === 0}>
+                      <div class="muted">{t("이 지점의 기록을 읽지 못했습니다")}</div>
+                    </Show>
                     <For each={c().lines}>
                       {(l) => (
                         <div style={l.seq === c().hitSeq ? { background: "rgba(110,158,255,.18)" } : undefined}>
@@ -241,7 +254,7 @@ export function LogsPanelTab() {
             {(l) => (
               <div class="logsp-row" classList={{ error: l.level === "error", warn: l.level === "warn" }}>
                 <span class="mono muted logsp-time">{l.time}</span>
-                <span class="mono logsp-src">{t(l.type)}</span>
+                <span class="mono logsp-src">{t(typeLabel(l.type))}</span>
                 <span class={`logsp-lv mono ${l.level}`}>{l.level.toUpperCase()}</span>
                 <span class="logsp-msg">{maskSecrets(l.message)}</span>
                 <Show when={l.expandable}>
@@ -252,7 +265,12 @@ export function LogsPanelTab() {
           </For>
           <Show when={logs().length === 0}>
             <div class="muted" style={{ padding: "12px", "font-size": "11px" }}>
-              {t("조건에 맞는 로그가 없습니다")}
+              <Show when={query().trim()} fallback={t("조건에 맞는 로그가 없습니다")}>
+                {tf("“{q}”에 맞는 항목이 없습니다", { q: query().trim() })}{" "}
+                <button class="btn ghost" style={{ padding: "1px 6px" }} onClick={() => setQuery("")}>
+                  {t("검색 지우기")}
+                </button>
+              </Show>
             </div>
           </Show>
         </div>

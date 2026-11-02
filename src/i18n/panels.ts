@@ -186,8 +186,18 @@ export const dict: Record<string, string> = {
   "{f}에서 {k} 줄을 지웁니다. 되돌리기는 없습니다.": "Deletes the {k} line from {f}. This can't be undone.",
   // 서버 탭 저장 명령 (D2)
   "저장 명령": "Saved commands",
-  "셸에 입력합니다: {run}": "Types into the shell: {run}",
-  "{f}을(를) 읽지 못했습니다": "Couldn't read {f}",
+  "셸 입력줄에 채웁니다 — Enter는 직접 누르세요: {run}": "Fills the shell prompt — press Enter yourself: {run}",
+  "{f}을(를) 읽지 못했습니다 — {err}": "Couldn't read {f} — {err}",
+  // 0.6 QA eqmux-79: 서버 탭 (B181 · P63 · U145) · 환경변수 원문 (U115)
+  "자주 쓰는 명령을 저장해 두면 버튼이 됩니다": "Save the commands you use often and they become buttons",
+  "commands.json 만들기": "Create commands.json",
+  "{f}을(를) 만들었습니다 — 파일 탭에서 고치세요": "Created {f} — edit it in the Files tab",
+  "포트 · 저장 명령 다시 읽기": "Re-read ports and saved commands",
+  "서버 터미널을 먼저 만드세요": "Create the server terminal first",
+  "셸이 끝났습니다 — [셸 다시 열기]를 누르세요": "The shell has exited — choose [Reopen shell]",
+  "원문에는 이 파일의 모든 값이 평문으로 보입니다. 화면을 공유 중이면 멈추고 여세요. 열면 [값 보기]도 켜집니다.":
+    "The raw view shows every value in this file in plain text. Stop any screen sharing before you open it. Opening it also turns on [Show values].",
+  "값을 보이고 열기": "Show values and open",
   "쓸 수 없는 항목 {n}개를 건너뛰었습니다": "Skipped {n} unusable entries",
   "세션 포트 범위": "Session port ranges",
   // 사이드 패널 개편 (결정 21 · §12)
@@ -196,9 +206,28 @@ export const dict: Record<string, string> = {
   "저장하지 않은 편집": "Unsaved edits",
   "파일 탭에 저장하지 않은 편집이 있습니다. 패널을 닫으면 사라집니다.": "The Files tab has unsaved edits. Closing the panel discards them.",
   "버리고 닫기": "Discard and close",
+  // 편집기 [취소] · 워크스페이스 전환 확인 (P77 · B200) — 제목 '저장하지 않은 편집이 있습니다'는 roles 사전
+  "버리면 고친 내용이 사라집니다. 남기려면 [계속 편집]을 누르고 [저장]하세요.":
+    "Discarding loses your changes. To keep them, choose [Keep editing] and then [Save].",
+  "변경 버리기": "Discard changes",
+  "계속 편집": "Keep editing",
   "탭이 묶였습니다 — 대화 [대화 | 로그] · 코드 [git | 파일 | 문서] · 실행 [서버 | 포트 | 환경변수] · 브라우저 · 확장 [MCP | 플러그인 | 스킬]": "Tabs are grouped — Talk [Conversation | Logs] · Code [git | Files | Docs] · Run [Server | Ports | Env] · Browser · Extensions [MCP | Plugins | Skills]",
   // 비밀값 노출 묶음 (§2 · B147–B155)
   "페인·서버 셸 환경에 넣지 않습니다 — 서버가 dotenv로 직접 읽는 값입니다": "Not injected into panes or the server shell — your server reads these itself via dotenv",
   "이 파일과 스크롤백에는 토큰·비밀번호가 평문으로 남을 수 있습니다 — 이 화면에서만 가립니다": "Tokens and passwords may remain in plain text in these files and the scrollback — they're only masked on this screen",
   "세션마다 EQMUX_PORT_BASE ~ EQMUX_PORT_END로 알립니다 — 강제하지는 않습니다": "Each session is told its range via EQMUX_PORT_BASE ~ EQMUX_PORT_END — not enforced",
+  // 0.6 QA eqmux-17: 대화 탭 (U121 · U158)
+  "@{title} 직함인 팀원이 여럿입니다 — 이름으로 지정하세요": "More than one teammate has the title @{title}. Use a name instead",
+  "도구 승인은 관제 승인함에서도 답할 수 있습니다 →": "Tool approvals can also be answered in the Control approvals list →",
+  // ── 0.6 QA eqmux-52: 파일 · 문서 · 로그 · 포트 — U163 · P84 · P88 · B219 · B242 · B244 ──
+  "“{q}”에 맞는 항목이 없습니다": "Nothing matches “{q}”",
+  "검색 지우기": "Clear search",
+  "{dir} · 파일 {n}개": "{dir} · {n} files",
+  "메일 주소를 복사했습니다 — {addr}": "Copied the email address — {addr}",
+  "{ws} 스크롤백을 읽지 못했습니다": "Couldn't read the {ws} scrollback",
+  "이 지점의 기록을 읽지 못했습니다": "Couldn't read the log around this point",
+  "최근 {n}개 · 표시 {m}개": "Latest {n} · showing {m}",
+  "다른 워크스페이스": "Other workspaces",
+  "{n}개 리슨": "{n} listening",
+  "commands 배열이 없습니다": "No commands array",
 };

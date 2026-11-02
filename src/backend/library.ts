@@ -196,6 +196,15 @@ export async function listPresets(): Promise<CastingPreset[]> {
   return invoke<CastingPreset[]>("preset_list").catch(() => []);
 }
 
+/** 초상을 둘 폴더(앱 데이터 personas/)를 탐색기로 연다 (0.6 QA P66) — 실패면 사유, 성공이면 null */
+export async function revealPersonasDir(): Promise<string | null> {
+  if (!isTauri()) return null;
+  return invoke("library_reveal_personas").then(
+    () => null,
+    (e) => String(e),
+  );
+}
+
 /** 초상 이미지 (0.6 §15-4) — personas/<id>.png를 Blob URL로. 키가 id+mtime이라 파일을 바꾸면 새로 읽는다.
  *  없거나 브라우저 dev면 undefined (이니셜). ponytail: 지난 mtime의 URL은 해제하지 않는다 — 초상 수만큼만 남는다 */
 const portraits = new Map<string, Promise<string | undefined>>();

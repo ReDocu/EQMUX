@@ -5,12 +5,13 @@
 // 본문 링크는 가로챈다 — 웹뷰가 앱 화면째 이동해 버리므로 http는 브라우저 패널로, .md는 이 패널로.
 import { createEffect, createResource, createSignal, For, onCleanup, Show } from "solid-js";
 import { fsRead, fsTree } from "../backend/panels";
-import { isTauri, revealPath } from "../backend/pty";
-import { openInBrowserPanel, scopeWorkspace, setPanelNote } from "../state";
-import { t } from "../i18n";
+import { clipWriteText, isTauri, revealPath } from "../backend/pty";
+import { openInBrowserPanel, openPanel, scopeWorkspace, setPanelNote } from "../state";
+import { t, tf } from "../i18n";
 import { fileManagerName } from "../labels"; // mac은 Finder (U76)
 import { Icon } from "./icons";
 import { markdownHtml } from "./markdownHtml";
+import { setExplorerPick } from "./MissionExplorerTab";
 import { notify } from "./ui";
 
 const MD_RE = /\.(md|markdown|mdx)$/i;
@@ -19,6 +20,8 @@ const MD_RE = /\.(md|markdown|mdx)$/i;
 const [rel, setRel] = createSignal("");
 const [html, setHtml] = createSignal("");
 const [error, setError] = createSignal<string | null>(null);
+// 문서를 연 워크스페이스 (B243) — 다른 워크스페이스로 옮기면 이전 문서를 비운다
+const [docWs, setDocWs] = createSignal<string | undefined>(undefined);
 
 /** 현재 문서 기준 상대 링크 → 워크스페이스 상대 경로 (`/`로 시작하면 루트 기준) */
 function resolveRel(from: string, href: string): string {
@@ -49,6 +52,7 @@ export function MdViewTab() {
     try {
       const fc = await fsRead(path, r);
       setRel(r);
+      setDocWs(ws()?.id);
       setHtml(markdownHtml(fc.text));
       setError(null);
     } catch (e) {
@@ -56,19 +60,47 @@ export function MdViewTab() {
     }
   };
 
+  // 워크스페이스가 바뀌었으면 이전 문서를 비운다 (B243) — 탭을 떠나 있던 사이에 바뀐 것도 잡는다
+  createEffect(() => {
+    if (docWs() !== undefined && docWs() !== ws()?.id) {
+      setRel("");
+      setHtml("");
+      setError(null);
+      setDocWs(undefined);
+    }
+  });
+
+  let body: HTMLDivElement | undefined;
   const onClick = (e: MouseEvent) => {
     const a = (e.target as HTMLElement).closest("a");
     if (!a) return;
     e.preventDefault();
-    const href = (a.getAttribute("href") ?? "").split("#")[0];
+    const raw = a.getAttribute("href") ?? "";
+    // 같은 문서 앵커 — 제목 id로 스크롤 (B242)
+    if (raw.startsWith("#")) {
+      const id = decodeURIComponent(raw.slice(1)).toLowerCase();
+      body?.querySelector(`[id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: "start" });
+      return;
+    }
+    const href = raw.split("#")[0];
     if (/^https?:/i.test(href)) openInBrowserPanel(href);
+    else if (/^mailto:/i.test(href)) {
+      // 앱은 http(s)만 밖으로 연다 (launch_web) — 메일 주소는 복사해 준다
+      clipWriteText(href.slice(7));
+      notify(tf("메일 주소를 복사했습니다 — {addr}", { addr: href.slice(7) }), "ok");
+    }
     else if (MD_RE.test(href)) void open(resolveRel(rel(), href));
+    else if (href) {
+      // .md가 아닌 상대 링크(소스 · 라이선스 · 그림)는 파일 탭에서 연다 (B242)
+      setExplorerPick(resolveRel(rel(), href));
+      openPanel("files");
+    }
   };
 
   // 세그먼트 줄 오른쪽 요약 (0.5 시안 E7Ixk6) — `docs/ · 42 files`
   createEffect(() => {
     const dir = rel().includes("/") ? `${rel().slice(0, rel().lastIndexOf("/"))}/` : (ws()?.name ?? t("워크스페이스 탭을 먼저 여세요"));
-    setPanelNote(`${dir} · ${files()?.length ?? 0} files`);
+    setPanelNote(tf("{dir} · 파일 {n}개", { dir, n: files()?.length ?? 0 }));
   });
   onCleanup(() => setPanelNote(""));
   const reveal = async () => {
@@ -128,7 +160,7 @@ export function MdViewTab() {
           </div>
         }
       >
-        <div class="card inset mdview-body" innerHTML={html()} onClick={onClick} />
+        <div ref={body} class="card inset mdview-body" innerHTML={html()} onClick={onClick} />
       </Show>
     </div>
   );

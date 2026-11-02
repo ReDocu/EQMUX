@@ -82,7 +82,8 @@ fn spans(s: &str) -> Vec<(usize, usize)> {
         let k = run(b, i, is_key);
         let word = s[i..k].to_ascii_uppercase();
         i = k;
-        if !p.keywords.iter().any(|w| word.contains(w.as_str())) {
+        let hits: Vec<&String> = p.keywords.iter().filter(|w| word.contains(w.as_str())).collect();
+        if hits.is_empty() {
             continue;
         }
         let mut q = k;
@@ -98,6 +99,10 @@ fn spans(s: &str) -> Vec<(usize, usize)> {
             q += 1;
         }
         let e = run(b, q, |c| !ends_value(c));
+        // 이름의 키워드가 TOKEN뿐이고 값이 숫자만이면 토큰 수다 — max_tokens=128000 (B196). 비밀번호 숫자는 그대로 가린다
+        if e > q && hits.iter().all(|w| *w == "TOKEN") && b[q..e].iter().all(u8::is_ascii_digit) {
+            continue;
+        }
         if e - q >= p.min_value {
             out.push((q, e));
         }

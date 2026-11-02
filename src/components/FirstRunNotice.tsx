@@ -9,11 +9,13 @@ import { openLink } from "../backend/browser";
 import { clipWriteText, revealPath } from "../backend/pty";
 import { settings, updateSettings } from "../backend/settings";
 import { t, tf } from "../i18n";
+import { revealLabel } from "../labels";
 import { IS_MAC } from "../platform";
 import { pushLayer, setOverlay, setSettingsCat } from "../state";
 import { notify } from "./ui";
 
-const HOWTO_URL = "https://github.com/ReDocu/EQMUX/blob/main/docs/site/docs.md";
+// 절 앵커까지 (0.6 QA P81) — 1,250줄 문서의 맨 위로 열렸다. 영어판 문서는 아직 없다
+const HOWTO_URL = "https://github.com/ReDocu/EQMUX/blob/main/docs/site/docs.md#다른-도구와-같이-쓰기";
 const APP_DATA = IS_MAC ? "~/Library/Application Support/com.eqment.eqmux" : "%APPDATA%\\com.eqment.eqmux";
 
 /** 점검 결과 — 앱 수명 동안 한 번 잰다(기동 때). 설정 › 정보의 [다시 점검]이 다시 잰다 */
@@ -33,8 +35,10 @@ export function startForeignCheck(): void {
         session: `app:foreign:${g.tool}`,
         workspace: "",
         kind: "app",
-        title: tf("{tool}의 전역 지시가 EQMUX 세션에도 실립니다", { tool: g.tool }),
-        body: t("세션 안내문으로 덮어 두었습니다 · 누르면 자세히"),
+        title: g.directive
+          ? tf("{tool}의 전역 지시가 EQMUX 세션에도 실립니다", { tool: g.tool })
+          : tf("{tool}의 훅 {n}개가 EQMUX 세션의 도구 호출마다 실행됩니다", { tool: g.tool, n: g.hooks }),
+        body: g.directive ? t("세션 안내문으로 덮어 두었습니다 · 누르면 자세히") : t("EQMUX가 막을 수 없습니다 · 누르면 끄는 방법"),
         open: openWhere,
       });
   });
@@ -58,22 +62,32 @@ function WhereList() {
         <span class="mono">{APP_DATA}</span>
         <span class="muted">{t("설정 · 워크스페이스 목록 · 세션 기록 · 훅과 상태 줄 합성 설정(hook-settings.json)")}</span>
       </div>
+      {/* 세션 터미널 출력 원문도 여기 쌓인다 (U127) — 비밀값이 평문으로 남을 수 있는 가장 큰 파일이다 */}
       <div class="frn-row">
         <span class="mono">~/.eqmux/logs</span>
-        <span class="muted">{t("진단 로그")}</span>
+        <span class="muted">{t("세션 터미널 출력 로그 · 진단 로그 — 토큰이 평문으로 남을 수 있습니다(설정 › 저장소에서 끔)")}</span>
       </div>
       <div class="frn-row">
         <span class="mono">{t("<저장소>/.eqmux/")}</span>
-        <span class="muted">{t("팀 편성 · 역할 파일 · 임무. 커밋하지 않으려면 .gitignore에 .eqmux/를 넣으세요")}</span>
+        <span class="muted">{t("팀 편성 · 역할 파일 · 임무 — 커밋하면 동료가 같은 팀으로 시작합니다. 개인용이면 .gitignore에 .eqmux/를 넣습니다(팀 공유가 꺼집니다)")}</span>
+      </div>
+      {/* 확장 탭의 쓰기 (U116 · 결정 X1) — 사람이 그 화면에서 누를 때만 */}
+      <div class="frn-row">
+        <span class="mono">~/.claude/skills · settings.json, {t("<저장소>/.claude/skills · settings.local.json")}</span>
+        <span class="muted">{t("확장 탭에서 사람이 누를 때만 씁니다 — 플러그인 켜기 · 끄기, 스킬 만들기 · 고치기 · 지우기 · 복사")}</span>
       </div>
       <div class="frn-h">{t("쓰지 않는 곳")}</div>
       <div class="frn-row">
         <span class="mono">~/.claude · ~/.codex</span>
-        <span class="muted">{t("엔진 설정은 고치지 않습니다. 훅은 세션을 띄울 때 인자(--settings, Codex는 -c)로만 싣습니다")}</span>
+        <span class="muted">
+          {t("엔진 설정은 스스로 고치지 않습니다(확장 탭에서 사람이 누른 변경만 위 목록대로 씁니다). 훅은 세션을 띄울 때 인자로만 싣습니다")}{" "}
+          (<code class="mono" style={{ "white-space": "nowrap" }}>--settings</code>, Codex{" "}
+          <code class="mono" style={{ "white-space": "nowrap" }}>-c</code>)
+        </span>
       </div>
       <div class="frn-row">
         <span class="mono">{t("저장소의 .claude/ · .codex/ · CLAUDE.md")}</span>
-        <span class="muted">{t("읽기만 합니다")}</span>
+        <span class="muted">{t("읽기만 합니다 — 확장 탭에서 사람이 누른 스킬 · 플러그인 변경은 예외입니다")}</span>
       </div>
       <div class="muted frn-net">{t("요청하지 않으면 다른 시스템으로 아무것도 보내지 않습니다. 진단 정보도 사람이 복사해 붙일 때만 나갑니다.")}</div>
     </div>
@@ -95,12 +109,15 @@ function ForeignList() {
               {(g) => (
                 <div class="frn-tool">
                   <div class="frn-tool-t">
-                    {tf("{tool}의 전역 지시가 EQMUX 세션에도 실립니다 — 세션 안내문으로 덮어 두었습니다", { tool: g.tool })}
+                    {/* 덮을 수 있는 것은 구역 · 문장뿐이다 — 훅만이면 막을 수 없다고 말한다 (U128 · §14-2) */}
+                    {g.directive
+                      ? tf("{tool}의 전역 지시가 EQMUX 세션에도 실립니다 — 세션 안내문으로 덮어 두었습니다", { tool: g.tool })
+                      : tf("{tool}의 훅 {n}개가 EQMUX 세션의 도구 호출마다 실행됩니다 — EQMUX가 막을 수 없습니다", { tool: g.tool, n: g.hooks })}
                   </div>
                   <For each={list().filter((f) => f.tool === g.tool)}>
                     {(f) => (
                       <div class="frn-row">
-                        <button class="wizard-link mono" title={t("탐색기에서 열기")} onClick={() => void reveal(f.file)}>
+                        <button class="wizard-link mono" title={revealLabel()} onClick={() => void reveal(f.file)}>
                           {f.file}
                         </button>
                         <span class="muted">{kindText(f.kind, f.count)}</span>
@@ -129,8 +146,9 @@ export function DiagCopyButton() {
   const copy = async () => {
     setBusy(true);
     try {
-      clipWriteText(await diagBundle());
-      notify(t("진단 정보를 복사했습니다 — GitHub 이슈에 붙여 주세요"));
+      // 클립보드 쓰기가 실패하면 성공 토스트를 띄우지 않는다 (B197)
+      if (await clipWriteText(await diagBundle())) notify(t("진단 정보를 복사했습니다 — GitHub 이슈에 붙여 주세요"), "ok");
+      else notify(t("진단 정보를 클립보드에 넣지 못했습니다 — 다시 눌러 주세요"));
     } catch (e) {
       notify(tf("진단 정보를 만들지 못했습니다 · {err}", { err: String(e) }));
     } finally {
@@ -179,8 +197,9 @@ export function FirstRunNotice() {
         <WhereList />
         <ForeignList />
         <div class="eq-confirm-f">
+          {/* 알림만 하는 창의 닫기 — 'Confirm'은 정책 동의로 읽혔다 (0.6 QA U147) */}
           <button ref={ok} class="btn primary" onClick={close}>
-            {t("확인")}
+            {t("알겠습니다")}
           </button>
         </div>
       </div>

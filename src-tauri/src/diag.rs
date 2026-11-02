@@ -353,6 +353,11 @@ const BUNDLE_LOG_LINES: usize = 200;
 
 /// 짧은 명령 한 번의 첫 줄. 5초 안에 안 끝나면 포기한다(그 프로세스는 스스로 끝날 때까지 둔다)
 fn first_line_of(program: &str, args: &[&str]) -> Option<String> {
+    first_line(program, args).ok()
+}
+
+/// first_line_of + 못 읽은 이유 — "timeout"(5초 시한) | "not found"(없거나 실패). 진단 정보가 둘을 가른다 (B197)
+fn first_line(program: &str, args: &[&str]) -> Result<String, &'static str> {
     #[cfg(windows)]
     let mut cmd = {
         use std::os::windows::process::CommandExt;
@@ -372,22 +377,29 @@ fn first_line_of(program: &str, args: &[&str]) -> Option<String> {
     std::thread::spawn(move || {
         let _ = tx.send(cmd.output());
     });
-    let out = rx.recv_timeout(std::time::Duration::from_secs(5)).ok()?.ok()?;
+    let out = rx.recv_timeout(std::time::Duration::from_secs(5)).map_err(|_| "timeout")?.map_err(|_| "not found")?;
     let text = String::from_utf8_lossy(&out.stdout);
-    text.lines().map(str::trim).find(|l| !l.is_empty()).map(str::to_string).filter(|_| out.status.success())
+    text.lines().map(str::trim).find(|l| !l.is_empty()).map(str::to_string).filter(|_| out.status.success()).ok_or("not found")
 }
 
 /// 엔진 CLI 버전 줄 (`claude --version` 첫 줄) — 읽으면 앱이 떠 있는 동안 기억한다.
 /// 진단 묶음과 스폰 때 버전 검사(agent::check_cli_version)가 같이 쓴다. 못 읽으면 다음에 다시 잰다
 pub fn cli_version(cli: &str) -> Option<String> {
+    cli_version_or(cli).ok()
+}
+
+/// cli_version + 못 읽은 이유("timeout" | "not found")
+fn cli_version_or(cli: &str) -> Result<String, &'static str> {
     static CACHE: Mutex<Option<std::collections::HashMap<String, Option<String>>>> = Mutex::new(None);
-    if let Some(v) = CACHE.lock().ok()?.get_or_insert_with(Default::default).get(cli) {
-        return v.clone();
+    if let Some(v) = CACHE.lock().map_err(|_| "not found")?.get_or_insert_with(Default::default).get(cli) {
+        return v.clone().ok_or("not found");
     }
-    let v = first_line_of(cli, &["--version"])?; // 잠금 밖에서 — 최대 5초
+    let v = first_line(cli, &["--version"])?; // 잠금 밖에서 — 최대 5초
     // 읽은 것만 기억한다 — 한 번의 시한 초과(npm 래퍼 첫 기동)가 앱 수명 내내 버전 검사를 끄지 않게
-    CACHE.lock().ok()?.get_or_insert_with(Default::default).insert(cli.to_string(), Some(v.clone()));
-    Some(v)
+    if let Ok(mut c) = CACHE.lock() {
+        c.get_or_insert_with(Default::default).insert(cli.to_string(), Some(v.clone()));
+    }
+    Ok(v)
 }
 
 /// ASCII 대소문자를 무시하고 바꾼다 — Windows 경로는 철자가 섞여 온다
@@ -475,7 +487,13 @@ pub fn mask(text: &str, home: &str, user: &str) -> String {
 }
 
 fn bundle_text() -> String {
-    let os_ver = if cfg!(windows) { first_line_of("ver", &[]) } else { first_line_of("sw_vers", &["-productVersion"]) };
+    // 세 확인을 함께 돌린다 — 차례로 돌면 하나마다 5초 시한이라 최악 15초였다 (B197)
+    let (os_ver, claude, codex) = std::thread::scope(|sc| {
+        let os = sc.spawn(|| if cfg!(windows) { first_line_of("ver", &[]) } else { first_line_of("sw_vers", &["-productVersion"]) });
+        let cl = sc.spawn(|| cli_version_or("claude"));
+        let cx = sc.spawn(|| cli_version_or("codex"));
+        (os.join().ok().flatten(), cl.join().unwrap_or(Err("not found")), cx.join().unwrap_or(Err("not found")))
+    });
     let mut s = format!(
         "EQMUX {}\nOS: {} {} {}\n",
         env!("CARGO_PKG_VERSION"),
@@ -483,9 +501,8 @@ fn bundle_text() -> String {
         std::env::consts::ARCH,
         os_ver.unwrap_or_default()
     );
-    for cli in ["claude", "codex"] {
-        let v = cli_version(cli).unwrap_or_else(|| "not found".into());
-        s.push_str(&format!("{cli}: {v}\n"));
+    for (cli, v) in [("claude", claude), ("codex", codex)] {
+        s.push_str(&format!("{cli}: {}\n", v.unwrap_or_else(|e| e.to_string())));
     }
     let foreign = foreign_in(&crate::home_dir());
     if !foreign.is_empty() {

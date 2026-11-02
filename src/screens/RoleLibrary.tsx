@@ -1,7 +1,7 @@
 // 역할 라이브러리 (화면 #7) — 직무 / 페르소나 목록 · 편집 (FR-E-28: 생성·편집·복제·삭제).
 // 직무=책임, 페르소나=판단 성향 (P1 분리). 전역 라이브러리 + 워크스페이스 오버라이드 (P2).
 // Tauri에서는 앱데이터 jobs/*.md·personas/*.md 실파일이 원본이다 (FR-E-20~23).
-import { createEffect, createSignal, For, on, Show } from "solid-js";
+import { createEffect, createSignal, For, on, onCleanup, Show } from "solid-js";
 import {
   addPersonaFile,
   createCharacterFile,
@@ -10,6 +10,7 @@ import {
   libNameError,
   listMergedLibrary,
   readCharacterFile,
+  revealPersonasDir,
   saveCharacterFile,
   saveJobFile,
   savePersonaFile,
@@ -23,7 +24,7 @@ import { fileManagerName, jobName as labelJob } from "../labels";
 import { memoryRel, nudgeRoleReload, nudgeTeamReload, saveRoleFile } from "../backend/roles";
 import { resaveTeams } from "../backend/team";
 import { fileChangeTick } from "../backend/watch";
-import { tick } from "../state";
+import { guardOverlay, setOverlay, tick } from "../state";
 import { ConfirmDialog, FieldHint, KV, notify } from "../components/ui";
 import { JOB_META, jobMeta, TITLE_SUGGEST } from "../jobs";
 import { cleanTitle, personaLevel, personaProfile, personaTagline, TITLE_MAX } from "../types";
@@ -38,7 +39,7 @@ const JOB_PALETTE: { color: Persona["color"]; letter: string; job: string }[] = 
   { color: "purple", letter: "개", job: "개발" },
   { color: "pink", letter: "디", job: "디자인" },
   { color: "green", letter: "Q", job: "QA" },
-  { color: "red", letter: "디", job: "디버거" },
+  { color: "red", letter: "버", job: "디버거" }, // '디'는 디자인 — 둘이 같은 글자였다 (U170)
   { color: "slate", letter: "문", job: "문서" },
   { color: "orange", letter: "릴", job: "릴리즈" },
 ];
@@ -298,6 +299,19 @@ export function RoleLibrary() {
   // 이탈 확인 (U57) — 저장 안 한 편집이 있으면 다른 항목으로 가기 전에 묻는다
   const [leave, setLeave] = createSignal<(() => void) | undefined>(undefined);
   const guard = (go: () => void, dirty = personaDirty() || jobDirty() || sheetDirty()) => (dirty ? setLeave(() => go) : go());
+  // 팝업 닫기도 같은 이탈 확인을 거친다 (B225) — ESC·[닫기]·앱 바 도구·화면 이동이 모두 setOverlay로 온다.
+  // [버리고 이동]이면 가드를 풀고 가려던 팝업으로 간다(닫기면 닫기만). 화면 이동은 팝업만 닫고, 이동은 다시 누른다
+  let leaving = false;
+  onCleanup(
+    guardOverlay((next) => {
+      if (leaving || !(personaDirty() || jobDirty() || sheetDirty())) return false;
+      setLeave(() => () => {
+        leaving = true;
+        setOverlay(next);
+      });
+      return true;
+    }),
+  );
 
   // ── 직무 편집 (FR-E-28) — 권한은 곧 실행 플래그의 원천이라 편집 화면에서도 정직하게 보여준다 ──
   const [selJobId, setSelJobId] = createSignal<string | undefined>(undefined);
@@ -601,6 +615,48 @@ export function RoleLibrary() {
                 <span class="rl-saved mono ok">{t("저장됨 ✓")}</span>
               </Show>
             </div>
+            {/* 정체성 먼저 (U169) — 이름 · 색 → 기본 직무 · 직함 → 성향 · 단계 → 모델 · 매 턴 상기 · 기억 */}
+            <div class="rl-field">
+              <label class="rl-label">{t("이름 (세션 이름과 분리 가능)")}</label>
+              <input value={draftName()} onInput={(e) => setDraftName(e.currentTarget.value)} />
+              <Show when={nameErr()}>
+                <span class="rl-hint st-waiting">{t(nameErr()!)}</span>
+              </Show>
+            </div>
+            <div class="rl-field">
+              <label class="rl-label">{t("색 — 직무 팔레트와 정렬 (점 글자 = 직무) · UI 표시 전용")}</label>
+              <div style={{ display: "flex", gap: "6px", "flex-wrap": "wrap" }}>
+                <For each={JOB_PALETTE}>
+                  {(p) => (
+                    <button
+                      class={`persona-dot ${p.color}`}
+                      title={`${t(p.job)} ${t("색")}`}
+                      aria-label={`${t(p.job)} ${t("색")}`}
+                      aria-pressed={draftColor() === p.color}
+                      style={{ cursor: "pointer", outline: draftColor() === p.color ? "2px solid var(--eq-blue)" : "none" }}
+                      onClick={() => setDraftColor(p.color)}
+                    >
+                      {p.letter}
+                    </button>
+                  )}
+                </For>
+              </div>
+            </div>
+            {/* 초상 (P66 · §15-4) — 파일 규약뿐이라 숨은 기능이었다. 자리와 폴더를 여기서 알린다 */}
+            <div class="rl-field">
+              <label class="rl-label">{t("초상")}</label>
+              <div style={{ display: "flex", gap: "8px", "align-items": "center" }}>
+                <PersonaAvatar persona={sel()!} class="rl-avatar" />
+                <span class="rl-hint muted">
+                  {tf("앱 데이터 personas 폴더에 {id}.png를 두면 이름 첫 글자 대신 그 그림을 씁니다 (4MB까지)", { id: sel()!.id })}
+                </span>
+                <Show when={isTauri()}>
+                  <button class="btn ghost" onClick={() => void revealPersonasDir().then((err) => err && notify(err))}>
+                    {t("폴더 열기")}
+                  </button>
+                </Show>
+              </div>
+            </div>
             <div class="rl-field rl-field-narrow">
               <label class="rl-label">{t("기본 직무")}</label>
               <select value={draftJob()} onChange={(e) => setDraftJob(e.currentTarget.value)}>
@@ -690,73 +746,6 @@ export function RoleLibrary() {
                   )}
                 </For>
               </div>
-            </div>
-            {/* 매 턴 캐릭터 상기 (0.6 §15-3) — 단계와 무관. 꺼짐이 기본. Codex는 훅 출력을 실측하지 않아 내지 않는다 */}
-            <div class="rl-field">
-              <label style={{ display: "flex", gap: "6px", "align-items": "center", cursor: "pointer" }}>
-                <input type="checkbox" checked={draftRemind()} onChange={(e) => setDraftRemind(e.currentTarget.checked)} />
-                {t("매 턴 캐릭터 상기")}
-              </label>
-              <span class="rl-hint muted">
-                {t("프롬프트마다 캐릭터 한 줄을 다시 싣습니다 — 턴당 수십 토큰. Claude Code만 (Codex는 나가지 않음)")}
-              </span>
-            </div>
-            {/* 캐릭터 기억 (0.6 §15-4) — 캐릭터 본인이 덧붙이고 SessionStart가 뒤 4000자를 싣는다. 비우기는 휴지통 */}
-            <Show when={isTauri()}>
-              <div class="rl-field">
-                <label class="rl-label">{t("캐릭터 기억 — 워크스페이스마다 따로. 세션이 스스로 덧붙이고 다음 세션 시작에 실립니다")}</label>
-                <Show
-                  when={memories().length > 0}
-                  fallback={<span class="rl-hint muted">{tf("아직 기억이 없습니다 — {path}", { path: memoryRel(sel()!.id) })}</span>}
-                >
-                  <For each={memories()}>
-                    {(m) => (
-                      <div style={{ display: "flex", gap: "6px", "align-items": "center" }}>
-                        <span>{m.ws.name}</span>
-                        <span class="muted mono" style={{ "font-size": "11px" }}>
-                          {tf("{n}줄", { n: m.lines })}
-                        </span>
-                        <span style={{ flex: 1 }} />
-                        <button class="btn ghost" onClick={() => void revealPath(memoryRel(sel()!.id), m.ws.path)}>
-                          {t("기억 열기")}
-                        </button>
-                        <button class="btn ghost danger" onClick={() => setAskClear(m.ws)}>
-                          {t("비우기")}
-                        </button>
-                      </div>
-                    )}
-                  </For>
-                </Show>
-              </div>
-            </Show>
-            <div class="rl-field">
-              <label class="rl-label">{t("이름 (세션 이름과 분리 가능)")}</label>
-              <input value={draftName()} onInput={(e) => setDraftName(e.currentTarget.value)} />
-              <Show when={nameErr()}>
-                <span class="rl-hint st-waiting">{t(nameErr()!)}</span>
-              </Show>
-            </div>
-            <div class="rl-field">
-              <label class="rl-label">{t("색 — 직무 팔레트와 정렬 (점 글자 = 직무 앞글자) · UI 표시 전용")}</label>
-              <div style={{ display: "flex", gap: "6px", "flex-wrap": "wrap" }}>
-                <For each={JOB_PALETTE}>
-                  {(p) => (
-                    <button
-                      class={`persona-dot ${p.color}`}
-                      title={`${t(p.job)} ${t("색")}`}
-                      style={{ cursor: "pointer", outline: draftColor() === p.color ? "2px solid var(--eq-blue)" : "none" }}
-                      onClick={() => setDraftColor(p.color)}
-                    >
-                      {p.letter}
-                    </button>
-                  )}
-                </For>
-              </div>
-            </div>
-            {/* 모델 (0.6 §3 · C5) — 직무 모델보다 우선. 스폰 인자라 다음 기동부터 */}
-            <div class="rl-field">
-              <label class="rl-label">{t("모델 — 비우면 직무 모델, 그것도 비면 엔진 기본. 다음 기동부터 적용")}</label>
-              <input class="mono" list="eq-model-suggest" placeholder="opus · sonnet · haiku" value={draftModel()} onInput={(e) => setDraftModel((e.currentTarget.value = modelChars(e.currentTarget.value)))} />
             </div>
             {/* 말투·성격은 중급 전용 — 고급은 시트의 말투 규칙·성격 섹션이 담당한다 */}
             <Show when={editLevel() === "mid"}>
@@ -883,6 +872,49 @@ export function RoleLibrary() {
                   </button>
                 </Show>
               </Show>
+            </Show>
+            {/* 모델 (0.6 §3 · C5) — 직무 모델보다 우선. 스폰 인자라 다음 기동부터 */}
+            <div class="rl-field">
+              <label class="rl-label">{t("모델 — 비우면 직무 모델, 그것도 비면 엔진 기본. 다음 기동부터 적용")}</label>
+              <input class="mono" list="eq-model-suggest" placeholder="opus · sonnet · haiku" value={draftModel()} onInput={(e) => setDraftModel((e.currentTarget.value = modelChars(e.currentTarget.value)))} />
+            </div>
+            {/* 매 턴 캐릭터 상기 (0.6 §15-3) — 단계와 무관. 꺼짐이 기본. Codex는 훅 출력을 실측하지 않아 내지 않는다 */}
+            <div class="rl-field">
+              <label style={{ display: "flex", gap: "6px", "align-items": "center", cursor: "pointer" }}>
+                <input type="checkbox" checked={draftRemind()} onChange={(e) => setDraftRemind(e.currentTarget.checked)} />
+                {t("매 턴 캐릭터 상기")}
+              </label>
+              <span class="rl-hint muted">
+                {t("프롬프트마다 캐릭터 한 줄을 다시 싣습니다 — 턴당 수십 토큰. Claude Code만 (Codex는 나가지 않음)")}
+              </span>
+            </div>
+            {/* 캐릭터 기억 (0.6 §15-4) — 캐릭터 본인이 덧붙이고 SessionStart가 뒤 4000자를 싣는다. 비우기는 휴지통 */}
+            <Show when={isTauri()}>
+              <div class="rl-field">
+                <label class="rl-label">{t("캐릭터 기억 — 워크스페이스마다 따로. 세션이 스스로 덧붙이고 다음 세션 시작에 실립니다")}</label>
+                <Show
+                  when={memories().length > 0}
+                  fallback={<span class="rl-hint muted">{tf("아직 기억이 없습니다 — {path}", { path: memoryRel(sel()!.id) })}</span>}
+                >
+                  <For each={memories()}>
+                    {(m) => (
+                      <div style={{ display: "flex", gap: "6px", "align-items": "center" }}>
+                        <span>{m.ws.name}</span>
+                        <span class="muted mono" style={{ "font-size": "11px" }}>
+                          {tf("{n}줄", { n: m.lines })}
+                        </span>
+                        <span style={{ flex: 1 }} />
+                        <button class="btn ghost" onClick={() => void revealPath(memoryRel(sel()!.id), m.ws.path)}>
+                          {t("기억 열기")}
+                        </button>
+                        <button class="btn ghost danger" onClick={() => setAskClear(m.ws)}>
+                          {t("비우기")}
+                        </button>
+                      </div>
+                    )}
+                  </For>
+                </Show>
+              </div>
             </Show>
             <div class="card inset" style={{ padding: "4px 10px" }}>
               <KV k={t("원본")} v={t(selIsWs() ? ".eqmux/personas/*.md (WS 오버라이드)" : "앱 데이터 personas/*.md")} />

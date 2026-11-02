@@ -52,6 +52,12 @@ fn seg(p: &[char], s: &[char]) -> bool {
     }
 }
 
+/// 앱이 세션에게 쓰라고 시킨 파일(`.eqmux/` 아래 기억 · 노트 · 역할 · 임무)인가 — 담당 밖 · 동시 편집 판정과
+/// 검토 화면의 '고친 파일'에서 뺀다 (U113). rel은 repo_rel을 거친 것(워크트리 접두가 떨어진 것)이다
+pub fn app_file(rel: &str) -> bool {
+    rel.replace('\\', "/").to_lowercase().starts_with(".eqmux/")
+}
+
 /// 담당 밖인가 — owns가 비면 언제나 false(경고 없음)
 pub fn outside(owns: &[String], rel: &str) -> bool {
     !owns.is_empty() && !owns.iter().any(|g| glob_match(g, rel))
@@ -78,7 +84,7 @@ fn first_in_window(seen: &mut HashMap<String, i64>, key: String, now: i64) -> bo
 pub fn edit_warning(cwd: &str, session: &str, path: &str, now: i64) -> Option<(String, Vec<String>)> {
     let owns = role_owns(cwd, session);
     let rel = repo_rel(cwd, path);
-    if rel.is_empty() || rel.starts_with('/') || rel.starts_with("../") || std::path::Path::new(&rel).is_absolute() || !outside(&owns, &rel) {
+    if rel.is_empty() || app_file(&rel) || rel.starts_with('/') || rel.starts_with("../") || std::path::Path::new(&rel).is_absolute() || !outside(&owns, &rel) {
         return None;
     }
     static SEEN: OnceLock<Mutex<HashMap<String, i64>>> = OnceLock::new();
@@ -140,6 +146,8 @@ mod tests {
         assert_eq!(edit_warning(&ws, "kai@w", &format!("{ws}/src/app.tsx"), 1), Some(("src/app.tsx".into(), vec!["src/git/**".into(), "docs/**".into()])));
         assert_eq!(edit_warning(&ws, "kai@w", &format!("{ws}/src/app.tsx"), 2), None, "10분에 한 번");
         assert_eq!(edit_warning(&ws, "kai@w", "Z:/elsewhere/x.ts", 3), None, "저장소 밖");
+        assert_eq!(edit_warning(&ws, "kai@w", &format!("{ws}/.eqmux/memory/kai.md"), 3), None, "앱이 시킨 기억 파일 (U113)");
+        assert_eq!(edit_warning(&ws, "kai@w", &format!("{ws}/.eqmux/worktrees/kai@w/.eqmux/notes/a.md"), 3), None, "워크트리 안 노트");
         assert_eq!(edit_warning(&ws, "rin@w", &format!("{ws}/src/app.tsx"), 4), None, "역할 파일 없음");
         std::fs::remove_dir_all(&dir).ok();
     }

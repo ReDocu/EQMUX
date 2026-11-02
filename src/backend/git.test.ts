@@ -37,3 +37,32 @@ test("명령 문자열 — 빈칸 · 따옴표가 든 인자만 감싼다 (Rust 
   expect(commandLine(["pull", "--ff-only"])).toBe("git pull --ff-only");
   expect(commandLine(["commit", "-m", '고침 "a"'])).toBe('git commit -m "고침 \\"a\\""');
 });
+
+test("HEAD 표시 — 같은 브랜치라도 해시가 바뀌면 다른 값이다 (B175)", async () => {
+  const { headMark } = await import("./git");
+  const refs = (head: string, branch?: string) => ({
+    local: branch ? [{ name: branch, hash: head, upstream: "", ahead: 0, behind: 0, gone: false, head: true }] : [],
+    remote: [],
+    tags: [],
+    stashes: [],
+    head,
+  });
+  expect(headMark(refs("1111111111", "main"))).toBe("main 11111111");
+  expect(headMark(refs("2222222222", "main"))).not.toBe(headMark(refs("1111111111", "main")));
+  expect(headMark(refs("3333333333"))).toBe("33333333"); // 분리 HEAD
+  expect(headMark(refs(""))).toBe(""); // 빈 저장소
+  expect(headMark(undefined)).toBe("");
+});
+
+test("실패 알림 — 진행 머리말이 아니라 원인 줄, 흔한 경우는 할 일을 앞에 (B177)", async () => {
+  const { failText } = await import("./git");
+  const push = "To C:/r/remote.git\n ! [rejected]        master -> master (fetch first)\nerror: failed to push some refs";
+  expect(failText(push)).toContain("Pull 하세요");
+  expect(failText(push)).toContain("! [rejected]");
+  const pull = "From C:/r/remote\n   0865c8c..53438f3  master -> origin/master\nhint: Diverging branches\nfatal: Not possible to fast-forward, aborting.";
+  expect(failText(pull)).toContain("fatal: Not possible to fast-forward");
+  expect(failText(pull)).toContain("merge 또는 rebase");
+  expect(failText("On branch master\nThe previous cherry-pick is now empty")).toContain("[건너뛰기]");
+  expect(failText("Auto-merging a.txt\nCONFLICT (content): Merge conflict in a.txt")).toContain("CONFLICT (content)");
+  expect(failText("그냥 한 줄")).toBe("그냥 한 줄");
+});

@@ -1,7 +1,7 @@
 // 같은 파일 동시 편집 경고 (0.6 §13-1 · C1) — 대시보드 주의 카드 · 페인 머리 칩.
 // 막지도, 자동으로 보내지도 않는다. [○○에게 알리기]는 사람이 고칠 수 있는 ask 초안을 연다.
 import { For } from "solid-js";
-import { activeConflicts, conflictName, conflictsOf, dismissConflict, fmtAgo } from "../backend/attention";
+import { activeConflicts, conflictName, conflictsOf, dismissConflict, fmtAgo, outsideOf } from "../backend/attention";
 import type { EditConflict } from "../backend/attention";
 import { t, tf } from "../i18n";
 import { openDraft } from "../state";
@@ -71,6 +71,15 @@ export function PaneConflictChip(props: { sessionId: string }) {
                 }
               : undefined
           }
+        />
+      )}
+      {/* 담당 밖 편집 (U120) — 동시 편집과 같은 자리에 10분. 막지 않고 보이기만 한다 */}
+      {!c() && outsideOf(props.sessionId) && (
+        <Chip
+          tone="amber"
+          text={tf("담당 밖 · {path}", { path: outsideOf(props.sessionId)!.path.split("/").pop() ?? "" })}
+          short={t("담당 밖")}
+          title={`${outsideOf(props.sessionId)!.path} — ${tf("담당: {owns}", { owns: outsideOf(props.sessionId)!.owns.join(" ") })}`}
         />
       )}
     </>

@@ -1,5 +1,5 @@
 // 관제 고정 탭 — 다중 워크스페이스 대시보드 (result_prd §3.2 · sYRf5 배경 시안).
-// 관측과 이동만 제공한다. 승인·거부·일괄 액션은 없다 (G7).
+// 관측과 이동이 중심이다. 0.6부터 승인함이 도구 승인 한 건씩 [허용]·[거부]를 받는다(§13-4) — 일괄 액션은 없다.
 // UI 리파인 §03: 통계 타일 4개 → 제목 옆 요약 한 줄 · 빈 슬롯 병합 · 닫힌 워크스페이스 한 줄 강등 ·
 // 세션 셀 우클릭 메뉴 (§06 — 셀에는 상태만 남고 액션은 메뉴로).
 import { createMemo, createSignal, For, Index, onCleanup, onMount, Show } from "solid-js";
@@ -9,10 +9,10 @@ import { backend, MAX_OPEN_WORKSPACES, onEventLog } from "../backend/mock";
 import { isTauri, killPty, revealPath } from "../backend/pty";
 import { maxSlots, settings } from "../backend/settings";
 import { t, tf } from "../i18n";
-import { focusSession, jumpToSession, openPanel, setOverlay, setView, tick, view } from "../state";
+import { focusSession, jumpToSession, openPanel, setLastWorkspaceId, setOverlay, setView, tick, view } from "../state";
 import { Chip, ContextMenu, Identity, notify, PaneNoText, StopConfirm } from "../components/ui";
 import type { ChipTone } from "../components/ui";
-import { approvalRespond, canRespondInline, canStartFresh, resumeAgent, startFresh } from "../backend/agent";
+import { approvalExpired, approvalRespond, canRespondInline, canStartFresh, resumeAgent, startFresh } from "../backend/agent";
 import { attentionRank, fmtAgo, inboxWaiting, urgentSenders } from "../backend/attention";
 import { awayCard, dismissAway } from "../backend/away";
 import { overBudget, spendText } from "../backend/budget";
@@ -30,9 +30,9 @@ const capFirst = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1);
 const ghostSpan = (len: number): number =>
   len % 4 === 0 ? Math.min(4, maxSlots() - len) : 4 - (len % 4);
 
-/** 기다리는 이유 한 마디 — 도구 승인 · 질문 · 계획 승인. 모르면 '승인 대기' */
+/** 기다리는 이유 한 마디 — 도구 승인 · 질문 · 계획 승인. 상태 이름('응답 대기') 뒤에 붙는다 (U157). 모르면 빈 문자열 */
 const pendingKindText = (p: PendingTool | undefined): string =>
-  p?.kind === "question" ? "질문에 답 대기 — 페인에서 고릅니다" : p?.kind === "plan" ? "계획 승인 대기 — 페인에서 고릅니다" : "승인 대기";
+  p?.kind === "question" ? "질문 — 페인에서 고릅니다" : p?.kind === "plan" ? "계획 승인 — 페인에서 고릅니다" : p ? "도구 승인" : "";
 
 export function Dashboard() {
   const sessions = () => {
@@ -92,7 +92,7 @@ export function Dashboard() {
   const doneChip = (s: Session): { tone: ChipTone; text: string; title?: string } | undefined => {
     // 멈춘 세션 (0.6 A5) — busy 셀은 테두리로 드러나지 않아 칩이 먼저다
     if (s.status === "busy" && s.stalled)
-      return { tone: "amber", text: t("멈춤 · 한동안 출력 없음"), title: t("일하는 중인데 한동안 훅·출력이 없습니다 — 페인을 확인하세요") };
+      return { tone: "amber", text: t("멈춤? · 10분째 훅 없음"), title: t("훅이 10분째 없습니다 — 출력이 흐르는 긴 명령이면 그대로 두세요. 멈췄으면 터미널에서 Ctrl+C나 [중지]") };
     const n = pendingOf(s);
     if (n > 0) return { tone: "blue", text: tf("메시지 {n}건", { n }) };
     if (s.reportPending) return { tone: "blue", text: s.reportProgress ? t("✓ 보고함 · 완료 표시 없음") : t("✓ 턴 끝남 · 보고 전") };
@@ -134,7 +134,7 @@ export function Dashboard() {
   // 셀 칩 — 행동 단계도 칩으로 (승인 대기 · 종료됨), 없으면 확인 단계 칩
   const cellChip = (s: Session): { tone: ChipTone; text: string; title?: string } | undefined => {
     if (s.status === "waiting")
-      return { tone: "amber", text: `${t("승인 대기")}${s.waitingFor ? ` · ${t(s.waitingFor)}` : ""} ${fmtSince(s.sinceMs)}` };
+      return { tone: "amber", text: `${statusText("waiting")}${s.waitingFor ? ` · ${t(s.waitingFor)}` : ""} ${fmtSince(s.sinceMs)}` };
     if (s.status === "dead") return { tone: "red", text: `${t("종료됨")} · exit ${s.exitCode ?? "?"}` };
     return doneChip(s);
   };
@@ -147,10 +147,19 @@ export function Dashboard() {
     if (r.ok) return;
     // 이미 답했으면 목록에서 곧 빠진다(상태 이벤트) — 알리기만. 그 밖에는 페인으로 데려간다
     if (r.reason === "NOT_WAITING") return notify(t("이미 페인에서 답했습니다 — 아무것도 넣지 않았습니다"));
-    notify(t(r.reason === "OTHER_TOOL" ? "지금은 다른 것을 기다립니다 — 페인에서 답하세요" : "이 세션은 앱에서 답할 수 없습니다 — 페인에서 답하세요"));
+    notify(
+      t(
+        r.reason === "OTHER_TOOL"
+          ? "지금은 다른 것을 기다립니다 — 페인에서 답하세요"
+          : r.reason === "ERROR"
+            ? "승인을 전하지 못했습니다 — 페인에서 답하세요"
+            : "이 세션은 앱에서 답할 수 없습니다 — 페인에서 답하세요",
+      ),
+    );
     focusSession(s.workspaceId, s.id);
   };
   // 승인함 (0.6 §13-4) — waiting은 모든 워크스페이스에서(닫아 둔 팀도 기다린다), dead는 열린 것만. 기다린 순
+  const waitingAll = () => sessions().filter((s) => s.status === "waiting");
   const waitRows = () => {
     return sessions()
       .filter((s) => s.status === "waiting" || (s.status === "dead" && openSessions().includes(s)))
@@ -179,12 +188,12 @@ export function Dashboard() {
   const wsSessions = (wsId: string): Session[] => byWs().get(wsId) ?? [];
 
   const cellLine2 = (s: Session) => {
-    if (s.status === "waiting") return s.waitingFor ? t(s.waitingFor) : t("승인 대기");
+    if (s.status === "waiting") return s.waitingFor ? t(s.waitingFor) : statusText("waiting");
     if (s.status === "dead") return t(s.resumable ? "재개 가능" : "재개 불가");
     return missionName(s) ?? t("미배정");
   };
 
-  // 세션 셀 우클릭 메뉴 (§06) — G7 준수: 승인·거부 없음, 점프·이동·중지만
+  // 세션 셀 우클릭 메뉴 (§06) — 점프·이동·중지. 승인·거부는 승인함 몫이다
   const [cellMenu, setCellMenu] = createSignal<{ x: number; y: number; s: Session } | undefined>(undefined);
   // 중지는 확인을 거친다 (BR-08)
   const [stopTarget, setStopTarget] = createSignal<Session | undefined>(undefined);
@@ -213,12 +222,16 @@ export function Dashboard() {
         <div>
           <h1>{t("관제 대시보드")}</h1>
           <div class="sub mono">
-            {tf("열린 워크스페이스 {m} · 주의 정렬: waiting › dead › 확인 필요 › busy › idle", { m: openWs().length })}
+            {tf("열린 워크스페이스 {m} · 주의 정렬: {order}", {
+              m: openWs().length,
+              order: [statusText("waiting"), statusText("dead"), t("확인 필요"), statusText("busy"), statusText("idle")].join(" › "),
+            })}
           </div>
         </div>
         {/* 워크스페이스 관리를 관제에서 바로 연다 — 앱 바 + 와 같은 팝업 */}
-        <button class="btn" title={t("워크스페이스 열기·관리")} onClick={() => setOverlay("connect")}>
-          {t("워크스페이스")}
+        {/* 화면 이름 '워크스페이스 열기 · 관리'와 같은 말을 쓴다 (0.6 QA P83) */}
+        <button class="btn" title={t("워크스페이스 열기 · 관리")} onClick={() => setOverlay("connect")}>
+          {t("워크스페이스 열기")}
         </button>
       </div>
       {/* 지표 타일 (시안 SgZhp Metric) — 색은 단계 색만: 행동 amber · 확인 blue · 실행 green */}
@@ -229,7 +242,8 @@ export function Dashboard() {
             { k: "열린 워크스페이스", v: openWs().length, c: "blue" },
             { k: "전체 세션", v: openSessions().length, c: "" },
             { k: "실행 중", v: openSessions().length - count("dead"), c: "green", tip: subagents() > 0 ? `${t("서브")} ${subagents()}` : undefined },
-            { k: "행동 필요", v: count("waiting") + count("dead"), c: "amber" },
+            // waiting은 승인함과 같은 집합(모든 워크스페이스)으로 센다 — 닫아 둔 팀도 기다린다 (B237)
+            { k: "행동 필요", v: waitingAll().length + count("dead"), c: "amber" },
             { k: "확인 필요", v: openSessions().filter((s) => (attentionRank(s, pendingOf(s)) || 0) >= 3).length, c: "blue" },
             { k: "재개 가능", v: openSessions().filter(canResume).length, c: "purple" },
             // 오늘 비용 (0.6 §13-6) — 예산을 켜면 "$3.20 / $10", 넘으면 amber. 설정 › 알림에서 켠다
@@ -284,7 +298,7 @@ export function Dashboard() {
         {(c) => (
           <details class="card away-card" open>
             <summary>
-              <span class="away-t">{tf("자리 비운 사이 · {ago}부터 · 세션 {n}개가 바뀌었습니다", { ago: fmtAgo(Date.now() - c().since), n: c().rows.length })}</span>
+              <span class="away-t">{tf("자리 비운 사이 · {ago}부터 · 세션 {n}개가 바뀌었습니다", { ago: fmtAgo(Date.now() - c().snap.since), n: c().rows.length })}</span>
               <button class="btn ghost away-x" aria-label={t("닫기")} onClick={(e) => (e.preventDefault(), dismissAway())}>
                 ✕
               </button>
@@ -435,7 +449,7 @@ export function Dashboard() {
           </For>
           <Show when={openWs().length === 0}>
             <div class="card" style={{ padding: "16px" }}>
-              <div class="muted">{t("열린 워크스페이스가 없습니다 — 상단 + 또는 워크스페이스 연결에서 git 저장소를 열어주세요")}</div>
+              <div class="muted">{t("열린 워크스페이스가 없습니다 — 탭 줄의 + 또는 [워크스페이스 열기]에서 git 저장소를 여세요")}</div>
             </div>
           </Show>
           {/* 닫힌 워크스페이스 — 한 줄 강등은 유지하되 항목을 카드로 (U4).
@@ -464,10 +478,10 @@ export function Dashboard() {
                             <span class="badge mono">{tf("세션 {n} 실행 중", { n: live() })}</span>
                           </Show>
                           <Show when={waiting() > 0}>
-                            <span class="badge amber mono">waiting {waiting()}</span>
+                            <span class="badge amber mono">{statusText("waiting")} {waiting()}</span>
                           </Show>
                           <Show when={waiting() === 0 && dead() > 0}>
-                            <span class="badge red mono">dead {dead()}</span>
+                            <span class="badge red mono">{statusText("dead")} {dead()}</span>
                           </Show>
                         </>
                       );
@@ -506,10 +520,16 @@ export function Dashboard() {
         </div>
 
         {/* 주의 & 이벤트 (FR-G-40~42) */}
-        <div class="dash-side">
+        <div class="dash-side" classList={{ urgent: waitRows().length > 0 }}>
           <div class="dash-side-head">
-            <div class="dash-side-t">{t("기다리는 에이전트 · 열린 워크스페이스")}</div>
-            <span class="mono st-waiting dash-side-n">{waitRows().length}</span>
+            {/* 승인함은 모든 워크스페이스의 waiting을 모은다 — 머리도 그렇게 말한다 (U122). 수는 waiting만, 종료됨은 회색 수 */}
+            <div class="dash-side-t">{t("승인함 · 모든 워크스페이스")}</div>
+            <span class="mono st-waiting dash-side-n" title={t("응답을 기다리는 세션")}>{waitingAll().length}</span>
+            <Show when={waitRows().length > waitingAll().length}>
+              <span class="mono muted dash-side-n" title={t("열린 워크스페이스의 종료된 세션")}>
+                {statusText("dead")} {waitRows().length - waitingAll().length}
+              </span>
+            </Show>
             <Show when={unseenCount() > 0}>
               <button
                 class="btn ghost"
@@ -540,7 +560,7 @@ export function Dashboard() {
                   </div>
                   <div class="muted wait-row-why">
                     {w.status === "waiting"
-                      ? `${t(pendingKindText(w.pendingTool))}${!w.pendingTool && w.waitingFor ? ` · ${t(w.waitingFor)}` : ""}`
+                      ? [statusText("waiting"), w.pendingTool ? t(pendingKindText(w.pendingTool)) : w.waitingFor ? t(w.waitingFor) : ""].filter(Boolean).join(" · ")
                       : `${t("종료됨")} · exit ${w.exitCode ?? "?"}${w.resumable ? ` · ${t("재개 가능")}` : ""}`}
                   </div>
                   {/* 기다리는 도구와 원문 — 무엇을 허용하는지 보고 누른다 */}
@@ -554,6 +574,9 @@ export function Dashboard() {
                 </button>
                 <Show when={w.status === "waiting"}>
                   <div class="wait-row-acts">
+                    <Show when={approvalExpired(w)}>
+                      <span class="muted wait-row-why">{t("앱이 기다리는 시간이 지났습니다 — 페인에서 답하세요")}</span>
+                    </Show>
                     <Show when={canRespondInline(w) && w.pendingTool}>
                       {(p) => (
                         <>
@@ -594,13 +617,13 @@ export function Dashboard() {
         </div>
       </div>
 
-      {/* 세션 셀 우클릭 메뉴 (§06) — 셀 상시 액션 대신. 승인·거부는 터미널 페인에서 (G7) */}
+      {/* 세션 셀 우클릭 메뉴 (§06) — 셀 상시 액션 대신. 도구 승인은 승인함, 질문 · 계획은 페인에서 (U158) */}
       <Show when={cellMenu()}>
         {(m) => (
           <ContextMenu
             x={m().x}
             y={m().y}
-            header={`${personaName(m().s)} · ${jobName(m().s)} — ${m().s.status}`}
+            header={`${personaName(m().s)} · ${jobName(m().s)} — ${statusText(m().s.status)}`}
             onClose={() => setCellMenu(undefined)}
             groups={[
               [
@@ -624,11 +647,19 @@ export function Dashboard() {
                   : []),
               ],
               [
-                { label: t("대화 패널 열기"), action: () => openPanel("conversation") },
+                // 그 세션의 팀 대화로 연다 (B211) — 관제에는 워크스페이스 문맥이 없어 스코프가 마지막 워크스페이스였다.
+                // 관제 화면에서 스코프는 lastWorkspaceId라 화면을 옮기지 않고 그것만 바꾼다
+                {
+                  label: t("대화 패널 열기"),
+                  action: () => {
+                    setLastWorkspaceId(m().s.workspaceId);
+                    openPanel("conversation");
+                  },
+                },
                 { label: t("임무 배정…"), action: () => setView({ kind: "missions", wsId: m().s.workspaceId }) },
                 { label: t("팀 편성…"), action: () => setView({ kind: "composition", wsId: m().s.workspaceId }) },
               ],
-              [{ label: t("승인·거부는 터미널 페인에서"), note: true }],
+              [{ label: t("도구 승인은 승인함에서 · 질문 · 계획은 페인에서"), note: true }],
               [
                 {
                   label: t("작업 폴더 열기"),

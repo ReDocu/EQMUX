@@ -126,7 +126,7 @@ export interface Session {
   costUsd?: number; // statusLine 누적 비용 USD (FR-D-19) — 미보고면 undefined
   subagents: number;
   resumable: boolean;
-  resumeReason?: string; // "transcript + cwd 일치" | "transcript 없음" 등
+  resumeReason?: string; // "대화 기록과 작업 폴더가 맞습니다" | "대화 기록 없음" 등 (i18n 키)
   degraded: boolean;
   exitCode?: number;
   missionId?: string;
@@ -419,6 +419,7 @@ export interface Workspace {
   branchNote: string; // "main · 2분 전" | "경로를 찾을 수 없음"
   open: boolean;
   pathMissing: boolean; // 흐름 07 · 재지정 대상
+  notRepo?: boolean; // 폴더는 있고 .git만 없다 — git init을 권한다 (0.6 QA P80)
   teamFile: string; // .eqmux/team.json (원본) — result_prd Δ1
   lastUsed?: string;
 }

@@ -1,11 +1,13 @@
 // 실행 방식 선택 (ChIvy · 0.5 시안 xfVq4) — 레인 01의 2단계. 빠른 시작 · 기본 터미널 · 역할 팀으로 분기한다.
-import { createSignal, For, onMount } from "solid-js";
+import { createSignal, For, onMount, Show } from "solid-js";
+import { agentClis, agentClisReady, INSTALL_CMD, refreshAgentClis } from "../backend/agentprobe";
 import { listPresets } from "../backend/library";
 import { backend } from "../backend/mock";
+import { clipWriteText, isTauri } from "../backend/pty";
 import { maxSlots } from "../backend/settings";
-import { castSavedTeam, savedTeam } from "../backend/team";
+import { castingConfirmLines, castSavedTeam, savedTeam } from "../backend/team";
 import { launchRoleAgents } from "../components/TerminalPane";
-import { Identity, notify } from "../components/ui";
+import { ConfirmDialog, Identity, notify } from "../components/ui";
 import { t, tf } from "../i18n";
 import { setFocusRequest, setOverlay, setSelectedSession, setView } from "../state";
 import { projectStem } from "../types";
@@ -13,6 +15,7 @@ import type { Session } from "../types";
 import { quickStartSlots, wizardSteps } from "./launchRules";
 import type { WizardPath } from "./launchRules";
 import { Icon } from "../components/icons";
+import { segKeyIndex } from "../components/keynav";
 
 /** saved = 저장소의 team.json으로 시작 (D3 · W4) — 단계는 빠른 시작과 같다(실행 방식에서 바로 워크스페이스) */
 type Mode = WizardPath | "saved";
@@ -59,17 +62,34 @@ export function LaunchMode(props: { wsId: string }) {
   });
   const quickSlots = () => quickStartSlots(backend.listPersonas(), backend.listJobs().map((j) => j.id));
   const personaName = (id: string) => backend.listPersonas().find((p) => p.id === id)?.name ?? id;
+  // 빠른 시작은 claude를 바로 띄운다 (P64) — PATH 실측에 없으면 시작을 막고 설치 명령을 보인다(세션 추가와 같은 블록).
+  // 브라우저 dev는 실측이 없어 막지 않는다
+  const claudeMissing = () => isTauri() && agentClisReady() && !agentClis().some((a) => a.cmd === "claude" && a.installed);
 
   // 빠른 시작 — 사람이 누른 버튼이 편성 · 기동까지 한 번에 한다. 임무는 배정하지 않는다
-  const quickStart = () => {
+  // 이미 세션이 있으면 편성 교체가 그것을 끝내므로 먼저 묻는다 (B198 · 팀 캐스팅과 같은 확인)
+  const [confirmQuick, setConfirmQuick] = createSignal<string[]>();
+  const quickStart = (confirmed = false) => {
     const slots = quickSlots();
     if (slots.length === 0) return notify(t("페르소나가 없어 빠른 시작을 할 수 없습니다 — 역할 팀으로 시작하세요"));
+    const lines = confirmed ? [] : castingConfirmLines(props.wsId, slots);
+    if (lines.length > 0) return setConfirmQuick(lines);
     backend.applyCasting(props.wsId, slots);
     backend.openWorkspace(props.wsId);
     arrive(backend.listSessions().filter((s) => s.workspaceId === props.wsId && s.personaId));
   };
   // 저장소의 편성으로 시작 (D3) — castSavedTeam이 슬롯에 앉히고 워크스페이스를 연다. 기동은 여기서
-  const startSaved = async () => arrive(await castSavedTeam(props.wsId));
+  // 기다리는 동안 버튼을 막는다 (0.6 QA B231) — 두 번 누르면 기동이 두 번 걸렸다
+  const [starting, setStarting] = createSignal(false);
+  const startSaved = async () => {
+    if (starting()) return;
+    setStarting(true);
+    try {
+      arrive(await castSavedTeam(props.wsId));
+    } finally {
+      setStarting(false);
+    }
+  };
   // 띄우고 워크스페이스로 — 리드에게 키보드를 준다 (U108)
   const arrive = (list: Session[]) => {
     launchRoleAgents(list);
@@ -139,7 +159,10 @@ export function LaunchMode(props: { wsId: string }) {
         id: "terminal" as Mode,
         icon: ">_",
         title: t("기본 터미널"),
-        copy: t("셸만 엽니다. 에이전트는 필요할 때 직접 띄웁니다. 이름은 워크스페이스명XX(EQMUX01…)로 붙고, 만들 때 바꿀 수 있습니다."),
+        // 예는 지금 워크스페이스 이름으로 (U139) — 아래 헤더 예와 같은 이름
+        copy: tf("셸만 엽니다. 에이전트는 필요할 때 직접 띄웁니다. 이름은 워크스페이스명XX({name}01…)로 붙고, 만들 때 바꿀 수 있습니다.", {
+          name: projectStem(ws()?.name ?? ""),
+        }),
         features: [
           t("세션 이름 · 번호가 헤더와 레일에 붙습니다"),
           t("손으로 띄운 claude에는 메시지를 쌓아 둡니다 (넣기 칩) · 설정에서 '쉬면 자동으로 넣기'로 바꿀 수 있습니다"),
@@ -158,13 +181,30 @@ export function LaunchMode(props: { wsId: string }) {
           t("완료 신호 · 넘김 회신 · 워크스페이스 간 통신"),
           tf("프리셋: {list}", { list: presetNames().map((n) => t(n)).join(" · ") }),
         ],
-        route: t("다음 → 팀 캐스팅 → 팀 편성 → 관제"),
-        example: () => <Identity slot={3} name={t("카이")} title={t("클라이언트 개발자")} cli="claude" />,
+        route: t("다음 → 팀 캐스팅 → 팀 편성 → 워크스페이스"), // U129 — 단계 줄 · 팀 편성 마지막 버튼과 같은 도착지
+        // 라이브러리의 실제 이름 (0.6 QA U150) — 영어 화면에서 'Kai'와 '카이'가 한 줄에 섞였다
+        example: () => <Identity slot={3} name={backend.listPersonas().find((x) => x.id !== quickSlots()[0]?.personaId)?.name ?? t("카이")} title={t("클라이언트 개발자")} cli="claude" />,
       },
     ] as const;
 
   return (
     <div class="screen">
+      <Show when={confirmQuick()}>
+        {(lines) => (
+          <ConfirmDialog
+            title={t("빠른 시작이 지금 팀을 바꿉니다")}
+            body={t("시작하면 아래가 바로 일어납니다. 종료된 세션은 되돌릴 수 없습니다.")}
+            info={lines()}
+            danger
+            confirmLabel={t("바꾸고 시작")}
+            onConfirm={() => {
+              setConfirmQuick(undefined);
+              quickStart(true);
+            }}
+            onCancel={() => setConfirmQuick(undefined)}
+          />
+        )}
+      </Show>
       <div class="screen-head">
         <div>
           <h1>
@@ -182,13 +222,27 @@ export function LaunchMode(props: { wsId: string }) {
       <div class="screen-body launch-body">
         <WizardSteps path={mode() === "saved" ? "quick" : (mode() as WizardPath)} at={1} />
 
-        <div class="launch-choices" role="radiogroup" aria-label={t("실행 방식")}>
+        {/* 라디오 그룹 관례 (U130 · U37) — 탭 정지는 고른 카드 하나, 화살표 · Home · End로 바로 고른다 */}
+        <div
+          class="launch-choices"
+          role="radiogroup"
+          aria-label={t("실행 방식")}
+          onKeyDown={(e) => {
+            const ids = choices().map((c) => c.id);
+            const i = segKeyIndex(e.key, ids.length, ids.indexOf(mode()));
+            if (i === undefined) return;
+            e.preventDefault();
+            setMode(ids[i]);
+            e.currentTarget.querySelectorAll<HTMLButtonElement>(".launch-choice")[i]?.focus();
+          }}
+        >
           <For each={choices()}>
             {(c) => (
               <button
                 class="card launch-choice"
                 role="radio"
                 aria-checked={mode() === c.id}
+                tabIndex={mode() === c.id ? 0 : -1}
                 classList={{ selected: mode() === c.id }}
                 onClick={() => setMode(c.id)}
               >
@@ -225,6 +279,21 @@ export function LaunchMode(props: { wsId: string }) {
         </div>
 
         <div class="launch-footer">
+          {/* 빠른 시작인데 claude가 없다 (P64) — 세션 추가의 설치 블록과 같은 모양. 설치 뒤 [다시 감지]로 풀린다 */}
+          <Show when={mode() === "quick" && claudeMissing()}>
+            <div class="engine-missing mono">
+              <div class="st-dead">{tf("PATH에 {cmd}가 없습니다 — 아래 명령으로 설치한 뒤 다시 감지하세요", { cmd: "claude" })}</div>
+              <div class="engine-install">
+                <code>{INSTALL_CMD.claude}</code>
+                <button class="btn ghost" onClick={() => clipWriteText(INSTALL_CMD.claude)}>
+                  {t("복사")}
+                </button>
+                <button class="btn ghost" onClick={() => void refreshAgentClis()}>
+                  {t("다시 감지")}
+                </button>
+              </div>
+            </div>
+          </Show>
           <div class="launch-footer-note">
             <span class="launch-info">ⓘ</span>
             <span class="muted">
@@ -244,8 +313,8 @@ export function LaunchMode(props: { wsId: string }) {
             <button class="btn" onClick={() => setOverlay("connect")}>
               {t("← 워크스페이스 열기")}
             </button>
-            <button class="btn primary" onClick={next}>
-              {nextLabel()}
+            <button class="btn primary" disabled={starting() || (mode() === "quick" && claudeMissing())} onClick={next}>
+              {starting() ? t("기동 중…") : nextLabel()}
             </button>
           </div>
         </div>

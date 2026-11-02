@@ -243,7 +243,7 @@ let conflictFeed = false;
 export function startConflictFeed(): void {
   if (conflictFeed || !isTauri()) return;
   conflictFeed = true;
-  setInterval(() => conflictList().length > 0 && setConflictClock(Date.now()), 60_000);
+  setInterval(() => (conflictList().length > 0 || outsideList().length > 0) && setConflictClock(Date.now()), 60_000);
   void listen<EditConflict>("edit-conflict", (e) => {
     const c = e.payload;
     receiveConflict(c, () => {
@@ -262,7 +262,17 @@ export interface OutsideOwns {
   owns: string[];
   ts: number;
 }
+/** 담당 밖 편집 목록에 합친다 (U120) — 세션마다 최신 하나, 창(10분)이 지난 것은 뺀다. 순수 함수 */
+export function mergeOutside(list: readonly OutsideOwns[], o: OutsideOwns): OutsideOwns[] {
+  return [o, ...list.filter((x) => x.session !== o.session && x.ts > o.ts - CONFLICT_WINDOW_MS)];
+}
+const [outsideList, setOutsideList] = createSignal<OutsideOwns[]>([]);
+/** 이 세션의 살아 있는 담당 밖 편집 — 페인 머리 칩이 본다 (§13-1 '동시 편집과 같은 자리') */
+export const outsideOf = (sessionId: string): OutsideOwns | undefined =>
+  outsideList().find((o) => o.session === sessionId && o.ts > conflictClock() - CONFLICT_WINDOW_MS);
 export function receiveOutsideOwns(o: OutsideOwns): void {
+  setOutsideList((l) => mergeOutside(l, o));
+  setConflictClock(Date.now());
   notifyLocal({
     session: `app:owns:${o.session}:${o.path}`,
     workspace: o.workspace,

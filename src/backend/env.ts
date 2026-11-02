@@ -117,12 +117,27 @@ const eolOf = (text: string) => (text.includes("\r\n") ? "\r\n" : "\n");
 /** [줄0, 구분0, 줄1, 구분1, …] — 구분자를 같이 잡아 원래 줄바꿈을 지킨다 */
 const splitKeep = (text: string) => text.split(/(\r?\n)/);
 
-/** line번 줄을 KEY=VALUE로 바꾼다 — 원래 줄의 앞 공백과 `export ` 머리는 남긴다 */
+/** 값 뒤 줄 끝 주석(` # …`) — parseDotenv가 값에서 떼는 것과 같은 규칙. 없으면 "" */
+function commentTail(line: string): string {
+  const eq = line.indexOf("=");
+  if (eq < 0) return "";
+  const rest = line.slice(eq + 1);
+  const q = rest.trimStart()[0];
+  if (q === '"' || q === "'" || q === "`") {
+    const open = rest.indexOf(q);
+    const close = rest.indexOf(q, open + 1);
+    const after = close < 0 ? "" : rest.slice(close + 1);
+    return /^\s*#/.test(after) ? after : "";
+  }
+  return /\s+#.*$/.exec(rest)?.[0] ?? "";
+}
+
+/** line번 줄을 KEY=VALUE로 바꾼다 — 원래 줄의 앞 공백 · `export ` 머리 · 줄 끝 주석은 남긴다 (B190) */
 export function setLine(text: string, line: number, key: string, rendered: string): string {
   const parts = splitKeep(text);
   const old = parts[line * 2] ?? "";
   const head = /^\s*(export\s+)?/.exec(old)?.[0] ?? "";
-  parts[line * 2] = `${head}${key}=${rendered}`;
+  parts[line * 2] = `${head}${key}=${rendered}${commentTail(old)}`;
   return parts.join("");
 }
 

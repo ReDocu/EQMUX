@@ -1310,7 +1310,12 @@ fn agent_spawn_inner(
     carry: Option<String>,
 ) -> Result<String, String> {
     if !Path::new(&cwd).is_dir() {
-        return Err("워크스페이스 경로를 찾을 수 없습니다 — 재개는 같은 cwd에서만 성립합니다".into());
+        // 기동과 재개가 같은 길이다 — 문구가 둘 다에 맞게, 어느 폴더인지 말한다 (B207)
+        return Err(if resume {
+            format!("작업 폴더가 없습니다: {cwd} — 재개는 같은 폴더에서만 됩니다")
+        } else {
+            format!("작업 폴더가 없습니다: {cwd} — 폴더를 되돌리거나 세션을 다시 만드세요")
+        });
     }
     // 이중 호출 가드 (P-8) — 같은 id의 PTY가 이미 살아 있으면 새 uuid로 Tracked를 교체하지
     // 않는다. 교체하면 레지스트리 매칭(FR-D-12)·agent_session 매핑이 전부 실행된 적 없는
@@ -1680,10 +1685,10 @@ fn transcript_read(
         return transcript::read(Path::new(&rollout?), 200);
     }
     // 1급 — 이 세션에서 EQMUX가 띄운 에이전트의 uuid 매핑 (FR-D-24)
+    // 매핑이 있는데 못 읽으면(첫 턴 전 · 경로 불일치) 추정으로 떨어지지 않는다 — 같은 폴더 동료의 대화가
+    // 이 세션 것으로 보였다 (B209). Err면 프런트가 스크롤백 폴백으로 간다
     if let Some(uuid) = agent_uuid_for(&app, &workspace, &id) {
-        if let Ok(d) = transcript::read(&agent::transcript_path(&cwd, &uuid), 200) {
-            return Ok(d);
-        }
+        return transcript::read(&agent::transcript_path(&cwd, &uuid), 200);
     }
     // 셸 우선 폴백 — 터미널에서 직접 띄운 에이전트는 매핑이 없다. 같은 cwd의 최신
     // 트랜스크립트를 추정해 보여준다 (TUI 잔해투성이 스크롤백 폴백보다 낫다). 추정임은 표시한다.
@@ -2663,8 +2668,7 @@ fn settings_save(
     if let Ok(v) = settings.0.lock() {
         apply_window_theme(&app, &v);
     }
-    #[cfg(not(target_os = "macos"))]
-    let _ = &app;
+    tray::refresh(&app); // 언어가 바뀌었을 수 있다 — 트레이 메뉴·툴팁을 바로 그 말로 (B194)
     std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
     workspace::atomic_write(&root.join("settings.json"), json.as_bytes())?;
     Ok(())
@@ -2999,7 +3003,18 @@ pub fn run() {
                     .notification()
                     .builder()
                     .title("EQMUX")
-                    .body(format!("사라진 워크스페이스 등록 {restored}개를 백업에서 되살렸습니다"))
+                    .body({
+                        // 설정은 아래에서 읽는다 — 여기서는 파일에서 언어만 본다 (B195)
+                        let en = std::fs::read_to_string(root.join("settings.json"))
+                            .ok()
+                            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                            .is_some_and(|v| v["language"] == "en");
+                        if en {
+                            format!("Restored {restored} missing workspace registration(s) from backup")
+                        } else {
+                            format!("사라진 워크스페이스 등록 {restored}개를 백업에서 되살렸습니다")
+                        }
+                    })
                     .show();
             }
             library::seed(&root); // 역할 라이브러리 시드 (FR-E-27) — 디렉터리가 없을 때만
@@ -3117,7 +3132,9 @@ pub fn run() {
             mission_assign,
             missions::mission_mark_assigned, // 배정 시각 (B92) — eqmux-66
             missions::mission_mark_base, // 임무 시작점 (§13-2) — 0.6 W4
+            missions::mission_set_depends, // 선행 임무 화면 지정 (0.6 QA P60)
             library::library_portrait, // 초상 이미지 (§15-4) — 0.6 W4
+            library::library_reveal_personas, // 초상 폴더 열기 (0.6 QA P66) — eqmux-88
             missions::mission_touched_files, // 임무 검토 필터 (§13-3) — 0.6 W4
             scrollback_tail,
             scrollback_search,

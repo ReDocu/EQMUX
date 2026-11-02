@@ -11,7 +11,8 @@ import { exitMarkerSuffix, findExitCode } from "../screens/reviewRules";
 import { canInject } from "../types";
 import type { ConversationMessage, Mission, MissionStatus } from "../types";
 import { notify } from "../components/ui";
-import { tf } from "../i18n";
+import { t, tf } from "../i18n";
+import { dict as missionsDict } from "../i18n/missions";
 
 interface MissionFile {
   id: string;
@@ -105,11 +106,25 @@ export async function setMissionStatus(wsId: string, missionId: string, status: 
   await refreshMissions(wsId);
   // 산출물 체크리스트 (C4) — 미체크가 남아도 막지 않고 알리기만 한다. 판단은 사람 몫
   const m = backend.listMissions().find((x) => x.id === missionId && x.workspaceId === wsId);
-  const open = m?.outputs.filter((_, i) => !m.outputsDone?.[i]).length ?? 0;
-  if (ok && status === "in-review" && open > 0) {
-    notify(tf("산출물 {n}개가 아직 체크되지 않았습니다 — 검토 중으로 옮겼습니다", { n: open }));
+  const msg = ok ? outputsNotice(status, m?.outputs.filter((_, i) => !m.outputsDone?.[i]).length ?? 0) : undefined;
+  if (msg) notify(msg);
+  if (ok && status === "done") {
+    for (const x of unlockedOrphans(missionId, backend.listMissions().filter((y) => y.workspaceId === wsId)))
+      notify(tf("'{name}'의 선행 임무가 모두 끝났습니다 — 담당 세션이 없어 아무도 시작하지 않습니다", { name: x.name }));
   }
 }
+
+/** 미체크 산출물 안내 — 검토 중으로 옮길 때와 끝낼 때([승인] 포함, B188). 없으면 undefined */
+export function outputsNotice(status: MissionStatus, open: number): string | undefined {
+  if (open <= 0) return undefined;
+  if (status === "in-review") return tf("산출물 {n}개가 아직 체크되지 않았습니다 — 검토 중으로 옮겼습니다", { n: open });
+  if (status === "done") return tf("산출물 {n}개가 체크되지 않은 채 끝났습니다 — 임무 파일에서 확인하세요", { n: open });
+  return undefined;
+}
+
+/** 임무 상태 표시 이름 (U136) — 파일 값(todo · in-progress …)은 그대로 두고 화면에만 쓴다 */
+export const missionStatusText = (st: MissionStatus): string =>
+  t(({ todo: "할 일", "in-progress": "진행 중", "in-review": "검토 중", done: "끝남" } as const)[st] ?? st);
 
 /** 임무 쓰기 실패 (BR-12) — 조용히 삼키면 버튼이 안 먹는 것으로 읽힌다 */
 function failed(e: unknown): void {
@@ -162,16 +177,32 @@ const assignedAt = new Map<string, number>();
 const atKey = (wsId: string, missionId: string, sid: string) => `${wsId}|${missionId}|${sid}`;
 
 /** 이 임무의 마지막 완료 보고 (B92) — 배정된 세션이 배정 뒤에 보낸 report --done만 센다.
- *  예전에는 이전 임무의 보고가 새 임무에 바로 '완료 보고'·[검토 중으로]로 떴다 */
+ *  예전에는 이전 임무의 보고가 새 임무에 바로 '완료 보고'·[검토 중으로]로 떴다.
+ *  [되돌려 보내기] 뒤에는 그 의견보다 나중 보고만 센다 (B172) — 배정 시각은 '고친 파일'의 시작점이라 다시 찍지 않는다 */
 export function missionDoneReport(
   msgs: readonly ConversationMessage[],
-  m: Pick<Mission, "id" | "workspaceId" | "assigned">,
+  m: Pick<Mission, "id" | "workspaceId" | "assigned"> & { name?: string },
   since = (sid: string) => assignedAt.get(atKey(m.workspaceId, m.id, sid)),
 ): ConversationMessage | undefined {
+  // 보낼 때의 언어가 지금과 다를 수 있다 (U123) — 한 · 영 머리 둘 다 본다
+  const heads = m.name === undefined ? [] : [SEND_BACK_HEAD, missionsDict[SEND_BACK_HEAD]].map((h) => h.replaceAll("{name}", m.name!));
+  const backAt = (sid: string) =>
+    Math.max(0, ...msgs.filter((x) => x.from === "나" && x.type === "review" && x.to === sid && heads.some((h) => x.body.startsWith(h))).map((x) => x.ts ?? 0));
   return msgs
-    .filter((x) => x.done && x.workspaceId === m.workspaceId && m.assigned.includes(x.from) && (x.ts ?? 0) >= (since(x.from) ?? 0))
+    .filter(
+      (x) =>
+        x.done &&
+        x.workspaceId === m.workspaceId &&
+        m.assigned.includes(x.from) &&
+        (x.ts ?? 0) >= (since(x.from) ?? 0) &&
+        (x.ts ?? 0) > backAt(x.from),
+    )
     .at(-1);
 }
+
+/** [되돌려 보내기] 의견의 머리 — missionDoneReport가 이것으로 되돌린 시각을 찾는다. 화면 언어를 따른다 (U123) */
+const SEND_BACK_HEAD = "임무 '{name}' 검토 의견 — ";
+const sendBackHead = (name: string) => tf(SEND_BACK_HEAD, { name });
 
 /** 배정 브리프 (FR-E-55) — 지금 받을 수 있으면 바로, 아니면(작업 중·승인 대기·셸·종료) 다음 idle
  *  전이(턴 끝·기동·재개)에 넣는다 (B93 — 예전에는 흘려서 화면 약속과 반대였다).
@@ -181,9 +212,40 @@ function sendBrief(sessionId: string, m: Mission): void {
   const s = backend.listSessions().find((x) => x.id === sessionId);
   if (!s?.personaId) return;
   const goal = m.goal ? ` — ${m.goal}` : "";
-  const line = `[EQ] 임무 배정: ${m.name}${goal} · 정의 ${m.file}`;
+  // `[EQ]` 머리는 에이전트가 알아보는 표식이라 번역하지 않는다 (U123)
+  const line = `[EQ] ${tf("임무 배정: {name}{goal} · 정의 {file}", { name: m.name, goal, file: m.file })}${depsNote(m)}`;
   if (canInject(s)) injectLine(sessionId, line); // 2단계 제출 (B94)
   else queueBrief(sessionId, line);
+}
+
+/** 아직 끝나지 않은 선행 임무 (P60) — 목록에 없는 id는 빼고(지워진 선행이 영영 남지 않게) 이름과 상태를 돌려준다 */
+export function openDeps(m: Pick<Mission, "dependsOn">, all: readonly Mission[]): Mission[] {
+  return (m.dependsOn ?? []).flatMap((id) => all.filter((x) => x.id === id && x.status !== "done"));
+}
+
+/** 브리프 꼬리 (P60) — 선행이 남았으면 에이전트가 곧바로 시작하지 않게 알린다 */
+function depsNote(m: Mission): string {
+  const left = openDeps(m, backend.listMissions().filter((x) => x.workspaceId === m.workspaceId));
+  return left.length
+    ? ` · ${tf("선행: {deps} — 끝나면 알림이 옵니다", { deps: left.map((x) => `${x.name}(${missionStatusText(x.status)})`).join(", ") })}`
+    : "";
+}
+
+/** 선행 임무 지정 (P60) — 파일 frontmatter depends_on을 고치고 다시 읽는다 */
+export async function setMissionDepends(wsId: string, missionId: string, deps: string[]): Promise<void> {
+  const path = wsPath(wsId);
+  if (!isTauri() || !path) {
+    const m = backend.listMissions().find((x) => x.id === missionId && x.workspaceId === wsId);
+    if (m) m.dependsOn = deps;
+    return;
+  }
+  await invoke("mission_set_depends", { wsPath: path, id: missionId, deps }).catch(failed);
+  await refreshMissions(wsId);
+}
+
+/** 선행이 모두 끝났는데 담당이 없는 후행 임무 (P60) — Rust 알림은 배정 세션에게만 가므로 사람에게 알릴 것 */
+export function unlockedOrphans(doneId: string, all: readonly Mission[]): Mission[] {
+  return all.filter((m) => m.status !== "done" && m.assigned.length === 0 && (m.dependsOn ?? []).includes(doneId) && openDeps(m, all).length === 0);
 }
 
 /** [브리프 전달] 때 임무 시작점을 지금 HEAD로 (§13-2) — 배정 때는 mission_mark_assigned가 처음 한 번 적는다 */
@@ -250,11 +312,21 @@ export async function runReviewTest(wsId: string, run: string, shellCmd: string)
   });
 }
 
-/** [되돌려 보내기] — 의견을 담당 세션 모두에게 review로 보내고 IN-PROGRESS로 되돌린다 */
-export async function sendBackMission(wsId: string, m: Mission, note: string, nameOf: (sid: string) => string): Promise<void> {
-  const body = `임무 '${m.name}' 검토 의견 — ${note.trim()}`;
-  await Promise.all(m.assigned.map((sid) => sendConversation(wsId, `@${nameOf(sid)}`, "review", body)));
+/** [되돌려 보내기] — 의견을 담당 세션 모두에게 review로 보내고 IN-PROGRESS로 되돌린다.
+ *  수신자는 세션 id다 (B169) — `@이름` 문자열은 원장에서 어느 세션에도 맞지 않아 아무에게도 닿지 않았다.
+ *  하나라도 못 보내면 상태를 바꾸지 않고 실패한 세션 이름과 이유를 돌려준다 */
+export async function sendBackMission(
+  wsId: string,
+  m: Mission,
+  note: string,
+  nameOf: (sid: string) => string,
+): Promise<string | null> {
+  const body = `${sendBackHead(m.name)}${note.trim()}`;
+  const errs = await Promise.all(m.assigned.map((sid) => sendConversation(wsId, sid, "review", body)));
+  const failedTo = m.assigned.flatMap((sid, i) => (errs[i] ? [`${nameOf(sid)}: ${errs[i]}`] : []));
+  if (failedTo.length) return failedTo.join(" · ");
   await setMissionStatus(wsId, m.id, "in-progress");
+  return null;
 }
 
 /** 임무별 비용 (§13-6 · W2 cost_summary) — 임무 id → USD, 보존 기간(30일) 전체. 임무 밖 비용(null)은 뺀다 */

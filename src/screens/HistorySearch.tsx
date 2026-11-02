@@ -26,6 +26,9 @@ export function HistorySearch(props: { wsId?: string }) {
   const [query, setQuery] = createSignal("");
   const [hits, setHits] = createSignal<HistoryHit[] | undefined>();
   const [busy, setBusy] = createSignal(false);
+  // 검색 실패 사유 (B186) — 결과 0건과 가른다
+  const [err, setErr] = createSignal<string | undefined>();
+  let input: HTMLInputElement | undefined;
   const groups = createMemo(() => groupByConversation(hits() ?? []));
 
   const submit = async () => {
@@ -33,8 +36,12 @@ export function HistorySearch(props: { wsId?: string }) {
     const q = query().trim();
     if (!w || !q || busy()) return;
     setBusy(true);
+    setErr(undefined);
     try {
       setHits(await historySearch(w.id, w.path, q));
+    } catch (e) {
+      setHits(undefined);
+      setErr(String(e));
     } finally {
       setBusy(false);
     }
@@ -64,8 +71,10 @@ export function HistorySearch(props: { wsId?: string }) {
     jumpToSession(s.workspaceId, s.id);
   };
   const copyResume = (uuid: string) => {
-    clipWriteText(resumeCommand(uuid));
-    notify(t("복사했습니다 — 이 폴더의 터미널에 붙여 넣으세요"));
+    const w = ws();
+    if (!w) return;
+    clipWriteText(resumeCommand(uuid, w.path));
+    notify(tf("복사했습니다 — 터미널에 붙여 넣으면 {path}로 옮겨 재개합니다", { path: w.path }), "ok");
   };
 
   const close = () => {
@@ -73,6 +82,8 @@ export function HistorySearch(props: { wsId?: string }) {
     setView((v.kind === "history" ? v.back : undefined) ?? ({ kind: "control" } as View));
   };
   onMount(() => {
+    // autofocus 속성은 SPA에서 새로 붙은 요소에 듣지 않는다 (B245) — 팔레트로 열어도 바로 칠 수 있게
+    input?.focus();
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || (e.target as HTMLElement | null)?.matches?.("input, textarea, select")) return;
       close();
@@ -95,7 +106,7 @@ export function HistorySearch(props: { wsId?: string }) {
           title={t("이 워크스페이스에서 돈 Claude Code 대화에서 찾습니다 (Enter)")}
           value={query()}
           disabled={!ws()}
-          autofocus
+          ref={input}
           onInput={(e) => setQuery(e.currentTarget.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.isComposing) void submit();
@@ -116,6 +127,14 @@ export function HistorySearch(props: { wsId?: string }) {
 
       <div class="hs-body">
         <Show when={ws()} fallback={<p class="muted hs-empty">{t("워크스페이스를 고르세요")}</p>}>
+          <Show when={err()}>
+            <p class="hs-empty st-dead">
+              {tf("검색하지 못했습니다 — {err}", { err: err()! })}{" "}
+              <button class="btn ghost" onClick={() => void submit()}>
+                {t("다시 시도")}
+              </button>
+            </p>
+          </Show>
           <Show when={hits() && !groups().length}>
             <p class="muted hs-empty">{t("맞는 대화가 없습니다")}</p>
           </Show>

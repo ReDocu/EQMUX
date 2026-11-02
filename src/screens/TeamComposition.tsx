@@ -6,7 +6,7 @@ import { listPresets } from "../backend/library";
 import type { CastingPreset } from "../backend/library";
 import { backend } from "../backend/mock";
 import { maxSlots } from "../backend/settings";
-import { castingConfirmLines } from "../backend/team";
+import { applyCastingWithDefaults, castingConfirmLines, permLabel, presetSlots } from "../backend/team";
 import { t, tf } from "../i18n";
 import { jobName } from "../labels";
 import { setFocusRequest, setSelectedSession, setView, tick, view } from "../state";
@@ -42,12 +42,10 @@ export function TeamComposition(props: { wsId: string }) {
   const lead = () => roleMembers().find((m) => m.jobId === "lead") ?? roleMembers()[0];
 
   const permsOf = (s: Session) => s.permOverride ?? job(s.jobId)?.permissions;
+  // 팀 캐스팅 카드와 같은 말 (U168)
   const permText = (s: Session) => {
     const p = permsOf(s);
-    if (!s.personaId || !p) return "—";
-    return [p.write ? "write" : "read", p.commit ? "commit" : undefined, p.push ? "push" : "no-push"]
-      .filter(Boolean)
-      .join(" · ");
+    return !s.personaId || !p ? "—" : permLabel(p);
   };
   const permTip = (s: Session) => {
     const p = permsOf(s);
@@ -92,20 +90,17 @@ export function TeamComposition(props: { wsId: string }) {
     return order.map((j) => `${jobName(job(j), j)}${n.get(j)! > 1 ? ` ${n.get(j)}` : ""}`).join(" · ");
   };
 
-  // 기본 편성 = 첫 프리셋(presets/*.json 실측)의 직무 구성 + 라이브러리 페르소나 순서대로 중복 없이.
-  // 팀 캐스팅의 프리셋 채우기와 같은 규칙이다. 프리셋이 없으면(브라우저 dev) 표준 구성을 쓴다
+  // 기본 편성 = 첫 프리셋(presets/*.json 실측)의 직무 구성 — 팀 캐스팅의 프리셋 채우기와 같은 규칙(presetSlots)이다.
+  // 지금 팀원은 같은 직무 자리에 남는다. 프리셋이 없으면(브라우저 dev) 표준 구성을 쓴다
   const fillDefault = async () => {
     const jobs = (await listPresets())[0]?.jobs ?? FALLBACK_PRESET.jobs;
     const known = new Set(backend.listJobs().map((j) => j.id));
-    const personas = backend.listPersonas();
-    const slots = jobs
-      .filter((j) => known.has(j))
-      .slice(0, Math.min(maxSlots(), personas.length))
-      .map((jobId, i) => ({ personaId: personas[i].id, jobId }));
+    const current = roleMembers().map((m) => ({ personaId: m.personaId, jobId: m.jobId }));
+    const slots = presetSlots(jobs.filter((j) => known.has(j)), current, backend.listPersonas(), maxSlots());
     if (slots.length === 0) return;
     // 돌고 있는 세션을 끝내거나 직무를 바꾸면 먼저 묻는다 (P35 · B69와 같은 확인창)
     const lines = castingConfirmLines(props.wsId, slots);
-    if (lines.length === 0) backend.applyCasting(props.wsId, slots);
+    if (lines.length === 0) applyCastingWithDefaults(props.wsId, slots);
     else setConfirm({ lines, slots });
   };
   const [confirm, setConfirm] = createSignal<{ lines: string[]; slots: { personaId: string; jobId: string }[] } | undefined>(undefined);
@@ -153,8 +148,8 @@ export function TeamComposition(props: { wsId: string }) {
             when={idle().length > 0}
             fallback={
               <button class="btn primary" onClick={() => openWorkspace(false)}>
-                <Icon name="arrow-right" size={12} />
-                {t("워크스페이스 열기")}
+                {/* '워크스페이스 열기'는 단계 01(연결 화면)의 이름이다 — 이 버튼은 워크스페이스 탭으로 들어간다 (U129) */}
+                {t("워크스페이스로 →")}
               </button>
             }
           >
@@ -180,7 +175,7 @@ export function TeamComposition(props: { wsId: string }) {
             onConfirm={() => {
               const slots = c().slots;
               setConfirm(undefined);
-              backend.applyCasting(props.wsId, slots);
+              applyCastingWithDefaults(props.wsId, slots); // B246 — 팀 캐스팅과 같은 경로 (기본 임무 배정)
             }}
             onCancel={() => setConfirm(undefined)}
           />

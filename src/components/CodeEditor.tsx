@@ -5,12 +5,38 @@
 import { onCleanup, onMount } from "solid-js";
 import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
+import { indentWithTab } from "@codemirror/commands";
 import { json } from "@codemirror/lang-json";
 import { markdown } from "@codemirror/lang-markdown";
 import { yaml } from "@codemirror/lang-yaml";
 import { HighlightStyle, LanguageDescription, syntaxHighlighting } from "@codemirror/language";
 import { tags as t } from "@lezer/highlight";
 import { basicSetup } from "codemirror";
+import { settings } from "../backend/settings";
+
+/** 산문 파일만 줄바꿈한다 (P86) — 코드는 긴 줄이 접히면 줄 번호와 실제 줄이 어긋나 보인다 */
+const isProse = (name: string) => /\.(md|markdown|mdx|txt)$/i.test(name);
+
+/** 검색 패널(Ctrl+F) 한국어 문구 (U164) — CodeMirror 기본은 영어다. 영어 화면은 기본 문구를 그대로 쓴다 */
+const PHRASES_KO: Record<string, string> = {
+  Find: "찾기",
+  Replace: "바꾸기",
+  next: "다음",
+  previous: "이전",
+  all: "모두",
+  "match case": "대소문자 구분",
+  regexp: "정규식",
+  "by word": "단어 단위",
+  replace: "바꾸기",
+  "replace all": "모두 바꾸기",
+  close: "닫기",
+  "Go to line": "줄로 이동",
+  go: "이동",
+  "current match": "현재 일치",
+  "on line": "줄",
+  "replaced match on line $": "$번 줄의 일치를 바꿨습니다",
+  "replaced $ matches": "일치 $개를 바꿨습니다",
+};
 
 /** 확장자 → 언어. 임무·역할·팀 파일(md/json/yaml)은 정적 번들 — 편집기와 함께 즉시 뜬다.
  *  그 외 확장자는 language-data 목록에서 찾아 지연 로드한다 (아래 loadExtraLang) */
@@ -141,12 +167,18 @@ export function CodeEditor(props: {
                 return true;
               },
             },
+            // 앱 단축키(Mod-Shift-K·L·B·D·U, App.tsx)는 앱 것이다 (B222) — basicSetup의 줄 삭제·같은 단어 모두
+            // 고르기가 같은 키에 함께 돌지 않게 여기서 삼킨다. stopPropagation은 달지 않아 window의 앱 단축키는 그대로 받는다
+            ...["k", "l", "b", "d", "u"].map((k) => ({ key: `Mod-Shift-${k}`, run: () => true })),
+            // Tab은 들여쓰기 (P86) — YAML에서 포커스가 밖으로 나갔다. Esc 다음 Tab은 CodeMirror 관례대로 포커스 이동
+            indentWithTab,
           ]),
           basicSetup,
           langSlot.of(staticLang),
           eqTheme,
           syntaxHighlighting(eqHighlight),
-          EditorView.lineWrapping, // 임무·역할 문서는 산문이다 — 가로 스크롤보다 줄바꿈
+          isProse(props.fileName) ? EditorView.lineWrapping : [], // 임무·역할 문서는 산문이다 — 가로 스크롤보다 줄바꿈
+          settings().language === "en" ? [] : EditorState.phrases.of(PHRASES_KO),
           EditorView.updateListener.of((u) => {
             if (u.docChanged) props.onChange(u.state.doc.toString());
           }),

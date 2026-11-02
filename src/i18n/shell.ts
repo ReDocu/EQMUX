@@ -116,7 +116,7 @@ export const dict: Record<string, string> = {
 
   // ── LayoutPicker ──
   "페인 배치": "Pane layout",
-  "현재 워크스페이스 · {n}개 세션 · 선택 즉시 미리보기": "Current workspace · {n} sessions · previews on select",
+  "현재 워크스페이스 · {n}개 세션 · 고른 배치는 [적용] 뒤 바뀝니다": "Current workspace · {n} sessions · the layout changes when you apply",
   현재: "Current",
   "적용 후 분할선을 드래그해 비율을 조정할 수 있습니다 · 슬롯 번호는 배치와 무관하게 그대로입니다":
     "After applying, drag the dividers to adjust ratios · slot numbers stay the same in every layout",
@@ -225,6 +225,9 @@ export const dict: Record<string, string> = {
   "다음 → 워크스페이스 (Claude Code 2개 기동)": "Next → Workspace (launches 2 Claude Code sessions)",
   "페르소나가 없어 빠른 시작을 할 수 없습니다 — 역할 팀으로 시작하세요": "No personas, so quick start can't run. Start with Role team",
   "2세션으로 시작 → 워크스페이스": "Start with 2 sessions → Workspace",
+  "빠른 시작이 지금 팀을 바꿉니다": "Quick start will replace the current team",
+  "시작하면 아래가 바로 일어납니다. 종료된 세션은 되돌릴 수 없습니다.": "Starting does the following right away. Stopped sessions can't be brought back.",
+  "바꾸고 시작": "Replace and start",
   "다음: 기본 터미널 구성 →": "Next: Default terminal setup →",
   "다음: 팀 캐스팅 →": "Next: Team casting →",
   "리드와 개발 2세션으로 시작합니다. 워크스페이스가 열리면 Claude Code가 바로 뜹니다. 슬롯 {n}개 중 2개를 씁니다.":
@@ -245,8 +248,8 @@ export const dict: Record<string, string> = {
     "Settings · workspace list · session history · generated hook and status line settings (hook-settings.json)",
   "진단 로그": "Diagnostic logs",
   "<저장소>/.eqmux/": "<repo>/.eqmux/",
-  "팀 편성 · 역할 파일 · 임무. 커밋하지 않으려면 .gitignore에 .eqmux/를 넣으세요":
-    "Team setup · role files · missions. Add .eqmux/ to .gitignore if you don't want to commit them",
+  "팀 편성 · 역할 파일 · 임무 — 커밋하면 동료가 같은 팀으로 시작합니다. 개인용이면 .gitignore에 .eqmux/를 넣습니다(팀 공유가 꺼집니다)":
+    "Team setup · role files · missions — commit them and teammates start with the same team. For personal use, add .eqmux/ to .gitignore (team sharing turns off)",
   "쓰지 않는 곳": "Never writes to",
   "엔진 설정은 고치지 않습니다. 훅은 세션을 띄울 때 인자(--settings, Codex는 -c)로만 싣습니다":
     "Engine settings are never changed. Hooks are passed only as launch arguments (--settings, or -c for Codex)",
@@ -288,6 +291,19 @@ export const dict: Record<string, string> = {
     "Starts with the repo's team. Role sessions launch as soon as the workspace opens. Uses up to {n} slots.",
   // ── 0.6 W7: 스크롤백 저장 토글 (E4 · W6) ──
   "스크롤백 · 세션 로그 저장": "Save scrollback and session logs",
-  "스크롤백과 세션 로그 파일에는 토큰·비밀번호가 평문으로 남을 수 있습니다. 끄면 디스크에 쓰지 않습니다(재시작 뒤 이전 출력을 다시 볼 수 없습니다).":
-    "Scrollback and session log files can keep tokens and passwords in plain text. Turn this off to stop writing them to disk (you won't see earlier output after a restart).",
+  "스크롤백과 세션 로그 파일에는 토큰·비밀번호가 평문으로 남을 수 있습니다. 끄면 디스크에 쓰지 않습니다 — 꺼 둔 동안은 eqmux read · 로그 검색 · 과거 세션 검색에 새 출력이 남지 않고, 재시작 뒤 이전 출력도 다시 볼 수 없습니다.":
+    "Scrollback and session log files can keep tokens and passwords in plain text. When off, nothing is written to disk — while it's off, new output won't show up in eqmux read, log search or past-session search, and earlier output can't be viewed after a restart.",
+  // ── 0.6 QA eqmux-dd ──
+  "라이브러리에 없는 페르소나": "Persona not in your library",
+  "실행 중 {n} — 에이전트 {a} · 셸만 연 역할 세션 {r} · 기본 터미널 {d} · 서버 {s}. 자동 재개하지 않습니다.":
+    "{n} running — {a} agent(s) · {r} role session(s) with only a shell · {d} default terminal(s) · {s} server(s). Nothing auto-resumes.",
+  "git 저장소 아님": "Not a git repository",
+  "git init…": "git init…",
+  "등록 해제": "Unregister",
+  "{name}을(를) 목록에서 뺍니다. 저장된 세션 {n} · 재개 가능 {m}": "Removes {name} from the list. Saved sessions {n} · resumable {m}",
+  "clone 중… {s}초 · 창을 닫아도 계속됩니다": "Cloning… {s}s · keeps going if you close this window",
+  "오래 걸리면 Git 로그인 창이 다른 창 뒤에 떠 있을 수 있습니다.":
+    "If this takes long, a Git sign-in window may be hidden behind other windows.",
+  "기동 중…": "Launching…",
+  "알겠습니다": "Got it",
 };

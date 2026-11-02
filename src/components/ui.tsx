@@ -162,9 +162,10 @@ export function ContextMenu(props: {
 
 /* ── 0.5 공통 부품 (기획서 §UX 기반 › 공통 부품) ───────────────────── */
 
-/** 화면 아래 한 줄 토스트, 4초 — 사람이 한 동작의 실패·거부만. 벨(세션이 사람을 부름)과 섞지 않는다.
+/** 화면 아래 한 줄 토스트, 4초 — 사람이 한 동작의 결과. 기본은 실패·거부(빨강)이고,
+ *  성공은 kind "ok"로 중립 테두리에 띄운다 (B184). 벨(세션이 사람을 부름)과 섞지 않는다.
  *  호스트 컴포넌트 없이 어디서든 부를 수 있게 DOM에 직접 붙인다 */
-export function notify(msg: string): void {
+export function notify(msg: string, kind: "error" | "ok" = "error"): void {
   let host = document.getElementById("eq-toasts");
   if (!host) {
     host = document.createElement("div");
@@ -174,7 +175,7 @@ export function notify(msg: string): void {
     document.body.appendChild(host);
   }
   const el = document.createElement("div");
-  el.className = "eq-toast";
+  el.className = kind === "ok" ? "eq-toast ok" : "eq-toast";
   el.textContent = msg;
   host.appendChild(el);
   setTimeout(() => el.remove(), 4000);
@@ -305,13 +306,13 @@ export function Chip(props: {
   short?: string; // 좁은 페인(8슬롯)에서 대신 보일 짧은 글자 — 시안 T1sVdJ
   title?: string;
   action?: { label: string; onClick: () => void; title?: string; disabled?: boolean };
-  onClick?: () => void; // 칩 글자 자체가 동작일 때 (+N 펼치기 등)
+  onClick?: (e: MouseEvent & { currentTarget: HTMLButtonElement }) => void; // 칩 글자 자체가 동작일 때 (+N 펼치기 등) — 메뉴 자리는 e.currentTarget (B233)
 }) {
   const tone = () => props.tone ?? "info";
   return (
     <span class={`eq-chip ${tone()}`} title={props.title}>
       <Show when={props.onClick} fallback={<span class="eq-chip-tx">{chipText(props)}</span>}>
-        <button class="eq-chip-tx" onClick={(e) => (e.stopPropagation(), props.onClick!())}>
+        <button class="eq-chip-tx" onClick={(e) => (e.stopPropagation(), props.onClick!(e))}>
           {chipText(props)}
         </button>
       </Show>

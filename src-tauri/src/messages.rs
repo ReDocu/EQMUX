@@ -316,6 +316,17 @@ pub fn get(root: &Path, ws: &str, id: i64) -> Result<Option<MsgRow>, String> {
     one(root, ws, "id = ?1", params![id])
 }
 
+/// 다른 원장에 적힌 같은 메시지 (B173) — 프로젝트 간 발신은 두 원장에 한 줄씩 적는다. `--re`를 받는 쪽
+/// 원장 id로 옮길 때 쓴다. 두 줄은 같은 발신에서 거의 같은 시각에 적히므로 ±5초 안의 첫 줄을 고른다
+pub fn twin(root: &Path, ws: &str, orig: &MsgRow) -> Result<Option<MsgRow>, String> {
+    one(
+        root,
+        ws,
+        "sender = ?1 AND recipient = ?2 AND kind = ?3 AND body = ?4 AND ts BETWEEN ?5 - 5000 AND ?5 + 5000",
+        params![orig.from, orig.to, orig.kind, orig.body, orig.ts],
+    )
+}
+
 /// `send --wait` (§4) — 내가 보낸 `id`에 온 첫 회신. `--re id`로 이은 것, 또는 그 메시지를 받은 사람이
 /// 그 뒤 나에게 낸 report --done (회신 고리를 쓰지 않아도 완료 보고는 맡긴 쪽에 자동으로 온다)
 pub fn reply_to(root: &Path, ws: &str, me: &str, id: i64) -> Result<Option<MsgRow>, String> {
@@ -458,6 +469,21 @@ mod tests {
         let ask2 = send(&dir, "ws1", me, "lin@ws1", "handoff", "로그인").unwrap();
         let d = send_with(&dir, "ws1", "lin@ws1", me, "report", "완료", &Extra { done: true, ..Default::default() }).unwrap();
         assert_eq!(reply_to(&dir, "ws1", me, ask2.id).unwrap().unwrap().id, d.id);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// B173 — 프로젝트 간 질문은 두 원장에 적힌다. 받는 쪽(ws2)에서 단 `--re`를 보낸 쪽(ws1) 원장 id로 옮긴다
+    #[test]
+    fn twin_finds_the_same_message_in_the_other_ledger() {
+        let dir = std::env::temp_dir().join(format!("eqmux-twin-{}", crate::workspace::now_ms()));
+        let (a, c) = ("kai@ws1", "lin@ws2");
+        send(&dir, "ws1", a, c, "ask", "다른 질문").unwrap(); // 본문이 다르면 짝이 아니다
+        let mine = send(&dir, "ws1", a, c, "ask", "스키마?").unwrap();
+        let theirs = send(&dir, "ws2", a, c, "ask", "스키마?").unwrap();
+        assert_eq!(twin(&dir, "ws1", &theirs).unwrap().unwrap().id, mine.id);
+        let r = send_with(&dir, "ws1", c, a, "report", "답", &Extra { re: Some(mine.id), ..Default::default() }).unwrap();
+        assert_eq!(reply_to(&dir, "ws1", a, mine.id).unwrap().unwrap().id, r.id);
+        assert!(twin(&dir, "ws3", &theirs).unwrap().is_none()); // 원장 없음
         std::fs::remove_dir_all(&dir).ok();
     }
 

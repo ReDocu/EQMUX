@@ -4,18 +4,18 @@
 // git 화면(스테이징 · 메시지)을 연다. 버튼 우클릭 = [명령 복사] — 터미널에서 직접 칠 수도 있다.
 // UI 리파인 §git: 카드 스택 → 한 줄 툴바 · 밀도 높은 커밋 행(뱃지 복수 + 우측 메타) ·
 // 커밋 행 클릭 = 부모 커밋 ↔ 이 커밋 diff.
-import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
-import { commandLine, commitWebUrl, gitOverview, gitRun, remoteWebUrl } from "../backend/git";
+import { batch, createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
+import { commandLine, commitWebUrl, failText, gitOverview, gitRefs, gitRun, remoteWebUrl, withHeadNotice } from "../backend/git";
 import type { GitOverview } from "../backend/git";
 import { GIT_STATE, backend } from "../backend/mock";
 import { clipWriteText, isTauri, revealPath } from "../backend/pty";
 import { openLink } from "../backend/browser";
 import { t, tf } from "../i18n";
-import { scopeWorkspace, setPanelNote, setPanelOpen, setView, tick, view } from "../state";
+import { pushLayer, scopeWorkspace, setPanelNote, setPanelOpen, setView, tick, view } from "../state";
 import { Icon } from "./icons";
 import { ConfirmDialog, ContextMenu, Eyebrow, notify } from "./ui";
 import { sessionDisplayName } from "../types";
-import { guardSessions, guardWorsened, workGuard } from "../screens/gitWrite";
+import { guardSessions, guardWorsened, pushArgs, workGuard } from "../screens/gitWrite";
 
 interface CommitRow {
   hash: string;
@@ -102,9 +102,10 @@ export function GitPanelTab() {
         real: true,
       };
     }
+    // 목 모드 (U166) — GIT_STATE는 Academy 하나뿐이다. 머리 줄 이름 · 브랜치는 지금 워크스페이스 것을 쓴다
     return {
-      repo: GIT_STATE.repo,
-      branch: GIT_STATE.branch,
+      repo: ws()?.name ?? GIT_STATE.repo,
+      branch: ws()?.branch ?? GIT_STATE.branch,
       ahead: GIT_STATE.ahead,
       behind: GIT_STATE.behind,
       changed: GIT_STATE.changed,
@@ -155,23 +156,38 @@ export function GitPanelTab() {
 
   // ── pull · push 버튼 (§17 G7′) — 누르면 실행. pull은 §4-1 작업 중 경고를 거친다 ──
   const [actNote, setActNote] = createSignal<string | undefined>(undefined);
-  const [running, setRunning] = createSignal(false);
+  const [authFail, setAuthFail] = createSignal(false);
+  // 실행 중인 워크스페이스 id들 (B240) — A에서 시작한 push가 B의 버튼을 잠그지 않는다
+  const [runningIn, setRunningIn] = createSignal<string[]>([]);
+  const running = () => !!ws() && runningIn().includes(ws()!.id);
+  // B240 — 워크스페이스를 바꾸면 이전 저장소의 개요 · 실행 결과 줄을 바로 지운다 (새 응답까지 A의 커밋이 B 이름 아래 남았다)
+  createEffect(on(() => ws()?.id, () => batch(() => (setReal(undefined), setActNote(undefined), setAuthFail(false))), { defer: true }));
   const [guardAsk, setGuardAsk] = createSignal<{ level: "busy" | "waiting"; names: string[] } | undefined>();
   const runCmd = async (args: string[]) => {
     const w = ws();
-    if (!w || running()) return;
-    setRunning(true);
-    setActNote(tf("실행 중 — {cmd}", { cmd: commandLine(args) }));
-    const r = await gitRun(w.id, w.path, args);
-    setRunning(false);
-    setActNote(
-      r.ok
-        ? tf("{cmd} 완료", { cmd: r.command })
-        : r.auth
-          ? t("로그인이 필요합니다 — 터미널에서 `git fetch`를 한 번 실행해 로그인하세요")
-          : `${r.command} — ${r.output.split("\n").find((l) => l.trim()) ?? t("실패")}`,
-    );
+    if (!w || runningIn().includes(w.id)) return;
+    setRunningIn([...runningIn(), w.id]);
+    batch(() => (setActNote(tf("실행 중 — {cmd}", { cmd: commandLine(args) })), setAuthFail(false)));
+    // 바뀐 뒤 알림 (§17-3 · B175) — git 화면과 같은 설정 · 같은 HEAD 해시 비교. push는 HEAD를 안 바꿔 알림이 안 간다
+    const r = await withHeadNotice(w.id, w.path, () => gitRun(w.id, w.path, args));
+    setRunningIn(runningIn().filter((x) => x !== w.id));
+    if (ws()?.id !== w.id) return; // 그새 다른 워크스페이스로 갔다 — 결과는 실행 로그에만 (B240)
+    batch(() => {
+      setAuthFail(r.auth);
+      setActNote(
+        r.ok
+          ? tf("{cmd} 완료", { cmd: r.command })
+          : r.auth
+            ? t("로그인이 필요합니다 — 터미널에서 `git fetch`를 한 번 실행해 로그인하세요")
+            : `${r.command} — ${failText(r.output)}`,
+      );
+    });
     void load();
+  };
+  /** B180 — git 화면과 같은 push: 업스트림 없는 새 브랜치면 `push -u <원격> <브랜치>` */
+  const push = async () => {
+    const w = ws();
+    if (w) void runCmd(pushArgs(await gitRefs(w.path)));
   };
   const guardNames = () => {
     const w = ws();
@@ -198,6 +214,14 @@ export function GitPanelTab() {
 
   // ── 저장소 드롭다운 (UI 리파인 §git) — 워크스페이스 전환 = 패널 스코프 전환 ──
   const [repoMenu, setRepoMenu] = createSignal(false);
+  let repoWrap!: HTMLDivElement;
+  createEffect(() => {
+    if (!repoMenu()) return;
+    const off = pushLayer(() => setRepoMenu(false)); // Esc (U162)
+    const down = (e: MouseEvent) => !repoWrap.contains(e.target as Node) && setRepoMenu(false);
+    document.addEventListener("mousedown", down);
+    onCleanup(() => (off(), document.removeEventListener("mousedown", down)));
+  });
   const repoChoices = () => {
     tick();
     return backend.listWorkspaces().filter((w) => !w.pathMissing);
@@ -217,11 +241,13 @@ export function GitPanelTab() {
       {/* 머리 줄 (0.5 시안 AYgJv) — 저장소 드롭다운 · 원격 저장소 · 탐색기 · 새로 읽기.
           저장소 선택 = 그 워크스페이스로 전환 (스코프 단일 소스 유지) */}
       <div class="gitp-head">
-      <div class="gitp-repo-wrap">
+      <div class="gitp-repo-wrap" ref={repoWrap}>
         <button
           class="card inset gitp-repo mono"
           style={{ cursor: "pointer" }}
           title={ws()?.path ?? t("저장소 = 활성 워크스페이스")}
+          aria-haspopup="listbox"
+          aria-expanded={repoMenu()}
           onClick={() => setRepoMenu(!repoMenu())}
         >
           <span class="gitp-repo-name">{ws() ? `${g().repo} · ${ws()!.path}` : g().repo}</span>
@@ -273,8 +299,8 @@ export function GitPanelTab() {
         {(r) => <div class="gitp-remote-hint mono">origin: {remoteWebUrl(r()) ?? r()}</div>}
       </Show>
 
-      {/* 한 줄 툴바 (UI 리파인 §git) — 브랜치 · ↑↓ · pull · commit · push.
-          pull·push·commit은 명령 복사뿐 (G7 유지) */}
+      {/* 한 줄 툴바 (UI 리파인 §git) — 브랜치 · ↑↓ · Pull · Commit · Push.
+          Pull · Push는 누르면 실행(§17 G7′ · git 화면과 같은 인자), Commit은 git 화면을 연다. 우클릭 = 명령 복사 */}
       <div class="gitp-toolbar">
         <div class="gitp-branch-wrap">
           <div class="card inset gitp-branch mono">
@@ -293,37 +319,41 @@ export function GitPanelTab() {
           onClick={pull}
           onContextMenu={copyMenu(PULL)}
         >
-          ↓ pull
+          ↓ {t("Pull")}
         </button>
         <button class="gitp-act mono" disabled={!ws()} title={t("git 화면에서 스테이지하고 커밋합니다")} onClick={openGitScreen}>
-          commit
+          {t("Commit")}
         </button>
         <button
           class="gitp-act mono"
           disabled={!ws() || running()}
-          title={t("git push 실행 — 우클릭: 명령 복사")}
-          onClick={() => void runCmd(["push"])}
+          title={t("git push 실행 — 업스트림이 없으면 -u로 올립니다 · 우클릭: 명령 복사")}
+          onClick={() => void push()}
           onContextMenu={copyMenu(["push"])}
         >
-          ↑ push
+          ↑ {t("Push")}
           <Show when={g().ahead > 0}>
             <span class="n">{g().ahead}</span>
           </Show>
         </button>
       </div>
-      {/* 변경 요약 (0.5 시안) — git_overview가 주는 값만: 변경 · 수정 · 추가 */}
+      {/* 변경 요약 (0.5 시안 · U165) — 합계 = 추가 + 수정 + 삭제. 키는 git 패널 고유 키다 (B241 — '수정'은 역할 묶음 'Fixes') */}
       <div class="gitp-sum">
-        <div class="gitp-sum-tile" title={tf("+{a} ~{m} −{d}", { a: g().added, m: g().modified, d: g().deleted })}>
-          <span>{t("변경")}</span>
+        <div class="gitp-sum-tile" title={t("추가 + 수정 + 삭제 — 추적 안 된 파일은 추가, 이름 바꾸기는 수정으로 셉니다")}>
+          <span>{t("변경 합계")}</span>
           <b class="mono" style={{ color: "var(--eq-amber)" }}>{g().changed}</b>
         </div>
         <div class="gitp-sum-tile">
-          <span>{t("수정")}</span>
+          <span>{t("더한 파일")}</span>
+          <b class="mono" style={{ color: "var(--eq-purple)" }}>{g().added}</b>
+        </div>
+        <div class="gitp-sum-tile">
+          <span>{t("고친 파일")}</span>
           <b class="mono">{g().modified}</b>
         </div>
         <div class="gitp-sum-tile">
-          <span>{t("추가")}</span>
-          <b class="mono" style={{ color: "var(--eq-purple)" }}>{g().added}</b>
+          <span>{t("지운 파일")}</span>
+          <b class="mono">{g().deleted}</b>
         </div>
       </div>
 
@@ -331,10 +361,16 @@ export function GitPanelTab() {
       <Show when={actNote()}>
         <div class="mono muted" style={{ "font-size": "10px" }}>
           {actNote()}
+          <Show when={authFail()}>
+            {" "}
+            <button class="btn ghost" style={{ "font-size": "10px", padding: "0 4px" }} onClick={() => void clipWriteText("git fetch")}>
+              {t("`git fetch` 복사")}
+            </button>
+          </Show>
         </div>
       </Show>
 
-      <Eyebrow>COMMIT GRAPH</Eyebrow>
+      <Eyebrow>{t("커밋 그래프")}</Eyebrow>
       {/* 밀도 높은 커밋 행 (UI 리파인 §git) — 뱃지+메시지 왼쪽 · 작성자·시간·해시 오른쪽 한 줄.
           클릭 = 부모 커밋 ↔ 이 커밋 diff */}
       <div class="gitp-commits">
@@ -343,8 +379,14 @@ export function GitPanelTab() {
             <div
               class="gitp-commit"
               role="button"
+              tabIndex={0}
               title={tf("{msg} — 클릭: 부모 커밋과 나란히 비교(diff)", { msg: c.message })}
               onClick={() => openCommitDiff(c)}
+              onKeyDown={(e) => {
+                if (e.key !== "Enter" && e.key !== " ") return;
+                e.preventDefault();
+                openCommitDiff(c);
+              }}
               onContextMenu={(e) => {
                 e.preventDefault();
                 setCmMenu({ x: e.clientX, y: e.clientY, c });
@@ -390,7 +432,7 @@ export function GitPanelTab() {
       </button>
 
       {/* 정책 고지 1회 — G7′. 사람이 누를 때만 실행한다 */}
-      <div class="gitp-foot mono muted">{t("누를 때만 실행 · pull은 --ff-only · 우클릭하면 명령 복사")}</div>
+      <div class="gitp-foot mono muted">{t("누를 때만 실행 · Pull은 --ff-only · 우클릭하면 명령 복사")}</div>
 
       <Show when={guardAsk()}>
         {(a) => (

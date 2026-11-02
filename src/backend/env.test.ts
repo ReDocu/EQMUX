@@ -62,6 +62,13 @@ describe("한 줄 편집 — 다른 줄을 건드리지 않는다", () => {
     expect(out).toBe("# c\r\n\r\nexport A='y'\r\nB=2 # keep\r\nC=3");
   });
 
+  test("바꾸기: 값 뒤 줄 끝 주석은 남는다 (B190) — # 앞 공백 없는 값은 주석이 아니다", () => {
+    expect(setLine(text, at("B").line!, "B", "5")).toBe("# c\r\n\r\nexport A='x'\r\nB=5 # keep\r\nC=3");
+    expect(setLine('A="x y"  # note', 0, "A", "'z'")).toBe("A='z'  # note");
+    expect(setLine("A=a#b", 0, "A", "c")).toBe("A=c");
+    expect(setLine('A="x # y"', 0, "A", "c")).toBe("A=c");
+  });
+
   test("빼기: 가운데 줄 · 마지막 줄(끝 줄바꿈 없음) · 첫 줄", () => {
     expect(removeLine(text, at("B").line!)).toBe("# c\r\n\r\nexport A='x'\r\nC=3");
     expect(removeLine(text, at("C").line!)).toBe("# c\r\n\r\nexport A='x'\r\nB=2 # keep");

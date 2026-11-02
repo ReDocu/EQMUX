@@ -1,7 +1,7 @@
 // 주입 본문 단위 테스트 — 전달 경로(PTY·인박스)는 통합의 몫이고, 여기서는 "여러 건을 어떻게
 // 한 줄로 접는가"만 본다: 단건/묶음 접두 · 개행 평탄화 · 상한에서 덩어리 갈리기.
 import { describe, expect, test } from "vitest";
-import { batches, cancelBrief, consumeTaken, droppedIds, noteTaken, capQueue, deliveredIds, flushInboxOnState, fmt, fmtNotice, goneName, injectedMsgIds, sentState, touchesMission, orphanedInbox, pendingBrief, queueBrief, pendingReason, prependOlder, splitPending, unmanagedAgent } from "./conversation";
+import { batches, cancelBrief, crossCopy, titlePrefix, consumeTaken, droppedIds, noteTaken, capQueue, deliveredIds, flushInboxOnState, fmt, fmtNotice, goneName, injectedMsgIds, sentState, touchesMission, orphanedInbox, pendingBrief, queueBrief, pendingReason, prependOlder, splitPending, unmanagedAgent } from "./conversation";
 import { typedText } from "./pty";
 import type { ConversationMessage } from "../types";
 
@@ -240,5 +240,22 @@ describe("전달됨 시점 (B168)", () => {
     expect(touchesMission({ from: "kai", to: "@all" }, ["kai"])).toBe(true);
     expect(touchesMission({ from: "나", to: "kai" }, ["kai"])).toBe(true);
     expect(touchesMission({ from: "나", to: "rin" }, ["kai"])).toBe(false);
+  });
+});
+
+describe("받는 사람 · 사본 (U121 · B210)", () => {
+  test("직함 접두 — 띄어쓰기를 빼고 비교, 뒤는 공백이나 끝", () => {
+    expect(titlePrefix("클라이언트 개발자 확인 부탁", "클라이언트 개발자")).toBe(9);
+    expect(titlePrefix("클라이언트개발자 확인", "클라이언트 개발자")).toBe(8);
+    expect(titlePrefix("클라이언트 개발자", "클라이언트개발자")).toBe(9);
+    expect(titlePrefix("클라이언트 개발자들 확인", "클라이언트 개발자")).toBe(0);
+    expect(titlePrefix("서버 개발자 확인", "클라이언트 개발자")).toBe(0);
+    expect(titlePrefix("아무거나", undefined)).toBe(0);
+  });
+  test("보낸 쪽 사본은 다른 워크스페이스의 한 세션에게 보낼 때만", () => {
+    expect(crossCopy("B", "lin@B", "A")).toBe(true);
+    expect(crossCopy("A", "kai@A", "A")).toBe(false);
+    expect(crossCopy("B", "@all", "A")).toBe(false); // 보낸 쪽 @all은 보낸 쪽 팀 전체에게 간다
+    expect(crossCopy("B", "lin@B")).toBe(false);
   });
 });

@@ -45,3 +45,7 @@ export function quickStartSlots(
   }
   return out;
 }
+
+/** 기본 터미널 세션 id인가 (0.6 QA B227) — 페르소나 목록이 아니라 id 모양(`shell{N}@ws`)으로 가린다.
+ *  크래시 뒤 페르소나를 지웠어도 역할 세션이 기본 터미널로 둔갑하지 않게 */
+export const isDefaultTerminalId = (id: string) => /^shell\d+@/.test(id);

@@ -242,18 +242,29 @@ export async function restartAgent(
 // 누르기 직전에 같은 도구로 아직 기다리는지 본다 — 그사이 페인에서 먼저 답했으면 아무것도 넣지 않는다.
 // Rust도 같은 확인을 한 번 더 한다(키를 넣는 순간 기준).
 
-/** 승인함에서 바로 답할 수 있는가 — 질문 · 계획 승인은 답을 고르는 일이라 페인에서 한다. 순수 함수 */
-export function canRespondInline(s: Pick<Session, "status" | "pendingTool">): boolean {
-  return s.status === "waiting" && s.pendingTool?.kind === "tool";
+/** 훅이 앱의 답을 기다려 주는 시간 — Rust APPROVAL_WAIT(570초)와 같은 값. 넘으면 훅이 손을 뗀다 (B212) */
+export const APPROVAL_WAIT_MS = 570_000;
+
+type Inline = Pick<Session, "status" | "pendingTool"> & { cli?: AgentCliId; sinceMs?: number };
+
+/** 승인함에서 바로 답할 수 있는가 — 질문 · 계획 승인은 답을 고르는 일이라 페인에서 한다.
+ *  Codex는 훅 대기를 만들지 않고, 시한이 지난 대기는 Rust가 이미 지웠다 (B212). 순수 함수 */
+export function canRespondInline(s: Inline): boolean {
+  return s.status === "waiting" && s.pendingTool?.kind === "tool" && s.cli !== "codex" && (s.sinceMs ?? 0) < APPROVAL_WAIT_MS;
 }
+
+/** 도구 승인인데 앱이 기다리는 시간이 지났다 — 버튼 대신 '페인에서 답하세요'를 보인다 (B212). 순수 함수 */
+export const approvalExpired = (s: Inline): boolean =>
+  s.status === "waiting" && s.pendingTool?.kind === "tool" && s.cli !== "codex" && (s.sinceMs ?? 0) >= APPROVAL_WAIT_MS;
 
 /** 누르기 직전 확인 — 화면에 보인 도구와 지금 기다리는 도구가 같은가. 순수 함수 */
 export function stillWaitingFor(s: Pick<Session, "status" | "pendingTool"> | undefined, seen: PendingTool): boolean {
   return !!s && s.status === "waiting" && s.pendingTool?.tool === seen.tool && s.pendingTool.input === seen.input;
 }
 
-/** 응답 실패 이유 (C2 — W2가 코드로 준다). NOT_WAITING=이미 답함 · OTHER_TOOL=다른 도구를 기다림 · NO_HOOK=앱이 답할 길이 없다 */
-export type ApprovalReason = "NOT_WAITING" | "OTHER_TOOL" | "NO_HOOK";
+/** 응답 실패 이유 (C2 — W2가 코드로 준다). NOT_WAITING=이미 답함 · OTHER_TOOL=다른 도구를 기다림 · NO_HOOK=앱이 답할 길이 없다
+ *  ERROR=호출 자체가 실패했다 (B212 — 예전엔 NO_HOOK으로 바꿔 같은 문구가 나왔다) */
+export type ApprovalReason = "NOT_WAITING" | "OTHER_TOOL" | "NO_HOOK" | "ERROR";
 
 /** 답은 엔진의 권한 훅이 기다리다 받는다 (Q1 (b)) — 페인의 승인 창도 그대로 떠 있고, 먼저 온 답이 이긴다 */
 export async function approvalRespond(sessionId: string, seen: PendingTool, allow: boolean): Promise<{ ok: boolean; reason?: ApprovalReason }> {
@@ -263,6 +274,6 @@ export async function approvalRespond(sessionId: string, seen: PendingTool, allo
   if (!isTauri()) return { ok: false, reason: "NO_HOOK" };
   return invoke<{ ok: boolean; reason?: ApprovalReason }>("approval_respond", { session: sessionId, allow }).catch(() => ({
     ok: false,
-    reason: "NO_HOOK" as const,
+    reason: "ERROR" as const,
   }));
 }

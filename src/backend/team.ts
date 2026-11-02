@@ -5,8 +5,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { notify } from "../components/ui";
 import { t, tf } from "../i18n";
 import { castingChanges, sessionName } from "../types";
-import type { Persona, Session } from "../types";
+import type { Permissions, Persona, Session } from "../types";
 import { applyAgentSnapshot } from "./agent";
+import { autoAssignDefault } from "./missions";
 import { backend, libraryRev } from "./mock";
 import { isServerTermId } from "./ports";
 import { isTauri, listAlivePty } from "./pty";
@@ -178,6 +179,42 @@ export function castingConfirmLines(wsId: string, wanted: readonly { personaId: 
     ...c.dropped.map((p) => tf("{name} 자리 없음 — 빠집니다", { name: persona(p)?.name ?? p })),
     ...(c.dropped.length ? [t("자리를 늘리려면 설정에서 슬롯 수를 올리거나 기본 터미널을 닫으세요")] : []),
   ];
+}
+
+/** 편성 적용 (0.6 QA B246) — 팀 캐스팅 [편성 저장]·[편성 선택 →]과 팀 편성 [기본 편성 채우기]가 같은 경로를 탄다.
+ *  어느 버튼으로 만들었든 기본 임무 자동 배정(FR-E-56)이 붙는다 (autoAssignDefault는 임무가 있으면 건너뛴다) */
+export function applyCastingWithDefaults(wsId: string, slots: readonly { personaId: string; jobId: string }[]): void {
+  backend.applyCasting(wsId, [...slots]);
+  for (const sl of slots) if (sl.personaId) void autoAssignDefault(wsId, `${sl.personaId}@${wsId}`);
+}
+
+/** 프리셋 채우기 (0.6 QA P78 · P79) — 프리셋은 직무 구성이다. 지금 팀원은 같은 직무 자리에 남기고,
+ *  빈 자리는 그 직무가 기본 직무인 페르소나 → 라이브러리 순서로 중복 없이 채운다. 사람이 모자라면 그 자리는 뺀다.
+ *  팀 캐스팅 프리셋 버튼과 팀 편성 [기본 편성 채우기]가 같이 쓴다 */
+export function presetSlots(
+  jobs: readonly string[],
+  current: readonly { personaId: string; jobId: string }[],
+  personas: readonly { id: string; job?: string }[],
+  max: number,
+): { personaId: string; jobId: string }[] {
+  const want = jobs.slice(0, max);
+  const picked: (string | undefined)[] = want.map(() => undefined);
+  const used = new Set<string>();
+  const take = (i: number, id: string | undefined) => {
+    if (picked[i] || !id) return;
+    picked[i] = id;
+    used.add(id);
+  };
+  want.forEach((jobId, i) => take(i, current.find((c) => c.personaId && c.jobId === jobId && !used.has(c.personaId))?.personaId));
+  want.forEach((jobId, i) => take(i, personas.find((p) => p.job === jobId && !used.has(p.id))?.id));
+  want.forEach((_, i) => take(i, personas.find((p) => !used.has(p.id))?.id));
+  return want.flatMap((jobId, i) => (picked[i] ? [{ personaId: picked[i]!, jobId }] : []));
+}
+
+/** 권한 한 줄 (0.6 QA U168) — 팀 캐스팅 카드와 팀 편성 표가 같은 말로 적는다 */
+export function permLabel(p: Permissions): string {
+  const mark = (b: boolean) => (b ? "✓" : "—");
+  return `${t("쓰기")} ${mark(p.write)} · ${t("커밋")} ${mark(p.commit)} · ${t("푸시")} ${mark(p.push)}`;
 }
 
 /** 저장소 편성에서 이 PC 라이브러리에 없는 페르소나 (D3) — 클론한 저장소의 team.json은 남의 라이브러리 id를 가리킬 수 있다 */

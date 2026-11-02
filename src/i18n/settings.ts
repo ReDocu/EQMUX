@@ -183,7 +183,7 @@ export const dict: Record<string, string> = {
   "디자인 토큰만 바꿉니다 — 터미널 페인은 항상 다크": "Swaps design tokens only — terminal panes stay dark",
   "배경 명도·색온도만 바뀝니다 — 강조색은 팔레트 공통":
     "Changes background lightness and warmth only — accent colors are shared",
-  "WebGL이 빠르다 · 잔상이 보일 때만 DOM으로": "WebGL is faster · switch to DOM only if you see ghosting",
+  "WebGL이 빠릅니다 · 잔상이 보일 때만 DOM으로 바꿉니다": "WebGL is faster · switch to DOM only if you see ghosting",
   "WebGL (기본)": "WebGL (default)",
   "자동 실행 없이 화면 상태만 복원합니다": "Restores screen state only, nothing runs automatically",
   "앱을 다시 켰을 때 페인에 다시 그리는 줄 수": "Lines redrawn in each pane when the app restarts",
@@ -199,7 +199,7 @@ export const dict: Record<string, string> = {
   "승인·입력 대기가 되면 소리를 냅니다 · 창을 보고 있으면 내지 않습니다":
     "Plays a sound when waiting for approval or input · silent while the window is focused",
   켜짐: "On",
-  "세션 메모리가 넘으면 배너로 알린다 — 소프트 경고만": "Shows a banner when a session exceeds it — soft warning only",
+  "세션 메모리가 넘으면 배너로 알립니다 — 소프트 경고만 냅니다": "Shows a banner when a session exceeds it — soft warning only",
   "같은 세션 반복 합치기": "Merge repeats from one session",
   "60초 안의 반복을 합칩니다 · 완료 알림은 따로 셉니다": "Repeats within 60s are merged · completion alerts count separately",
   "60초": "60s",
@@ -207,7 +207,7 @@ export const dict: Record<string, string> = {
   "Stop · Notification 훅으로 쉬는 중 · 승인 대기를 판정합니다": "Stop · Notification hooks decide resting and waiting",
   "항상 켬": "Always on",
   "창을 보고 있으면 OS 알림을 내지 않습니다": "No OS notification while the window is focused",
-  "스크롤백에 색 시퀀스를 남긴다 · 끄면 용량 절감": "Keeps color sequences in scrollback · turn off to save space",
+  "스크롤백에 색 시퀀스를 남깁니다 · 끄면 용량을 아낍니다": "Keeps color sequences in scrollback · turn off to save space",
   "메시지 · 스크롤백 보존": "Message · scrollback retention",
   "30일": "30 days",
   "버전 업 때 session.db": "session.db on version update",
@@ -224,7 +224,7 @@ export const dict: Record<string, string> = {
   "snapshot · get-text 한 번": "One snapshot · get-text call",
   "10,000자": "10,000 chars",
   "권한 우회": "Permission bypass",
-  "bypass를 쓰지 않는다 — 승인은 사람이 터미널 페인에서": "Never bypassed — a human approves in the terminal pane",
+  "bypass를 쓰지 않습니다 — 승인은 사람이 합니다(터미널 페인 또는 관제 승인함)": "Never bypassed — a human approves (in the terminal pane or the Control approvals list)",
   "항상 끔": "Always off",
   "외부 열기": "External open",
   "http/https만 엽니다 · 원격 주소의 토큰은 화면·툴팁·링크 어디에도 나오지 않습니다":
@@ -238,8 +238,8 @@ export const dict: Record<string, string> = {
 
   // ── 0.6 W7: 창 닫기 (W1 트레이 §1-1 · §10) ──
   "창을 닫으면": "Closing the window",
-  "Dock에 남기면 세션은 계속 돈다 · 끝내기는 앱 메뉴 [종료]": "Sessions keep running while the app stays in the Dock · Quit from the app menu",
-  "트레이로 숨기면 세션은 계속 돈다 · 끝내기는 트레이 메뉴 [전부 종료]": "Sessions keep running while hidden in the tray · Quit everything from the tray menu",
+  "Dock에 남겨도 세션이 계속 돕니다 · 끝내려면 ⌘Q 또는 메뉴 막대 아이콘의 [전부 종료]를 누릅니다": "Sessions keep running while the app stays in the Dock · To quit, press ⌘Q or use [Quit all] in the menu bar icon",
+  "트레이로 숨기면 세션이 계속 돕니다 · 끝내려면 트레이 메뉴의 [전부 종료]를 누릅니다": "Sessions keep running while hidden in the tray · Quit everything from the tray menu",
   "Dock에 남기기 (기본)": "Keep in Dock (default)",
   "트레이로 숨기기 (기본)": "Hide to tray (default)",
   "앱 종료": "Quit app",
@@ -248,4 +248,11 @@ export const dict: Record<string, string> = {
   "모든 세션의 비용 합계 · 넘으면 하루에 한 번 알립니다 · 세션은 멈추지 않습니다":
     "Total cost across all sessions (status line) · notifies once a day when exceeded · sessions keep running",
   "끔 (기본)": "Off (default)",
+  // [기본값 복원] 확인 (B203)
+  "설정을 기본값으로 되돌릴까요?": "Restore settings to defaults?",
+  "아래 {n}개 값이 기본값으로 바뀝니다. 앱 안에서는 되돌릴 수 없습니다.":
+    "These {n} settings change to their defaults. This can't be undone in the app.",
+  // 줄마다 기본값 표시 (0.6 QA U149)
+  "관제 대시보드 (기본)": "Control dashboard (default)",
+  "500줄 (기본)": "500 lines (default)",
 };

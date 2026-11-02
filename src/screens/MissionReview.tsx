@@ -8,6 +8,7 @@ import {
   fmtUsd,
   missionCostSignal,
   missionDoneReport,
+  missionStatusText,
   missionTouchedFiles,
   refreshMissions,
   runReviewTest,
@@ -50,13 +51,17 @@ export function MissionReview(props: { wsId: string; missionId: string; back?: V
     return !!mm?.baseCommit && mm.status !== "done" && mm.commitsSince === undefined;
   };
   const base = () => (baseLost() ? undefined : m()?.baseCommit);
-  // ③ 저장 명령 중 kind "test" (C7). 없으면 버튼을 숨긴다
+  // ③ 저장 명령 중 kind "test" (C7). 없으면 넣는 법을 알린다 (U119)
   const [tests, setTests] = createSignal<SavedCommand[]>([]);
   const [pick, setPick] = createSignal(0);
   const [testState, setTestState] = createSignal<"running" | TestRun | undefined>(undefined);
 
+  // 입력 칸의 Esc는 그 칸 몫이다 (B185 — diff 파일 필터를 지우려다 화면이 닫혔다). HistorySearch와 같은 가드
   const onKey = (e: KeyboardEvent) => {
-    if (e.key === "Escape" && !sendBackOpen()) close();
+    if (e.key !== "Escape" || sendBackOpen()) return;
+    const el = e.target as HTMLElement | null;
+    if (el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) return;
+    close();
   };
   onMount(() => {
     void refreshMissions(props.wsId);
@@ -100,10 +105,13 @@ export function MissionReview(props: { wsId: string; missionId: string; back?: V
   const [note, setNote] = createSignal("");
   const sendBack = async () => {
     const mm = m();
-    if (!mm || !note().trim()) return;
+    if (!mm) return;
+    if (!note().trim()) return notify(t("고칠 점을 적어야 보낼 수 있습니다"));
+    if (!mm.assigned.length) return notify(t("담당 세션이 없어 보낼 곳이 없습니다 — 임무 화면에서 먼저 배정하세요"));
     setSendBackOpen(false);
-    await sendBackMission(props.wsId, mm, note(), nameOf);
-    notify(tf("{n}명에게 검토 의견을 보내고 진행 중으로 되돌렸습니다", { n: mm.assigned.length }));
+    const err = await sendBackMission(props.wsId, mm, note(), nameOf);
+    if (err) return notify(tf("보내지 못해 임무 상태를 그대로 두었습니다 — {err}", { err }));
+    notify(tf("{n}명에게 검토 의견을 보내고 진행 중으로 되돌렸습니다", { n: mm.assigned.length }), "ok");
     close();
   };
 
@@ -127,7 +135,7 @@ export function MissionReview(props: { wsId: string; missionId: string; back?: V
                 </div>
               </div>
               <div class="ma-head-r">
-                <Chip text={mm().status.toUpperCase()} />
+                <Chip text={missionStatusText(mm().status)} />
                 <button class="btn ghost" onClick={close}>
                   {t("닫기")}
                 </button>
@@ -184,7 +192,20 @@ export function MissionReview(props: { wsId: string; missionId: string; back?: V
                     </label>
                   </Show>
                 </div>
-                <Show when={tests().length > 0}>
+                <Show
+                  when={tests().length > 0}
+                  fallback={
+                    <div class="ma-field">
+                      <div class="ma-label">{t("테스트 실행")}</div>
+                      <div class="muted mrv-hint">
+                        {t('테스트 명령이 없습니다 — .eqmux/commands.json에 kind: "test" 항목을 넣으면 여기서 돌릴 수 있습니다.')}{" "}
+                        <button class="wizard-link" onClick={() => openPanel("server")}>
+                          {t("서버 탭 열기 →")}
+                        </button>
+                      </div>
+                    </div>
+                  }
+                >
                   <div class="ma-field">
                     <div class="ma-label">{t("테스트 실행 — 서버 탭 셸에서 돕니다")}</div>
                     <div style={{ display: "flex", gap: "6px" }}>

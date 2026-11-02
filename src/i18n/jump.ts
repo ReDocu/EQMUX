@@ -11,4 +11,9 @@ export const dict: Record<string, string> = {
   "diff 화면 — 다음 · 이전 변경": "Diff screen — next · previous change",
   "diff 화면 — 다음 · 이전 파일": "Diff screen — next · previous file",
   "git · diff · 기록 화면 닫기 (돌아가기)": "Close git · diff · history screen (go back)",
+  // ── 0.6 QA eqmux-52: P87 · P86 ──
+  "git 패널": "git panel",
+  "{ws}에서": "in {ws}",
+  "파일 편집기 안 — 찾기 · 저장 · 들여쓰기 (Esc 다음 Tab은 포커스 이동)":
+    "Inside the file editor — find · save · indent (Tab after Esc moves focus)",
 };

@@ -22,11 +22,14 @@ import {
   gitRun,
   gitStatus,
   commandLine,
+  failText,
   isConflict,
   LOG_PAGE,
+  NOTIFY_KEY,
   runLog,
+  withHeadNotice,
 } from "../backend/git";
-import type { BlameLine, ChangedFile, CommitDetail, GitRefs, LogCommit, RunResult, StatusFile, WorkStatus } from "../backend/git";
+import type { BlameLine, BranchRef, ChangedFile, CommitDetail, GitRefs, LogCommit, RunResult, StatusFile, WorkStatus } from "../backend/git";
 import { backend } from "../backend/mock";
 import { clipWriteText, isTauri } from "../backend/pty";
 import { openLink } from "../backend/browser";
@@ -43,12 +46,14 @@ import { ConfirmDialog, ContextMenu, notify } from "../components/ui";
 import type { MenuGroup } from "../components/ui";
 import { computeGraph } from "./gitGraph";
 import {
+  chunkPaths,
   conflictParts,
   guardSessions,
   guardWorsened,
   hunkPatch,
   hunkRange,
   isDotenvPath,
+  pushArgs as pushArgsOf,
   pushRemote,
   refNameProblem,
   resolveConflicts,
@@ -58,6 +63,7 @@ import {
 import type { ConflictPart, ConflictPick, FilePatch, GuardLevel } from "./gitWrite";
 
 const ROW_H = 24;
+const HUNK_LINES = 39; // 덩어리 미리보기 줄 수 — 넘으면 접고 '펼치기'를 둔다 (U114)
 const LANE_W = 12;
 const LANE_COLORS = [
   "var(--eq-blue)",
@@ -70,7 +76,6 @@ const LANE_COLORS = [
   "var(--eq-red)",
 ];
 const laneColor = (n: number) => LANE_COLORS[n % LANE_COLORS.length];
-const NOTIFY_KEY = "eqmux.git.notifyAgents"; // 바뀐 뒤 에이전트 알림 (§17-3) — 기본 꺼짐, 메시지 한 건만큼 토큰이 든다
 
 /** 그래프 시각 — 오늘이면 시:분, 올해면 월-일, 아니면 연-월-일 */
 function fmtTime(sec: number): string {
@@ -89,12 +94,14 @@ function NamePrompt(props: {
   initial?: string;
   withMessage?: boolean; // 태그 — 메시지가 있으면 주석 태그
   free?: boolean; // 참조 이름이 아니다 (stash 메시지) — 이름 검사를 하지 않는다
+  check?: string; // 체크 상자 하나 (기본 켜짐) — [+ 브랜치]의 "만든 뒤 전환" (P61)
   confirmLabel: string;
-  onConfirm: (name: string, message: string) => void;
+  onConfirm: (name: string, message: string, checked: boolean) => void;
   onCancel: () => void;
 }) {
   const [name, setName] = createSignal(props.initial ?? "");
   const [msg, setMsg] = createSignal("");
+  const [checked, setChecked] = createSignal(true);
   let box!: HTMLDivElement;
   let input!: HTMLInputElement;
   const problem = () => (props.free ? undefined : refNameProblem(name()));
@@ -103,7 +110,7 @@ function NamePrompt(props: {
     input.select();
     onCleanup(pushLayer(() => props.onCancel(), () => box));
   });
-  const submit = () => !problem() && props.onConfirm(name().trim(), msg().trim());
+  const submit = () => !problem() && props.onConfirm(name().trim(), msg().trim(), checked());
   return (
     <div class="overlay" onClick={(e) => (e.stopPropagation(), props.onCancel())}>
       <div ref={box} class="dialog eq-confirm" role="dialog" aria-modal="true" aria-label={props.title} onClick={(e) => e.stopPropagation()}>
@@ -123,6 +130,12 @@ function NamePrompt(props: {
             <label class="gx-field">
               <span>{t("메시지 (비우면 가벼운 태그)")}</span>
               <input class="mono" value={msg()} onInput={(e) => setMsg(e.currentTarget.value)} />
+            </label>
+          </Show>
+          <Show when={props.check}>
+            <label class="gx-check">
+              <input type="checkbox" checked={checked()} onChange={(e) => setChecked(e.currentTarget.checked)} />
+              {props.check}
             </label>
           </Show>
           <Show when={name().trim() && problem()}>
@@ -197,8 +210,9 @@ interface Prompt {
   initial?: string;
   withMessage?: boolean;
   free?: boolean;
+  check?: string;
   confirmLabel: string;
-  onConfirm: (name: string, message: string) => void;
+  onConfirm: (name: string, message: string, checked: boolean) => void;
 }
 
 export function GitScreen(props: { wsId?: string; file?: string }) {
@@ -225,8 +239,8 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
   const [bySession, setBySession] = createSignal<Record<string, string[]>>({});
   const [blameOn, setBlameOn] = createSignal(false);
   const filtering = () => !!query().trim();
-  // 검색 결과는 부모가 빠져 있어 레인이 거짓말을 한다 — 거를 때는 선 없이 목록만 보인다
-  const graph = createMemo(() => (filtering() ? [] : computeGraph(commits())));
+  // 검색 결과 · 파일 히스토리(--follow)는 부모가 빠져 있어 레인이 계단이 된다 — 선 없이 목록만 보인다 (B176)
+  const graph = createMemo(() => (filtering() || file() ? [] : computeGraph(commits())));
   const graphWidth = createMemo(() => Math.max(1, ...graph().map((r) => r.width)));
 
   let logReq = 0;
@@ -336,18 +350,12 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
     const r = await gitRun(w.id, w.path, args);
     setRunning(undefined);
     if (r.auth) setAuthHelp(r.command);
-    else if (!r.ok) notify(`${r.command} — ${r.output.split("\n").find((l) => l.trim()) ?? t("실패")}`);
-    else if (!opts.quiet) notify(tf("{cmd} 완료", { cmd: r.command }));
+    else if (!r.ok) notify(`${r.command} — ${failText(r.output)}`);
+    else if (!opts.quiet) notify(tf("{cmd} 완료", { cmd: r.command }), "ok");
     reloadAll();
     return r;
   };
 
-  /** 바뀐 뒤 알림 (§17-3) — 켜 두었을 때만, 그 폴더의 에이전트 전부에게 한 건 */
-  const announce = (from: string, to: string) => {
-    const w = ws();
-    if (!w || !notifyAgents() || from === to) return;
-    void sendConversation(w.id, "@all", "report", tf("브랜치·HEAD가 {a} → {b}로 바뀌었습니다. 작업 중인 파일을 다시 읽으세요.", { a: from, b: to }));
-  };
   const headLabel = () => (work()?.hasHead ? t("분리된 HEAD") : "—"); // 브랜치 없이 커밋에 서 있다
 
   const guardNow = (): { level: GuardLevel; busy: number; waiting: number } => {
@@ -356,13 +364,13 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
   };
 
   /** §4-1 — busy면 강한 경고, waiting만이면 약한 경고, 아니면 바로 실행. 누른 순간 한 번 더 본다 */
-  const guarded = (label: string, args: string[]) => {
+  const guarded = (args: string[], after?: (r: RunResult | undefined) => void) => {
+    // 바뀐 뒤 알림 (§17-3) — HEAD 해시 전후 비교 (B175: 이름만 보면 같은 브랜치 pull · reset이 빠졌다)
     const go = async () => {
-      const before = head()?.name ?? head()?.hash ?? "";
-      const r = await run(args);
+      const w = ws();
+      const r = w ? await withHeadNotice(w.id, w.path, () => run(args)) : undefined;
       await loadSide();
-      const after = head()?.name ?? head()?.hash ?? "";
-      if (r?.ok) announce(before || label, after);
+      after?.(r);
     };
     const ask = (g: ReturnType<typeof guardNow>) => {
       if (g.level === "none") return void go();
@@ -398,7 +406,7 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
   const headHash = () => head()?.hash ?? commits().find((c) => c.refs.some((r) => r.startsWith("HEAD")))?.hash ?? "";
   /** 확인창 하나를 띄우고, 누르면 §4-1 경고를 거쳐 실행한다 */
   const confirmThen = (c: Omit<Confirm, "onConfirm">, args: string[]) =>
-    setConfirm({ ...c, onConfirm: () => (setConfirm(undefined), guarded(args[0], args)) });
+    setConfirm({ ...c, onConfirm: () => (setConfirm(undefined), guarded(args)) });
 
   const cherryPick = (c: LogCommit) =>
     confirmThen(
@@ -494,7 +502,7 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
           info: [commandLine(args), tf("되돌릴 해시: {h}", { h: short(from) })],
           danger: true,
           confirmLabel: t("reset --hard"),
-          onConfirm: () => (setConfirm(undefined), guarded("reset", args)),
+          onConfirm: () => (setConfirm(undefined), guarded(args)),
     };
   };
 
@@ -507,7 +515,7 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
       confirmLabel: t("stash"),
       onConfirm: (m) => {
         setPrompt(undefined);
-        guarded("stash", ["stash", "push", "-u", ...(m ? ["-m", m] : [])]);
+        guarded(["stash", "push", "-u", ...(m ? ["-m", m] : [])]);
       },
     });
   /** `stash@{0}: 메시지` → `stash@{0}` */
@@ -526,11 +534,13 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
   const progress = () => work()?.progress ?? null;
   const conflicts = () => (work()?.files ?? []).filter(isConflict);
   const continueArgs = () => (progress() === "merge" ? ["commit", "--no-edit"] : [progress()!, "--continue"]);
+  // B178 — 빈 cherry-pick · rebase · revert: 충돌도 스테이지된 것도 없으면 --continue는 같은 이유로 다시 실패한다
+  const emptyStep = () => !!progress() && progress() !== "merge" && !conflicts().length && !staged().length;
   const doContinue = () => {
     const w = ws();
     if (!w) return;
     // 스테이지된 해결 결과로 merge 커밋을 만든다 — merge는 commit --no-edit, 나머지는 --continue
-    guarded(progress()!, continueArgs());
+    guarded(continueArgs());
   };
   const doAbort = () =>
     confirmThen(
@@ -579,7 +589,7 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
       to: delegateTargets()[0]?.id ?? "",
       body: tf(
         "git {op} 중 충돌이 났습니다. 아래 파일의 충돌 표식(<<<<<<< ======= >>>>>>>)을 고치고 `git add`까지만 해 주세요. 커밋 · --continue는 사람이 git 화면에서 합니다.\n{files}",
-        { op: progress() ?? "merge", files: conflicts().map((f) => `- ${f.path}`).join("\n") },
+        { op: progress() ?? "stash", files: conflicts().map((f) => `- ${f.path}`).join("\n") },
       ),
     });
   const sendDelegate = async () => {
@@ -589,7 +599,7 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
     const err = await sendConversation(w.id, d.to, "ask", d.body);
     if (err) return notify(err);
     setDelegate(undefined);
-    notify(tf("{n}에게 보냈습니다", { n: conflictName(d.to) }));
+    notify(tf("{n}에게 보냈습니다", { n: conflictName(d.to) }), "ok");
   };
 
   // B154 — .env 계열은 덩어리 · blame에서도 값을 가린다
@@ -599,11 +609,8 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
 
   // ── 툴바 동작 ──
   const doFetch = () => void run(["fetch", "--all", "--prune"]);
-  const doPull = () => guarded("pull", ["pull", "--ff-only"]);
-  const pushArgs = () => {
-    const b = head();
-    return b && !b.upstream ? ["push", "-u", pushRemote((refs()?.remote ?? []).map((r) => r.name)), b.name] : ["push"];
-  };
+  const doPull = () => guarded(["pull", "--ff-only"]);
+  const pushArgs = () => pushArgsOf(refs());
   const doPush = () => void run(pushArgs());
   const doForcePush = () =>
     setConfirm({
@@ -617,14 +624,33 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
 
   const switchTo = (name: string) => {
     if (name === head()?.name) return;
-    guarded(name, ["switch", name]);
+    guarded(["switch", name]);
   };
   const newBranch = (at?: string) =>
     setPrompt({
       title: at ? tf("{h}에서 브랜치 만들기", { h: at.slice(0, 8) }) : t("현재 HEAD에서 브랜치 만들기"),
       label: t("브랜치 이름"),
+      check: t("만든 뒤 전환"),
       confirmLabel: t("만들기"),
-      onConfirm: (n) => (setPrompt(undefined), void run(at ? ["branch", n, at] : ["branch", n])),
+      onConfirm: async (n, _m, sw) => {
+        setPrompt(undefined);
+        const r = await run(at ? ["branch", n, at] : ["branch", n]);
+        if (r?.ok && sw) guarded(["switch", n]); // P61 — 만들기만 하면 원래 브랜치에 커밋하기 쉽다
+      },
+    });
+  /** P61 — 원격 브랜치를 따라가는 로컬 브랜치를 만들고 전환한다. 이미 있으면 그리로 전환 */
+  const trackRemote = (remote: string) => {
+    const local = remote.slice(remote.indexOf("/") + 1);
+    if (refs()?.local.some((b) => b.name === local)) return switchTo(local);
+    guarded(["switch", "--track", remote]);
+  };
+  const setUpstream = (b: BranchRef) =>
+    setPrompt({
+      title: tf("{b}의 업스트림 설정", { b: b.name }),
+      label: t("원격 브랜치 (예: origin/main)"),
+      initial: b.upstream || `${pushRemote((refs()?.remote ?? []).map((r) => r.name))}/${b.name}`,
+      confirmLabel: t("업스트림 설정"),
+      onConfirm: (up) => (setPrompt(undefined), void run(["branch", "-u", up, b.name])),
     });
   const renameBranch = (old: string) =>
     setPrompt({
@@ -634,9 +660,21 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
       confirmLabel: t("바꾸기"),
       onConfirm: (n) => (setPrompt(undefined), void run(["branch", "-m", old, n])),
     });
-  const deleteBranch = async (name: string, hash: string) => {
+  /** U124 — 병합 여부와 상관없이 한 번 묻고, 성공하면 되살릴 명령을 알린다 */
+  const deleteBranch = (name: string, hash: string) =>
+    setConfirm({
+      title: tf("브랜치 {b} 삭제", { b: name }),
+      body: <p>{t("병합된 브랜치만 지웁니다. 병합 안 된 브랜치면 한 번 더 묻습니다.")}</p>,
+      info: [commandLine(["branch", "-d", name]), tf("되살리기: git branch {b} {h}", { b: name, h: hash.slice(0, 10) })],
+      danger: true,
+      confirmLabel: t("삭제"),
+      onConfirm: () => (setConfirm(undefined), void deleteMerged(name, hash)),
+    });
+  const deleted = (name: string, hash: string) => notify(tf("{b} 삭제 — 되살리기: git branch {b} {h}", { b: name, h: hash.slice(0, 10) }), "ok");
+  const deleteMerged = async (name: string, hash: string) => {
     const r = await run(["branch", "-d", name], { quiet: true });
-    if (!r || r.ok || !/not fully merged|완전히 병합되지/i.test(r.output)) return;
+    if (r?.ok) return deleted(name, hash);
+    if (!r || !/not fully merged|완전히 병합되지/i.test(r.output)) return;
     // 병합 안 된 브랜치 — 무엇이 사라지는지와 되돌릴 해시를 보이고 한 번 더 묻는다 (§17-4)
     setConfirm({
       title: tf("병합 안 된 브랜치 {b} 삭제", { b: name }),
@@ -644,9 +682,25 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
       info: [commandLine(["branch", "-D", name]), tf("되돌릴 해시: {h} (git branch {b} {h})", { h: hash.slice(0, 10), b: name })],
       danger: true,
       confirmLabel: t("삭제"),
-      onConfirm: () => (setConfirm(undefined), void run(["branch", "-D", name])),
+      onConfirm: async () => {
+        setConfirm(undefined);
+        if ((await run(["branch", "-D", name], { quiet: true }))?.ok) deleted(name, hash);
+      },
     });
   };
+  const deleteTag = (r: { name: string; hash: string }) =>
+    setConfirm({
+      title: tf("태그 {t} 삭제", { t: r.name }),
+      body: <p>{t("로컬 태그만 지웁니다. 원격에 올린 태그는 그대로입니다.")}</p>,
+      info: [commandLine(["tag", "-d", r.name]), tf("되살리기: git tag {t} {h}", { t: r.name, h: r.hash.slice(0, 10) })],
+      danger: true,
+      confirmLabel: t("삭제"),
+      onConfirm: async () => {
+        setConfirm(undefined);
+        if ((await run(["tag", "-d", r.name], { quiet: true }))?.ok)
+          notify(tf("{t} 삭제 — 되살리기: git tag {t} {h}", { t: r.name, h: r.hash.slice(0, 10) }), "ok");
+      },
+    });
   const newTag = (at?: string) =>
     setPrompt({
       title: at ? tf("{h}에 태그 달기", { h: at.slice(0, 8) }) : t("HEAD에 태그 달기"),
@@ -662,23 +716,51 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
   // ── 작업 트리 · 스테이징 ──
   const unstaged = () => (work()?.files ?? []).filter((f) => f.y !== " ");
   const staged = () => (work()?.files ?? []).filter((f) => f.x !== " " && f.x !== "?");
-  const stageFiles = (fs: StatusFile[]) => fs.length && void run(["add", "--", ...fs.map((f) => f.path)], { quiet: true });
+  // B171 — git은 표식(<<<<<<<)이 남은 충돌 파일도 add를 받아 해결로 친다. 표식이 남은 파일은 빼고 [충돌 보기]로 보낸다
+  const stageFiles = async (fs: StatusFile[]) => {
+    const w = ws();
+    if (!w || !fs.length) return;
+    const marked: string[] = [];
+    for (const f of fs.filter(isConflict)) {
+      const c = await fsRead(w.path, f.path).catch(() => undefined); // 못 읽음 = 한쪽이 지운 파일 — 표식 없음
+      if (c && conflictParts(c.text).some((p) => p.kind === "conflict")) marked.push(f.path);
+    }
+    if (marked.length) {
+      notify(tf("충돌 표식이 남은 파일 {n}개는 스테이지하지 않았습니다 — [충돌 보기]에서 먼저 푸세요", { n: marked.length }));
+      void openConflict(marked[0]);
+    }
+    const rest = fs.filter((f) => !marked.includes(f.path));
+    await runChunked(["add", "--"], rest.map((f) => f.path));
+  };
+  /** B179 — 경로를 한 번에 다 붙이면 Windows 명령 줄 상한(32,767자)을 넘는다. 묶음마다 돌리고 실패하면 멈춘다 */
+  const runChunked = async (head: string[], paths: string[]) => {
+    for (const c of chunkPaths(paths)) {
+      const r = await run([...head, ...c], { quiet: true });
+      if (!r?.ok) return;
+    }
+  };
   const unstageFiles = (fs: StatusFile[]) => {
     if (!fs.length) return;
     const paths = fs.flatMap((f) => (f.from ? [f.from, f.path] : [f.path]));
     // HEAD가 없으면(첫 커밋 전) restore --staged가 안 된다 — 인덱스에서만 뺀다
-    void run(work()?.hasHead ? ["restore", "--staged", "--", ...paths] : ["rm", "--cached", "-q", "--", ...paths], { quiet: true });
+    void runChunked(work()?.hasHead ? ["restore", "--staged", "--"] : ["rm", "--cached", "-q", "--"], paths);
   };
 
   const [hunkFile, setHunkFile] = createSignal<{ path: string; staged: boolean } | undefined>();
   const [hunks, setHunks] = createSignal<FilePatch | undefined>();
+  const [openHunks, setOpenHunks] = createSignal<number[]>([]); // U114 — 39줄 넘는 덩어리 중 펼친 것
+  /** 덩어리 본문 줄 — 머리(@@) 다음부터, 끝 줄바꿈이 만든 빈 줄은 뺀다 */
+  const hunkBody = (hk: string) => {
+    const l = hk.split("\n").slice(1);
+    return l[l.length - 1] === "" ? l.slice(0, -1) : l;
+  };
   const loadHunks = async () => {
     const w = ws();
     const h = hunkFile();
     if (!w || !h) return setHunks(undefined);
     setHunks(splitHunks(await gitFilePatch(w.path, h.path, h.staged)));
   };
-  createEffect(on(hunkFile, () => void loadHunks()));
+  createEffect(on(hunkFile, () => (setOpenHunks([]), void loadHunks())));
   createEffect(on(work, () => hunkFile() && void loadHunks(), { defer: true }));
   const applyHunk = async (i: number) => {
     const w = ws();
@@ -688,7 +770,7 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
     setRunning("git apply --cached");
     const r = await gitApplyPatch(w.id, w.path, hunkPatch(p, i), h.staged);
     setRunning(undefined);
-    if (!r.ok) notify(`${t("덩어리 적용 실패")} — ${r.output}`);
+    if (!r.ok) notify(`${t("덩어리 적용 실패")} — ${failText(r.output)}`);
     void loadSide();
   };
 
@@ -756,19 +838,20 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
         },
       ],
     ]);
-  const branchMenu = (e: MouseEvent, b: { name: string; hash: string; head: boolean }) =>
+  const branchMenu = (e: MouseEvent, b: BranchRef) =>
     openMenu(e, b.name, [
       [
         { label: t("전환"), disabled: b.head, action: () => switchTo(b.name) },
         { label: t("이름 변경"), action: () => renameBranch(b.name) },
         { label: t("여기서 브랜치 만들기"), action: () => newBranch(b.hash) },
+        { label: t("업스트림 설정…"), action: () => setUpstream(b) },
       ],
       [{ label: t("해시 복사"), action: () => void clipWriteText(b.hash) }],
       [
         { label: t("현재 브랜치로 merge"), disabled: b.head, action: () => mergeIn(b.name) },
         { label: t("현재 브랜치를 그 위로 rebase"), disabled: b.head || !head(), action: () => rebaseOnto(b.name) },
       ],
-      [{ label: t("삭제"), danger: true, disabled: b.head, action: () => void deleteBranch(b.name, b.hash) }],
+      [{ label: t("삭제…"), danger: true, disabled: b.head, action: () => deleteBranch(b.name, b.hash) }],
     ]);
 
   // ── 닫기 · 키 ──
@@ -848,6 +931,27 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
             <span class="n">{head()!.behind}</span>
           </Show>
         </button>
+        {/* P62 — 갈라졌으면 --ff-only pull은 실패한다. 다음 할 일(merge · rebase)을 Pull 옆에 바로 둔다 */}
+        <Show when={head()?.upstream && head()!.ahead > 0 && head()!.behind > 0 ? head()!.upstream : undefined}>
+          {(up) => (
+            <button
+              class="btn ghost gx-mini"
+              disabled={!!running()}
+              title={t("원격과 갈라졌습니다 — merge 또는 rebase")}
+              aria-label={t("원격과 갈라졌습니다 — merge 또는 rebase")}
+              onClick={(e) =>
+                openMenu(e, tf("{u}와 갈라짐", { u: up() }), [
+                  [
+                    { label: t("업스트림을 merge"), action: () => mergeIn(up()) },
+                    { label: t("업스트림 위로 rebase"), action: () => rebaseOnto(up()) },
+                  ],
+                ])
+              }
+            >
+              ▾
+            </button>
+          )}
+        </Show>
         <button class="btn" disabled={!!running() || !ws()} onClick={doPush} onContextMenu={copyMenu(pushArgs())} title={commandLine(pushArgs())}>
           ↑ {t("Push")}
           <Show when={(head()?.ahead ?? 0) > 0}>
@@ -926,12 +1030,18 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
           </div>
         )}
       </Show>
-      <Show when={progress()}>
-        {(op) => (
+      {/* U126 — stash 적용 · 꺼내기 충돌은 진행 중 표식이 없다. 충돌 파일만 있어도 배너를 띄운다 */}
+      <Show when={progress() || conflicts().length > 0}>
           <div class="gx-banner warn">
             <span>
-              {tf("{op} 진행 중", { op: op() })}
-              {conflicts().length ? tf(" — 충돌 {n}개", { n: conflicts().length }) : t(" — 충돌을 다 풀었습니다. [계속]으로 마칩니다")}
+              {progress()
+                ? tf("{op} 진행 중", { op: progress()! }) +
+                  (conflicts().length
+                    ? tf(" — 충돌 {n}개", { n: conflicts().length })
+                    : emptyStep()
+                      ? t(" — 이 커밋의 변경이 이미 있습니다. [건너뛰기]로 넘어갑니다")
+                      : t(" — 충돌을 다 풀었습니다. [계속]으로 마칩니다"))
+                : tf("충돌 {n}개 — 고른 뒤 스테이지하세요", { n: conflicts().length })}
             </span>
             <Show when={conflicts().length}>
               <button class="btn ghost" onClick={() => void openConflict(conflicts()[0].path)}>
@@ -941,20 +1051,37 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
                 {t("세션에게 해결 맡기기")}
               </button>
             </Show>
-            <button
-              class="btn primary"
-              disabled={!!running() || conflicts().length > 0}
-              title={commandLine(continueArgs())}
-              onClick={doContinue}
-              onContextMenu={copyMenu(continueArgs())}
-            >
-              {t("계속")}
-            </button>
-            <button class="btn" disabled={!!running()} onClick={doAbort} onContextMenu={copyMenu([op(), "--abort"])}>
-              {t("중단 (--abort)")}
-            </button>
+            <Show when={progress()}>
+              {(op) => (
+                <>
+                  <Show when={emptyStep()}>
+                    <button
+                      class="btn primary"
+                      disabled={!!running()}
+                      title={commandLine([op(), "--skip"])}
+                      onClick={() => guarded([op(), "--skip"])}
+                      onContextMenu={copyMenu([op(), "--skip"])}
+                    >
+                      {t("건너뛰기 (--skip)")}
+                    </button>
+                  </Show>
+                  <button
+                    class="btn"
+                    classList={{ primary: !emptyStep() }}
+                    disabled={!!running() || conflicts().length > 0 || emptyStep()}
+                    title={commandLine(continueArgs())}
+                    onClick={doContinue}
+                    onContextMenu={copyMenu(continueArgs())}
+                  >
+                    {t("계속")}
+                  </button>
+                  <button class="btn" disabled={!!running()} onClick={doAbort} onContextMenu={copyMenu([op(), "--abort"])}>
+                    {t("중단 (--abort)")}
+                  </button>
+                </>
+              )}
+            </Show>
           </div>
-        )}
       </Show>
       <Show when={!ws()}>
         <div class="card conn-error mono">{t("워크스페이스 문맥이 없습니다 — 워크스페이스 탭을 먼저 여세요")}</div>
@@ -992,9 +1119,19 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
             <summary class="gx-sec">{tf("원격 ({n})", { n: refs()?.remote.length ?? 0 })}</summary>
             <For each={refs()?.remote ?? []}>
               {(r) => (
-                <div class="gx-ref mono" classList={{ on: sel() === r.hash }} onClick={() => setSel(r.hash)} onContextMenu={(e) =>
+                <div
+                  class="gx-ref mono"
+                  classList={{ on: sel() === r.hash }}
+                  title={t("더블클릭: 따라가는 로컬 브랜치를 만들고 전환")}
+                  onClick={() => setSel(r.hash)}
+                  onDblClick={() => !r.name.endsWith("/HEAD") && trackRemote(r.name)}
+                  onContextMenu={(e) =>
                     openMenu(e, r.name, [
-                      [{ label: t("해시 복사"), action: () => void clipWriteText(r.hash) }, { label: t("여기서 브랜치 만들기"), action: () => newBranch(r.hash) }],
+                      [
+                        { label: t("따라가는 로컬 브랜치 만들고 전환"), disabled: r.name.endsWith("/HEAD"), action: () => trackRemote(r.name) },
+                        { label: t("여기서 브랜치 만들기"), action: () => newBranch(r.hash) },
+                        { label: t("해시 복사"), action: () => void clipWriteText(r.hash) },
+                      ],
                       [
                         { label: t("현재 브랜치로 merge"), action: () => mergeIn(r.name) },
                         { label: t("현재 브랜치를 그 위로 rebase"), disabled: !head(), action: () => rebaseOnto(r.name) },
@@ -1017,7 +1154,7 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
                   onContextMenu={(e) =>
                     openMenu(e, r.name, [
                       [{ label: t("해시 복사"), action: () => void clipWriteText(r.hash) }],
-                      [{ label: t("태그 삭제"), danger: true, action: () => void run(["tag", "-d", r.name]) }],
+                      [{ label: t("태그 삭제…"), danger: true, action: () => deleteTag(r) }],
                     ])
                   }
                 >
@@ -1037,8 +1174,16 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
                   onContextMenu={(e) =>
                     openMenu(e, r.name, [
                       [
-                        { label: t("적용 (apply — 목록에 남김)"), action: () => guarded("stash", ["stash", "apply", stashRef(r.name)]) },
-                        { label: t("꺼내기 (pop — 적용하고 목록에서 뺌)"), action: () => guarded("stash", ["stash", "pop", stashRef(r.name)]) },
+                        { label: t("적용 (apply — 목록에 남김)"), action: () => guarded(["stash", "apply", stashRef(r.name)]) },
+                        {
+                          label: t("꺼내기 (pop — 적용하고 목록에서 뺌)"),
+                          action: () =>
+                            guarded(["stash", "pop", stashRef(r.name)], (res) => {
+                              // U126 — 충돌이 나면 git은 stash를 목록에 남긴다. 풀고 나서 버려야 다시 적용되지 않는다
+                              if (res && !res.ok && /stash entry is kept|CONFLICT/.test(res.output))
+                                notify(tf("{s}이(가) 목록에 남았습니다 — 충돌을 푼 뒤 버리세요", { s: stashRef(r.name) }));
+                            }),
+                        },
                       ],
                       [{ label: t("버리기…"), danger: true, action: () => stashDrop(r) }],
                     ])
@@ -1072,7 +1217,7 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
             )}
           </Show>
           <Show when={logErr()}>
-            <div class="card conn-error mono">{logErr()}</div>
+            <div class="card conn-error mono">{t(logErr()!)}</div>
           </Show>
           <Show
             when={blameOn() && file()}
@@ -1312,21 +1457,36 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
                 >
                   <div class="gx-wlist">
                     <For each={hunks()!.hunks}>
-                      {(hk, i) => (
-                        <div class="gx-hunk mono">
-                          <div class="gx-hunk-head">
-                            <span>{hunkRange(hk)}</span>
-                            <button class="btn ghost gx-mini" disabled={!!running()} onClick={() => void applyHunk(i())}>
-                              {h().staged ? t("덩어리 내리기") : t("덩어리 스테이지")}
-                            </button>
+                      {(hk, i) => {
+                        const body = hunkBody(hk);
+                        const folded = () => body.length > HUNK_LINES && !openHunks().includes(i());
+                        return (
+                          <div class="gx-hunk mono">
+                            <div class="gx-hunk-head">
+                              <span>{hunkRange(hk)}</span>
+                              <button
+                                class="btn ghost gx-mini"
+                                disabled={!!running()}
+                                title={folded() ? tf("보이지 않는 줄까지 덩어리 전체 {n}줄을 옮깁니다", { n: body.length }) : undefined}
+                                onClick={() => void applyHunk(i())}
+                              >
+                                {h().staged ? t("덩어리 내리기") : t("덩어리 스테이지")}
+                              </button>
+                            </div>
+                            <pre>
+                              <For each={folded() ? body.slice(0, HUNK_LINES) : body}>
+                                {(l) => <div classList={{ add: l.startsWith("+"), del: l.startsWith("-") }}>{diffLine(l, maskFor(h().path))}</div>}
+                              </For>
+                            </pre>
+                            {/* U114 — 잘린 덩어리는 잘렸다고 보인다. [덩어리 스테이지]는 전체를 옮긴다 */}
+                            <Show when={folded()}>
+                              <button class="btn ghost gx-mini" onClick={() => setOpenHunks([...openHunks(), i()])}>
+                                ⋯ {tf("{n}줄 접힘 — 펼치기", { n: body.length - HUNK_LINES })}
+                              </button>
+                            </Show>
                           </div>
-                          <pre>
-                            <For each={hk.split("\n").slice(1, 40)}>
-                              {(l) => <div classList={{ add: l.startsWith("+"), del: l.startsWith("-") }}>{diffLine(l, maskFor(h().path))}</div>}
-                            </For>
-                          </pre>
-                        </div>
-                      )}
+                        );
+                      }}
                     </For>
                   </div>
                 </Show>
@@ -1400,6 +1560,7 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
             initial={p().initial}
             withMessage={p().withMessage}
             free={p().free}
+            check={p().check}
             confirmLabel={p().confirmLabel}
             onConfirm={p().onConfirm}
             onCancel={() => setPrompt(undefined)}

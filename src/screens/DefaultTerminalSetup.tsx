@@ -44,7 +44,8 @@ export function DefaultTerminalSetup(props: { wsId: string }) {
     backend.openWorkspace(props.wsId);
     // 역할 없는 셸 세션 → 실제 PTY 부착. 죽어 있던 세션을 되살렸다면 PTY도 다시 띄운다 (B58) —
     // 페인의 initialized 래치는 세션이 제거될 때만 풀리므로 재마운트가 대신 스폰해 주지 않는다
-    const revived = backend.startDefaultTerminal(props.wsId);
+    // 카드에 보인 셸 그대로 연다 (B202) — 셸 인자가 없으면 늘 pwsh로 떴다
+    const revived = backend.startDefaultTerminal(props.wsId, defaultShell().label);
     if (revived) void respawnSessionShell(revived.id, revived.cwd, revived.workspaceId, revived.shell);
     setView({ kind: "workspace", id: props.wsId });
   };
@@ -74,7 +75,8 @@ export function DefaultTerminalSetup(props: { wsId: string }) {
         <WizardSteps path="terminal" at={2} />
         <div class="dts-mode-row">
           {/* 토글처럼 보이던 [기본 터미널 | 역할 세션]은 실제로는 '뒤로'였다 (P49) — 이동임을 드러내는 링크로 */}
-          <button class="wizard-link" onClick={() => setView({ kind: "launch", wsId: props.wsId })}>
+          {/* 실행 방식으로 돌아가면 빠른 시작이 골라져 있었다 (0.6 QA U151) — 역할 팀 갈래(팀 캐스팅)로 바로 */}
+          <button class="wizard-link" onClick={() => setView({ kind: "casting", wsId: props.wsId, wizard: true })}>
             {t("역할 팀으로 바꾸기 →")}
           </button>
         </div>

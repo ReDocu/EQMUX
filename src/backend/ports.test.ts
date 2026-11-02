@@ -216,6 +216,11 @@ describe("서버 탭 마지막 명령 (feedLine)", () => {
     expect(r.commit).toBeUndefined();
     expect(feedLine(r.st, "ls\r").commit).toBe("ls"); // 다음 줄은 다시 믿는다
   });
+  test("Ctrl+C는 치던 줄을 버린다 — 서버를 멈춘 바로 다음 줄도 기록한다 (B181)", () => {
+    const r = feedLine(feedLine(empty, "npm ru\t").st, "\x03");
+    expect(r.st).toEqual(empty);
+    expect(feedLine(r.st, "npm run dev\r").commit).toBe("npm run dev");
+  });
   test("빈 Enter는 기록하지 않는다", () => {
     expect(feedLine(empty, "   \r").commit).toBeUndefined();
   });
@@ -261,5 +266,11 @@ describe("parseCommands (C7)", () => {
   test("깨진 JSON · commands 없음은 error", () => {
     expect(parseCommands("{").error).toBeDefined();
     expect(parseCommands("{}").error).toBeDefined();
+  });
+
+  test("UTF-8 BOM이 붙은 파일도 읽는다 (B191)", () => {
+    const r = parseCommands('﻿{"commands":[{"name":"dev","run":"npm run dev"}]}');
+    expect(r.error).toBeUndefined();
+    expect(r.commands).toHaveLength(1);
   });
 });

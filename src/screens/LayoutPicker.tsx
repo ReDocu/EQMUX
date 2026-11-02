@@ -1,4 +1,4 @@
-// 페인 배치 (srpYm) — 6종 배치 선택 모달. 선택 즉시 미리보기, 적용 시 터미널 그리드에 반영.
+// 페인 배치 (srpYm) — 6종 배치 선택 모달. 고른 배치는 [적용] 때 터미널 그리드에 반영 (0.6 QA U151).
 import { createSignal, For, onCleanup, Show } from "solid-js";
 import { backend } from "../backend/mock";
 import { t, tf } from "../i18n";
@@ -45,7 +45,7 @@ export function LayoutPicker() {
           <div>
             <div class="lp-title">{t("페인 배치")}</div>
             <div class="mono muted lp-sub">
-              {tf("현재 워크스페이스 · {n}개 세션 · 선택 즉시 미리보기", { n: sessionCount() })} · {keyLabel("Ctrl+Shift+L")}
+              {tf("현재 워크스페이스 · {n}개 세션 · 고른 배치는 [적용] 뒤 바뀝니다", { n: sessionCount() })} · {keyLabel("Ctrl+Shift+L")}
             </div>
           </div>
           <button class="btn ghost" aria-label={t("닫기")} onClick={() => setLayoutPickerOpen(false)}>

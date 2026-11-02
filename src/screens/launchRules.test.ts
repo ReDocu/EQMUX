@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { defaultTerminalPlan, openView, quickStartSlots, wizardSteps } from "./launchRules";
+import { defaultTerminalPlan, isDefaultTerminalId, openView, quickStartSlots, wizardSteps } from "./launchRules";
 
 describe("워크스페이스 열기 (U60 · B107)", () => {
   it("세션이 없으면 마법사, 있으면 그 탭", () => {
@@ -44,4 +44,10 @@ describe("빠른 시작 · 단계 표시 (§10 · P49)", () => {
     expect(wizardSteps("team").at(-1)).toBe("워크스페이스");
     expect(wizardSteps("terminal")).toHaveLength(4);
   });
+});
+
+it("기본 터미널은 id 모양으로 가린다 — 라이브러리에 없는 페르소나는 역할 세션 (0.6 QA B227)", () => {
+  expect(isDefaultTerminalId("shell1@eqmux-1e3b93")).toBe(true);
+  expect(isDefaultTerminalId("ghost@zzz-unknown")).toBe(false);
+  expect(isDefaultTerminalId("shellby@academy")).toBe(false);
 });

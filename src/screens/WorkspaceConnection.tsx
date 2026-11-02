@@ -53,7 +53,7 @@ export function WorkspaceConnection() {
   const sessionsOf = (id: string) => backend.listSessions().filter((s) => s.workspaceId === id);
   // 행의 보조 글 — 브랜치 · 세션 수. 경로가 없으면 그 사실(branchNote)이 먼저다
   const rowNote = (ws: Workspace) => {
-    if (ws.pathMissing) return ws.branchNote;
+    if (ws.pathMissing) return t(ws.branchNote); // 영어 화면에 한국어 사유가 남았다 (0.6 QA B229)
     const n = sessionsOf(ws.id).length;
     const branch = ws.branch ?? "—";
     if (n === 0) return branch;
@@ -70,6 +70,8 @@ export function WorkspaceConnection() {
   const [cloneOpen, setCloneOpen] = createSignal(false);
   const [cloneUrl, setCloneUrl] = createSignal("");
   const [cloneBusy, setCloneBusy] = createSignal(false);
+  // clone 경과 초 (0.6 QA P72) — 진행률은 못 받지만 멈춘 것인지 도는 것인지는 보인다
+  const [cloneSecs, setCloneSecs] = createSignal(0);
   let cloneBox: HTMLDivElement | undefined;
 
   // 선택 창이 열려 있는 동안 [폴더 찾기…]를 막는다 (B135) — 다시 누르면 선택 창이 하나 더 열렸다
@@ -99,10 +101,12 @@ export function WorkspaceConnection() {
     if (!path) return;
     try {
       await gitInit(path);
-      const info = await registerWorkspace(path);
+      // 이미 등록된 폴더에서 .git만 사라진 경우 (P80) — init만 하고 다시 읽는다
+      const known = workspaces().find((w) => w.path === path);
+      const id = known ? known.id : (await registerWorkspace(path)).entry.id;
       setInitTarget(undefined);
       await refreshWorkspaces();
-      setSelectedId(info.entry.id);
+      setSelectedId(id);
     } catch (e) {
       setInitTarget(undefined);
       setError(String(e));
@@ -121,6 +125,8 @@ export function WorkspaceConnection() {
     const parent = await pickFolder();
     if (!parent) return;
     setCloneBusy(true);
+    setCloneSecs(0);
+    const timer = setInterval(() => setCloneSecs((n) => n + 1), 1000);
     try {
       const clonedPath = await cloneRepo(url, parent);
       const info = await registerWorkspace(clonedPath);
@@ -131,6 +137,7 @@ export function WorkspaceConnection() {
     } catch (e) {
       setError(`${t("clone 실패")} · ${String(e)}`);
     } finally {
+      clearInterval(timer);
       setCloneBusy(false);
     }
   };
@@ -156,30 +163,38 @@ export function WorkspaceConnection() {
   const liveOf = (id: string) => backend.listSessions().filter((s) => s.workspaceId === id && s.status !== "dead");
   const [unregTarget, setUnregTarget] = createSignal<string | undefined>(undefined);
 
-  const askUnregister = (id: string) => {
-    if (liveOf(id).length > 0) setUnregTarget(id);
-    else void unregister(id);
-  };
+  // 말줄임표 버튼은 늘 확인창을 연다 (0.6 QA P71) — 세션이 없으면 가벼운 확인
+  const askUnregister = (id: string) => setUnregTarget(id);
 
   const unregister = async (id: string) => {
     setUnregTarget(undefined);
     if (isTauri()) {
-      await unregisterWorkspace(id).catch(() => {});
-      await refreshWorkspaces();
+      // 실패를 삼키면 버튼이 안 먹은 것처럼 보였다 (0.6 QA B230) — 다른 동작과 같이 보이고 선택은 그대로
+      try {
+        await unregisterWorkspace(id);
+      } catch (e) {
+        setError(String(e));
+        return;
+      } finally {
+        await refreshWorkspaces();
+      }
     } else {
       backend.removeWorkspace(id);
     }
-    if (selectedId() === id) setSelectedId(workspaces()[0]?.id);
+    if (selectedId() === id) setSelectedId(groups()[0]?.items[0]?.id); // 화면 맨 위 행 (U62)
   };
 
   // 목록 행과 상세의 [열기]는 같은 일을 한다 (U60) — 열고 그 워크스페이스로 간다. 세션이 없으면
   // 첫 세션 마법사, 있으면 탭으로 (B107: 이미 세션이 있는 워크스페이스를 '첫 세션' 마법사로 들이지 않는다).
-  // 깨어 있는 세션만 센다 — team.json 복원이 슬롯을 셸로 먼저 채우므로 전체 수면 D3 카드가 안 나왔다
+  // 닫힌 워크스페이스는 깨어 있는 세션만 센다 — team.json 복원이 슬롯을 셸로 먼저 채우므로 전체 수면 D3 카드가 안 나왔다.
+  // 이미 열린 워크스페이스와 기본 터미널(페르소나 없음)의 셸은 사람이 연 것이라 센다 (B201 — [탭으로 가기]가 마법사로 갔다)
   const open = (id: string) => {
-    if (!workspaces().find((w) => w.id === id)?.open && openFull()) return notify(fullReason());
+    const wasOpen = !!workspaces().find((w) => w.id === id)?.open;
+    if (!wasOpen && openFull()) return notify(fullReason());
     backend.openWorkspace(id);
     touchWorkspace(id);
-    setView(openView(id, sessionsOf(id).filter((s) => s.status !== "shell" && s.status !== "dead").length));
+    const live = sessionsOf(id).filter((s) => s.status !== "dead" && (wasOpen || !s.personaId || s.status !== "shell"));
+    setView(openView(id, live.length));
   };
 
   return (
@@ -240,10 +255,10 @@ export function WorkspaceConnection() {
                             </span>
                             <button
                               class="ws-row-link"
-                              classList={{ off: ws.pathMissing }}
-                              disabled={ws.pathMissing}
-                              title={(ws.pathMissing ? t("경로를 찾을 수 없음") : revealLabel())}
-                              aria-label={(ws.pathMissing ? t("경로를 찾을 수 없음") : revealLabel())}
+                              classList={{ off: ws.pathMissing && !ws.notRepo }}
+                              disabled={ws.pathMissing && !ws.notRepo}
+                              title={(ws.pathMissing && !ws.notRepo ? t("경로를 찾을 수 없음") : revealLabel())}
+                              aria-label={(ws.pathMissing && !ws.notRepo ? t("경로를 찾을 수 없음") : revealLabel())}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 void reveal(ws.path);
@@ -277,15 +292,29 @@ export function WorkspaceConnection() {
                           <Show
                             when={!ws.pathMissing}
                             fallback={
-                              <button
-                                class="btn"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  void repath(ws.id);
-                                }}
-                              >
-                                {t("경로 재지정")}
-                              </button>
+                              <>
+                                {/* 폴더는 있고 .git만 없다 — 등록 때처럼 git init을 권한다 (P80) */}
+                                <Show when={ws.notRepo}>
+                                  <button
+                                    class="btn"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setInitTarget(ws.path);
+                                    }}
+                                  >
+                                    {t("git init…")}
+                                  </button>
+                                </Show>
+                                <button
+                                  class="btn"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    void repath(ws.id);
+                                  }}
+                                >
+                                  {t("경로 재지정")}
+                                </button>
+                              </>
                             }
                           >
                             <Show when={!ws.open} fallback={<span class="mono ws-row-open">{t("열림")}</span>}>
@@ -352,18 +381,27 @@ export function WorkspaceConnection() {
                   />
                 </div>
                 <div class="conn-detail-btns">
-                  <button
-                    class="btn primary"
-                    disabled={ws().pathMissing || (!ws().open && openFull())}
-                    title={!ws().open && openFull() ? fullReason() : undefined}
-                    onClick={() => open(ws().id)}
+                  <Show
+                    when={ws().notRepo}
+                    fallback={
+                      <button
+                        class="btn primary"
+                        disabled={ws().pathMissing || (!ws().open && openFull())}
+                        title={!ws().open && openFull() ? fullReason() : undefined}
+                        onClick={() => open(ws().id)}
+                      >
+                        {ws().pathMissing ? t("경로 재지정 필요") : ws().open ? t("탭으로 가기") : t("열기")}
+                      </button>
+                    }
                   >
-                    {ws().pathMissing ? t("경로 재지정 필요") : ws().open ? t("탭으로 가기") : t("열기")}
-                  </button>
+                    <button class="btn primary" onClick={() => setInitTarget(ws().path)}>
+                      {t("git init…")}
+                    </button>
+                  </Show>
                   <button
                     class="btn"
-                    disabled={ws().pathMissing}
-                    title={ws().pathMissing ? t("경로를 찾을 수 없음") : undefined}
+                    disabled={ws().pathMissing && !ws().notRepo}
+                    title={ws().pathMissing && !ws().notRepo ? t("경로를 찾을 수 없음") : undefined}
                     onClick={() => void reveal(ws().path)}
                   >
                     <Icon name="folder-open" size={12} />
@@ -399,20 +437,29 @@ export function WorkspaceConnection() {
       <Show when={unregTarget()}>
         {(id) => (
           <ConfirmDialog
-            danger
+            danger={liveOf(id()).length > 0}
             title={t("등록을 해제할까요?")}
             body={
               <>
-                {tf("실행 중인 세션 {n}개가 지금 종료됩니다 — 재등록해도 돌아오지 않습니다.", {
-                  n: String(liveOf(id()).length),
-                })}
+                <Show
+                  when={liveOf(id()).length > 0}
+                  fallback={tf("{name}을(를) 목록에서 뺍니다. 저장된 세션 {n} · 재개 가능 {m}", {
+                    name: workspaces().find((w) => w.id === id())?.name ?? "",
+                    n: sessionsOf(id()).length,
+                    m: sessionsOf(id()).filter((s) => s.resumable).length,
+                  })}
+                >
+                  {tf("실행 중인 세션 {n}개가 지금 종료됩니다 — 재등록해도 돌아오지 않습니다.", {
+                    n: String(liveOf(id()).length),
+                  })}
+                </Show>
                 <div class="muted" style={{ "margin-top": "4px" }}>
                   {t("디스크의 저장소와 .eqmux 파일은 그대로 남습니다.")}
                 </div>
               </>
             }
             info={[workspaces().find((w) => w.id === id())?.path ?? ""]}
-            confirmLabel={t("세션 종료 후 등록 해제")}
+            confirmLabel={liveOf(id()).length > 0 ? t("세션 종료 후 등록 해제") : t("등록 해제")}
             onConfirm={() => void unregister(id())}
             onCancel={() => setUnregTarget(undefined)}
           />
@@ -421,8 +468,9 @@ export function WorkspaceConnection() {
 
       {/* 원격 Clone (FR-E-02) */}
       <Show when={cloneOpen()}>
-        <Layer close={() => !cloneBusy() && setCloneOpen(false)} box={() => cloneBox} />
-        <div class="overlay" onClick={() => !cloneBusy() && setCloneOpen(false)}>
+        {/* clone 중에도 닫을 수 있다 (P72) — clone은 뒤에서 계속되고, 끝나면 등록되고 실패는 목록 위에 보인다 */}
+        <Layer close={() => setCloneOpen(false)} box={() => cloneBox} />
+        <div class="overlay" onClick={() => setCloneOpen(false)}>
           <div
             ref={cloneBox}
             class="dialog"
@@ -436,6 +484,14 @@ export function WorkspaceConnection() {
             <div class="muted" style={{ "font-size": "11px", margin: "4px 0 10px" }}>
               {t("URL 입력 → 부모 폴더 선택 → clone 후 자동 등록")}
             </div>
+            <Show when={cloneBusy()}>
+              <div class="muted mono" style={{ "font-size": "11px", margin: "0 0 8px" }}>
+                {tf("clone 중… {s}초 · 창을 닫아도 계속됩니다", { s: cloneSecs() })}
+                <Show when={cloneSecs() >= 30}>
+                  <div>{t("오래 걸리면 Git 로그인 창이 다른 창 뒤에 떠 있을 수 있습니다.")}</div>
+                </Show>
+              </div>
+            </Show>
             <input
               class="mono"
               style={{ width: "100%", "font-size": "12px" }}
@@ -447,7 +503,7 @@ export function WorkspaceConnection() {
               onKeyDown={(e) => {
                 if (isSubmitEnter(e)) void runClone(); // 한글 조합 확정 Enter는 넘긴다 (B130)
                 // 입력칸의 Esc는 레이어 스택이 양보한다 — 이 창만 닫는다 (B108)
-                if (e.key === "Escape" && !cloneBusy()) {
+                if (e.key === "Escape") {
                   e.stopPropagation();
                   setCloneOpen(false);
                 }
@@ -461,8 +517,8 @@ export function WorkspaceConnection() {
                 "margin-top": "14px",
               }}
             >
-              <button class="btn" disabled={cloneBusy()} onClick={() => setCloneOpen(false)}>
-                {t("취소")}
+              <button class="btn" onClick={() => setCloneOpen(false)}>
+                {t(cloneBusy() ? "닫기" : "취소")}
               </button>
               <button class="btn primary" disabled={cloneBusy() || !cloneUrl().trim()} onClick={() => void runClone()}>
                 {t(cloneBusy() ? "clone 중…" : "폴더 선택 후 Clone")}

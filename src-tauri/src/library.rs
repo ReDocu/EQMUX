@@ -688,6 +688,14 @@ pub fn library_portrait(store_state: tauri::State<crate::StoreState>, id: String
     read_portrait(&store_state.0.root(), &id).map(tauri::ipc::Response::new)
 }
 
+/// 초상을 둘 폴더 열기 (0.6 QA P66) — 전역 personas/. 없으면 만든 뒤 탐색기로 연다
+#[tauri::command]
+pub fn library_reveal_personas(store_state: tauri::State<crate::StoreState>) -> Result<(), String> {
+    let dir = personas_dir(&store_state.0.root());
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    crate::fsx::reveal_path(dir.to_string_lossy().into_owned(), None)
+}
+
 /// 시트 삭제 (중간 이하로 강등) — 없는 파일은 성공으로 친다 (멱등)
 pub fn delete_character(app_root: &Path, id: &str) -> Result<(), String> {
     let path = character_path_of(app_root, id);

@@ -57,7 +57,8 @@ function spans(s: string): [number, number][] {
     const k = run(i, isKey);
     const word = s.slice(i, k).toUpperCase();
     i = k - 1;
-    if (!PATTERNS.keywords.some((w) => word.includes(w))) continue;
+    const hits = PATTERNS.keywords.filter((w) => word.includes(w));
+    if (!hits.length) continue;
     let p = k;
     if (p < n && isQuote(c(p))) p++; // JSON 키의 닫는 따옴표
     p = run(p, isSpace);
@@ -65,6 +66,8 @@ function spans(s: string): [number, number][] {
     p = run(p + 1, isSpace);
     if (p < n && isQuote(c(p))) p++;
     const e = run(p, (ch) => !endsValue(ch));
+    // 이름의 키워드가 TOKEN뿐이고 값이 숫자만이면 토큰 수다 — max_tokens=128000 (B196). 비밀번호 숫자는 그대로 가린다
+    if (hits.every((w) => w === "TOKEN") && /^\d+$/.test(s.slice(p, e))) continue;
     if (e - p >= PATTERNS.minValue) out.push([p, e]);
   }
 

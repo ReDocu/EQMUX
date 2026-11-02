@@ -249,6 +249,32 @@ pub fn mark_base(ws_path: &str, id: &str, overwrite: bool) -> Result<(), String>
     atomic_write(&path, &out)
 }
 
+/// 선행 임무 지정 (P60) — frontmatter `depends_on`만 바꾸고 나머지는 보존한다. 자기 자신 · 빈 id는 뺀다. 비면 줄을 지운다
+pub fn set_depends(ws_path: &str, id: &str, deps: &[String]) -> Result<(), String> {
+    let path = find_path(ws_path, id).ok_or("임무 파일을 찾을 수 없습니다")?;
+    let text = fs::read_to_string(&path).map_err(|_| "임무 파일을 찾을 수 없습니다".to_string())?;
+    let (mut fm, body) = split_frontmatter(&text);
+    let mut deps: Vec<&str> = deps.iter().map(|d| d.trim()).filter(|d| !d.is_empty() && *d != id && !d.contains(char::is_whitespace)).collect();
+    deps.dedup();
+    fm.retain(|l| !l.starts_with("depends_on:"));
+    if !deps.is_empty() {
+        fm.push(format!("depends_on: {}", deps.join(" ")));
+    }
+    let mut out = String::from("---\n");
+    for l in &fm {
+        out.push_str(l);
+        out.push('\n');
+    }
+    out.push_str("---\n");
+    out.push_str(&body);
+    atomic_write(&path, &out)
+}
+
+#[tauri::command]
+pub fn mission_set_depends(ws_path: String, id: String, deps: Vec<String>) -> Result<(), String> {
+    set_depends(&ws_path, &id, &deps)
+}
+
 /// [브리프 전달] 커맨드 (§13-2) — 사람이 "지금부터"라고 누른 것이라 시작점을 덮는다
 #[tauri::command]
 pub fn mission_mark_base(ws_path: String, id: String) -> Result<(), String> {
@@ -270,7 +296,8 @@ pub fn touched_rel(ws_path: &str, paths: impl IntoIterator<Item = String>) -> Ve
         } else {
             None
         };
-        if let Some(r) = rel.filter(|r| !r.is_empty()) {
+        // 앱이 시킨 기억 · 노트 쓰기는 임무 변경이 아니다 (U113) — 워크트리 안 소스는 남긴다
+        if let Some(r) = rel.filter(|r| !r.is_empty() && !crate::owns::app_file(&crate::owns::repo_rel(ws_path, r))) {
             out.insert(r);
         }
     }
@@ -622,9 +649,11 @@ mod tests {
                 "./src/x.ts".into(),
                 "C:/other/z.ts".into(),
                 "D:/w/repo2/q.ts".into(),
+                "D:/w/repo/.eqmux/memory/kai.md".into(),
+                ".eqmux/worktrees/kai@w/src/w.ts".into(),
             ],
         );
-        assert_eq!(got, vec!["src/x.ts", "src/y.ts"]);
+        assert_eq!(got, vec![".eqmux/worktrees/kai@w/src/w.ts", "src/x.ts", "src/y.ts"]);
     }
 
     /// 선행 임무 (§4) — 공백으로 나눈 id 목록, 다른 쓰기(상태 변경)가 보존한다
@@ -638,6 +667,12 @@ mod tests {
         fs::write(&path, text).unwrap();
         set_status(&ws, &m.id, "in-progress").unwrap();
         assert_eq!(get(&ws, &m.id).unwrap().depends_on, vec!["api", "db-schema"]);
+        // 화면에서 고친다 (P60) — 자기 자신 · 빈 값은 빼고, 다른 frontmatter는 남는다. 비우면 줄이 없어진다
+        set_depends(&ws, &m.id, &["db-schema".into(), m.id.clone(), " ".into()]).unwrap();
+        let got = get(&ws, &m.id).unwrap();
+        assert_eq!((got.depends_on, got.status.as_str()), (vec!["db-schema".to_string()], "in-progress"));
+        set_depends(&ws, &m.id, &[]).unwrap();
+        assert!(!fs::read_to_string(&path).unwrap().contains("depends_on"));
         fs::remove_dir_all(&ws).ok();
     }
 

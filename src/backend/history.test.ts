@@ -27,7 +27,7 @@ describe("groupByConversation", () => {
   });
 
   test("앱 밖 재개 명령", () => {
-    expect(resumeCommand("abc-1")).toBe("claude --resume abc-1");
+    expect(resumeCommand("abc-1", "D:\\work\\내 앱")).toBe('cd "D:\\work\\내 앱"; claude --resume abc-1');
   });
 });
 

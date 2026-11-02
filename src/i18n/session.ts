@@ -11,8 +11,8 @@ export const dict: Record<string, string> = {
     "Degraded — registry unreachable · maintained via hooks + process liveness",
   미배정: "Unassigned",
   서브에이전트: "Subagents",
-  "활동 (훅 2차)": "Activity (hook, secondary)",
-  "비용 (statusLine)": "Cost (statusLine)",
+  활동: "Activity",
+  비용: "Cost",
   누적: "cumulative",
   "— (보고 전)": "— (not yet reported)",
   메모리: "Memory",
@@ -73,9 +73,9 @@ export const dict: Record<string, string> = {
   "페인으로 점프": "Jump to pane",
 
   // 세션 데이터의 고정 문구 (mock.ts resumeReason) — 렌더 지점 t()가 푼다
-  "transcript + cwd 일치": "transcript + cwd match",
-  "transcript 없음": "no transcript",
-  "일반 셸 · cwd 유지": "plain shell · cwd kept",
+  "대화 기록과 작업 폴더가 맞습니다": "conversation log and work folder match",
+  "대화 기록 없음": "no conversation log",
+  "일반 셸 · 작업 폴더 유지": "plain shell · work folder kept",
 
   // ── 종료 다이얼로그 (ExitDialog) ──
   "대화·로그 저장 중…": "Saving conversations and logs…",
@@ -85,8 +85,6 @@ export const dict: Record<string, string> = {
   "실행 중인 세션 {n}개가 종료됩니다. 자동 재개하지 않습니다.":
     "{n} running session(s) will be terminated. They will not auto-resume.",
   "실행 중인 세션이 없습니다 — 바로 종료합니다.": "No sessions running — quitting immediately.",
-  "실행 중 {n} — 에이전트 {a} · 기본 터미널 {d} · 서버 {s}. 자동 재개하지 않습니다.":
-    "{n} running — {a} agent(s) · {d} default terminal(s) · {s} server(s). Nothing auto-resumes.",
   "승인 대기 — 종료하면 거부로 끝남": "awaiting approval — quitting denies it",
   "모두 종료": "Quit all",
   "종료 중…": "Quitting…",
@@ -107,7 +105,7 @@ export const dict: Record<string, string> = {
   "이전 일치 (Shift+Enter)": "Previous match (Shift+Enter)",
   "다음 일치 (Enter)": "Next match (Enter)",
   "닫기 (ESC)": "Close (ESC)",
-  "▲ 디스크 기록 보기 — 링버퍼 위 기록": "▲ View disk history — lines above the ring buffer",
+  "▲ 이전 기록 더 보기 (저장된 기록)": "▲ Load earlier lines (saved history)",
   "트랜스크립트 없음": "no transcript",
   "이전 에이전트 세션 발견 — 재개 대기": "Previous agent session found — awaiting resume",
   "같은 대화를 --resume으로 이어갑니다. 자동 실행하지 않습니다.":

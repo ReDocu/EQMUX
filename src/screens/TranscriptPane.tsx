@@ -24,7 +24,10 @@ export function TranscriptPane(props: { session: Session; onJump?: () => void })
 
   const [data, setData] = createSignal<TranscriptData | undefined>(undefined);
   const [fallback, setFallback] = createSignal<string[] | undefined>(undefined);
-  const [openTurn, setOpenTurn] = createSignal<number | undefined>(undefined); // 펼친 도구 턴 index
+  // 펼친 도구 턴 — 순번이 아니라 턴 내용으로 기억한다 (B236: 검색 · 창 밀림 · 세션 전환에 엉뚱한 턴이 펼쳐졌다).
+  // ponytail: 같은 시각 · 같은 도구 · 같은 요약인 두 턴은 함께 펼쳐진다 — 턴에 tool_use id가 실리면 그것으로
+  const [openTurn, setOpenTurn] = createSignal<string | undefined>(undefined);
+  const turnKey = (t: { time: string; text: string; summary: string | null }) => `${t.time}\n${t.text}\n${t.summary ?? ""}`;
 
   onMount(() => {
     if (!isTauri()) return;
@@ -33,18 +36,21 @@ export function TranscriptPane(props: { session: Session; onJump?: () => void })
     // <For>가 턴·개요 DOM 전부를 다시 만들던 자리다. 로그는 append-only라 끝 턴과 개수로 가른다
     const sig = (d?: TranscriptData) =>
       d && `${d.file}|${d.turns.length}|${d.skipped}|${JSON.stringify(d.turns[d.turns.length - 1])}`;
+    // 페인은 세션이 바뀌어도 다시 만들어지지 않는다 — 시작 때 세션을 잡아 두고, 끝났을 때 다르면 버린다 (B236)
     const load = async () => {
+      const sid = props.session.id;
       const d = await readTranscript(props.session);
+      if (sid !== props.session.id) return;
       if (d && sig(d) === sig(data())) return;
       setData(d);
       if (!d) {
         // 스크롤백 폴백 (FR-G-86) — 로그가 없거나 스키마 인식 불가. 여기는 평문만 쓴다.
         // TUI 잔해(프레임·로고 조각·연속 중복)는 걸러낸다 — 재생 필터와 같은 판정
-        const lines = await scrollbackTail(props.session.workspaceId, props.session.id, 200);
-        setFallback(cleanScrollback(lines).map((l) => l.text));
+        const lines = await scrollbackTail(props.session.workspaceId, sid, 200);
+        if (sid === props.session.id) setFallback(cleanScrollback(lines).map((l) => l.text));
       }
     };
-    createEffect(on(() => props.session.id, () => void load()));
+    createEffect(on(() => props.session.id, () => (setOpenTurn(undefined), void load())));
     const later = () => {
       clearTimeout(timer);
       timer = setTimeout(() => void load(), 1000);
@@ -114,9 +120,11 @@ export function TranscriptPane(props: { session: Session; onJump?: () => void })
   };
 
   const [draft, setDraft] = createSignal("");
+  // 승인 · 질문 대기 중엔 글이 TUI 승인 창의 답이 된다 (B214) — 대화 버스처럼 waiting엔 넣지 않는다
+  const blocked = () => props.session.status === "dead" || props.session.status === "waiting";
   const send = () => {
     const text = draft().trim();
-    if (!text) return;
+    if (!text || blocked()) return;
     if (isTauri()) {
       writePty(props.session.id, text + "\r"); // V3 — 별도 경로 없이 PTY로
     } else {
@@ -129,7 +137,9 @@ export function TranscriptPane(props: { session: Session; onJump?: () => void })
     const d = data();
     if (!isTauri()) return tr("목 데이터");
     if (d) {
-      const parts = [`JSONL ${d.guessed ? tr("cwd 최신 추정") : tr("실측")}${d.windowed ? ` · ${tr("끝 2MB 창")}` : ""}`];
+      // 구현 용어(JSONL · cwd · 창) 대신 뜻을 말한다 (U160)
+      const parts = [d.guessed ? tr("같은 폴더의 최근 대화로 추정 — 이 세션 것이 아닐 수 있습니다") : tr("대화 로그")];
+      if (d.windowed) parts.push(tr("최근 2MB만"));
       if (d.skipped > 0) parts.push(tf("건너뜀 {n}줄", { n: d.skipped }));
       return parts.join(" · ");
     }
@@ -140,17 +150,22 @@ export function TranscriptPane(props: { session: Session; onJump?: () => void })
   // JSONL 경로는 cwd로 정해지므로(agent::transcript_path) cwd + 파일명이 곧 출처다.
   // 셸 우선 추정(guessed)일수록 중요하다 — 같은 cwd의 최신 파일을 고른 것이라 세션과 1:1이 아니다.
   const baseName = (p: string) => p.split(/[\\/]/).pop() ?? p;
+  // 보이는 이름은 탭과 같은 워크스페이스 이름 + 저장소 상대 폴더다 (U160 — 내부 id 'eqmux-1a2b3c'가 보였다). 복사는 전체 경로
   const source = () => {
     if (!isTauri()) return undefined;
-    const ws = props.session.workspaceId;
+    const ws = backend.listWorkspaces().find((w) => w.id === props.session.workspaceId);
+    const wsName = ws?.name ?? props.session.workspaceId;
     const d = data();
     if (d) {
-      return { path: d.file, label: `${ws} · ${props.session.cwd} · ${baseName(d.file)}`, guessed: d.guessed };
+      const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "");
+      const root = ws ? norm(ws.path) : "";
+      const cwd = norm(props.session.cwd ?? "");
+      const rel = root && cwd.toLowerCase().startsWith(root.toLowerCase()) ? cwd.slice(root.length).replace(/^\//, "") : cwd;
+      return { path: d.file, label: [wsName, rel, baseName(d.file)].filter(Boolean).join(" · "), guessed: d.guessed };
     }
     // 스크롤백 폴백은 워크스페이스 DB에서 읽는다 — 어느 워크스페이스인지가 곧 출처다
     if (!fallback()?.length) return undefined;
-    const db = `workspaces/${ws}/session.db`;
-    return { path: db, label: db, guessed: false };
+    return { path: `workspaces/${props.session.workspaceId}/session.db`, label: wsName, guessed: false };
   };
 
   const roleLabel = (role: string) =>
@@ -169,11 +184,11 @@ export function TranscriptPane(props: { session: Session; onJump?: () => void })
 
   const countText = () => {
     // 검색 중에는 필터 결과를 함께 보인다 — 총계만 남으면 카운터가 거짓말이 된다 (B6)
-    const label = data() || !isTauri() ? "turns" : "lines";
+    const turns = data() || !isTauri(); // 턴이 아니면 스크롤백 줄이다
     const total = isTauri() ? (data()?.turns.length ?? fallback()?.length ?? 0) : mockTurns().length;
-    if (!q()) return `${total} ${label}`;
+    if (!q()) return tf(turns ? "{n}턴" : "{n}줄", { n: total });
     const shown = isTauri() ? (data() ? shownTurns().length : shownFallback().length) : shownMock().length;
-    return `${shown} / ${total} ${label}`;
+    return tf(turns ? "{shown} / {total}턴" : "{shown} / {total}줄", { shown, total });
   };
 
   return (
@@ -232,7 +247,7 @@ export function TranscriptPane(props: { session: Session; onJump?: () => void })
           {/* Tauri — 실측 턴 */}
           <Show when={isTauri() && data()}>
             <For each={shownTurns()}>
-              {(t, i) => (
+              {(t) => (
                 <div class="tr-turn" classList={{ user: t.role === "user" }}>
                   <div class="tr-turn-top">
                     <span class="tr-who">{roleLabel(t.role)}</span>
@@ -247,13 +262,13 @@ export function TranscriptPane(props: { session: Session; onJump?: () => void })
                     <button
                       class="mono turn-tool"
                       title={t.summary ?? undefined}
-                      onClick={() => setOpenTurn(openTurn() === i() ? undefined : i())}
+                      onClick={() => setOpenTurn(openTurn() === turnKey(t) ? undefined : turnKey(t))}
                     >
                       {t.text}
                       <Show when={t.summary}>{(s) => <span class="muted"> · {s()}</span>}</Show>{" "}
-                      <span class="muted">{openTurn() === i() ? <Icon name="chevron-down" size={12} /> : <Icon name="chevron-right" size={12} />}</span>
+                      <span class="muted">{openTurn() === turnKey(t) ? <Icon name="chevron-down" size={12} /> : <Icon name="chevron-right" size={12} />}</span>
                     </button>
-                    <Show when={openTurn() === i() && t.detail}>
+                    <Show when={openTurn() === turnKey(t) && t.detail}>
                       <pre class="mono muted tr-detail">{t.detail}</pre>
                     </Show>
                   </Show>
@@ -315,13 +330,17 @@ export function TranscriptPane(props: { session: Session; onJump?: () => void })
       <div class="transcript-input">
         <input
           style={{ flex: 1, "min-width": 0 }}
-          placeholder={tf("{name}에게 입력 보내기", { name: who() })}
+          placeholder={
+            props.session.status === "waiting"
+              ? tr("승인 · 질문을 기다리는 중입니다 — 터미널에서 읽고 답하세요")
+              : tf("{name}에게 입력 보내기", { name: who() })
+          }
           value={draft()}
           onInput={(e) => setDraft(e.currentTarget.value)}
           onKeyDown={(e) => isSubmitEnter(e) && send()}
-          disabled={props.session.status === "dead"}
+          disabled={blocked()}
         />
-        <button class="btn primary" onClick={send} disabled={props.session.status === "dead"}>
+        <button class="btn primary" onClick={send} disabled={blocked()}>
           {tr("보내기")}
         </button>
       </div>

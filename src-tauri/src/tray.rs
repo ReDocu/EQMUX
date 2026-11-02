@@ -38,11 +38,16 @@ fn should_hide(close_action: Option<&str>, running: usize) -> bool {
     close_action != Some("quit") && running > 0
 }
 
+/// 영어 단수형 — "1 session" (B194)
+fn plural(n: usize) -> &'static str {
+    if n == 1 { "session" } else { "sessions" }
+}
+
 /// (툴팁, 메뉴 첫 줄, 창 열기, 전부 종료)
 fn labels(n: usize, en: bool) -> (String, String, &'static str, &'static str) {
     if en {
         let tip = if n == 0 { "EQMUX".into() } else { format!("EQMUX — {n} running in background") };
-        (tip, format!("{n} sessions running"), "Open window", "Quit all")
+        (tip, format!("{n} {} running", plural(n)), "Open window", "Quit all")
     } else {
         let tip = if n == 0 { "EQMUX".into() } else { format!("EQMUX — 백그라운드 {n}개 실행 중") };
         (tip, format!("실행 중 세션 {n}개"), "창 열기", "전부 종료")
@@ -116,13 +121,18 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
     let mut b = TrayIconBuilder::with_id(TRAY_ID)
         .tooltip(tip)
         .menu(&menu)
-        .show_menu_on_left_click(false)
+        // mac 메뉴 막대 아이콘은 왼쪽 클릭에 메뉴가 열리는 것이 관례다 — 알림이 가리키는 [전부 종료]가 거기 있다 (U132).
+        // Windows는 왼쪽 클릭 = 창 열기, 메뉴는 우클릭
+        .show_menu_on_left_click(cfg!(target_os = "macos"))
         .on_menu_event(|app, e| match e.id().as_ref() {
             "open" => show_main(app),
             "quit" => quit_all(app),
             _ => {}
         })
         .on_tray_icon_event(|tray, e| {
+            if cfg!(target_os = "macos") {
+                return;
+            }
             if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = e {
                 show_main(tray.app_handle());
             }
@@ -163,10 +173,10 @@ pub(crate) fn window_close_to_tray(app: AppHandle) -> bool {
     if !HINTED.swap(true, Ordering::SeqCst) {
         use tauri_plugin_notification::NotificationExt;
         let body = match (english(&app), cfg!(target_os = "macos")) {
-            (true, false) => format!("EQMUX keeps running in the tray — {n} sessions. Use [Quit all] in the tray menu to exit."),
-            (true, true) => format!("EQMUX keeps running in the Dock — {n} sessions. Use [Quit all] in the menu bar icon to exit."),
-            (false, false) => format!("EQMUX가 트레이에서 계속 실행 중입니다 — 세션 {n}개. 끄려면 트레이 메뉴의 [전부 종료]."),
-            (false, true) => format!("EQMUX가 Dock에서 계속 실행 중입니다 — 세션 {n}개. 끄려면 메뉴 막대 아이콘의 [전부 종료]."),
+            (true, false) => format!("EQMUX keeps running in the tray — {n} {}. Use [Quit all] in the tray menu to exit.", plural(n)),
+            (true, true) => format!("EQMUX keeps running in the Dock — {n} {}. Press ⌘Q or use [Quit all] in the menu bar icon to exit.", plural(n)),
+            (false, false) => format!("EQMUX가 트레이에서 계속 실행 중입니다 — 세션 {n}개. 끄려면 트레이 메뉴의 [전부 종료]를 누릅니다."),
+            (false, true) => format!("EQMUX가 Dock에서 계속 실행 중입니다 — 세션 {n}개. 끄려면 ⌘Q 또는 메뉴 막대 아이콘의 [전부 종료]를 누릅니다."),
         };
         let _ = app.notification().builder().title("EQMUX").body(body).show();
     }
@@ -183,5 +193,12 @@ mod tests {
         assert!(should_hide(Some("tray"), 1));
         assert!(!should_hide(Some("quit"), 3), "닫으면 종료를 골랐다");
         assert!(!should_hide(None, 0), "도는 것이 없으면 숨길 이유가 없다");
+    }
+
+    #[test]
+    fn english_count_is_singular_for_one() {
+        assert_eq!(labels(1, true).1, "1 session running");
+        assert_eq!(labels(2, true).1, "2 sessions running");
+        assert_eq!(labels(1, false).1, "실행 중 세션 1개");
     }
 }

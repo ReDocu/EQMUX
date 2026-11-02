@@ -6,15 +6,26 @@ import type { CrashReport, CrashSession } from "../backend/recovery";
 import { t, tf } from "../i18n";
 import { openSessionDetail, pushLayer, tick } from "../state";
 import { sessionName } from "../types";
+import { isDefaultTerminalId } from "./launchRules";
 
 /** 내부 id(`shell1@eqmux-1e3b93`) 대신 사람이 아는 이름 — 세션이 복원돼 있으면 세션 이름,
- *  아직이면 id 앞부분의 페르소나 이름, 그것도 없으면 기본 터미널이다 */
+ *  아직이면 id 앞부분의 페르소나 이름. 기본 터미널은 id 모양으로 가리고, 라이브러리에 없는
+ *  페르소나는 id 앞부분을 그대로 보인다 (0.6 QA B227) */
 function crashName(c: CrashSession): string {
   tick(); // 팀 복원이 끝나면 이름이 따라온다
   const personas = backend.listPersonas();
   const s = backend.listSessions().find((x) => x.id === c.id);
   if (s) return sessionName(s, personas.find((p) => p.id === s.personaId));
-  return personas.find((p) => p.id === c.id.split("@")[0])?.name ?? t("기본 터미널");
+  if (isDefaultTerminalId(c.id)) return t("기본 터미널");
+  const pid = c.id.split("@")[0];
+  return personas.find((p) => p.id === pid)?.name ?? pid;
+}
+
+/** 복원되지 않은 역할 세션인데 그 페르소나가 라이브러리에 없다 — 지웠거나 id를 바꿨다 (B227) */
+function lostPersona(c: CrashSession): boolean {
+  tick();
+  if (isDefaultTerminalId(c.id) || backend.listSessions().some((x) => x.id === c.id)) return false;
+  return !backend.listPersonas().some((p) => p.id === c.id.split("@")[0]);
 }
 
 /** 세션이 복원돼 탭에 있다 — 그 페인으로 바로 갈 수 있다 */
@@ -27,7 +38,7 @@ function restored(c: CrashSession): boolean {
 function shellOnly(c: CrashSession): boolean {
   const s = backend.listSessions().find((x) => x.id === c.id);
   if (s) return !s.personaId;
-  return !backend.listPersonas().some((p) => p.id === c.id.split("@")[0]);
+  return isDefaultTerminalId(c.id);
 }
 
 /** DB 폴더 이름(워크스페이스 id) → 표시 이름. 프런트가 모르는 워크스페이스면 내부 id 대신 중립 표시 (U63) */
@@ -72,6 +83,7 @@ export function CrashRecovery(props: { report: CrashReport; onClose: () => void 
                   <b>{crashName(s)}</b>{" "}
                   <span class="muted" style={{ "font-size": "11px" }}>
                     {wsName(s.workspace)}
+                    <Show when={lostPersona(s)}> · {t("라이브러리에 없는 페르소나")}</Show>
                   </span>
                 </span>
                 <span class="mono" style={{ "font-size": "11px" }}>
@@ -111,7 +123,7 @@ export function CrashRecovery(props: { report: CrashReport; onClose: () => void 
         </div>
         <div style={{ display: "flex", "justify-content": "flex-end", padding: "0 20px 16px" }}>
           <button class="btn primary" onClick={props.onClose}>
-            {t("확인")}
+            {t("알겠습니다")}
           </button>
         </div>
       </div>

@@ -123,13 +123,35 @@ export function ensureConversation(wsId: string): void {
   void refreshConversation(wsId);
 }
 
+/** 보낸 쪽 원장에도 사본을 적는가 (B210) — 다른 워크스페이스의 한 세션에게 보낼 때만. 순수 함수 */
+export const crossCopy = (wsId: string, to: string, fromWs?: string): fromWs is string =>
+  !!fromWs && fromWs !== wsId && to !== "@all";
+
+/** 직함 접두 길이 (U121) — `@클라이언트 개발자 확인 부탁`에서 직함이 차지한 글자 수. 띄어쓰기는 빼고 비교한다
+ *  (Rust title_matches와 같은 규칙 — `@클라이언트개발자`도 닿는다). 직함 뒤는 공백이나 끝이어야 한다. 안 맞으면 0. 순수 함수 */
+export function titlePrefix(rest: string, title: string | undefined): number {
+  const want = (title ?? "").replace(/\s+/g, "");
+  if (!want) return 0;
+  let got = "";
+  for (let i = 0; i < rest.length; i++) {
+    if (!/\s/.test(rest[i])) got += rest[i];
+    if (got === want) return /^(\s|$)/.test(rest.slice(i + 1)) ? i + 1 : 0;
+    if (!want.startsWith(got)) return 0;
+  }
+  return 0;
+}
+
 /** 발신 (M2 강제 타입 · M6 상한). 성공하면 message-new 이벤트가 스트림 반영과 전달을 처리한다.
- *  반환값은 사용자에게 보여줄 오류 문구 — null이면 성공. */
+ *  반환값은 사용자에게 보여줄 오류 문구 — null이면 성공.
+ *  fromWs — 보낸 사람이 있는 워크스페이스. 받는 쪽과 다르면 보낸 쪽 원장에도 한 줄 적는다 (B210):
+ *  에이전트 발신(Rust send_to)처럼 양쪽 대화 탭에 남게. 그 줄의 받는 사람은 다른 워크스페이스 세션이라
+ *  보낸 쪽에서는 전달(recipients)이 일어나지 않는다. 배지는 받는 세션의 워크스페이스로 대화 탭이 붙인다 */
 export async function sendConversation(
   wsId: string,
   to: string,
   type: ConversationMessage["type"],
   body: string,
+  fromWs?: string,
 ): Promise<string | null> {
   if (!isTauri()) {
     backend.sendMessage("나", to, type, body);
@@ -137,6 +159,10 @@ export async function sendConversation(
   }
   try {
     await invoke("msg_send", { workspace: wsId, from: "나", to, msgType: type, body });
+    // @all 사본은 적지 않는다 — 보낸 쪽 원장의 @all은 보낸 쪽 팀 전체에게 전달된다.
+    // ponytail: 보낸 쪽 사본에는 '대기 중·전달됨'이 붙지 않는다(전달 상태는 받는 쪽 원장 id에 붙는다) — 필요하면 두 id를 짝짓는다
+    if (crossCopy(wsId, to, fromWs))
+      await invoke("msg_send", { workspace: fromWs, from: "나", to, msgType: type, body }).catch(() => {});
     return null;
   } catch (e) {
     const s = String(e);

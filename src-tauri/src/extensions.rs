@@ -111,6 +111,11 @@ fn kill_tree(child: &mut std::process::Child) {
 fn run(cli: &str, args: &[String], cwd: Option<&str>) -> Result<(bool, String, String), String> {
     let mut child = match spawn(cli, args, cwd, false) {
         Ok(c) => c,
+        // 셸 폴백 전에 PATH부터 본다 (B182) — 없으면 cmd의 "내부 또는 외부 명령이 아닙니다"가 OEM 코드 페이지로
+        // 와서 깨져 보이고, 종료 코드(1)로는 다른 실패와 가를 수 없다. 문구를 여기서 만든다
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && !crate::agentscan::on_path(cli) => {
+            return Err(format!("{cli}가 PATH에 없습니다"));
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             spawn(cli, args, cwd, true).map_err(|e| format!("{cli}를 실행하지 못했습니다 — {e}"))?
         }
@@ -249,16 +254,36 @@ pub fn scan_mcp(claude_json: Option<&Value>, mcp_json: Option<&Value>, ws_path: 
     rows
 }
 
-fn read_json(p: &Path) -> Option<Value> {
-    serde_json::from_str(&fs::read_to_string(p).ok()?).ok()
+/// 설정 JSON 하나 — 없으면 None. 있는데 못 읽었으면(끝 쉼표 · 쓰는 도중 · 권한) errors에 "경로: 사유"를 남긴다.
+/// 메모장이 붙이는 BOM은 벗긴다 (B218) — 예전엔 둘 다 '설정된 MCP 서버가 없습니다'로만 보였다
+fn read_json(p: &Path, errors: &mut Vec<String>) -> Option<Value> {
+    let text = match fs::read_to_string(p) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) => {
+            errors.push(format!("{}: {e}", p.display()));
+            return None;
+        }
+    };
+    serde_json::from_str(text.trim_start_matches('\u{feff}'))
+        .map_err(|e| errors.push(format!("{}: {e}", p.display())))
+        .ok()
+}
+
+#[derive(Serialize, Default)]
+pub struct McpScan {
+    pub rows: Vec<McpRow>,
+    /// 있는데 못 읽은 설정 파일 — 화면이 경고 행으로 보인다
+    pub errors: Vec<String>,
 }
 
 #[tauri::command]
-pub async fn mcp_scan(ws_path: Option<String>) -> Vec<McpRow> {
+pub async fn mcp_scan(ws_path: Option<String>) -> McpScan {
     tauri::async_runtime::spawn_blocking(move || {
-        let claude = read_json(&crate::home_dir().join(".claude.json"));
-        let mcp = ws_path.as_deref().and_then(|ws| read_json(&Path::new(ws).join(".mcp.json")));
-        scan_mcp(claude.as_ref(), mcp.as_ref(), ws_path.as_deref())
+        let mut errors = Vec::new();
+        let claude = read_json(&crate::home_dir().join(".claude.json"), &mut errors);
+        let mcp = ws_path.as_deref().and_then(|ws| read_json(&Path::new(ws).join(".mcp.json"), &mut errors));
+        McpScan { rows: scan_mcp(claude.as_ref(), mcp.as_ref(), ws_path.as_deref()), errors }
     })
     .await
     .unwrap_or_default()
@@ -504,6 +529,28 @@ mod tests {
         assert_eq!(by("pw").env_keys, ["TOKEN"]);
         assert_eq!((by("ok").approval, by("off").approval, by("new").approval), ("approved", "disabled", "pending"));
         assert!(scan_mcp(None, None, None).is_empty(), "파일이 없거나 깨지면 빈 목록");
+    }
+
+    #[test]
+    fn read_json_strips_bom_and_reports_broken_files() {
+        let base = std::env::temp_dir().join(format!("eqmux-mcpjson-{}", crate::workspace::now_ms()));
+        fs::create_dir_all(&base).unwrap();
+        let mut errors = Vec::new();
+        fs::write(base.join("bom.json"), "\u{feff}{\"mcpServers\":{}}").unwrap();
+        assert!(read_json(&base.join("bom.json"), &mut errors).is_some(), "BOM은 벗긴다");
+        assert!(read_json(&base.join("none.json"), &mut errors).is_none());
+        assert!(errors.is_empty(), "없는 파일은 오류가 아니다: {errors:?}");
+        fs::write(base.join("bad.json"), "{\"mcpServers\":{},}").unwrap();
+        assert!(read_json(&base.join("bad.json"), &mut errors).is_none());
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("bad.json"));
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn missing_engine_is_reported_in_plain_words() {
+        let err = run("eqmux-no-such-cli-b182", &a(&["plugin", "list"]), None).unwrap_err();
+        assert!(err.contains("PATH에 없습니다"), "{err}");
     }
 
     #[test]

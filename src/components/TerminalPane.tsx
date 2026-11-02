@@ -279,7 +279,7 @@ export async function respawnSessionShell(id: string, cwd: string, wsId?: string
   if (!isTauri()) return;
   const e = REGISTRY.get(id); // 페인 미마운트 세션도 이동은 된다 — 크기만 기본값 폴백
   await killAndWait(id);
-  e?.term.writeln(`\x1b[90m─── 브랜치 부여 → ${cwd} ───\x1b[0m`);
+  e?.term.writeln(`\x1b[90m─── ${tf("브랜치 부여 → {cwd}", { cwd })} ───\x1b[0m`);
   const size = sessionTermSize(id); // 재개/재시작과 같은 크기 규약 — 미마운트면 기본값 폴백
   try {
     notePtyShell(id, await spawnPty(id, cwd, size.cols, size.rows, wsId, shell));
@@ -335,16 +335,22 @@ export function roleAgentOf(s: Session): { name: string; permissions: Permission
 /** 역할 세션들을 관리 에이전트로 띄운다 — 사람이 누른 [빠른 시작] · [모두 기동]의 몫이다.
  *  셸이 아직 안 떴으면 뜨는 대로, 떠 있으면 바로. 이미 에이전트가 붙은 세션(손으로 띄운 것 포함)은
  *  건너뛴다 — 기동은 페인을 통째로 끝내므로 돌고 있는 에이전트를 죽인다. 띄우기로 한 수를 돌려준다 */
+const launchQueued = new Set<string>();
 export function launchRoleAgents(list: readonly Session[]): number {
   let n = 0;
   for (const s of list) {
     const a = roleAgentOf(s);
-    if (!a || s.status !== "shell" || s.agent) continue;
+    // 이미 기동을 예약한 세션은 거른다 (0.6 QA B231) — 아직 'shell'이라 두 번 통과했고,
+    // 두 번째 기동이 막 뜨던 첫 에이전트를 죽였다
+    if (!a || s.status !== "shell" || s.agent || launchQueued.has(s.id)) continue;
     n++;
+    launchQueued.add(s.id);
     whenSessionReady(s.id, () =>
-      void launchAgentInSession(s.id, s.workspaceId, s.cwd, a.name, a.permissions, cliOf(s)).catch(() => {
-        /* 실패는 페인 출력과 이벤트 피드가 보여준다 (FR-D-08) */
-      }),
+      void launchAgentInSession(s.id, s.workspaceId, s.cwd, a.name, a.permissions, cliOf(s))
+        .catch(() => {
+          /* 실패는 페인 출력과 이벤트 피드가 보여준다 (FR-D-08) */
+        })
+        .finally(() => launchQueued.delete(s.id)),
     );
   }
   return n;
@@ -355,6 +361,7 @@ export function disposeSessionTerminal(id: string) {
   // 스폰 실패·첫 마운트 전 제거로 한 번도 불리지 않은 예약이 남지 않게 (CPU·RAM L3)
   pendingReady.delete(id);
   readySessions.delete(id);
+  launchQueued.delete(id);
   const e = REGISTRY.get(id);
   if (e) {
     clearTimeout(e.parkTimer);
@@ -734,14 +741,14 @@ async function initSession(
     const tail = await scrollbackTail(props.wsId ?? "default", props.sessionId, settings().scrollbackReplay);
     const cleaned = cleanScrollback(tail);
     if (cleaned.length > 0) {
-      term.writeln(`\x1b[90m─── 이전 세션 스크롤백 · 마지막 ${cleaned.length}줄 재생 ───\x1b[0m`);
+      term.writeln(`\x1b[90m─── ${tf("이전 세션 스크롤백 · 마지막 {n}줄 재생", { n: cleaned.length })} ───\x1b[0m`);
       // SGR 보존본(FR-C-15)이 있으면 색 그대로, 없으면 흐리게 (FR-C-31)
       for (const line of cleaned) term.writeln(line.styled ?? `\x1b[2m${line.text}\x1b[0m`);
       // FR-C-32 경계 — 복원 대기 중에는 "새 세션 시작"이 아니다 (아직 아무것도 안 떴다)
       term.writeln(
         props.revive
-          ? "\x1b[90m─── 웹뷰 재시작 — 실행 중인 세션에 재부착 ───\x1b[0m"
-          : "\x1b[90m─── 새 세션 시작 ───\x1b[0m",
+          ? `\x1b[90m─── ${t("웹뷰 재시작 — 실행 중인 세션에 재부착")} ───\x1b[0m`
+          : `\x1b[90m─── ${t("새 세션 시작")} ───\x1b[0m`,
       );
     }
     // 웹뷰 재시작 재부착 (FR-C-06) — PTY는 Rust에 살아 있다. 스폰 없이 출력 구독만 잇고,
@@ -749,7 +756,7 @@ async function initSession(
     if (props.revive) {
       readySessions.add(props.sessionId); // PTY는 살아 있다 — 뒤에 건 예약이 기다리지 않게
       if (cleaned.length === 0) {
-        term.writeln("\x1b[90m─── 웹뷰 재시작 — 실행 중인 세션에 재부착 ───\x1b[0m");
+        term.writeln(`\x1b[90m─── ${t("웹뷰 재시작 — 실행 중인 세션에 재부착")} ───\x1b[0m`);
       }
       entry.lastCols = term.cols;
       entry.lastRows = term.rows;
@@ -792,7 +799,8 @@ export function TerminalPane(props: {
   cwd: string;
   wsId?: string;
   shell?: string;
-  agent?: { name: string; permissions: Permissions };
+  /** 본문 우클릭 메뉴 머리 — 페인 머리 메뉴와 같은 세션 이름 (U153). 없으면 '터미널' */
+  title?: string;
   revive?: boolean;
   mockLines?: string[];
   /** 페인 소유 화면(컨트롤 센터)이 얹는 세션 액션 그룹 — 편집 그룹 뒤에 붙는다 (시안 §06) */
@@ -986,7 +994,7 @@ export function TerminalPane(props: {
           e.unsubs?.forEach((u) => u());
           e.unsubs = undefined;
           try {
-            e.term.writeln(`\r\n\x1b[31m세션 시작 실패 — ${err}\x1b[0m`);
+            e.term.writeln(`\r\n\x1b[31m${tf("세션 시작 실패 — {err}", { err: String(err) })}\x1b[0m`);
           } catch {
             /* 터미널이 이미 폐기됨 */
           }
@@ -1123,7 +1131,7 @@ export function TerminalPane(props: {
         </Show>
         <Show when={isTauri() && atTop() && !history()}>
           <button class="btn term-history-chip" onClick={() => void openHistory()}>
-            {t("▲ 디스크 기록 보기 — 링버퍼 위 기록")}
+            {t("▲ 이전 기록 더 보기 (저장된 기록)")}
           </button>
         </Show>
         <Show when={history()}>
@@ -1160,7 +1168,7 @@ export function TerminalPane(props: {
           <ContextMenu
             x={m().x}
             y={m().y}
-            header={props.agent ? `${props.agent.name} · ${t("터미널")}` : t("기본 터미널")}
+            header={props.title ?? t("터미널")}
             onClose={() => setMenu(undefined)}
             groups={[
               // 주 동작 — 편집

@@ -2,7 +2,8 @@
 // 상태를 바꾸는 것은 언제나 사용자 버튼이며, 자동 실행 경로는 없다.
 import { invoke } from "@tauri-apps/api/core";
 import { createSignal } from "solid-js";
-import { backend } from "./backend/mock";
+import { backend, MAX_OPEN_WORKSPACES } from "./backend/mock";
+import { tf } from "./i18n";
 import { isTauri } from "./backend/pty";
 import { IS_MAC } from "./platform";
 import { settings } from "./backend/settings";
@@ -33,10 +34,11 @@ export type View =
 export type OverlayKind = "explorer" | "connect" | "roles" | "settings";
 const [overlay, setOverlayRaw] = createSignal<OverlayKind | undefined>(undefined);
 export { overlay };
-/** 지금 팝업이 닫히기를 거부하는가 — 임무 탐색기의 미저장 편집. 막을 때 안내는 건 쪽(ScreenOverlay)이 띄운다 */
-let overlayGuard: (() => boolean) | undefined;
+/** 지금 팝업이 닫히기를 거부하는가 — 역할 라이브러리의 미저장 편집(B225). 막을 때 묻는 창은 건 쪽이 띄운다.
+ *  next는 가려던 팝업(닫기면 undefined) — 확인 뒤 그리로 다시 가게 */
+let overlayGuard: ((next: OverlayKind | undefined) => boolean) | undefined;
 /** 팝업 닫기 거부 조건을 건다 — 돌려준 함수로 푼다(그사이 다른 팝업이 바꿔 걸었으면 그대로 둔다) */
-export function guardOverlay(g: () => boolean): () => void {
+export function guardOverlay(g: (next: OverlayKind | undefined) => boolean): () => void {
   overlayGuard = g;
   return () => {
     if (overlayGuard === g) overlayGuard = undefined;
@@ -46,7 +48,7 @@ export function guardOverlay(g: () => boolean): () => void {
  *  닫히기를 거부하면(미저장 편집) 그대로 두고 false — 예전엔 ESC만 막고 이동·✕는 편집을 버렸다 */
 export function setOverlay(k: OverlayKind | undefined): boolean {
   if (overlay() === k) return true;
-  if (overlay() && overlayGuard?.()) return false;
+  if (overlay() && overlayGuard?.(k)) return false;
   setOverlayRaw(k);
   return true;
 }
@@ -377,9 +379,17 @@ backend.subscribe(() => setTick((t) => t + 1));
 export function jumpToSession(workspaceId: string, sessionId: string): boolean {
   // 팝업이 미저장 편집으로 닫히기를 거부하면 데려가지 않는다 — 뒤에서만 이동하고 '본 것'만 찍히지 않게 (B72)
   if (!setOverlay(undefined)) return false;
+  backend.openWorkspace(workspaceId);
+  // 동시 열기 상한이면 openWorkspace는 열지 않고 돌아간다 — 탭 없는 화면으로 데려가지 않고 이유를 알린다 (B238).
+  // notify는 ui.tsx(이 파일을 가져다 쓴다)에 있어 순환을 피하려고 늦게 가져온다
+  const ws = backend.listWorkspaces().find((w) => w.id === workspaceId);
+  if (ws && !ws.open && !ws.pathMissing) {
+    const msg = tf("동시에 열 수 있는 워크스페이스는 {n}개입니다 — 하나를 닫고 다시 시도하세요", { n: MAX_OPEN_WORKSPACES });
+    void import("./components/ui").then((m) => m.notify(msg)).catch(() => {});
+    return false;
+  }
   setSelectedSession(sessionId);
   backend.markSeen(sessionId);
-  backend.openWorkspace(workspaceId);
   setView({ kind: "workspace", id: workspaceId });
   return true;
 }
@@ -387,7 +397,8 @@ export function jumpToSession(workspaceId: string, sessionId: string): boolean {
 /** 포커스로 잡기 요청 — 줌과 키보드 포커스는 컨트롤 센터의 몫이라(줌은 그 화면의 지역 상태다)
  *  여기서는 "이 세션을 잡아라"는 요청만 남기고 화면이 이펙트로 받는다. 같은 세션을 다시
  *  잡을 수 있어야 하므로 값이 아니라 매번 새 객체다. */
-export const [focusRequest, setFocusRequest] = createSignal<{ session: string } | undefined>(undefined);
+/** full = Focus(전체 화면 + 줌)로 들어간다. 없으면 선택·키보드만 (B234) */
+export const [focusRequest, setFocusRequest] = createSignal<{ session: string; full?: boolean } | undefined>(undefined);
 
 /** 대화 초안 요청 (0.6 §13-1) — 밖(동시 편집 경고)에서 '이 세션에게 ask'를 채워 대화 탭을 연다.
  *  보내지는 않는다 — 사람이 고치고 Enter를 누른다. 받은 대화 탭이 비운다 */
@@ -417,5 +428,5 @@ export function openSessionDetail(workspaceId: string, sessionId: string): boole
 export function focusSession(workspaceId: string, sessionId: string) {
   if (!jumpToSession(workspaceId, sessionId)) return;
   setTerminalFull(true);
-  setFocusRequest({ session: sessionId });
+  setFocusRequest({ session: sessionId, full: true });
 }

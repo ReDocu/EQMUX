@@ -8,6 +8,7 @@ vi.mock("../state", () => ({ jumpToSession: () => true, modalOpen: () => false, 
 import {
   CONFLICT_WINDOW_MS,
   mergeConflict,
+  mergeOutside,
   attentionOrder,
   attentionRank,
   urgentSenders,
@@ -116,6 +117,13 @@ describe("같은 파일 동시 편집 (§13-1 · C1)", () => {
     expect(l).toHaveLength(2);
     expect(mergeConflict(l, c("z.ts", ["x", "y"], 2000 + CONFLICT_WINDOW_MS + 1))).toHaveLength(1);
   });
+});
+
+test("담당 밖 편집 칩 — 세션마다 최신 하나, 10분 지난 것은 뺀다 (U120)", () => {
+  const o = (session: string, path: string, ts: number) => ({ workspace: "w", session, path, owns: ["docs/**"], ts });
+  const l = mergeOutside([o("kai", "a.ts", 0), o("rin", "b.ts", 500)], o("kai", "c.ts", 1000));
+  expect(l.map((x) => `${x.session}:${x.path}`)).toEqual(["kai:c.ts", "rin:b.ts"]);
+  expect(mergeOutside(l, o("noel", "d.ts", 600 + CONFLICT_WINDOW_MS))).toHaveLength(2);
 });
 
 test("긴급 에스컬레이션은 주의 맨 위 (W3 §4)", () => {

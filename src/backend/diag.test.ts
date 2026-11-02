@@ -120,8 +120,10 @@ describe("다른 도구 전역 지시 요약 (§14)", () => {
         { tool: "cmux", file: "~/.codex/AGENTS.md", kind: "sentence", count: 2 },
       ]),
     ).toEqual([
-      { tool: "wmux", files: ["~/.claude/CLAUDE.md", "~/.claude/settings.json"], hooks: 10 },
-      { tool: "cmux", files: ["~/.codex/AGENTS.md"], hooks: 0 },
+      { tool: "wmux", files: ["~/.claude/CLAUDE.md", "~/.claude/settings.json"], hooks: 10, directive: true },
+      { tool: "cmux", files: ["~/.codex/AGENTS.md"], hooks: 0, directive: true },
     ]);
+    // 훅만 있으면 '덮어 두었다'고 말하면 안 된다 (U128)
+    expect(foreignSummary([{ tool: "hx", file: "~/.claude/settings.json", kind: "hook", count: 3 }])[0].directive).toBe(false);
   });
 });

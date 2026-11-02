@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { guardWorsened, hunkPatch, hunkRange, pushRemote, refNameProblem, splitHunks, workGuard } from "./gitWrite";
+import { chunkPaths, guardWorsened, hunkPatch, hunkRange, pushArgs, pushRemote, refNameProblem, splitHunks, workGuard } from "./gitWrite";
 
 test("§4-1 작업 중 경고 — busy > waiting > 없음, 다른 워크스페이스 · 자기 워크트리 세션은 뺀다", () => {
   const s = (workspaceId: string, status: "busy" | "waiting" | "idle" | "starting" | "shell", wt = false, missing = false) => ({
@@ -85,4 +85,28 @@ test("업스트림 없는 push — 원격이 하나뿐이면 그 이름, 아니�
   expect(pushRemote(["upstream/main", "upstream/dev"])).toBe("upstream");
   expect(pushRemote(["origin/main", "fork/main"])).toBe("origin");
   expect(pushRemote(["fork/main", "gh/main"])).toBe("origin");
+});
+
+test("push 인자 — 업스트림 없으면 -u <원격> <브랜치>, 있으면 그냥 push (B180)", () => {
+  const refs = (upstream: string, remote: string[] = ["origin/main"]) => ({
+    local: [{ name: "feat", hash: "a", upstream, ahead: 0, behind: 0, gone: false, head: true }],
+    remote: remote.map((name) => ({ name, hash: "b" })),
+    tags: [],
+    stashes: [],
+    head: "a",
+  });
+  expect(pushArgs(refs(""))).toEqual(["push", "-u", "origin", "feat"]);
+  expect(pushArgs(refs("", ["fork/main"]))).toEqual(["push", "-u", "fork", "feat"]);
+  expect(pushArgs(refs("origin/feat"))).toEqual(["push"]);
+  expect(pushArgs(undefined)).toEqual(["push"]);
+});
+
+test("경로 묶음 — 명령 줄 상한 안쪽으로 나누고 순서 · 개수를 지킨다 (B179)", () => {
+  const paths = Array.from({ length: 900 }, (_, i) => `generated/components/very_long_folder_name/file_number_${i}_component.tsx`);
+  const chunks = chunkPaths(paths);
+  expect(chunks.length).toBeGreaterThan(5);
+  expect(chunks.flat()).toEqual(paths);
+  for (const c of chunks) expect(c.join(" ").length).toBeLessThan(8000);
+  expect(chunkPaths([])).toEqual([]);
+  expect(chunkPaths(["x".repeat(9000)])).toEqual([["x".repeat(9000)]]); // 혼자 넘는 경로도 한 묶음
 });

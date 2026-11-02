@@ -3,7 +3,7 @@
 // 고정 정책 항목은 클릭해도 바뀌지 않는 선언으로 남는다. Tauri 밖에서는 저장 없이 화면만 바뀐다.
 // 0.5 — 클릭마다 다음 값으로 넘어가던 버튼을 없앴다: 선택지 3개 이하는 세그먼트, 4개 이상은 드롭다운.
 // 0.5 시안(mT3kL·fvlW8) — 카테고리 탭 줄 + 카드. 행은 "이름·설명 | 컨트롤" 한 줄이다.
-import { For, Show } from "solid-js";
+import { createSignal, For, Show } from "solid-js";
 import {
   BUDGET_OPTIONS,
   DEFAULT_SETTINGS,
@@ -19,8 +19,8 @@ import { agentClis, agentClisReady, refreshAgentClis } from "../backend/agentpro
 import { isTauri } from "../backend/pty";
 import { openLink } from "../backend/browser";
 import { defaultShell, setDefaultShell, setSettingsCat, settingsCat, SHELLS } from "../state";
-import { t } from "../i18n";
-import { Segmented } from "../components/ui";
+import { t, tf } from "../i18n";
+import { ConfirmDialog, Segmented } from "../components/ui";
 import { Icon } from "../components/icons";
 import { WhereCard } from "../components/FirstRunNotice";
 import { IS_MAC } from "../platform";
@@ -29,7 +29,8 @@ type Wired = {
   k: string;
   d?: string; // 행 설명 (시안의 둘째 줄)
   labels: string[];
-  current: () => number;
+  /** s를 주면 그 설정에서 고를 칸 — [기본값 복원] 확인창이 '지금 → 기본값'을 셈한다 (B203) */
+  current: (s?: AppSettings) => number;
   apply: (idx: number) => void;
 };
 /** 고정 정책·사실 — 바뀌지 않는 값을 칩으로 보인다. tone은 시안의 칩 색 (green = 안전한 쪽으로 고정) */
@@ -102,67 +103,67 @@ const SECTIONS: Section[] = [
       {
         k: "언어",
         d: "화면 표시만 바뀝니다 — 코드·데이터의 한국어 원문과 직함 값은 그대로",
-        labels: ["한국어", "English"],
-        current: () => pick(LANGS, settings().language),
+        labels: ["한국어 (기본)", "English"],
+        current: (s = settings()) => pick(LANGS, s.language),
         apply: (i) => updateSettings({ language: LANGS[i] }),
       },
       {
         k: "테마",
         d: "디자인 토큰만 바꿉니다 — 터미널 페인은 항상 다크",
         labels: ["다크 (기본)", "라이트", "시스템 따름"],
-        current: () => pick(THEMES, settings().theme),
+        current: (s = settings()) => pick(THEMES, s.theme),
         apply: (i) => updateSettings({ theme: THEMES[i] }),
       },
       {
         k: "색 팔레트",
         d: "배경 명도·색온도만 바뀝니다 — 강조색은 팔레트 공통",
         labels: ["부드러움 (기본)", "고대비", "중성", "따뜻함"],
-        current: () => pick(PALS, settings().palette),
+        current: (s = settings()) => pick(PALS, s.palette),
         apply: (i) => updateSettings({ palette: PALS[i] }),
       },
       {
         k: "터미널 렌더러",
-        d: "WebGL이 빠르다 · 잔상이 보일 때만 DOM으로",
+        d: "WebGL이 빠릅니다 · 잔상이 보일 때만 DOM으로 바꿉니다",
         labels: ["WebGL (기본)", "DOM"],
-        current: () => pick(RENDERERS, settings().termRenderer),
+        current: (s = settings()) => pick(RENDERERS, s.termRenderer),
         apply: (i) => updateSettings({ termRenderer: RENDERERS[i] }),
       },
       {
         k: "시작 화면",
         d: "자동 실행 없이 화면 상태만 복원합니다",
-        labels: ["관제 대시보드", "마지막 워크스페이스"],
-        current: () => pick(START_VIEWS, settings().startView),
+        labels: ["관제 대시보드 (기본)", "마지막 워크스페이스"], // 줄마다 기본값 표시 (0.6 QA U149)
+        current: (s = settings()) => pick(START_VIEWS, s.startView),
         apply: (i) => updateSettings({ startView: START_VIEWS[i] }),
       },
       {
         k: "웹 페이지 열기",
         d: "누른 링크와 에이전트의 eqmux browser open이 열리는 곳 · Chrome이면 에이전트가 페이지를 조작하지 못합니다",
         labels: ["EQMUX 브라우저 (기본)", "Chrome"],
-        current: () => pick(WEB_OPEN, settings().webOpen),
+        current: (s = settings()) => pick(WEB_OPEN, s.webOpen),
         apply: (i) => updateSettings({ webOpen: WEB_OPEN[i] }),
       },
       {
         // W1 트레이 (§1-1 · §10) — Rust window_close_to_tray가 읽는다. 돌고 있는 세션이 없으면 어느 쪽이든 종료한다
         k: "창을 닫으면",
         d: IS_MAC
-          ? "Dock에 남기면 세션은 계속 돈다 · 끝내기는 앱 메뉴 [종료]"
-          : "트레이로 숨기면 세션은 계속 돈다 · 끝내기는 트레이 메뉴 [전부 종료]",
+          ? "Dock에 남겨도 세션이 계속 돕니다 · 끝내려면 ⌘Q 또는 메뉴 막대 아이콘의 [전부 종료]를 누릅니다"
+          : "트레이로 숨기면 세션이 계속 돕니다 · 끝내려면 트레이 메뉴의 [전부 종료]를 누릅니다",
         labels: [IS_MAC ? "Dock에 남기기 (기본)" : "트레이로 숨기기 (기본)", "앱 종료"],
-        current: () => pick(CLOSE_ACTIONS, settings().closeAction),
+        current: (s = settings()) => pick(CLOSE_ACTIONS, s.closeAction),
         apply: (i) => updateSettings({ closeAction: CLOSE_ACTIONS[i] }),
       },
       {
         k: "스크롤백 재생",
         d: "앱을 다시 켰을 때 페인에 다시 그리는 줄 수",
-        labels: ["250줄", "500줄", "1,000줄"],
-        current: () => pick(REPLAY, settings().scrollbackReplay),
+        labels: ["250줄", "500줄 (기본)", "1,000줄"],
+        current: (s = settings()) => pick(REPLAY, s.scrollbackReplay),
         apply: (i) => updateSettings({ scrollbackReplay: REPLAY[i] }),
       },
       {
         k: "슬롯 수",
         d: "워크스페이스당 세션 수의 상한 · 줄여도 이미 열린 세션은 닫지 않습니다",
         labels: ["4개 (기본)", "6개", "8개"],
-        current: () => pick(SLOTS, settings().maxSlots),
+        current: (s = settings()) => pick(SLOTS, s.maxSlots),
         apply: (i) => updateSettings({ maxSlots: SLOTS[i] }),
       },
     ],
@@ -184,7 +185,7 @@ const SECTIONS: Section[] = [
         k: "세션 상태 줄",
         d: "검증된 CLI와 관측 방식은 고정입니다 · 상태 줄 표시만 고릅니다",
         labels: ["모델 · 비용 (기본)", "모델만 — 비용 숨김", "숨김"],
-        current: () => pick(STATUSLINES, settings().statusLine),
+        current: (s = settings()) => pick(STATUSLINES, s.statusLine),
         apply: (i) => updateSettings({ statusLine: STATUSLINES[i] }),
       },
     ],
@@ -203,21 +204,21 @@ const SECTIONS: Section[] = [
         k: "하루 비용 예산",
         d: "모든 세션의 비용 합계 · 넘으면 하루에 한 번 알립니다 · 세션은 멈추지 않습니다",
         labels: ["끔 (기본)", "$5", "$10", "$20", "$50"],
-        current: () => pick(BUDGETS, settings().dailyBudgetUsd),
+        current: (s = settings()) => pick(BUDGETS, s.dailyBudgetUsd),
         apply: (i) => updateSettings({ dailyBudgetUsd: BUDGETS[i] }),
       },
       {
         k: "OS 알림",
         d: "사람의 행동이 필요한 상태만 알립니다 · 꺼도 인앱 미확인은 유지됩니다",
         labels: ["응답 대기 · 종료", "응답 대기만", "꺼짐"],
-        current: () => pick(NOTI, settings().notifications),
+        current: (s = settings()) => pick(NOTI, s.notifications),
         apply: (i) => updateSettings({ notifications: NOTI[i] }),
       },
       {
         k: "완료 OS 알림",
         d: "완료 보고는 에이전트가 끝났다고 밝힌 것입니다 · 턴 완료는 하루 수십 번이라 기본으로 끕니다 · 앱 안의 칩은 설정과 관계없이 뜹니다",
         labels: ["완료 보고만 (기본)", "턴 끝날 때마다", "끔"],
-        current: () => pick(DONE_NOTI, settings().doneNotifications),
+        current: (s = settings()) => pick(DONE_NOTI, s.doneNotifications),
         apply: (i) => updateSettings({ doneNotifications: DONE_NOTI[i] }),
       },
       {
@@ -225,7 +226,7 @@ const SECTIONS: Section[] = [
         k: "손으로 띄운 에이전트 메시지",
         d: "기본 터미널에서 직접 실행한 claude·codex에 온 메시지 · 자동이어도 쉬는 중일 때만 넣고, 승인 대기·상태 모름이면 쌓아 벨에 남깁니다",
         labels: ["쌓아 두기 (기본)", "쉬면 자동으로 넣기"],
-        current: () => pick(MANUAL_DELIVERY, settings().manualDelivery),
+        current: (s = settings()) => pick(MANUAL_DELIVERY, s.manualDelivery),
         apply: (i) => updateSettings({ manualDelivery: MANUAL_DELIVERY[i] }),
       },
       {
@@ -233,14 +234,14 @@ const SECTIONS: Section[] = [
         k: "응답 대기 알림 소리",
         d: "승인·입력 대기가 되면 소리를 냅니다 · 창을 보고 있으면 내지 않습니다",
         labels: ["꺼짐 (기본)", "켜짐"],
-        current: () => (settings().waitingSound ? 1 : 0),
+        current: (s = settings()) => (s.waitingSound ? 1 : 0),
         apply: (i) => updateSettings({ waitingSound: i === 1 }),
       },
       {
         k: "메모리 배너",
-        d: "세션 메모리가 넘으면 배너로 알린다 — 소프트 경고만",
+        d: "세션 메모리가 넘으면 배너로 알립니다 — 소프트 경고만 냅니다",
         labels: ["꺼짐 (기본)", "세션 2 GB↑", "세션 4 GB↑", "세션 8 GB↑"],
-        current: () => pick(MEM_BANNER, settings().memBannerMb),
+        current: (s = settings()) => pick(MEM_BANNER, s.memBannerMb),
         apply: (i) => updateSettings({ memBannerMb: MEM_BANNER[i] }),
       },
     ],
@@ -256,17 +257,17 @@ const SECTIONS: Section[] = [
     wired: [
       {
         k: "SGR 색 저장",
-        d: "스크롤백에 색 시퀀스를 남긴다 · 끄면 용량 절감",
+        d: "스크롤백에 색 시퀀스를 남깁니다 · 끄면 용량을 아낍니다",
         labels: ["켜짐 (기본)", "꺼짐"],
-        current: () => (settings().sgrStore ? 0 : 1),
+        current: (s = settings()) => (s.sgrStore ? 0 : 1),
         apply: (i) => updateSettings({ sgrStore: i === 0 }),
       },
       {
         // 0.6 E4 (W6) — 끄는 동작은 Rust(W1)가 이 키를 읽는다
         k: "스크롤백 · 세션 로그 저장",
-        d: "스크롤백과 세션 로그 파일에는 토큰·비밀번호가 평문으로 남을 수 있습니다. 끄면 디스크에 쓰지 않습니다(재시작 뒤 이전 출력을 다시 볼 수 없습니다).",
+        d: "스크롤백과 세션 로그 파일에는 토큰·비밀번호가 평문으로 남을 수 있습니다. 끄면 디스크에 쓰지 않습니다 — 꺼 둔 동안은 eqmux read · 로그 검색 · 과거 세션 검색에 새 출력이 남지 않고, 재시작 뒤 이전 출력도 다시 볼 수 없습니다.",
         labels: ["켜짐 (기본)", "꺼짐"],
-        current: () => (settings().scrollbackPersist ? 0 : 1),
+        current: (s = settings()) => (s.scrollbackPersist ? 0 : 1),
         apply: (i) => updateSettings({ scrollbackPersist: i === 0 }),
       },
     ],
@@ -294,7 +295,7 @@ const SECTIONS: Section[] = [
     cat: "security",
     title: "보안",
     fixed: [
-      { k: "권한 우회", d: "bypass를 쓰지 않는다 — 승인은 사람이 터미널 페인에서", label: "항상 끔" },
+      { k: "권한 우회", d: "bypass를 쓰지 않습니다 — 승인은 사람이 합니다(터미널 페인 또는 관제 승인함)", label: "항상 끔" },
       {
         k: "외부 열기",
         d: "http/https만 엽니다 · 원격 주소의 토큰은 화면·툴팁·링크 어디에도 나오지 않습니다",
@@ -309,8 +310,9 @@ const SECTIONS: Section[] = [
       { k: "이벤트 방송 범위", d: "PTY 출력·메시지·상태 이벤트는 main 창에만", label: "main", tone: "green" },
       { k: "권한 원천", label: "역할 파일 frontmatter" },
       { k: "권한 변경", label: "재개 기반 재시작" },
-      { k: "~/.claude/settings", label: "수정 안 함" },
-      { k: "repo .claude / CLAUDE.md", label: "수정 안 함 (읽기만)" },
+      // 확장 탭은 사람이 누르면 쓴다 (0.6 QA U116 · 결정 X1) — 첫 실행 고지와 같은 말
+      { k: "~/.claude/settings", d: "확장 탭에서 사람이 누른 플러그인 · 스킬 변경만 씁니다", label: "스스로 고치지 않음" },
+      { k: "repo .claude / CLAUDE.md", d: "확장 탭에서 사람이 누른 스킬 · settings.local.json 변경만 씁니다", label: "스스로 고치지 않음" },
     ],
   },
   {
@@ -328,6 +330,7 @@ const SECTIONS: Section[] = [
           { k: "⌘⇧B", label: "사이드 패널 토글 (마지막 탭)" },
           { k: "⌘⇧K", label: "건너뛰기 팔레트 — 세션 · 워크스페이스 · 임무 · 화면 · 패널" },
           { k: "⌘F", label: "터미널 검색" },
+          { k: "⌘F · ⌘S · Tab", label: "파일 편집기 안 — 찾기 · 저장 · 들여쓰기 (Esc 다음 Tab은 포커스 이동)" },
           { k: "⌘C / ⌘V", label: "복사 · 붙여넣기 (이미지는 파일 경로로)" },
           { k: "⌘K", label: "터미널 화면 · 스크롤백 비우기" },
           { k: "Ctrl+C · F · V", label: "셸로 그대로 — 인터럽트 · 커서 이동 · 글자 그대로 넣기" },
@@ -347,6 +350,7 @@ const SECTIONS: Section[] = [
           { k: "Ctrl+Shift+B", label: "사이드 패널 토글 (마지막 탭)" },
           { k: "Ctrl+Shift+K", label: "건너뛰기 팔레트 — 세션 · 워크스페이스 · 임무 · 화면 · 패널" },
           { k: "Ctrl+F", label: "터미널 검색" },
+          { k: "Ctrl+F · Ctrl+S · Tab", label: "파일 편집기 안 — 찾기 · 저장 · 들여쓰기 (Esc 다음 Tab은 포커스 이동)" },
           { k: "Ctrl+Shift+C / V", label: "복사 · 붙여넣기" },
           { k: "Ctrl+C · Ctrl+V", label: "선택이 있으면 복사 · 붙여넣기 (앱)" },
           { k: "Esc", label: "맨 위 창·팝업·메뉴 하나만 닫기 · 입력칸에서는 칸 빠져나오기" },
@@ -399,8 +403,15 @@ export function Settings() {
   // 조용히 지우지 않는다 (B53). 첫 실행 고지를 봤다는 표시도 같다 — 복원이 고지를 다시 띄우지 않게
   const visible = (x: AppSettings) => JSON.stringify({ ...x, muted: [], firstRunSeen: false });
   const isDefault = () => visible(settings()) === visible(DEFAULT_SETTINGS);
-  const restoreDefaults = () =>
-    updateSettings({ ...DEFAULT_SETTINGS, muted: settings().muted, firstRunSeen: settings().firstRunSeen });
+  const resetTo = (): AppSettings => ({ ...DEFAULT_SETTINGS, muted: settings().muted, firstRunSeen: settings().firstRunSeen });
+  // 복원은 확인을 거친다 (B203) — 언어·슬롯 수·예산·창 닫기까지 한 번에 바뀌었다. 바뀌는 행만 '지금 → 기본값'으로 보인다
+  const [askReset, setAskReset] = createSignal(false);
+  const resetLines = () => {
+    const next = resetTo();
+    return SECTIONS.flatMap((sec) => sec.wired ?? [])
+      .filter((it) => it.current() !== it.current(next))
+      .map((it) => `${t(it.k)}: ${t(it.labels[it.current()])} → ${t(it.labels[it.current(next)])}`);
+  };
   // 카테고리는 앱 셸 상태다 — 벨의 [알림 설정]이 알림 탭을 지정해 연다 (U34)
   const cat = () => settingsCat() as Cat;
   const setCat = (c: Cat) => setSettingsCat(c);
@@ -414,11 +425,25 @@ export function Settings() {
         </div>
         <div style={{ display: "flex", gap: "8px", "align-items": "center" }}>
           <span class="set-chip">{t("바뀔 때마다 저장")}</span>
-          <button class="btn" disabled={isDefault()} onClick={restoreDefaults}>
+          <button class="btn" disabled={isDefault()} onClick={() => setAskReset(true)}>
             {t("기본값 복원")}
           </button>
         </div>
       </div>
+      <Show when={askReset()}>
+        <ConfirmDialog
+          danger
+          title={t("설정을 기본값으로 되돌릴까요?")}
+          body={tf("아래 {n}개 값이 기본값으로 바뀝니다. 앱 안에서는 되돌릴 수 없습니다.", { n: resetLines().length })}
+          info={resetLines()}
+          confirmLabel={t("기본값 복원")}
+          onConfirm={() => {
+            setAskReset(false);
+            updateSettings(resetTo());
+          }}
+          onCancel={() => setAskReset(false)}
+        />
+      </Show>
       {/* 저장 실패 (B54) — 화면 값과 파일이 갈라진 상태를 숨기지 않는다 */}
       <Show when={settingsSaveError()}>
         <div class="card inset" style={{ margin: "0 0 8px", padding: "8px 10px", "font-size": "11px" }}>

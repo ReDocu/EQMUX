@@ -116,7 +116,7 @@ export function App() {
       e.preventDefault();
       setDiagMark("진단 기록 중…");
       void diagSnapshot("USER-MARK 화면 손상 신고").then(() => {
-        setDiagMark("진단에 기록했습니다 — .eqmux/logs/diagnostics.log");
+        setDiagMark("진단에 기록했습니다 — ~/.eqmux/logs/diagnostics.log"); // 저장소의 .eqmux/가 아니다 (U127)
         setTimeout(() => setDiagMark(undefined), 2600);
       });
     };

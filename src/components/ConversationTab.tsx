@@ -17,9 +17,11 @@ import {
   projectLabels,
   sendConversation,
   senderLabel,
+  titlePrefix,
   touchesMission,
 } from "../backend/conversation";
 import { backend } from "../backend/mock";
+import { canRespondInline } from "../backend/agent";
 import { isTauri, revealPath } from "../backend/pty";
 import { t, tf } from "../i18n";
 import { draftRequest, focusSession, jumpToSession, scopeWorkspace, setDraftRequest, setView, tick, view } from "../state";
@@ -163,7 +165,18 @@ export function ConversationTab() {
   // 이름에 공백이 있을 수 있으므로("H[역사강사] 힐데") 공백 없는 토큰으로 끊지 않고, 실제 후보
   // 이름들에 대한 최장 일치로 끊는다 — 토큰으로 끊으면 그런 팀원에게는 어떤 방법으로도 1:1
   // 메시지를 보낼 수 없다. 이름 없는 기본 터미널 여럿이면 첫 번째가 잡힌다 (구분은 FR-E-36).
-  const mentionMatch = (rest: string): { id: string; len: number } | undefined =>
+  // 이름이 먼저, 없으면 직함 (U121 — CLI resolve_in과 같은 순서). 같은 직함이 둘이면 ambiguous로 고르게 한다
+  const mentionMatch = (rest: string): { id: string; len: number } | { ambiguous: string } | undefined => {
+    const byName = nameMatch(rest);
+    if (byName) return byName;
+    const hits = wsSessions()
+      .map((s) => ({ id: s.id, len: titlePrefix(rest, effectiveTitle(s, personaOf(s))) }))
+      .filter((h) => h.len > 0)
+      .sort((a, b) => b.len - a.len);
+    if (hits.length > 1 && hits[1].len === hits[0].len) return { ambiguous: rest.slice(0, hits[0].len) };
+    return hits[0];
+  };
+  const nameMatch = (rest: string): { id: string; len: number } | undefined =>
     [
       ...wsSessions().flatMap((s) => [
         { key: nameOf(s), id: s.id },
@@ -282,6 +295,10 @@ export function ConversationTab() {
           setError(tf("수신자 없음: @{name} — 이 워크스페이스의 페르소나·세션 이름으로 지정하세요", { name: rest.split(/\s/)[0] }));
           return;
         }
+        if ("ambiguous" in hit) {
+          setError(tf("@{title} 직함인 팀원이 여럿입니다 — 이름으로 지정하세요", { title: hit.ambiguous }));
+          return;
+        }
         to = hit.id;
         text = rest.slice(hit.len).trim();
       }
@@ -293,7 +310,7 @@ export function ConversationTab() {
     }
     // 다른 프로젝트 세션이면 그 프로젝트 원장으로 보낸다 — 받는 쪽 대화 탭에 프로젝트 배지와 함께 남는다
     const target = to === "@all" ? w.id : (sessionOf(to)?.workspaceId ?? w.id);
-    setError(await sendConversation(target, to, selType(), text));
+    setError(await sendConversation(target, to, selType(), text, w.id));
     if (!error()) setDraft("");
   };
 
@@ -374,6 +391,12 @@ export function ConversationTab() {
       <Show when={waitingNow().length > 0}>
         <div class="card inset conv-waiting">
           <span class="muted">{t("응답 대기 — 대화로는 답할 수 없습니다. 페인에서 직접 입력하세요")}</span>
+          {/* 도구 승인은 관제 승인함이 [허용]·[거부]로 받는다 (U158) — 질문 · 계획은 페인에서만 */}
+          <Show when={waitingNow().some(canRespondInline)}>
+            <button class="btn ghost btn-sm" onClick={() => setView({ kind: "control" })}>
+              {t("도구 승인은 관제 승인함에서도 답할 수 있습니다 →")}
+            </button>
+          </Show>
           <div class="conv-waiting-row">
             <For each={waitingNow()}>
               {(s) => (
@@ -630,7 +653,7 @@ export function ConversationTab() {
                     label: t("본문 복사"),
                     action: () =>
                       void (navigator.clipboard?.writeText(m.body) ?? Promise.reject()).then(
-                        () => notify(t("복사됨")),
+                        () => notify(t("복사됨"), "ok"),
                         () => notify(t("복사하지 못했습니다")),
                       ),
                   },
@@ -665,7 +688,7 @@ function ForwardDialog(props: { m: ConversationMessage; from?: string; onClose: 
   const [err, setErr] = createSignal<string | null>(null);
   const body = () => `[${t("전달")} · ${senderLabel(props.m.from, wsId())}] ${props.m.body}`;
   const send = async () => {
-    const e = await sendConversation(wsId(), to(), props.m.type, body());
+    const e = await sendConversation(wsId(), to(), props.m.type, body(), props.from);
     if (e) setErr(e);
     else props.onClose();
   };

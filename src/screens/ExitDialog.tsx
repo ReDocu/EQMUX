@@ -32,6 +32,9 @@ export function ExitDialog() {
   const persona = (id: string) => backend.listPersonas().find((p) => p.id === id);
   const ws = (id: string) => backend.listWorkspaces().find((w) => w.id === id);
   const agents = () => running().filter((s) => AGENT_UP.has(s.status)).length;
+  // 셋으로 나눈다 (0.6 QA B228) — 셸만 연 역할 세션(리드 등)이 '기본 터미널'로 세어졌다
+  const terminals = () => running().filter((s) => !s.personaId && !AGENT_UP.has(s.status)).length;
+  const roleShells = () => running().length - agents() - terminals();
   const total = () => running().length + servers().length;
 
   const [phase, setPhase] = createSignal<ShutdownPhase | undefined>(undefined);
@@ -68,10 +71,11 @@ export function ExitDialog() {
             <div class="exit-sub">
               {total() === 0
                 ? t("실행 중인 세션이 없습니다 — 바로 종료합니다.")
-                : tf("실행 중 {n} — 에이전트 {a} · 기본 터미널 {d} · 서버 {s}. 자동 재개하지 않습니다.", {
+                : tf("실행 중 {n} — 에이전트 {a} · 셸만 연 역할 세션 {r} · 기본 터미널 {d} · 서버 {s}. 자동 재개하지 않습니다.", {
                     n: total(),
                     a: agents(),
-                    d: running().length - agents(),
+                    r: roleShells(),
+                    d: terminals(),
                     s: servers().length,
                   })}
             </div>
@@ -105,7 +109,7 @@ export function ExitDialog() {
                         fallback={
                           <Chip
                             tone={s.resumable ? "blue" : "info"}
-                            text={s.resumable ? t("재개 가능") : `${t("재개 불가")} · ${t(s.resumeReason ?? "transcript 없음")}`}
+                            text={s.resumable ? t("재개 가능") : `${t("재개 불가")} · ${t(s.resumeReason ?? "대화 기록 없음")}`}
                           />
                         }
                       >

@@ -4,7 +4,7 @@ import { markdownHtml } from "./markdownHtml";
 describe("markdownHtml", () => {
   it("블록·인라인 구문을 태그로 바꾼다", () => {
     const html = markdownHtml("# T\n\n> q\n> r\n\n- a **b**\n- [x] done\n\n3. x\n\n```ts\nlet a = 1;\n```\n\n| h |\n|---|\n| c |\n\n---\n");
-    expect(html).toContain("<h1> T</h1>");
+    expect(html).toContain('<h1 id="t"> T</h1>');
     expect(html).toContain("<blockquote><p>q\n r</p></blockquote>");
     expect(html).toContain("<ul><li><p>a <strong>b</strong></p></li><li><input type=\"checkbox\" disabled checked> done</li></ul>");
     expect(html).toContain('<ol start="3"><li><p>x</p></li></ol>');
@@ -20,5 +20,14 @@ describe("markdownHtml", () => {
     expect(html).toContain('<a href="">a</a>');
     expect(html).toContain('<a href="http://x">b</a>');
     expect(html).toContain("<del>d</del> &amp; *");
+  });
+
+  it("제목에 앵커 id를 달고, 상대 경로 그림은 파일 링크로 남긴다 (B242)", () => {
+    const html = markdownHtml("## 설치 방법!\n\n## 설치 방법\n\nSetext\n---\n\n![shot](docs/a.png) ![w](https://x/a.png)");
+    expect(html).toContain('<h2 id="설치-방법"> 설치 방법!</h2>');
+    expect(html).toContain('<h2 id="설치-방법-1">');
+    expect(html).toContain('<h2 id="setext">');
+    expect(html).toContain('<a href="docs/a.png" class="md-img">🖼 shot</a>');
+    expect(html).toContain('<img alt="w" src="https://x/a.png">');
   });
 });

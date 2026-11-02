@@ -87,9 +87,13 @@ export interface McpRow {
   approval: "approved" | "pending" | "disabled";
 }
 
-export async function mcpScan(wsPath?: string): Promise<McpRow[]> {
-  if (!isTauri()) return [];
-  return invoke<McpRow[]>("mcp_scan", { wsPath: wsPath ?? null }).catch(() => []);
+/** errors — 있는데 못 읽은 설정 파일("경로: 사유"). 화면이 '없음'과 갈라 보인다 (B218) */
+export async function mcpScan(wsPath?: string): Promise<{ rows: McpRow[]; errors: string[] }> {
+  if (!isTauri()) return { rows: [], errors: [] };
+  return invoke<{ rows: McpRow[]; errors: string[] }>("mcp_scan", { wsPath: wsPath ?? null }).catch((e) => ({
+    rows: [],
+    errors: [String(e)],
+  }));
 }
 
 export type McpHealth = "ok" | "fail" | "pending" | "auth" | "unknown";
@@ -124,7 +128,8 @@ export function mcpCheck(wsPath?: string): Promise<string> {
   return enginePlugin("claude", ["mcp", "list"], wsPath);
 }
 
-/** 서버 탭 입력줄에 채울 명령 — 앱이 실행하지 않는다(Enter는 사람이) */
+/** 서버 탭 입력줄에 채울 명령 — 앱이 실행하지 않는다(Enter는 사람이).
+ *  add의 <이름> · <명령>은 고치지 않고 Enter를 치면 셸이 리디렉션 문법 오류로 막는다 — 아무것도 실행되지 않는다 */
 export const mcpCommand = {
   add: (scope: "local" | "user") => `claude mcp add --scope ${scope} <이름> -- <명령>`,
   remove: (name: string, scope: string) => `claude mcp remove --scope ${scope} ${quoteArg(name)}`,

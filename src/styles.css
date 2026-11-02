@@ -839,4 +839,22 @@ input[type="checkbox"]:focus-visible,
     -webkit-appearance: auto;
     background-image: none;
   }
+  /* 세그먼트 · 칩의 선택 항목은 배경 · 테두리 색으로만 달랐다 — 대비 테마가 그 색을 덮어 무엇을 골랐는지 사라진다 (U118).
+     시스템 강조색으로 칠한다 */
+  .eq-seg-it.on,
+  .conv-chip.on {
+    forced-color-adjust: none;
+    background: Highlight;
+    color: HighlightText;
+    border-color: Highlight;
+  }
+  /* 켬/끔 점도 초록 · 회색뿐이었다 — 끔은 속 빈 원, 켬은 꽉 찬 원 */
+  .extp-dot {
+    forced-color-adjust: none;
+    background: Canvas;
+    border: 1px solid CanvasText;
+  }
+  .extp-dot.on {
+    background: CanvasText;
+  }
 }

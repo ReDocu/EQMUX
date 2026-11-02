@@ -129,6 +129,7 @@ pub struct GitRefs {
     pub remote: Vec<NamedRef>,
     pub tags: Vec<NamedRef>,
     pub stashes: Vec<NamedRef>, // name = `stash@{0}: 메시지`
+    pub head: String,           // HEAD 커밋 해시 — 분리 HEAD도 · 빈 저장소면 "" (B175 전후 비교)
 }
 
 /// `ahead 2, behind 4` · `ahead 1` · `gone` → (ahead, behind, gone)
@@ -189,7 +190,8 @@ pub fn refs(ws_path: &str) -> Result<GitRefs, String> {
             Some(NamedRef { name: name.into(), hash: hash.into() })
         })
         .collect();
-    Ok(GitRefs { local, remote, tags, stashes })
+    let head = git(&["rev-parse", "--verify", "-q", "HEAD"], ws_path).map(|h| h.trim().to_string()).unwrap_or_default();
+    Ok(GitRefs { local, remote, tags, stashes, head })
 }
 
 #[derive(Serialize, Debug)]
@@ -253,8 +255,9 @@ fn parse_blame(out: &str) -> Vec<BlameLine> {
             info.entry(cur.clone()).or_default().0 = a.into();
         } else if let Some(t) = line.strip_prefix("author-time ") {
             info.entry(cur.clone()).or_default().1 = t.parse().unwrap_or(0);
-        } else if line.len() >= 40 && line[..40].chars().all(|c| c.is_ascii_hexdigit()) {
-            cur = line[..40].to_string();
+        } else if let Some(h) = line.get(..40).filter(|h| h.bytes().all(|c| c.is_ascii_hexdigit())) {
+            // get — 40바이트째가 한글 글자 가운데면 None (바이트 자르기는 panic, B170)
+            cur = h.to_string();
         }
     }
     rows
@@ -338,7 +341,8 @@ pub fn status(ws_path: &str) -> Result<WorkStatus, String> {
 /// 한 파일의 unified diff 원문 — 프런트가 덩어리로 나눠 [스테이지]용 패치를 만든다
 pub fn file_patch(ws_path: &str, file: &str, staged: bool) -> Result<String, String> {
     need_repo(ws_path)?;
-    let mut args = vec!["diff", "--no-color", "--no-ext-diff"];
+    // 접두 · textconv를 고정한다 (B189) — 전역 `diff.noprefix=true`면 머리가 `--- h.txt`라 apply -p1이 거부한다
+    let mut args = vec!["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/"];
     if staged {
         args.push("--cached");
     }
@@ -381,8 +385,9 @@ const ALLOWED: &[Spec] = &[
     // 스테이지 내리기만 — `--staged` 없는 restore는 작업 트리 변경을 지운다
     Spec { sub: "restore", flags: &["--staged"], valued: &[], paths: true, required: Some("--staged") },
     Spec { sub: "commit", flags: &["--amend", "--no-edit"], valued: &["-m"], paths: false, required: None },
-    // --detach — 커밋 메뉴의 [체크아웃]. 만들기(-c) · 강제(-f · --discard-changes)는 없다
-    Spec { sub: "switch", flags: &["--detach"], valued: &[], paths: false, required: None },
+    // --detach — 커밋 메뉴의 [체크아웃]. --track — 원격 브랜치를 따라가는 로컬 브랜치를 만들고 전환 (P61).
+    // 이름 붙여 만들기(-c) · 강제(-f · --discard-changes)는 없다
+    Spec { sub: "switch", flags: &["--detach", "--track"], valued: &[], paths: false, required: None },
     // 첫 커밋 전 저장소의 스테이지 내리기 — HEAD가 없어 restore --staged가 안 된다. 인덱스에서만 뺀다
     Spec { sub: "rm", flags: &["--cached", "-q"], valued: &[], paths: true, required: Some("--cached") },
     // ── 3단계: 이력 조작. 확인창 · §4-1 경고는 화면이 맡는다. 편집기는 env GIT_EDITOR=true가 막는다 ──
@@ -396,7 +401,8 @@ const ALLOWED: &[Spec] = &[
     // --hard는 화면이 사라질 것과 되돌릴 해시를 보이고 두 번 묻는다 (§17-4). --keep · --merge · 경로는 없다
     Spec { sub: "reset", flags: &["--soft", "--mixed", "--hard"], valued: &[], paths: false, required: None },
     // -D(병합 안 된 브랜치 삭제)는 화면이 -d 실패 뒤 확인창을 거쳐서만 보낸다
-    Spec { sub: "branch", flags: &["-m", "-d", "-D"], valued: &[], paths: false, required: None },
+    // -u <업스트림> — 로컬 브랜치 메뉴 [업스트림 설정] (P61)
+    Spec { sub: "branch", flags: &["-m", "-d", "-D"], valued: &["-u"], paths: false, required: None },
     Spec { sub: "tag", flags: &["-a", "-d"], valued: &["-m"], paths: false, required: None },
 ];
 
@@ -947,6 +953,8 @@ mod tests {
             &["reset", "--soft", "abc1234"],
             &["switch", "--detach", "abc1234"],
             &["rm", "--cached", "-q", "--", "a.txt"],
+            &["switch", "--track", "origin/feat"],
+            &["branch", "-u", "origin/feat", "feat"],
         ] {
             assert!(check_args(&s(good)).is_ok(), "받아야 한다: {good:?} — {:?}", check_args(&s(good)));
         }
@@ -1008,6 +1016,7 @@ mod tests {
         run_ok(&["add", "--", "a.txt"]);
         run_ok(&["commit", "-m", "base"]);
         let base = git(&["rev-parse", "HEAD"], &path).unwrap();
+        assert_eq!(refs(&path).unwrap().head, base.trim()); // B175 — 전후 비교는 이 해시로
         run_ok(&["branch", "feat"]);
         fs::write(dir.join("a.txt"), "main side\n").unwrap();
         run_ok(&["add", "--", "a.txt"]);
@@ -1064,5 +1073,37 @@ mod tests {
         let b = parse_blame(&out);
         assert_eq!(b.len(), 2);
         assert_eq!((b[1].author.as_str(), b[1].time, b[1].text.as_str()), ("kim", 100, "two"));
+    }
+
+    #[test]
+    fn hunk_patch_ignores_noprefix_config() {
+        // B189 — 전역 diff.noprefix=true여도 덩어리 패치는 a/ · b/ 머리라 apply --cached가 받는다
+        let (dir, path) = temp_repo("noprefix");
+        fs::write(dir.join("h.txt"), "1
+").unwrap();
+        git(&["add", "--", "h.txt"], &path).unwrap();
+        git(&["commit", "-m", "base"], &path).unwrap();
+        git(&["config", "diff.noprefix", "true"], &path).unwrap();
+        fs::write(dir.join("h.txt"), "1
+2
+").unwrap();
+        let p = file_patch(&path, "h.txt", false).unwrap();
+        assert!(p.contains("--- a/h.txt") && p.contains("+++ b/h.txt"), "{p}");
+        let r = apply_patch(&path, &p, false).unwrap();
+        assert!(r.ok, "{}", r.output);
+        assert!(file_patch(&path, "h.txt", true).unwrap().contains("+2"));
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn blame_korean_summary_does_not_panic() {
+        let h = "b".repeat(40);
+        // "summary " 8바이트 + 한글 3바이트씩 — 40바이트째가 글자 가운데에 걸린다
+        let summary = "summary 한글커밋메시지가길면블레임이죽는다고합니다";
+        assert!(summary.len() > 40 && !summary.is_char_boundary(40));
+        let out = format!("{h} 1 1 1\nauthor 김\nauthor-time 7\n{summary}\nfilename f\n\t한 줄\n");
+        let b = parse_blame(&out);
+        assert_eq!(b.len(), 1);
+        assert_eq!((b[0].hash.as_str(), b[0].author.as_str(), b[0].text.as_str()), ("bbbbbbbb", "김", "한 줄"));
     }
 }

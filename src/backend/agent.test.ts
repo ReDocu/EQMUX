@@ -3,7 +3,7 @@
 // 화면 반영과 인박스 배출이 이 판정 하나를 공유한다 — 갈리면 버려진 idle로 인박스가 배출돼
 // 이미 busy로 넘어간 세션에 주입이 끼어든다 (P-2).
 import { describe, expect, test } from "vitest";
-import { canRespondInline, staleSeq, stillWaitingFor } from "./agent";
+import { APPROVAL_WAIT_MS, approvalExpired, canRespondInline, staleSeq, stillWaitingFor } from "./agent";
 
 describe("staleSeq", () => {
   test("순번이 앞으로 가면 받고, 뒤로 가면 버린다", () => {
@@ -36,6 +36,14 @@ describe("승인함 (§13-4 · C2)", () => {
     expect(canRespondInline({ status: "waiting", pendingTool: bash })).toBe(true);
     expect(canRespondInline({ status: "waiting", pendingTool: { ...bash, kind: "question" } })).toBe(false);
     expect(canRespondInline({ status: "busy", pendingTool: bash })).toBe(false);
+  });
+  test("Codex · 시한(570초)이 지난 대기는 버튼을 내지 않는다 (B212)", () => {
+    expect(canRespondInline({ status: "waiting", pendingTool: bash, cli: "codex" })).toBe(false);
+    expect(canRespondInline({ status: "waiting", pendingTool: bash, sinceMs: APPROVAL_WAIT_MS - 1 })).toBe(true);
+    expect(canRespondInline({ status: "waiting", pendingTool: bash, sinceMs: APPROVAL_WAIT_MS })).toBe(false);
+    expect(approvalExpired({ status: "waiting", pendingTool: bash, sinceMs: APPROVAL_WAIT_MS })).toBe(true);
+    expect(approvalExpired({ status: "waiting", pendingTool: bash, sinceMs: 1000 })).toBe(false);
+    expect(approvalExpired({ status: "waiting", pendingTool: bash, cli: "codex", sinceMs: APPROVAL_WAIT_MS })).toBe(false);
   });
   test("누르기 직전 — 같은 도구·원문으로 아직 기다릴 때만 넣는다", () => {
     expect(stillWaitingFor({ status: "waiting", pendingTool: bash }, bash)).toBe(true);

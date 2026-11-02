@@ -123,8 +123,8 @@ export const dict: Record<string, string> = {
   "단계 — 단계마다 독립 프로필(성향·말투·성격). 전환해 각각 편집하고, 활성 단계만 주입됩니다 (저장 시 적용)":
     "Level — each level keeps an independent profile (style · tone · personality). Switch to edit each; only the active level is injected (applied on save)",
   "이름 (세션 이름과 분리 가능)": "Name (can differ from the session name)",
-  "색 — 직무 팔레트와 정렬 (점 글자 = 직무 앞글자) · UI 표시 전용":
-    "Color — aligned with the job palette (dot letter = job initial) · display only",
+  "색 — 직무 팔레트와 정렬 (점 글자 = 직무) · UI 표시 전용":
+    "Color — aligned with the job palette (dot letter = job) · display only",
   색: "color",
   기획: "Planning",
   개발: "Dev",
@@ -207,7 +207,7 @@ export const dict: Record<string, string> = {
   "→ 계속": "→ Continue",
   "← 워크스페이스 열기": "← Open workspace",
   "역할 팀": "Role team",
-  "셸만 엽니다. 에이전트는 필요할 때 직접 띄웁니다. 이름은 워크스페이스명XX(EQMUX01…)로 붙고, 만들 때 바꿀 수 있습니다.": "Opens shells only. You start agents yourself when needed. Names are workspace-name + XX (EQMUX01…), and you can change them when creating.",
+  "셸만 엽니다. 에이전트는 필요할 때 직접 띄웁니다. 이름은 워크스페이스명XX({name}01…)로 붙고, 만들 때 바꿀 수 있습니다.": "Opens shells only. You start agents yourself when needed. Names are workspace-name + XX ({name}01…), and you can change them when creating.",
   "세션 이름 · 번호가 헤더와 레일에 붙습니다": "Session name · number shown in the header and rail",
   "손으로 띄운 claude에는 메시지를 쌓아 둡니다 (넣기 칩) · 설정에서 '쉬면 자동으로 넣기'로 바꿀 수 있습니다": "Messages to a claude you started by hand are held (Insert chip) · switch to 'insert automatically when resting' in Settings",
   "역할 팀은 나중에 팀 캐스팅으로 더할 수 있습니다": "Add a role team later with team casting",
@@ -216,7 +216,7 @@ export const dict: Record<string, string> = {
   "직함으로 맡는 영역을 나눕니다 (클라이언트 · 서버 개발자)": "Titles split areas of ownership (client · server developer)",
   "완료 신호 · 넘김 회신 · 워크스페이스 간 통신": "Done signals · handoff replies · messaging across workspaces",
   "프리셋: {list}": "Presets: {list}",
-  "다음 → 팀 캐스팅 → 팀 편성 → 관제": "Next → team casting → team composition → control",
+  "다음 → 팀 캐스팅 → 팀 편성 → 워크스페이스": "Next → team casting → team composition → workspace",
   "헤더 예": "Header",
   카이: "Kai",
   // ── 0.5 W2 시안 적용 — TeamCasting (cjWtF) ──
@@ -299,4 +299,14 @@ export const dict: Record<string, string> = {
   '예: - 빌드 실패 보고 → "어디가 막혔는지 같이 봅시다."': 'e.g. - Build failure report → "Where did it get stuck? Let us look together."',
   "프롬프트마다 캐릭터 한 줄을 다시 싣습니다 — 턴당 수십 토큰. Claude Code만 (Codex는 나가지 않음)":
     "Re-adds one character line on every prompt — a few dozen tokens per turn. Claude Code only (not sent to Codex)",
+  // ── 0.6 QA eqmux-88 ──
+  수정됨: "edited",
+  "{ws}에서 활동 중": "Active in {ws}",
+  쓰기: "Write",
+  커밋: "Commit",
+  푸시: "Push",
+  "워크스페이스로 →": "To workspace →",
+  초상: "Portrait",
+  "앱 데이터 personas 폴더에 {id}.png를 두면 이름 첫 글자 대신 그 그림을 씁니다 (4MB까지)":
+    "Put {id}.png in the app-data personas folder to use it instead of the name initial (up to 4 MB)",
 };

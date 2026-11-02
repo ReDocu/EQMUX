@@ -4,11 +4,12 @@ import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-j
 import { rankItems } from "../backend/jump";
 import type { JumpItem, JumpKind } from "../backend/jump";
 import { backend } from "../backend/mock";
-import { t } from "../i18n";
+import { t, tf } from "../i18n";
+import { setMissionToOpen } from "../screens/Missions";
 import { isSubmitEnter } from "../platform";
 import { openPanel, pushLayer, scopeWorkspace, setOverlay, setSettingsCat, setView, tick, view, jumpToSession } from "../state";
 import type { PanelTab } from "../state";
-import { sessionName } from "../types";
+import { sessionName, statusText } from "../types";
 import { stepIndex } from "./keynav";
 
 const [open, setOpen] = createSignal(false);
@@ -20,7 +21,7 @@ export const jumpOpen = open;
 const PANEL_TABS: [PanelTab, string][] = [
   ["conversation", "대화"],
   ["logs", "로그"],
-  ["git", "git"],
+  ["git", "git 패널"], // 화면 전환의 git과 이름이 같아 두 줄이 나란히 보였다 (P87)
   ["files", "파일"],
   ["mdview", "문서"],
   ["server", "서버"],
@@ -50,27 +51,31 @@ function buildItems(): JumpItem[] {
     const ws = wsName(s.workspaceId);
     if (!ws) continue;
     const p = personas.find((x) => x.id === s.personaId);
-    items.push({ id: `s:${s.id}`, kind: "session", label: sessionName(s, p), sub: [ws, p?.title].filter(Boolean).join(" · "), run: () => void jumpToSession(s.workspaceId, s.id) });
+    // 상태를 함께 적는다 (P87) — 종료된 세션으로 건너뛰는 것을 미리 안다
+    items.push({ id: `s:${s.id}`, kind: "session", label: sessionName(s, p), sub: [ws, p?.title, statusText(s.status)].filter(Boolean).join(" · "), run: () => void jumpToSession(s.workspaceId, s.id) });
   }
   for (const w of wss) items.push({ id: `w:${w.id}`, kind: "workspace", label: w.name, sub: w.path, run: () => void setView({ kind: "workspace", id: w.id }) });
   const back = view();
   // git · 기록 · 임무는 워크스페이스 문맥이 있어야 쓸 것이 있다 — 하나도 안 열었으면 빼서 빈 화면으로 보내지 않는다
-  const screens: [string, () => void][] = [
+  // 워크스페이스 화면은 하위 줄에 어느 워크스페이스로 가는지 적는다 (P87) — 관제에서 열면 마지막 워크스페이스다
+  const target = scope ? tf("{ws}에서", { ws: scope.name }) : undefined;
+  const screens: [string, () => void, string?][] = [
     ["관제", () => void setView({ kind: "control" })],
     ...(scope
       ? ([
-          ["git", () => void setView({ kind: "git", wsId: scope.id, back })],
-          ["과거 세션 검색", () => void setView({ kind: "history", wsId: scope.id, back })],
-          ["임무", () => void setOverlay("explorer")],
-        ] as [string, () => void][])
+          ["git", () => void setView({ kind: "git", wsId: scope.id, back }), target],
+          ["과거 세션 검색", () => void setView({ kind: "history", wsId: scope.id, back }), target],
+          ["임무", () => void setOverlay("explorer"), target],
+        ] as [string, () => void, string?][])
       : []),
     ["설정", () => void setOverlay("settings")],
     ["역할 라이브러리", () => void setOverlay("roles")],
     ["단축키", () => (setSettingsCat("keys"), void setOverlay("settings"))],
   ];
-  for (const [label, run] of screens) items.push({ id: `v:${label}`, kind: "screen", label: t(label), run });
+  for (const [label, run, sub] of screens) items.push({ id: `v:${label}`, kind: "screen", label: t(label), sub, run });
   for (const [tab, label] of PANEL_TABS) items.push({ id: `p:${tab}`, kind: "panel", label: t(label), run: () => openPanel(tab) });
-  // 임무는 그 워크스페이스로 가서 임무 팝업을 연다 — 특정 임무를 골라 여는 것은 아직 없다
+  // 임무는 그 워크스페이스로 가서 임무 팝업을 열고 그 임무를 고른다 (B221 — 전에는 첫 임무가 열렸다).
+  // 상태는 임무 화면과 같은 원값(todo · in-progress …)으로 둔다
   for (const m of backend.listMissions()) {
     const ws = wsName(m.workspaceId);
     if (!ws) continue;
@@ -79,7 +84,11 @@ function buildItems(): JumpItem[] {
       kind: "mission",
       label: m.name,
       sub: `${ws} · ${m.status}`,
-      run: () => (setView({ kind: "workspace", id: m.workspaceId }), void setOverlay("explorer")),
+      run: () => {
+        setMissionToOpen({ wsId: m.workspaceId, id: m.id });
+        setView({ kind: "workspace", id: m.workspaceId });
+        setOverlay("explorer");
+      },
     });
   }
   return items;
@@ -100,7 +109,10 @@ function Palette() {
   };
   const pick = (it: JumpItem | undefined) => {
     if (!it) return;
-    close();
+    // 화면 · 세션 · 임무로 가는 항목은 도착한 자리가 포커스를 갖는다 (B245) — 연 자리(패널 탭 버튼 등)로
+    // 돌려 두면 키보드로 연 검색 화면에 친 글자가 아무 데도 들어가지 않았다. 패널 탭만 연 자리로 돌린다
+    setOpen(false);
+    if (it.kind === "panel" && opener?.isConnected) opener.focus();
     it.run();
   };
   onMount(() => {

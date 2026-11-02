@@ -3,7 +3,8 @@
 // 허용 목록(gitx.rs check_args)으로 한 번 더 거른다. 에이전트 · 메시지 · 자동 규칙은 부르지 않는다.
 import { invoke } from "@tauri-apps/api/core";
 import { createSignal } from "solid-js";
-import { t } from "../i18n";
+import { t, tf } from "../i18n";
+import { sendConversation } from "./conversation";
 import { MOCK_WORKTREES } from "./mock";
 import { isTauri } from "./pty";
 
@@ -203,11 +204,34 @@ export interface GitRefs {
   remote: NamedRef[];
   tags: NamedRef[];
   stashes: NamedRef[];
+  head: string; // HEAD 커밋 해시 — 분리 HEAD도 · 빈 저장소면 ""
 }
 
 export async function gitRefs(wsPath: string): Promise<GitRefs | undefined> {
   if (!isTauri()) return undefined;
   return invoke<GitRefs>("git_refs", { wsPath }).catch(() => undefined);
+}
+
+/** HEAD 표시 겸 비교 값 — `main 1a2b3c4d` · 분리 HEAD면 해시만 · 빈 저장소면 "".
+ *  해시까지 본다: 같은 브랜치의 pull · merge · reset · stash pop은 이름이 그대로다 (B175) */
+export function headMark(r: GitRefs | undefined): string {
+  if (!r?.head) return "";
+  const b = r.local.find((x) => x.head)?.name;
+  return b ? `${b} ${r.head.slice(0, 8)}` : r.head.slice(0, 8);
+}
+
+export const NOTIFY_KEY = "eqmux.git.notifyAgents"; // 바뀐 뒤 에이전트 알림 (§17-3) — 기본 꺼짐, 메시지 한 건만큼 토큰이 든다
+
+/** 바뀐 뒤 알림 (§17-3) — 켜 두었고 op 전후로 HEAD가 달라졌을 때만, 그 폴더의 에이전트 전부에게 한 건.
+ *  git 화면 guarded · 사이드 패널 pull이 같이 쓴다 */
+export async function withHeadNotice<T>(wsId: string, wsPath: string, op: () => Promise<T>): Promise<T> {
+  if (localStorage.getItem(NOTIFY_KEY) !== "1") return op();
+  const before = headMark(await gitRefs(wsPath));
+  const r = await op();
+  const after = headMark(await gitRefs(wsPath));
+  if (after && after !== before)
+    void sendConversation(wsId, "@all", "report", tf("브랜치·HEAD가 {a} → {b}로 바뀌었습니다. 작업 중인 파일을 다시 읽으세요.", { a: before || "—", b: after }));
+  return r;
 }
 
 export interface CommitDetail {
@@ -283,9 +307,30 @@ export interface RunLogEntry extends RunResult {
 const [runLog, setRunLog] = createSignal<RunLogEntry[]>([]);
 export { runLog };
 
+/** 실패 원인 줄 (B177) — git은 첫 줄에 진행 머리말(To · From · On branch)을 찍는다. 원인 줄을 먼저 찾는다 */
+function causeLine(output: string): string {
+  const lines = output.split("\n").map((l) => l.trim()).filter(Boolean);
+  return lines.find((l) => /^(error|fatal):|^! \[|^CONFLICT\b/.test(l)) ?? lines[0] ?? "";
+}
+
+/** 실패 알림 문구 (B177 · U125) — 흔한 경우는 할 일을 앞에 붙이고, 원인 줄은 사전을 한 번 거친다(없으면 원문) */
+export function failText(output: string): string {
+  const cause = t(causeLine(output)) || t("실패");
+  const hint = /\[rejected\].*\((fetch first|non-fast-forward)\)/.test(output)
+    ? "원격에 새 커밋이 있습니다 — Pull 하세요"
+    : /Not possible to fast-forward/.test(output)
+      ? "원격과 갈라졌습니다 — Pull ▾에서 merge 또는 rebase를 고르세요"
+      : /is now empty/.test(output)
+        ? "이 커밋의 변경이 이미 있습니다 — 배너의 [건너뛰기]로 넘어가세요"
+        : /^CONFLICT\b/m.test(output)
+          ? "충돌이 났습니다 — 배너에서 [충돌 보기]를 고르세요"
+          : undefined;
+  return hint ? `${t(hint)} (${cause})` : cause;
+}
+
 function record(wsId: string, r: RunResult): RunResult {
   setRunLog((l) => [{ ...r, ts: Date.now(), wsId }, ...l].slice(0, 200));
-  const head = r.output.split("\n").find((x) => x.trim()) ?? "";
+  const head = r.ok ? (r.output.split("\n").find((x) => x.trim()) ?? "") : causeLine(r.output);
   void invoke("events_log", {
     workspace: wsId,
     session: null,

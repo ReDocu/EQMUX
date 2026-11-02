@@ -60,7 +60,6 @@ export const dict: Record<string, string> = {
   "같은 이름": "Same name",
   "같은 이름이 다른 위치에도 있습니다 — 어느 쪽이 쓰이는지는 엔진이 정합니다":
     "The same name exists elsewhere — the engine decides which one is used",
-  "실행 중인 세션은 재시작해야 반영될 수 있습니다": "Running sessions may need a restart to pick this up",
   // MCP
   "마지막 점검 {time}": "Last checked {time}",
   "점검 전 — 설정 파일에서 읽은 목록입니다": "Not checked yet — list read from config files",
@@ -69,10 +68,31 @@ export const dict: Record<string, string> = {
   "점검하지 못했습니다 — {err}": "Could not check — {err}",
   "추가 명령 채우기": "Fill add command",
   "제거 명령 채우기": "Fill remove command",
-  "서버 탭에서 터미널을 먼저 여세요": "Open the terminal in the Server tab first",
+  "서버 탭 터미널 입력줄에 채웁니다 — <이름> · <명령>을 고친 뒤 Enter를 누르세요":
+    "Fills the Server tab prompt — replace <이름> and <명령>, then press Enter",
+  "MCP 설정을 읽지 못했습니다 — {err}": "Couldn't read the MCP config — {err}",
+  // 접근 가능한 이름 (U131)
+  "켜짐": "On",
+  "꺼짐": "Off",
+  "{id} 상세": "{id} details",
+  "연결됨": "Connected",
+  "승인 필요": "Needs approval",
+  "인증 필요": "Needs sign-in",
+  "알 수 없음": "Unknown",
+  "점검 전": "Not checked",
   "설정된 MCP 서버가 없습니다": "No MCP servers configured",
   "값은 읽지 않습니다 — 키 이름만": "Values are not read — key names only",
   "승인 대기 — 페인에서 /mcp": "Pending approval — run /mcp in the pane",
   "이 프로젝트에서 거부됨": "Rejected for this project",
   "점검에서만 보임 — 플러그인 · 커넥터": "Seen only in the check — plugin or connector",
+  // 0.6 QA eqmux-17: Rust(extensions.rs · fsx.rs) 오류 원문 — 확장 탭이 t(String(e))로 푼다 (B195)
+  "지원하지 않는 엔진입니다": "Unsupported engine",
+  "자동 동의(-y)는 쓰지 않습니다 — 선언된 명령은 화면에서 보고 동의합니다": "Auto-confirm (-y) isn't used. Review the declared command on screen and agree there",
+  "60초 안에 끝나지 않아 멈췄습니다": "Stopped because it didn't finish within 60 seconds",
+  "스킬을 만들 곳이 없습니다": "There's nowhere to create the skill",
+  "같은 이름의 스킬이 이미 있습니다": "A skill with this name already exists",
+  "스킬 폴더 이름이 아닙니다": "Not a skill folder name",
+  "복사할 곳이 없습니다": "There's nowhere to copy to",
+  "스킬이 아닙니다 (SKILL.md 없음)": "Not a skill (no SKILL.md)",
+  "파일이 밖에서 바뀌었습니다 — 편집을 취소하고 다시 열어 확인하세요": "The file changed outside the app. Cancel your edit and reopen it to check",
 };

@@ -869,10 +869,18 @@
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 0 14px;
+  padding: 0 12px;
   font-size: 11px;
   font-weight: 700;
   color: var(--eq-muted);
+  /* 영어 라벨이 440px을 넘친다 (B223) — 탭이 줄고 글자는 말줄임, 제어 버튼은 제자리 */
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.panel-tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .panel-tab:hover {
   color: var(--eq-text);
@@ -898,6 +906,7 @@
 }
 .panel-tab-ctl {
   margin-left: auto;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -1758,7 +1767,7 @@
 }
 .gitp-sum {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr); /* U165 — 합계 · 더한 · 고친 · 지운 */
   gap: 8px;
 }
 .gitp-sum-tile {
@@ -1912,36 +1921,6 @@
   color: var(--eq-text);
   background: var(--eq-blue-soft);
   border-color: var(--eq-blue);
-}
-.logsp-metrics {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
-}
-.logsp-metric {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 8px 10px;
-  background: var(--eq-surface-2);
-  border: 1px solid var(--eq-line);
-  border-radius: var(--eq-r-sm);
-}
-.logsp-metric-k {
-  font-size: 10px;
-  font-weight: 700;
-  color: var(--eq-muted);
-}
-.logsp-metric.warn .logsp-metric-v {
-  color: var(--eq-amber);
-}
-.logsp-metric.error .logsp-metric-v {
-  color: var(--eq-red);
-}
-.logsp-metric-v {
-  font-size: 19px;
-  font-weight: 800;
-  color: var(--eq-text);
 }
 .logsp-list {
   flex: 1;
@@ -3217,6 +3196,9 @@
 .terminal-statusbar {
   display: flex;
   align-items: center;
+  /* 좁은 창 · 영어에서 [기록 비우기] · [이벤트]가 잘렸다 (U143) — 넘치면 줄을 바꾸고 작업 폴더가 먼저 준다 */
+  flex-wrap: wrap;
+  row-gap: 4px;
   gap: 16px;
   margin-top: 8px;
   padding: 6px 12px;
@@ -3225,6 +3207,14 @@
   font-size: 10px;
   white-space: nowrap;
   position: relative;
+}
+.terminal-statusbar .sb-cwd {
+  margin-left: auto;
+  flex: 1 1 120px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: right;
 }
 .terminal-statusbar .sb-ev {
   color: var(--eq-muted);
@@ -3603,7 +3593,20 @@ button.eq-chip-tx,
   max-width: 55%;
 }
 .pane-head > :last-child {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 좁은 페인(165px쯤)에서 이름이 먼저 사라졌다 (U144) — 이름은 몇 글자를 지키고 상태 글자가 같이 준다 */
+.pane-head-id {
+  min-width: min(7em, 45%);
+}
+@container (max-width: 240px) {
+  .pane-head .eq-chip {
+    max-width: 35%;
+  }
 }
 @container (max-width: 400px) {
   .pane-head .eq-id-ti {
@@ -4579,6 +4582,15 @@ button.eq-chip-tx,
   font-size: 9px;
   font-weight: 800;
 }
+/* 성공 토스트 (B184) — 실패와 갈리게 초록 선 + ✓ */
+.eq-toast.ok {
+  border-color: var(--eq-green);
+}
+.eq-toast.ok::before {
+  content: "✓";
+  border-color: var(--eq-green);
+  color: var(--eq-green);
+}
 /* ConfirmDialog (xHaqq) */
 .eq-confirm {
   padding: 20px;
@@ -5464,17 +5476,6 @@ button.eq-chip-tx,
   align-items: center;
   gap: 8px;
 }
-.cast-save {
-  padding: 3px 8px;
-  font-size: 10px;
-  color: var(--eq-muted);
-  background: var(--eq-surface-2);
-  border: 1px solid var(--eq-line);
-  cursor: pointer;
-}
-.cast-save:hover {
-  color: var(--eq-text);
-}
 .cast-save.saved {
   color: var(--eq-green);
 }
@@ -6299,6 +6300,10 @@ button.eq-chip-tx,
   .dash-side {
     position: static;
   }
+  /* 한 열로 접히면 기다리는 행이 카드 전부 아래에 묻혔다 (P76) — 기다리는 것이 있을 때만 위로 */
+  .dash-side.urgent {
+    order: -1;
+  }
 }
 @container (max-width: 480px) {
   .ws-cells {
@@ -6479,7 +6484,7 @@ label.inbox-pop-row {
 .env-file-actions { margin-left: auto; display: flex; gap: 4px; }
 .env-row .k { display: flex; align-items: center; gap: 6px; cursor: copy; }
 .env-row .v { flex: 1; cursor: copy; }
-.env-row-actions { display: flex; gap: 2px; flex-shrink: 0; opacity: 0.5; }
+.env-row-actions { display: flex; gap: 2px; flex-shrink: 0; opacity: 0.75; } /* U162 — 0.5는 대비가 낮다 */
 .env-row:hover .env-row-actions, .env-row-actions:focus-within { opacity: 1; }
 .env-edit { display: flex; gap: 4px; padding: 4px 0; }
 .env-edit input { flex: 1; min-width: 0; font-size: 12px; }
@@ -7430,4 +7435,66 @@ label.inbox-pop-row {
 .launch-footer-actions {
   flex-shrink: 0;
   margin-left: auto;
+}
+
+/* 0.6 QA eqmux-dd: U150 — 실행 방식 카드 높이를 맞추고 도착지 · 헤더 예를 카드 바닥에 붙인다 */
+.launch-body .launch-choices {
+  align-items: stretch;
+}
+.launch-body .launch-choice {
+  height: 100%;
+}
+.launch-body .launch-choice .launch-route {
+  margin-top: auto;
+}
+
+/* 0.6 QA eqmux-dd: U148 — 좁은 카드에서 설명 칸이 90px로 눌려 낱말이 세로로 쌓였다. 180px 밑이면 컨트롤을 다음 줄로 */
+.settings-layout .set-row {
+  flex-wrap: wrap;
+}
+.settings-layout .set-row > .set-copy {
+  min-width: 180px;
+}
+.settings-layout .set-row > :last-child {
+  margin-left: auto;
+}
+
+/* 0.6 QA eqmux-88: P64 — 빠른 시작의 claude 설치 블록은 바닥 막대 한 줄을 다 쓴다 */
+.launch-footer .engine-missing {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+/* 0.6 QA eqmux-52: B224 — 브라우저 패널의 네이티브 웹뷰는 늘 맨 위라 아래 가운데 토스트를 가린다.
+   웹뷰가 보이는 동안 토스트를 패널 반대편 아래로 옮긴다 (BrowserPanelTab이 body[data-browser-side]를 단다) */
+body[data-browser-side="right"] #eq-toasts {
+  left: 24px;
+  transform: none;
+  align-items: flex-start;
+}
+body[data-browser-side="left"] #eq-toasts {
+  left: auto;
+  right: 24px;
+  transform: none;
+  align-items: flex-end;
+}
+
+/* 0.6 QA eqmux-d7: U134 — 좁은 폭(사이드 패널을 연 임무 검토)에서 diff 머리 줄이 한 글자씩 세로로 쪼개지지 않게.
+   왼쪽 제목 · 안내문은 말줄임, 오른쪽 버튼 · '변경 n/m'은 줄이지 않고 넘치면 다음 줄로 */
+.gde-toolbar > div:first-child {
+  flex: 1 1 0;
+  min-width: 0;
+}
+.gde-toolbar > div:first-child > div {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.gde-toolbar-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.gde-toolbar-actions > * {
+  flex-shrink: 0;
+  white-space: nowrap;
 }

@@ -235,12 +235,14 @@ export async function diagBundle(): Promise<string> {
 }
 
 /** 도구별로 묶은 요약 — 알림 한 줄 · 고지 화면이 같이 쓴다. 순수 함수 */
-export function foreignSummary(list: readonly ForeignFinding[]): { tool: string; files: string[]; hooks: number }[] {
-  const by = new Map<string, { tool: string; files: string[]; hooks: number }>();
+/** directive — 구역 · 문장(세션 안내문으로 덮을 수 있는 것)을 찾았나. 훅만이면 false다 (U128) */
+export function foreignSummary(list: readonly ForeignFinding[]): { tool: string; files: string[]; hooks: number; directive: boolean }[] {
+  const by = new Map<string, { tool: string; files: string[]; hooks: number; directive: boolean }>();
   for (const f of list) {
-    const g = by.get(f.tool) ?? { tool: f.tool, files: [], hooks: 0 };
+    const g = by.get(f.tool) ?? { tool: f.tool, files: [], hooks: 0, directive: false };
     if (!g.files.includes(f.file)) g.files.push(f.file);
     if (f.kind === "hook") g.hooks += f.count;
+    else g.directive = true;
     by.set(f.tool, g);
   }
   return [...by.values()];

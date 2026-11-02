@@ -22,19 +22,20 @@ export const dict: Record<string, string> = {
     "Focus — grabs the longest-waiting pane fullscreen. The answer is typed in the terminal",
   "응답 대기": "Awaiting answer",
   "ESC 종료": "ESC to exit",
+  "ESC는 에이전트로 · 나가기는 [전체 화면 종료]": "ESC goes to the agent · leave with [Exit fullscreen]",
   "이 자리에서 재개 — --resume · 대화 복원":
     "Resume in place — --resume · restores the conversation",
   "재개 — 대화 복원": "Resume — restore conversation",
 
   // ── 상태바 ──
   "세션이 쓰는 메모리": "Memory used by sessions",
-  "SessionService 이벤트 · 저장 상태": "SessionService events · storage status",
+  "이벤트 · 저장 상태": "Events · storage status",
   이벤트: "Events",
   "(실측)": "(live)",
   "(목)": "(mock)",
   "저장 (실측)": "Storage (live)",
   "저장 (목)": "Storage (mock)",
-  "100ms 배치 · 30일/1,000줄 보존": "100ms batches · 30-day/1,000-line retention",
+  "30일 · 세션당 1,000줄 보존": "Kept 30 days · 1,000 lines per session",
 
   // ── 저장 기록 초기화 (FR-C-52) ──
   "기록 비우기": "Clear history",
@@ -63,7 +64,7 @@ export const dict: Record<string, string> = {
   // ── 워크스페이스·슬롯 한도 ──
   "동시에 열 수 있는 워크스페이스는 {n}개입니다 — 하나를 닫고 다시 시도하세요":
     "You can keep {n} workspaces open at once — close one and try again",
-  "빈 슬롯에 세션 추가 — 클로드코드 · 코덱스 · 기본 터미널":
+  "빈 슬롯에 세션 추가 — Claude Code · Codex · 기본 터미널":
     "Add a session to an empty slot — Claude Code · Codex · default terminal",
   // ── 에이전트 기동 ──
   "에이전트 기동": "Start agent",
@@ -110,8 +111,6 @@ export const dict: Record<string, string> = {
   "의존성(node_modules 등)은 워크트리마다 별도입니다. 제거 시 워크트리는 남습니다 — 머지·정리는 사람이 합니다":
     "Dependencies (node_modules etc.) are separate per worktree. The worktree remains on removal — merging and cleanup are up to you",
   "역할 세션 제거": "Remove role session",
-  "제거하면 팀 편성의 이 슬롯이 비워지고 임무 배정이 해제되며 PTY 프로세스가 종료됩니다. 변경은 다음 캐스팅 저장 때 .eqmux/team.json에 반영됩니다.":
-    "Removing empties this slot in the team composition, unassigns its missions, and terminates the PTY process. The change is written to .eqmux/team.json on the next casting save.",
   "세션 제거": "Remove session",
 
   // ── 설정 > CLI 에이전트 ──
@@ -160,6 +159,18 @@ export const dict: Record<string, string> = {
   "턴 개요": "Turn outline",
   "대화 로그": "Conversation log",
   "{name}에게 입력 보내기": "Send input to {name}",
+  // 터미널에 앱이 찍는 경계 줄 (U154)
+  "브랜치 부여 → {cwd}": "Branch assigned → {cwd}",
+  "이전 세션 스크롤백 · 마지막 {n}줄 재생": "Previous session scrollback · replaying last {n} lines",
+  "웹뷰 재시작 — 실행 중인 세션에 재부착": "Webview restarted — reattached to the running session",
+  "새 세션 시작": "New session started",
+  "제거하면 프로세스가 끝나고 임무 배정이 풀립니다. 슬롯은 .eqmux/team.json(팀이 같이 쓰는 파일)에서 바로 빠집니다. 이 세션의 대화는 다시 재개할 수 없습니다 — 같은 사람으로 다시 만들면 새 대화로 시작합니다.":
+    "Removing ends the process and unassigns its missions. The slot leaves .eqmux/team.json (a file the team shares) right away. This session's conversation can't be resumed again; recreating the same person starts a new conversation.",
+  "제거 — 대화 기록 잃음": "Remove — lose the conversation",
+  "재개하지 못했습니다 — {err}": "Couldn't resume — {err}",
+  "에이전트를 띄우지 못했습니다 — {err}": "Couldn't start the agent — {err}",
+  "세션 시작 실패 — {err}": "Session failed to start — {err}",
+  "승인 · 질문을 기다리는 중입니다 — 터미널에서 읽고 답하세요": "Waiting on an approval or question — read and answer it in the terminal",
   전송: "Send",
 
   // ── 0.5 W3 · 확인창·페인 헤더·주의 칩·세션 이름 ──
@@ -169,6 +180,7 @@ export const dict: Record<string, string> = {
   "{name} 제거": "Remove {name}",
   "셸 프로세스가 종료되고 이 페인의 화면이 닫힙니다. 되돌릴 수 없습니다.": "The shell process ends and this pane closes. This can't be undone.",
   "메시지 {n}건": "{n} messages",
+  "메시지 1건": "1 message",
   "손으로 띄운 에이전트라 자동으로 넣지 않습니다": "Started by hand, so messages aren't typed in automatically",
   "넣기": "Insert",
   "✓ 턴 끝남 · 보고 전": "✓ Turn ended · no report yet",
@@ -223,6 +235,7 @@ export const dict: Record<string, string> = {
   "비워 두면 {name}": "Empty = {name}",
   "24자 이내 · 공백·@·줄바꿈 불가 · 만들 때 한 번 정해져 폴더 이름이 바뀌어도 그대로": "Up to 24 characters · no spaces, @ or line breaks · set once at creation, kept even if the folder is renamed",
   "{name}에 쌓인 메시지 {n}건": "{n} messages queued for {name}",
+  "{name}에 쌓인 메시지 1건": "1 message queued for {name}",
   "승인 창이 떠 있으면 먼저 답하세요. 넣기는 본문과 Enter를 그대로 보냅니다.": "If an approval prompt is open, answer it first. Insert types the text and Enter as-is.",
   "{n}건 넣기": "Insert {n}",
   "{name}에게 보고 요청": "Ask {name} for a report",
@@ -263,9 +276,10 @@ export const dict: Record<string, string> = {
   "엔진 1종": "1 ENGINE",
   "엔진 {n}종": "{n} ENGINES",
   "터미널 {n}개 실행 중": "{n} terminals running",
+  "터미널 1개 실행 중": "1 terminal running",
   "출력 {k}K": "OUTPUT {k}K",
   "저장 {kb} KB · {n}줄": "WAL {kb} KB · {n} lines",
-  "저장 —": "WAL —",
+  "저장 기록 없음": "No saved history",
   "메모리 {mb} MB": "MEM {mb} MB",
   "세션 {n}/{max} · 터미널 집중": "{n}/{max} SESSIONS · TERMINAL FOCUS",
 
@@ -293,9 +307,10 @@ export const dict: Record<string, string> = {
   "질문에 답 대기 — 페인에서 고릅니다": "Waiting for an answer to a question. Choose in the pane",
   "계획 승인 대기 — 페인에서 고릅니다": "Waiting for plan approval. Choose in the pane",
   // ── 0.6 W7: 멈춤 배지 · 자리 비운 사이 요약 (A5 · §13-5) ──
-  "멈춤 · 한동안 출력 없음": "Stalled · no output for a while",
-  멈춤: "Stalled",
-  "일하는 중인데 한동안 훅·출력이 없습니다 — 페인을 확인하세요": "Busy, but no hooks or output for a while. Check the pane",
+  "멈춤? · 10분째 훅 없음": "Stalled? · no hooks for 10 min",
+  "멈춤?": "Stalled?",
+  "훅이 10분째 없습니다 — 출력이 흐르는 긴 명령이면 그대로 두세요. 멈췄으면 터미널에서 Ctrl+C나 [중지]":
+    "No hooks for 10 minutes. If a long command is still printing, leave it. If it's stuck, press Ctrl+C in the terminal or [Stop]",
   "자리 비운 사이 · {ago}부터 · 세션 {n}개가 바뀌었습니다": "While you were away · since {ago} · {n} sessions changed",
   "받은 메시지 {n}": "{n} received",
   "보낸 메시지 {n}": "{n} sent",
@@ -329,4 +344,18 @@ export const dict: Record<string, string> = {
   긴급: "Urgent",
   "{name}이(가) 담당 밖 {path}를 편집": "{name} edited {path} outside its ownership",
   "담당: {owns}": "Owns: {owns}",
+  // 0.6 QA eqmux-17: 승인함 · 상태 이름 (U122 · U157 · U158 · B212 · B237)
+  "열린 워크스페이스 {m} · 주의 정렬: {order}": "{m} open workspaces · attention order: {order}",
+  "도구 승인": "tool approval",
+  "질문 — 페인에서 고릅니다": "question. Choose in the pane",
+  "계획 승인 — 페인에서 고릅니다": "plan approval. Choose in the pane",
+  "승인함 · 모든 워크스페이스": "Approvals · all workspaces",
+  "응답을 기다리는 세션": "Sessions waiting for you",
+  "열린 워크스페이스의 종료된 세션": "Ended sessions in open workspaces",
+  "앱이 기다리는 시간이 지났습니다 — 페인에서 답하세요": "The app stopped waiting for this one. Answer in the pane",
+  "승인을 전하지 못했습니다 — 페인에서 답하세요": "Couldn't deliver the answer. Answer in the pane",
+  "도구 승인은 승인함에서 · 질문 · 계획은 페인에서": "Tool approvals in the approvals list · questions and plans in the pane",
+  // 0.6 QA eqmux-17: 빠진 원문 (B195) · 진단 복사 실패 (B197)
+  "열린 창을 먼저 닫으세요": "Close the open window first",
+  "진단 정보를 클립보드에 넣지 못했습니다 — 다시 눌러 주세요": "Couldn't put the diagnostic info on the clipboard. Try again",
 };

@@ -48,7 +48,7 @@ export async function setCrossProject(id: string, on: boolean): Promise<void> {
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
-function toWorkspace(w: WsInfo): Workspace {
+export function toWorkspace(w: WsInfo): Workspace {
   const t = w.entry.last_used ? new Date(w.entry.last_used) : undefined;
   return {
     id: w.entry.id,
@@ -63,6 +63,7 @@ function toWorkspace(w: WsInfo): Workspace {
         : `${w.entry.branch ?? "(브랜치 없음)"} · 실측`,
     open: false,
     pathMissing: !w.exists || !w.is_repo,
+    notRepo: w.exists && !w.is_repo, // 폴더는 있다 — 재지정만이 아니라 git init도 권한다 (0.6 QA P80)
     teamFile: ".eqmux/team.json",
     lastUsed: t
       ? `${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())} ${pad(t.getHours())}:${pad(t.getMinutes())}`

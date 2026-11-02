@@ -197,7 +197,8 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
     setActionErr(undefined);
     if (isTauri() && s().personaId) {
       const p = effPerms();
-      if (!p) return;
+      // 말없이 멈추지 않는다 — 관제 우클릭 재개와 같은 문구 (B232)
+      if (!p) return setActionErr(t("직무 권한을 찾을 수 없습니다 — 역할을 다시 지정하세요"));
       const size = sessionTermSize(s().id);
       try {
         await resumeAgent(
@@ -224,9 +225,11 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
     const fresh = engineSwitched(s()); // restartAgent가 spawnCli를 새 엔진으로 덮기 전에 읽는다 (B82)
     if (isTauri() && s().personaId) {
       const p = effPerms();
+      // 권한이 없으면 재시작하지 않았다 — '재시작됨'으로 상태를 바꾸지 않는다 (B232)
+      if (!p) return setActionErr(t("직무 권한을 찾을 수 없습니다 — 역할을 다시 지정하세요"));
       const size = sessionTermSize(s().id);
       try {
-        if (p) await restartAgent(s().id, p, size.cols, size.rows, cliOf(s()));
+        await restartAgent(s().id, p, size.cols, size.rows, cliOf(s()));
       } catch (err) {
         setActionErr(String(err));
         return;
@@ -252,10 +255,10 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
             />
           </div>
           {/* BR-07 — 엔진 이름은 슬롯 엔진에서, 미기동 판정은 세션 상태로. 버전은 있을 때만 */}
-          <div class="mono muted sd-agent">
-            <Show when={agentAttached(s())} fallback={`${t("에이전트 미기동")} · ${s().id}`}>
+          <div class="mono muted sd-agent" title={s().id}>
+            <Show when={agentAttached(s())} fallback={t("에이전트 미기동")}>
               {s().personaId ? AGENT_CLI_LABEL[cliOf(s())] : (s().agent ?? t("에이전트"))}
-              <Show when={s().agentVersion}> {s().agentVersion}</Show> · {t("기동됨")} · {s().id}
+              <Show when={s().agentVersion}> {s().agentVersion}</Show> · {t("기동됨")}
             </Show>
           </div>
         </div>
@@ -288,10 +291,10 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
           </Show>
           <KV k={t("임무")} v={mission()?.name ?? t("미배정")} />
           <KV k={t("역할")} v={`${persona()?.name ?? "—"} · ${jobName(job())}`} />
-          <KV k={t("서브에이전트")} v={String(s().subagents)} />
-          <KV k={t("활동 (훅 2차)")} v={s().activity ?? "—"} />
+          <KV k={t("지금 도는 서브에이전트")} v={String(s().subagents)} />
+          <KV k={t("활동")} v={s().activity ?? "—"} />
           <KV
-            k={t("비용 (statusLine)")}
+            k={t("비용")}
             v={s().costUsd !== undefined ? `$${s().costUsd!.toFixed(2)} ${t("누적")}` : t("— (보고 전)")}
           />
           <KV
@@ -304,7 +307,7 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
           />
           <KV
             k={t("재개")}
-            v={s().resumable ? `${t("가능")} · ${t(s().resumeReason ?? "")}` : `${t("불가")} · ${t(s().resumeReason ?? "transcript 없음")}`}
+            v={s().resumable ? `${t("가능")} · ${t(s().resumeReason ?? "")}` : `${t("불가")} · ${t(s().resumeReason ?? "대화 기록 없음")}`}
           />
           <Show when={s().pid}>
             <KV k={t("PID · 셸")} v={`${s().pid} · ${s().shell}`} />
@@ -321,7 +324,7 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
               }
             />
           </Show>
-          <KV k="cwd" v={s().cwd} />
+          <KV k={t("작업 폴더")} v={s().cwd} />
           <KV
             k={t("알림")}
             v={

@@ -119,7 +119,7 @@ export function SidePanel() {
               onClick={() => setPanelTab(lastSub.get(g.key) ?? g.tabs[0].key)}
             >
               <Icon name={g.icon} size={13} />
-              {t(g.label)}
+              <span class="panel-tab-label">{t(g.label)}</span>
               {/* 새 세션 포트 (M31) — 배지는 그룹 단위다. 여는 것은 포트 패널 안의 클릭이다 */}
               <Show when={g.key === "run" && unseenPortCount() > 0}>
                 <span class="panel-tab-count">{unseenPortCount()}</span>
@@ -185,7 +185,7 @@ export function SidePanel() {
           <MdViewTab />
         </Show>
         <Show when={panelTab() === "env"}>
-          <EnvPanelTab files={envFiles() ?? []} wsPath={scopeWorkspace()?.path} onReload={() => void reloadEnv()} />
+          <EnvPanelTab files={envFiles() ?? []} loading={!!scopeWorkspace() && envFiles() === undefined} wsPath={scopeWorkspace()?.path} onReload={() => void reloadEnv()} />
         </Show>
         <Show when={filesSeen()}>
           <div class="panel-files" style={{ display: panelTab() === "files" ? undefined : "none" }}>

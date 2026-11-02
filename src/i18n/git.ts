@@ -212,10 +212,11 @@ export const dict: Record<string, string> = {
     "Sign-in needed — run `git fetch` once in a terminal to sign in",
   "git pull --ff-only 실행 — 우클릭: 명령 복사": "Run git pull --ff-only — right-click: copy command",
   "git 화면에서 스테이지하고 커밋합니다": "Stage and commit in the git screen",
-  "git push 실행 — 우클릭: 명령 복사": "Run git push — right-click: copy command",
+  "git push 실행 — 업스트림이 없으면 -u로 올립니다 · 우클릭: 명령 복사":
+    "Run git push — pushes with -u when there is no upstream · right-click: copy command",
   "git 화면 열기 — 그래프 · 브랜치 · 스테이징": "Open git screen — graph · branches · staging",
-  "누를 때만 실행 · pull은 --ff-only · 우클릭하면 명령 복사":
-    "Runs only when you click · pull is --ff-only · right-click to copy the command",
+  "누를 때만 실행 · Pull은 --ff-only · 우클릭하면 명령 복사":
+    "Runs only when you click · Pull is --ff-only · right-click to copy the command",
   "git 화면 열기": "Open git screen",
   "브랜치 · 태그 · merge · rebase · cherry-pick · revert · reset은 git 화면에서":
     "Branches · tags · merge · rebase · cherry-pick · revert · reset are in the git screen",
@@ -294,6 +295,8 @@ export const dict: Record<string, string> = {
     "Session that edited this commit's files with edit tools (estimated from edit records)",
   "충돌 표식이 없습니다 — 한쪽이 지운 파일이거나 이미 고쳤습니다. 남길 내용이면 스테이지하세요.":
     "No conflict markers — one side deleted the file or it is already fixed. Stage it if you want to keep it.",
+  "충돌 표식이 남은 파일 {n}개는 스테이지하지 않았습니다 — [충돌 보기]에서 먼저 푸세요":
+    "Did not stage {n} file(s) that still have conflict markers — resolve them in [View conflicts] first",
   "충돌 {n}": "Conflict {n}",
   "우리 것": "Ours",
   "저쪽 것": "Theirs",
@@ -306,4 +309,52 @@ export const dict: Record<string, string> = {
   // §13-3 기준 모드 (GitDiffEditor base · only — W4 임무 검토가 품는다)
   "기준 {base} ↔ 워크트리": "Base {base} ↔ worktree",
   "비교 · 기준 커밋 {base} ↔ 워크트리 · {stat}": "Compare · base commit {base} ↔ worktree · {stat}",
+  // ── 0.6 QA (eqmux-d7) — git 화면 · 사이드 패널 git 탭 ──
+  // B177 · U125 실패 알림
+  "원격에 새 커밋이 있습니다 — Pull 하세요": "The remote has new commits — Pull first",
+  "원격과 갈라졌습니다 — Pull ▾에서 merge 또는 rebase를 고르세요": "Diverged from the remote — choose merge or rebase from Pull ▾",
+  "이 커밋의 변경이 이미 있습니다 — 배너의 [건너뛰기]로 넘어가세요": "This commit's changes are already there — use [Skip] in the banner",
+  "충돌이 났습니다 — 배너에서 [충돌 보기]를 고르세요": "Conflicts — choose [View conflicts] in the banner",
+  "패치 형식이 아닙니다": "Not a patch",
+  "빈 명령": "Empty command",
+  "경로는 -- 뒤에만 둡니다": "Paths go only after --",
+  // B178 · U126 진행 중 배너
+  " — 이 커밋의 변경이 이미 있습니다. [건너뛰기]로 넘어갑니다": " — this commit's changes are already there. [Skip] moves on",
+  "건너뛰기 (--skip)": "Skip (--skip)",
+  "충돌 {n}개 — 고른 뒤 스테이지하세요": "{n} conflict(s) — pick, then stage",
+  "{s}이(가) 목록에 남았습니다 — 충돌을 푼 뒤 버리세요": "{s} stayed in the list — drop it after resolving the conflicts",
+  // U114 덩어리 접기
+  "보이지 않는 줄까지 덩어리 전체 {n}줄을 옮깁니다": "Moves the whole hunk, all {n} lines, including hidden ones",
+  // U124 삭제 확인
+  "브랜치 {b} 삭제": "Delete branch {b}",
+  "병합된 브랜치만 지웁니다. 병합 안 된 브랜치면 한 번 더 묻습니다.": "Deletes merged branches only. Asks again if the branch is not merged.",
+  "되살리기: git branch {b} {h}": "Restore: git branch {b} {h}",
+  "{b} 삭제 — 되살리기: git branch {b} {h}": "Deleted {b} — restore: git branch {b} {h}",
+  "삭제…": "Delete…",
+  "태그 삭제…": "Delete tag…",
+  "태그 {t} 삭제": "Delete tag {t}",
+  "로컬 태그만 지웁니다. 원격에 올린 태그는 그대로입니다.": "Deletes the local tag only. A tag pushed to the remote stays.",
+  "되살리기: git tag {t} {h}": "Restore: git tag {t} {h}",
+  "{t} 삭제 — 되살리기: git tag {t} {h}": "Deleted {t} — restore: git tag {t} {h}",
+  // P61 원격 브랜치 · 새 브랜치 · 업스트림
+  "만든 뒤 전환": "Switch after creating",
+  "더블클릭: 따라가는 로컬 브랜치를 만들고 전환": "Double-click: create a local tracking branch and switch",
+  "따라가는 로컬 브랜치 만들고 전환": "Create local tracking branch and switch",
+  "업스트림 설정…": "Set upstream…",
+  "{b}의 업스트림 설정": "Set upstream of {b}",
+  "원격 브랜치 (예: origin/main)": "Remote branch (e.g. origin/main)",
+  "업스트림 설정": "Set upstream",
+  // P62 갈라진 Pull
+  "원격과 갈라졌습니다 — merge 또는 rebase": "Diverged from the remote — merge or rebase",
+  "{u}와 갈라짐": "Diverged from {u}",
+  "업스트림을 merge": "Merge upstream",
+  "업스트림 위로 rebase": "Rebase onto upstream",
+  // 사이드 패널 git 탭 (U140 · B241 · U165)
+  "커밋 그래프": "Commit graph",
+  "변경 합계": "Total",
+  "더한 파일": "Added",
+  "고친 파일": "Modified",
+  "지운 파일": "Deleted",
+  "추가 + 수정 + 삭제 — 추적 안 된 파일은 추가, 이름 바꾸기는 수정으로 셉니다":
+    "Added + modified + deleted — untracked files count as added, renames as modified",
 };

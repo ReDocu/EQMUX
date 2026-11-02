@@ -2,6 +2,7 @@
 // · workGuard: §4-1 작업 중 경고 — HEAD · 작업 트리를 바꾸기 전에 그 폴더 세션의 상태를 본다
 // · splitHunks · hunkPatch: 덩어리 스테이징 — `git diff` 원문을 덩어리로 나눠 하나짜리 패치를 만든다
 import type { Session } from "../types";
+import type { GitRefs } from "../backend/git";
 import { EXAMPLE_FILES } from "../backend/env";
 
 export type GuardLevel = "busy" | "waiting" | "none";
@@ -138,3 +139,28 @@ export function pushRemote(remoteRefs: string[]): string {
   const names = [...new Set(remoteRefs.map((r) => r.split("/")[0]).filter(Boolean))];
   return names.length === 1 ? names[0] : "origin";
 }
+
+/** push 인자 — 업스트림 없는 브랜치면 `push -u <원격> <브랜치>`. git 화면 · 사이드 패널이 같이 쓴다 (B180) */
+export function pushArgs(refs: GitRefs | undefined): string[] {
+  const b = refs?.local.find((x) => x.head);
+  return b && !b.upstream ? ["push", "-u", pushRemote((refs?.remote ?? []).map((r) => r.name)), b.name] : ["push"];
+}
+
+/** 경로를 명령 줄 상한 안쪽 묶음으로 나눈다 (B179) — Windows 명령 줄은 32,767자까지다 */
+export function chunkPaths(paths: string[], max = 8000): string[][] {
+  const out: string[][] = [];
+  let cur: string[] = [];
+  let len = 0;
+  for (const p of paths) {
+    if (cur.length && len + p.length + 3 > max) {
+      out.push(cur);
+      cur = [];
+      len = 0;
+    }
+    cur.push(p);
+    len += p.length + 3; // 빈칸 · 따옴표
+  }
+  if (cur.length) out.push(cur);
+  return out;
+}
+

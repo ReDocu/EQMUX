@@ -2,7 +2,7 @@
 // 값은 비밀(API 키·토큰)이 많아 기본으로 가린다 — 화면 공유·녹화 중에 그대로 새지 않게. 편집 칸도 같다.
 // 알림·오류에는 키만 쓰고 값은 쓰지 않는다. 변수 하나를 고치면 그 한 줄만 바뀐다(원문 보존).
 // 파일 목록은 SidePanel이 읽는다. 여기는 그리기와 편집 — 저장 뒤에는 onReload로 다시 읽힌다.
-import { createEffect, createResource, createSignal, For, lazy, on, Show } from "solid-js";
+import { createEffect, createResource, createSignal, For, lazy, on, onMount, Show } from "solid-js";
 import {
   addToGitignore,
   appendLine,
@@ -33,15 +33,23 @@ const CodeEditor = lazy(() => import("./CodeEditor").then((m) => ({ default: m.C
 type Edit = { file: string; line?: number; key: string; value: string; quote?: string; self?: string };
 type Confirm = { file: string; v?: EnvVar };
 
-export function EnvPanelTab(props: { files: EnvFile[]; wsPath?: string; onReload: () => void }) {
+/** loading — 이 워크스페이스 목록을 아직 못 읽었다. '파일 없음'과 가른다 (B239) */
+export function EnvPanelTab(props: { files: EnvFile[]; loading?: boolean; wsPath?: string; onReload: () => void }) {
+  // 탭에 들어올 때마다 다시 읽는다 (P67) — 감시가 없어, 패널을 연 채 밖에서 만든 .env가 '없음'으로 남았다
+  onMount(props.onReload);
   const [reveal, setReveal] = createSignal(false);
   const [q, setQ] = createSignal("");
   const [edit, setEdit] = createSignal<Edit>();
   const [err, setErr] = createSignal<string>();
   const [busy, setBusy] = createSignal(false);
   const [confirm, setConfirm] = createSignal<Confirm>();
-  const [raw, setRaw] = createSignal<{ file: string; text: string; mtimeMs: number }>();
+  const [raw, setRaw] = createSignal<{ file: string; text: string; mtimeMs: number; base: string }>();
+  // [원문 편집] [취소]도 고친 내용이 있으면 묻는다 (P77)
+  const [askDropRaw, setAskDropRaw] = createSignal(false);
+  const cancelRaw = () => (raw() && raw()!.text !== raw()!.base ? setAskDropRaw(true) : setRaw(undefined));
   const [savedNote, setSavedNote] = createSignal(false);
+  // [값 보기]가 꺼진 채 [원문 편집]을 누르면 먼저 묻는다 (U115) — 원문은 모든 값을 평문으로 펼친다
+  const [askRaw, setAskRaw] = createSignal<string>();
 
   // 워크스페이스를 옮기면 [값 보기]와 편집 상태를 끈다 — 다른 저장소의 키가 확인 없이 펼쳐지지 않게 (B147)
   createEffect(
@@ -70,7 +78,7 @@ export function EnvPanelTab(props: { files: EnvFile[]; wsPath?: string; onReload
   const hit = (k: string) => k.toLowerCase().includes(q().trim().toLowerCase());
   const copy = (k: string, v: string) => {
     clipWriteText(v, true); // 클립보드 기록·클라우드 동기화에서 뺀다 (B148)
-    notify(tf("{k} 값을 복사했습니다", { k }));
+    notify(tf("{k} 값을 복사했습니다", { k }), "ok");
   };
 
   /** 쓰기 하나 — 실패 사유를 보이고, 외부 변경이면 다시 읽는다. 성공하면 다시 읽고 "재시작 필요" 한 줄 */
@@ -79,13 +87,13 @@ export function EnvPanelTab(props: { files: EnvFile[]; wsPath?: string; onReload
     setErr(undefined);
     try {
       await job();
-      if (ok) notify(ok);
+      if (ok) notify(ok, "ok");
       props.onReload();
       return true;
     } catch (e) {
       const stale = String(e).includes(STALE);
       setErr(stale ? t("파일이 밖에서 바뀌어 다시 읽었습니다 — 확인하고 다시 고치세요") : String(e));
-      if (stale) props.onReload();
+      props.onReload(); // 이유와 상관없이 — '이미 있습니다'도 목록이 낡았다는 뜻이다 (P67)
       return false;
     } finally {
       setBusy(false);
@@ -140,9 +148,10 @@ export function EnvPanelTab(props: { files: EnvFile[]; wsPath?: string; onReload
 
   const openRaw = async (file: string) => {
     if (!props.wsPath) return;
+    if (!reveal()) return setAskRaw(file);
     setErr(undefined);
     const c = await readEnvText(props.wsPath, file).catch((e) => void setErr(String(e)));
-    if (c) setRaw({ file, ...c });
+    if (c) setRaw({ file, ...c, base: c.text });
   };
   const saveRaw = async () => {
     const r = raw();
@@ -215,7 +224,7 @@ export function EnvPanelTab(props: { files: EnvFile[]; wsPath?: string; onReload
             class="btn"
             aria-label={t("새 파일")}
             value=""
-            disabled={busy()}
+            disabled={busy() || props.loading}
             onChange={(e) => {
               const v = e.currentTarget.value;
               e.currentTarget.value = "";
@@ -248,7 +257,10 @@ export function EnvPanelTab(props: { files: EnvFile[]; wsPath?: string; onReload
       </Show>
 
       {/* 빈 상태 (V2) — 탭은 늘 보이고, 만들기의 입구가 여기다 */}
-      <Show when={envs().length === 0}>
+      <Show when={props.loading}>
+        <div class="muted">{t("읽는 중…")}</div>
+      </Show>
+      <Show when={!props.loading && envs().length === 0}>
         <div class="card inset env-file env-empty">
           <div class="muted">{t("워크스페이스 루트에 .env 파일이 없습니다")}</div>
           <div class="env-empty-actions">
@@ -311,7 +323,7 @@ export function EnvPanelTab(props: { files: EnvFile[]; wsPath?: string; onReload
                     <button class="btn primary" disabled={busy()} onClick={() => void saveRaw()}>
                       {t("저장")}
                     </button>
-                    <button class="btn ghost" onClick={() => setRaw(undefined)}>
+                    <button class="btn ghost" onClick={cancelRaw}>
                       {t("취소")}
                     </button>
                   </div>
@@ -331,7 +343,14 @@ export function EnvPanelTab(props: { files: EnvFile[]; wsPath?: string; onReload
                               <Chip tone="amber" text={t("중복")} title={t("같은 키가 이 파일에 두 번 이상 있습니다")} />
                             </Show>
                           </span>
-                          <span class="v mono" title={t("클릭하면 값을 복사합니다")} onClick={() => copy(v.key, v.value)}>
+                          <span
+                            class="v mono"
+                            role="button"
+                            tabIndex={0}
+                            title={t("클릭하면 값을 복사합니다")}
+                            onClick={() => copy(v.key, v.value)}
+                            onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), copy(v.key, v.value))}
+                          >
                             {v.value === "" ? t("(빈 값)") : reveal() ? v.value : "••••••••"}
                           </span>
                           <Show when={!f.example}>
@@ -390,6 +409,38 @@ export function EnvPanelTab(props: { files: EnvFile[]; wsPath?: string; onReload
             onCancel={() => setConfirm(undefined)}
           />
         )}
+      </Show>
+      <Show when={askRaw()}>
+        {(file) => (
+          <ConfirmDialog
+            title={t("원문 편집")}
+            body={t("원문에는 이 파일의 모든 값이 평문으로 보입니다. 화면을 공유 중이면 멈추고 여세요. 열면 [값 보기]도 켜집니다.")}
+            info={[file()]}
+            confirmLabel={t("값을 보이고 열기")}
+            onConfirm={() => {
+              const f = file();
+              setAskRaw(undefined);
+              setReveal(true); // 상태 표시와 실제가 어긋나지 않게 — 원문이 열려 있는 동안 [값 보기]는 켜져 있다
+              void openRaw(f);
+            }}
+            onCancel={() => setAskRaw(undefined)}
+          />
+        )}
+      </Show>
+      <Show when={askDropRaw()}>
+        <ConfirmDialog
+          danger
+          title={t("저장하지 않은 편집이 있습니다")}
+          body={t("버리면 고친 내용이 사라집니다. 남기려면 [계속 편집]을 누르고 [저장]하세요.")}
+          info={[raw()?.file ?? ""]}
+          confirmLabel={t("변경 버리기")}
+          cancelLabel={t("계속 편집")}
+          onConfirm={() => {
+            setAskDropRaw(false);
+            setRaw(undefined);
+          }}
+          onCancel={() => setAskDropRaw(false)}
+        />
       </Show>
     </div>
   );

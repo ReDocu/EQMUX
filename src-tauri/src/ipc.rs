@@ -497,7 +497,12 @@ fn handle(app: &AppHandle, line: &str) -> Result<serde_json::Value, String> {
             let store: State<crate::StoreState> = app.state();
             let lines = scrollback_lines(&store.0.root(), &ws, &sid, n, grep)?;
             let label = entry.map(|e| e.name).unwrap_or_else(|| sid.split('@').next().unwrap_or(&sid).to_string());
-            Ok(json!({"ok": true, "result": untrusted(&label, &lines, en)}))
+            let mut out = untrusted(&label, &lines, en);
+            // 스크롤백 저장이 꺼져 있으면 새 출력은 기록에 남지 않는다 — 비었거나 옛 기록인 이유를 같이 말한다 (B183)
+            if !crate::scrollback_persist() {
+                out.push_str(persist_off_note(en));
+            }
+            Ok(json!({"ok": true, "result": out}))
         }
         "reply" => {
             // send --wait (§4) — CLI가 2초마다 묻는다. 연결을 붙잡아 두지 않는다 (파이프 인스턴스 고갈, B124)
@@ -575,6 +580,16 @@ fn scrollback_lines(root: &std::path::Path, ws: &str, session: &str, n: u64, gre
         .query_map(rusqlite::params![session, n as i64, like], |r| r.get::<_, String>(0))
         .map_err(|e| e.to_string())?;
     Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+fn persist_off_note(en: bool) -> &'static str {
+    if en {
+        "
+Scrollback saving is off (Settings › Storage) — new output is not recorded"
+    } else {
+        "
+스크롤백 저장이 꺼져 있습니다(설정 › 저장소) — 새 출력은 기록에 남지 않습니다"
+    }
 }
 
 /// 읽은 줄을 <untrusted>로 감싼다 — 남의 화면에는 웹 페이지·로그·사람이 친 것이 섞여 있다.
@@ -861,8 +876,13 @@ fn send_to(
         let resp = publish(app, ws, from, &to, kind, body, &out)?;
         // 받는 쪽 원장 — 상한은 위에서 이미 한 번 셌다
         let store: State<crate::StoreState> = app.state();
-        // re는 이 원장의 id라 받는 쪽 원장에서는 다른 메시지를 가리킨다 — 비운다
-        let inn = crate::messages::Extra { project: Some(mine.clone()), re: None, ..extra };
+        // re는 이 원장의 id라 받는 쪽 원장에서는 다른 메시지를 가리킨다 — 받는 쪽 원장의 같은 메시지 id로 옮긴다.
+        // 못 찾으면 비운다. 비우면 상대의 `--wait`가 회신을 못 알아본다 (B173)
+        let re = extra.re.and_then(|id| {
+            let orig = crate::messages::get(&store.0.root(), ws, id).ok().flatten()?;
+            crate::messages::twin(&store.0.root(), &target_ws, &orig).ok().flatten().map(|t| t.id)
+        });
+        let inn = crate::messages::Extra { project: Some(mine.clone()), re, ..extra };
         let row = crate::messages::send_with(&store.0.root(), &target_ws, from, &to, kind, body, &inn)?;
         let _ = app.emit_to("main", "message-new", json!({ "workspace": target_ws, "message": row }));
         resp
