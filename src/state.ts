@@ -23,7 +23,8 @@ export type View =
   // commit이 있으면 부모 커밋 ↔ 이 커밋 비교(UI 리파인 §git), 없으면 HEAD ↔ 워크트리
   | { kind: "gitdiff"; wsId?: string; back?: View; commit?: { hash: string; message: string } }
   // git 화면 (§17 W5) — 그래프 · 브랜치 사이드바 · 상세 · 작업 트리. file이 있으면 그 파일의 히스토리 · blame으로 연다
-  | { kind: "git"; wsId?: string; back?: View; file?: string };
+  | { kind: "git"; wsId?: string; back?: View; file?: string }
+  | { kind: "review"; wsId: string; missionId: string; back?: View }; // 임무 검토 (§13-3 W4)
 // 워크스페이스 연결·역할 라이브러리·설정은 View가 아니라 팝업(OverlayKind)이다 — 아래 overlay 참조
 
 /** 전체 화면 팝업 (M25 확장) — NAV 도구 4종(임무·워크스페이스·역할·설정)이 전부 팝업이다.
@@ -364,8 +365,6 @@ export function jumpToSession(workspaceId: string, sessionId: string): boolean {
  *  잡을 수 있어야 하므로 값이 아니라 매번 새 객체다. */
 export const [focusRequest, setFocusRequest] = createSignal<{ session: string } | undefined>(undefined);
 
-/** 세션 상세 열기 요청 (U63) — 상세 팝업의 열림은 컨트롤 센터의 지역 상태라, 밖(복구 창)에서는
- *  요청만 남기고 그 탭이 이펙트로 받는다. focusRequest와 같은 꼴 — 받은 쪽이 비운다 */
 /** 대화 초안 요청 (0.6 §13-1) — 밖(동시 편집 경고)에서 '이 세션에게 ask'를 채워 대화 탭을 연다.
  *  보내지는 않는다 — 사람이 고치고 Enter를 누른다. 받은 대화 탭이 비운다 */
 export const [draftRequest, setDraftRequest] = createSignal<
@@ -379,6 +378,8 @@ export function openDraft(workspaceId: string, session: string, text: string): v
   openPanel("conversation");
 }
 
+/** 세션 상세 열기 요청 (U63) — 상세 팝업의 열림은 컨트롤 센터의 지역 상태라, 밖(복구 창)에서는
+ *  요청만 남기고 그 탭이 이펙트로 받는다. focusRequest와 같은 꼴 — 받은 쪽이 비운다 */
 export const [detailRequest, setDetailRequest] = createSignal<{ session: string } | undefined>(undefined);
 export function openSessionDetail(workspaceId: string, sessionId: string): boolean {
   if (!jumpToSession(workspaceId, sessionId)) return false;

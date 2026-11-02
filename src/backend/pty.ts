@@ -168,13 +168,6 @@ export function writePty(id: string, data: string): void {
   void invoke("pty_write", { id, data }).catch(() => {});
 }
 
-/** 표시 전용 에코 (P-2) — PTY 입력을 거치지 않고 페인 화면·로컬 버퍼에만 쓴다.
- *  일반 셸에 키 입력으로 주입하면 뒤따르는 \r이 사용자가 치던 미제출 명령을 그대로
- *  실행하므로, 기본 터미널로 가는 메시지는 이 경로로만 표시한다. */
-export function echoPty(id: string, data: string): void {
-  outputSubs.get(id)?.forEach((cb) => cb(data));
-}
-
 /** 터미널 인스턴스 폐기 훅 — TerminalPane이 등록한다 (pty ← TerminalPane 순환 import 회피).
  *  화면 레이어를 모르는 mock이 제거 경로에서 이걸 부를 수 있게 하는 유일한 목적이다 (B44) */
 let disposeTerm: ((id: string) => void) | undefined;

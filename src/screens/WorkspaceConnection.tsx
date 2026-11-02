@@ -172,12 +172,13 @@ export function WorkspaceConnection() {
   };
 
   // 목록 행과 상세의 [열기]는 같은 일을 한다 (U60) — 열고 그 워크스페이스로 간다. 세션이 없으면
-  // 첫 세션 마법사, 있으면 탭으로 (B107: 이미 세션이 있는 워크스페이스를 '첫 세션' 마법사로 들이지 않는다)
+  // 첫 세션 마법사, 있으면 탭으로 (B107: 이미 세션이 있는 워크스페이스를 '첫 세션' 마법사로 들이지 않는다).
+  // 깨어 있는 세션만 센다 — team.json 복원이 슬롯을 셸로 먼저 채우므로 전체 수면 D3 카드가 안 나왔다
   const open = (id: string) => {
     if (!workspaces().find((w) => w.id === id)?.open && openFull()) return notify(fullReason());
     backend.openWorkspace(id);
     touchWorkspace(id);
-    setView(openView(id, sessionsOf(id).length));
+    setView(openView(id, sessionsOf(id).filter((s) => s.status !== "shell" && s.status !== "dead").length));
   };
 
   return (

@@ -8,7 +8,8 @@ import { listen } from "@tauri-apps/api/event";
 import { createSignal } from "solid-js";
 import { t, tf } from "../i18n";
 import { backend } from "./mock";
-import { echoPty, humanTyping, isTauri, onForgetSession, writePty } from "./pty";
+import { humanTyping, isTauri, onForgetSession, writePty } from "./pty";
+import { jumpToSession, setFocusRequest } from "../state";
 import { canInject, effectiveTitle, sessionName } from "../types";
 import { settings } from "./settings";
 import { notifyLocal } from "./attention";
@@ -469,13 +470,31 @@ function enqueueInject(sessionId: string, text: () => string): void {
   });
 }
 
-/** 기본 터미널용 표시 전용 라인 (P-2) — PTY 입력에 넣지 않는다. 주석 접두(`#`)를 붙여도
- *  사용자가 치던 미제출 명령 뒤에 이어 붙어 \r이 그 명령을 그대로 실행하므로,
- *  화면·로컬 버퍼에만 에코한다. 원문은 어차피 대화 원장(message 테이블)에 있다.
- *  머리는 에이전트가 받는 것과 같은 `[EQ·타입] 이름:` — 사람과 에이전트가 같은 꼴을 본다. */
-export function fmtEcho(m: ConversationMessage, label = m.from): string {
-  const body = (m.body + attach(m)).replace(/\r?\n/g, "\r\n");
-  return `\r\n\x1b[2m[EQ·${m.type}] ${label}: ${body}\x1b[0m\r\n`;
+/** 맨 셸 슬롯에 온 메시지의 한 줄 (P-2 · B157) — 머리는 에이전트가 받는 것과 같은 `[EQ·타입] 이름:`.
+ *  PTY 입력에 넣지 않는다(치던 명령 뒤에 붙어 \r이 그대로 실행한다). xterm 본문에도 쓰지 않는다 —
+ *  셸 줄 편집기가 모르는 줄이 프롬프트 자리에 끼어 프롬프트와 치던 글자를 덮었다(B157).
+ *  그래서 알림 센터와 토스트로만 보인다. 원문은 대화 원장(message 테이블)에 있다. 순수 함수 */
+export function fmtNotice(m: ConversationMessage, label = m.from): string {
+  const line = `[EQ·${m.type}] ${label}: ${(m.body + attach(m)).replace(/\s*\r?\n\s*/g, " ")}`;
+  return line.length > 160 ? `${line.slice(0, 159)}…` : line;
+}
+
+/** 맨 셸 슬롯(기본 터미널 · 에이전트 전 역할 세션)에 온 메시지를 사람에게 보인다 (B157) */
+function shellNotice(sessionId: string, wsId: string, m: ConversationMessage): void {
+  const line = fmtNotice(m, senderLabel(m.from, wsId));
+  notifyLocal({
+    session: sessionId,
+    workspace: wsId,
+    kind: "message",
+    title: tf("{name} · 메시지", { name: nameOf(sessionId) }),
+    body: line,
+    // 셸 슬롯은 주의 순위가 없어 벨이 읽음으로 그린다 — open이 있으면 안 읽음 · 누르면 그 페인으로
+    open: () => {
+      if (jumpToSession(wsId, sessionId)) setFocusRequest({ session: sessionId });
+    },
+  });
+  // 토스트 — 늦게 싣는다: ui.tsx는 window를 만지므로 정적 import면 이 모듈을 싣는 node 테스트가 깨진다
+  void import("../components/ui").then((u) => u.notify(line));
 }
 
 /** 수신 세션 결정 (M4) — "@all"이면 그 워크스페이스의 살아 있는 참여자 전원.
@@ -607,7 +626,7 @@ function releaseOrphans(): void {
     if (!s || !q.length || !agentSeen.has(id) || !orphanedInbox(s)) continue;
     agentSeen.delete(id);
     inbox.delete(id);
-    for (const m of q) echoPty(id, fmtEcho(m, senderLabel(m.from, s.workspaceId)));
+    for (const m of q) shellNotice(id, s.workspaceId, m);
     markDelivered(q);
     changed = true;
   }
@@ -723,12 +742,12 @@ function deliver(wsId: string, m: ConversationMessage): void {
         });
       }
     } else if (!s.personaId) {
-      echoPty(s.id, fmtEcho(m, senderLabel(m.from, wsId))); // 기본 터미널 — 표시 전용 (P-2)
+      shellNotice(s.id, wsId, m); // 기본 터미널 — 표시 전용 (P-2 · B157)
       reached = true;
     } else if (s.status === "shell") {
       // 역할은 있는데 에이전트가 아직 안 떴다 — 셸에 주입하면 사람이 치던 명령을 실행시킨다.
-      // 사람이 읽도록 화면에만 에코하고, 원문은 인박스에 남겨 기동 직후 에이전트에게 전달한다.
-      echoPty(s.id, fmtEcho(m, senderLabel(m.from, wsId)));
+      // 사람이 읽도록 알림으로만 보이고, 원문은 인박스에 남겨 기동 직후 에이전트에게 전달한다.
+      shellNotice(s.id, wsId, m);
       park(s.id);
     } else if (canInject(s)) {
       inject(s.id); // 유휴 = 프롬프트가 비어 있다 → 즉시 (M3)

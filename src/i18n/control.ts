@@ -305,4 +305,6 @@ export const dict: Record<string, string> = {
   "모든 세션의 statusLine 비용 증분 합계 · 예산은 설정 › 알림": "Sum of status line cost across all sessions · set a budget in Settings › Notifications",
   "오늘 비용이 예산 ${budget}을 넘었습니다": "Today's cost passed the ${budget} budget",
   "지금 ${usd} · 세션은 멈추지 않습니다": "Now ${usd} · sessions keep running",
+  "{name} · 메시지": "{name} · message",
+  "검토 →": "Review →",
 };

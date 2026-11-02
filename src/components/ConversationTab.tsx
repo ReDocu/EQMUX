@@ -21,7 +21,7 @@ import {
 import { backend } from "../backend/mock";
 import { isTauri, revealPath } from "../backend/pty";
 import { t, tf } from "../i18n";
-import { draftRequest, focusSession, jumpToSession, scopeWorkspace, setDraftRequest, tick } from "../state";
+import { draftRequest, focusSession, jumpToSession, scopeWorkspace, setDraftRequest, setView, tick, view } from "../state";
 import { ContextMenu, Eyebrow, notify } from "./ui";
 import { effectiveTitle, sessionName as sessionNameOf } from "../types";
 import type { ConversationMessage, Session } from "../types";
@@ -443,6 +443,17 @@ export function ConversationTab() {
                     <span class="conv-done" title={t("완료 보고 — 에이전트가 맡은 일을 끝냈다고 밝혔습니다")}>
                       ✓
                     </span>
+                    {/* 보낸 세션이 맡은 임무가 있으면 검토 화면으로 (§13-3) */}
+                    <Show when={backend.listSessions().find((x) => x.id === m.from)?.missionId}>
+                      {(mid) => (
+                        <button
+                          class="btn btn-sm conv-review"
+                          onClick={() => setView({ kind: "review", wsId: m.workspaceId ?? scopeWorkspace()?.id ?? "", missionId: mid(), back: view() })}
+                        >
+                          {t("검토 →")}
+                        </button>
+                      )}
+                    </Show>
                   </Show>
                   <Show when={m.from === "나" && deliveryOf(m.id)}>
                     {(d) => (

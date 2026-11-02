@@ -1,7 +1,7 @@
 // 주입 본문 단위 테스트 — 전달 경로(PTY·인박스)는 통합의 몫이고, 여기서는 "여러 건을 어떻게
 // 한 줄로 접는가"만 본다: 단건/묶음 접두 · 개행 평탄화 · 상한에서 덩어리 갈리기.
 import { describe, expect, test } from "vitest";
-import { batches, cancelBrief, consumeTaken, droppedIds, noteTaken, capQueue, deliveredIds, flushInboxOnState, fmt, fmtEcho, goneName, orphanedInbox, pendingBrief, queueBrief, pendingReason, prependOlder, splitPending, unmanagedAgent } from "./conversation";
+import { batches, cancelBrief, consumeTaken, droppedIds, noteTaken, capQueue, deliveredIds, flushInboxOnState, fmt, fmtNotice, goneName, orphanedInbox, pendingBrief, queueBrief, pendingReason, prependOlder, splitPending, unmanagedAgent } from "./conversation";
 import { typedText } from "./pty";
 import type { ConversationMessage } from "../types";
 
@@ -58,10 +58,9 @@ describe("fmt 발신자 이름", () => {
     expect(fmt([m])).toBe("[EQ·ask] 나: 요약 (파일: .eqmux/notes/a.md)");
   });
 
-  test("기본 터미널 에코도 같은 머리 — 내부 id가 나오지 않는다", () => {
-    const line = fmtEcho(msg("kai@eqmux-1e3b93", "hi"), "카이");
-    expect(line).toContain("[EQ·ask] 카이: hi");
-    expect(line).not.toContain("@eqmux");
+  test("맨 셸 알림도 같은 머리 · 한 줄 — 내부 id가 나오지 않는다 (B157)", () => {
+    expect(fmtNotice(msg("kai@eqmux-1e3b93", "hi\n  there"), "카이")).toBe("[EQ·ask] 카이: hi there");
+    expect(fmtNotice(msg("카이", "x".repeat(300)))).toHaveLength(160);
   });
 });
 
