@@ -13,7 +13,8 @@ import { maxSlots } from "../backend/settings";
 import { t, tf } from "../i18n";
 import { jobMeta } from "../jobs";
 import type { JobBadgeColor } from "../jobs";
-import { setView, tick } from "../state";
+import { setView, tick, view } from "../state";
+import { WizardSteps } from "./LaunchMode";
 import { ConfirmDialog, ContextMenu, Identity } from "../components/ui";
 import type { MenuGroup } from "../components/ui";
 import { personaTagline, projectStem, slotNo } from "../types";
@@ -190,9 +191,14 @@ export function TeamCasting(props: { wsId: string }) {
     if (lines.length === 0) then();
     else setConfirm({ lines, then });
   };
+  // 첫 세션 마법사로 왔는가 (P49) — 단계 표시 · [← 실행 방식]은 그때만. 다음 화면에도 넘긴다
+  const wizard = () => {
+    const v = view();
+    return v.kind === "casting" && !!v.wizard;
+  };
   const choose = () => {
     apply();
-    setView({ kind: "composition", wsId: props.wsId });
+    setView({ kind: "composition", wsId: props.wsId, wizard: wizard() || undefined });
   };
 
   // 남는 세션이면 지금 번호 그대로, 새 페르소나면 빈 슬롯 (0.5 시안 cjWtF 슬롯 머리 문구)
@@ -238,6 +244,11 @@ export function TeamCasting(props: { wsId: string }) {
           </div>
         </div>
         <div class="cast-head-actions">
+          <Show when={wizard()}>
+            <button class="btn" onClick={() => setView({ kind: "launch", wsId: props.wsId })}>
+              {t("← 실행 방식")}
+            </button>
+          </Show>
           <button class="cast-save mono" classList={{ saved: saved() }} title={t(".eqmux/team.json과 team.md에 저장")} onClick={() => guarded(save)}>
             {t(saved() ? "저장됨 ✓ · .eqmux/team.json · team.md" : "편성 저장 · .eqmux/team.json · team.md")}
           </button>
@@ -250,6 +261,9 @@ export function TeamCasting(props: { wsId: string }) {
         </div>
       </div>
       <div class="screen-body cast-body">
+        <Show when={wizard()}>
+          <WizardSteps path="team" at={2} />
+        </Show>
         <div class="cast-presets">
           <Show when={initial0.length > 0}>
             <button

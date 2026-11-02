@@ -2598,7 +2598,7 @@
 }
 .launch-choices {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); /* 빠른 시작 · 기본 터미널 · 역할 팀 (0.6 §10) */
   gap: 12px;
   margin-bottom: 12px;
 }
@@ -6449,3 +6449,27 @@ label.inbox-pop-row {
 .env-file .eyebrow { margin-bottom: 4px; }
 .env-file .kv { cursor: copy; }
 .env-file .kv .v { overflow-wrap: anywhere; }
+
+/* 0.6 W7: 첫 흐름 길 안내 (P49 · P50) — 마법사 머리 버튼 줄 · 이동을 드러내는 링크 */
+.dts-head-actions,
+.wizard-actions {
+  display: flex;
+  gap: 8px;
+}
+.wizard-link {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--eq-blue);
+}
+.wizard-link:hover {
+  text-decoration: underline;
+}
+.tcmp-steps {
+  padding: 14px 22px 0;
+}
+/* 세션 만들기 창은 위를 고정한다 (U107) — 가운데 정렬이라 [역할 세션 | 기본 터미널]을 바꾸면 높이가 줄며
+   세그먼트가 y=345→377로 튀어, 빠르게 두 번 누르면 엉뚱한 곳이 눌렸다 */
+.overlay > .create-dlg {
+  align-self: flex-start;
+  margin-top: 12vh;
+}

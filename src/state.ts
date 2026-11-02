@@ -14,8 +14,10 @@ export type View =
   | { kind: "workspace"; id: string } // 워크스페이스 탭 = 컨트롤 센터 (bi8Au)
   | { kind: "launch"; wsId: string } // 레인 01 — 실행 방식 선택 (ChIvy)
   | { kind: "terminalSetup"; wsId: string } // 레인 01 — 기본 터미널 구성 (S9u2S)
-  | { kind: "casting"; wsId: string } // 레인 01 — 팀 캐스팅
-  | { kind: "composition"; wsId: string } // 레인 01 — 팀 편성
+  // 레인 01 — 팀 캐스팅 · 팀 편성. wizard: 첫 세션 마법사로 왔다 — 단계 표시와 [← 실행 방식]을 보인다 (P49).
+  // 관제·대시보드 메뉴로 온 재캐스팅에는 마법사 단계가 없다
+  | { kind: "casting"; wsId: string; wizard?: boolean }
+  | { kind: "composition"; wsId: string; wizard?: boolean }
   | { kind: "missions"; wsId: string } // 임무 배정 (화면 #8)
   // Git Diff (AXXhV) — wsId 없으면 활성 워크스페이스, ✕/Esc는 back으로 복귀 (U11).
   // commit이 있으면 부모 커밋 ↔ 이 커밋 비교(UI 리파인 §git), 없으면 HEAD ↔ 워크트리

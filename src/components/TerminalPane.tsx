@@ -41,7 +41,8 @@ import { t, tf } from "../i18n";
 import { notePtyShell, selectedSession } from "../state";
 import { ContextMenu } from "./ui";
 import type { MenuGroup } from "./ui";
-import type { AgentCliId, Permissions } from "../types";
+import type { AgentCliId, Permissions, Session } from "../types";
+import { cliOf, effectivePermissions, sessionName } from "../types";
 import { Icon } from "./icons";
 import { IS_MAC, isImeEnter, keyLabel } from "../platform";
 import { findPathLinks, pathChunkAt } from "./termPaths";
@@ -201,11 +202,15 @@ if (typeof window !== "undefined") {
  *
  *  세션이 만들어진 직후에 걸어야 한다: 셸이 이미 떠 있는 세션에는 부르는 쪽이 직접 하면 된다. */
 const pendingReady = new Map<string, (id: string) => void>();
+/** 셸이 이미 뜬 세션 — 뜬 뒤에 건 예약은 다시 오지 않을 준비 신호를 기다리지 않고 바로 돈다 */
+const readySessions = new Set<string>();
 export function whenSessionReady(id: string, cb: (id: string) => void): void {
-  pendingReady.set(id, cb);
+  if (readySessions.has(id)) cb(id);
+  else pendingReady.set(id, cb);
 }
 
 function fireSessionReady(id: string): void {
+  readySessions.add(id);
   const cb = pendingReady.get(id);
   if (!cb) return;
   pendingReady.delete(id); // 한 번만 — 재스폰·재부착이 같은 행동을 다시 일으키지 않게
@@ -317,10 +322,38 @@ export async function launchAgentInSession(
   }
 }
 
+/** 관리 에이전트의 기동 인자 — 역할 세션에만 있다 (기본 터미널은 셸로 남는다).
+ *  claude --name은 세션 이름 (0.5) — Claude 재개 목록에서 세션을 가를 수 있게 */
+export function roleAgentOf(s: Session): { name: string; permissions: Permissions } | undefined {
+  if (!s.personaId) return undefined;
+  const p = effectivePermissions(s, backend.listJobs().find((j) => j.id === s.jobId));
+  if (!p) return undefined;
+  return { name: sessionName(s, backend.listPersonas().find((x) => x.id === s.personaId)), permissions: p };
+}
+
+/** 역할 세션들을 관리 에이전트로 띄운다 — 사람이 누른 [빠른 시작] · [모두 기동]의 몫이다.
+ *  셸이 아직 안 떴으면 뜨는 대로, 떠 있으면 바로. 이미 에이전트가 붙은 세션(손으로 띄운 것 포함)은
+ *  건너뛴다 — 기동은 페인을 통째로 끝내므로 돌고 있는 에이전트를 죽인다. 띄우기로 한 수를 돌려준다 */
+export function launchRoleAgents(list: readonly Session[]): number {
+  let n = 0;
+  for (const s of list) {
+    const a = roleAgentOf(s);
+    if (!a || s.status !== "shell" || s.agent) continue;
+    n++;
+    whenSessionReady(s.id, () =>
+      void launchAgentInSession(s.id, s.workspaceId, s.cwd, a.name, a.permissions, cliOf(s)).catch(() => {
+        /* 실패는 페인 출력과 이벤트 피드가 보여준다 (FR-D-08) */
+      }),
+    );
+  }
+  return n;
+}
+
 /** 세션 제거 시 호출 — PTY와 함께 터미널 인스턴스도 폐기한다 */
 export function disposeSessionTerminal(id: string) {
   // 스폰 실패·첫 마운트 전 제거로 한 번도 불리지 않은 예약이 남지 않게 (CPU·RAM L3)
   pendingReady.delete(id);
+  readySessions.delete(id);
   const e = REGISTRY.get(id);
   if (e) {
     clearTimeout(e.parkTimer);
@@ -713,6 +746,7 @@ async function initSession(
     // 웹뷰 재시작 재부착 (FR-C-06) — PTY는 Rust에 살아 있다. 스폰 없이 출력 구독만 잇고,
     // ConPTY가 resize에 전체 리페인트로 응답하는 성질로 현재 화면을 다시 그리게 한다.
     if (props.revive) {
+      readySessions.add(props.sessionId); // PTY는 살아 있다 — 뒤에 건 예약이 기다리지 않게
       if (cleaned.length === 0) {
         term.writeln("\x1b[90m─── 웹뷰 재시작 — 실행 중인 세션에 재부착 ───\x1b[0m");
       }

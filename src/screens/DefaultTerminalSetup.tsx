@@ -4,12 +4,12 @@ import { For, Show } from "solid-js";
 import { backend } from "../backend/mock";
 import { respawnSessionShell } from "../components/TerminalPane";
 import { Icon } from "../components/icons";
-import { Segmented } from "../components/ui";
 import { maxSlots } from "../backend/settings";
 import { t, tf } from "../i18n";
 import { defaultShell, setView, tick } from "../state";
 import { sessionName, slotNo } from "../types";
 import { defaultTerminalPlan } from "./launchRules";
+import { WizardSteps } from "./LaunchMode";
 
 export function DefaultTerminalSetup(props: { wsId: string }) {
   const ws = () => backend.listWorkspaces().find((w) => w.id === props.wsId);
@@ -58,25 +58,25 @@ export function DefaultTerminalSetup(props: { wsId: string }) {
           </h1>
           <div class="sub mono">{t("실제 기본 셸과 브랜치를 보입니다 · 열기 전에는 아무것도 실행하지 않습니다")}</div>
         </div>
-        <button class="btn primary" disabled={full()} title={blocked()} onClick={openTerminal}>
-          <Icon name="terminal" size={12} />
-          {"blocked" in plan() && !full() ? t("탭으로 가기") : t("열기")}
-        </button>
+        <div class="dts-head-actions">
+          <button class="btn" onClick={() => setView({ kind: "launch", wsId: props.wsId })}>
+            {t("← 실행 방식")}
+          </button>
+          {/* 마지막 버튼은 도착지를 말한다 (P50) */}
+          <button class="btn primary" disabled={full()} title={blocked()} onClick={openTerminal}>
+            <Icon name="terminal" size={12} />
+            {"blocked" in plan() && !full() ? t("탭으로 가기") : t("셸 열기 → 워크스페이스")}
+          </button>
+        </div>
       </div>
 
       <div class="screen-body dts-body">
+        <WizardSteps path="terminal" at={2} />
         <div class="dts-mode-row">
-          {/* 역할 세션 쪽은 실행 방식 선택(팀 캐스팅 입구)으로 간다 — 0.4.2의 "역할 팀 구성" 버튼과 같은 동작 */}
-          <Segmented
-            label={t("실행 방식")}
-            items={[
-              { value: "terminal", label: t("기본 터미널") },
-              { value: "role", label: t("역할 세션") },
-            ]}
-            value="terminal"
-            onChange={() => setView({ kind: "launch", wsId: props.wsId })}
-          />
-          <span class="muted">{t("역할 세션은 팀 캐스팅에서")}</span>
+          {/* 토글처럼 보이던 [기본 터미널 | 역할 세션]은 실제로는 '뒤로'였다 (P49) — 이동임을 드러내는 링크로 */}
+          <button class="wizard-link" onClick={() => setView({ kind: "launch", wsId: props.wsId })}>
+            {t("역할 팀으로 바꾸기 →")}
+          </button>
         </div>
 
         <Show when={blocked()}>

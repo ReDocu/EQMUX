@@ -218,4 +218,29 @@ export const dict: Record<string, string> = {
   "돌고 있음 · 포트 {ports}": "Running · port {ports}",
   // ── 셸 목록 (macOS, B114) ──
   "로그인 셸 ($SHELL)": "Login shell ($SHELL)",
+
+  // ── 0.6 W7: 빠른 시작 · 첫 흐름 길 안내 (§10 · P49 · P50) ──
+  "진행 단계": "Progress",
+  "저장소 연결": "Connect repository",
+  "빠른 시작": "Quick start",
+  "폴더만 있으면 된다. 리드와 개발 Claude Code 세션 2개를 바로 띄운다. 캐스팅 · 페르소나 · 임무는 건너뛰고, 팀은 나중에 고칠 수 있다.":
+    "All you need is a folder. Starts two Claude Code sessions right away, a lead and a developer. Casting, personas and missions are skipped; you can change the team later.",
+  "편성: {list}": "Team: {list}",
+  "페르소나가 없어 쓸 수 없다 — 역할 팀으로": "No personas, so this is unavailable. Use Role team",
+  "세션이 많을수록 사용 한도를 빨리 쓴다 — 2개로 시작한다": "More sessions use up your usage limits faster, so this starts with two",
+  "더 필요하면 팀 캐스팅에서 {n}개까지 늘린다": "Need more? Grow to {n} in Team casting",
+  "다음 → 워크스페이스 (Claude Code 2개 기동)": "Next → Workspace (launches 2 Claude Code sessions)",
+  "페르소나가 없어 빠른 시작을 할 수 없습니다 — 역할 팀으로 시작하세요": "No personas, so quick start can't run. Start with Role team",
+  "2세션으로 시작 → 워크스페이스": "Start with 2 sessions → Workspace",
+  "다음: 기본 터미널 구성 →": "Next: Default terminal setup →",
+  "다음: 팀 캐스팅 →": "Next: Team casting →",
+  "리드와 개발 2세션으로 시작해요. 워크스페이스가 열리면 Claude Code가 바로 떠요. 슬롯 {n}개 중 2개를 써요.":
+    "Starts with two sessions, a lead and a developer. Claude Code launches as soon as the workspace opens. Uses 2 of {n} slots.",
+  "← 실행 방식": "← Launch mode",
+  "셸 열기 → 워크스페이스": "Open shell → Workspace",
+  "역할 팀으로 바꾸기 →": "Switch to Role team →",
+  "← 팀 캐스팅": "← Team casting",
+  "워크스페이스 열기": "Open workspace",
+  "기동 없이 열기": "Open without launching",
+  "{n}개 모두 기동 → 워크스페이스": "Launch all {n} → Workspace",
 };

@@ -53,6 +53,7 @@ import {
   focusSessionTerminal,
   isRespawning,
   launchAgentInSession,
+  roleAgentOf,
   sessionTermSize,
   syncSessionTerminal,
   TerminalPane,
@@ -62,7 +63,7 @@ import { t, tf } from "../i18n";
 import { SessionDetailPanel } from "./SessionDetailPanel";
 import { TranscriptPane } from "./TranscriptPane";
 import type { AgentCliId, Session, Workspace } from "../types";
-import { AGENT_CLI_LABEL, agentAttached, cliOf, statusText, effectivePermissions, effectiveTitle, nameBesideNo, paneNo, SESSION_NAME_MAX, sessionDisplayName, sessionName, slotNo } from "../types";
+import { AGENT_CLI_LABEL, agentAttached, cliOf, statusText, effectiveTitle, nameBesideNo, paneNo, SESSION_NAME_MAX, sessionDisplayName, sessionName, slotNo } from "../types";
 import { Icon } from "../components/icons";
 import { IS_MAC, keyLabel } from "../platform";
 
@@ -456,7 +457,12 @@ export function ControlCenter(props: { workspace: Workspace }) {
   };
   const addTerminal = () => {
     if (addNameErr()) return;
-    backend.addTerminal(props.workspace.id, addShell() || defaultShell().label, undefined, addName());
+    const created = backend.addTerminal(props.workspace.id, addShell() || defaultShell().label, undefined, addName());
+    // 새 페인에 키보드를 준다 (U108) — 이전 페인에 남아 친 키가 엉뚱한 셸로 갔다
+    if (created) {
+      setSelectedSession(created.id);
+      whenSessionReady(created.id, focusSessionTerminal);
+    }
     setAddOpen(false);
   };
   // 셸 실행 에이전트 열기 (codex 등) — 설치 확인은 카드를 내놓을 때 이미 끝났다.
@@ -499,7 +505,11 @@ export function ControlCenter(props: { workspace: Workspace }) {
     // "열기"가 곧 기동이다 — 셸이 뜨는 대로 역할·권한·훅이 붙은 에이전트로 다시 연다.
     // 예전에는 여기서 맨 셸만 뜨고, 사람이 페인의 [▶ 에이전트 기동]을 따로 찾아 눌러야 했다.
     // 그 버튼은 그대로 남는다 — 중지한 세션을 다시 띄우는 자리는 여전히 거기다.
-    if (created) whenSessionReady(created.id, () => void launchAgent(created));
+    // 기동이 끝나면 launchAgentInSession이 그 터미널에 키보드를 준다 (U108) — 선택도 새 세션으로
+    if (created) {
+      setSelectedSession(created.id);
+      whenSessionReady(created.id, () => void launchAgent(created));
+    }
     setAddOpen(false);
   };
   const [removeTarget, setRemoveTarget] = createSignal<Session | undefined>(undefined);
@@ -710,14 +720,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
     setRemoveTarget(s);
   };
 
-  /** 관리되는 에이전트의 기동 인자 — 역할 세션에만 있다 (기본 터미널은 셸로 남는다) */
-  const roleAgent = (s: Session) => {
-    if (!s.personaId) return undefined;
-    const p = effectivePermissions(s, job(s.jobId));
-    if (!p) return undefined;
-    // claude --name은 세션 이름 (0.5) — Claude 재개 목록에서 세션을 가를 수 있게
-    return { name: sessionName(s, persona(s.personaId)), permissions: p };
-  };
+  const roleAgent = roleAgentOf;
   /** 아직 EQMUX가 관리하는 에이전트가 아니다 — 맨 셸이 떠 있는 역할 세션.
    *  손으로 `claude`를 쳐도 환경변수·훅·역할이 안 붙으므로, 기동은 이 액션으로만 한다.
    *

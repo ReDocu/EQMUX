@@ -8,7 +8,9 @@ import { backend } from "../backend/mock";
 import { maxSlots } from "../backend/settings";
 import { castingConfirmLines } from "../backend/team";
 import { t, tf } from "../i18n";
-import { setView, tick } from "../state";
+import { setFocusRequest, setSelectedSession, setView, tick, view } from "../state";
+import { launchRoleAgents } from "../components/TerminalPane";
+import { WizardSteps } from "./LaunchMode";
 import { Icon } from "../components/icons";
 import { ConfirmDialog } from "../components/ui";
 import { AGENT_CLI_LABEL, cliOf, effectiveTitle, nameBesideNo, sessionName, slotNo, translatePermissions } from "../types";
@@ -107,6 +109,25 @@ export function TeamComposition(props: { wsId: string }) {
   };
   const [confirm, setConfirm] = createSignal<{ lines: string[]; slots: { personaId: string; jobId: string }[] } | undefined>(undefined);
 
+  // 첫 세션 마법사로 왔는가 (P49) — 단계 표시는 그때만
+  const wizard = () => {
+    const v = view();
+    return v.kind === "composition" && !!v.wizard;
+  };
+  // 아직 셸뿐인 역할 세션 (P50) — 도착한 페인이 전부 '에이전트 없음'이라 [기동]을 네 번 눌러야 했다
+  const idle = () => roleMembers().filter((m) => m.status === "shell" && !m.agent);
+  // 마지막 버튼 = 워크스페이스로 간다. launch면 셸이 뜨는 대로 에이전트를 띄우고 리드에게 키보드를 준다
+  const openWorkspace = (launch: boolean) => {
+    if (launch) launchRoleAgents(idle());
+    backend.openWorkspace(props.wsId);
+    setView({ kind: "workspace", id: props.wsId });
+    const l = lead();
+    if (launch && l) {
+      setSelectedSession(l.id);
+      setFocusRequest({ session: l.id });
+    }
+  };
+
   return (
     <div class="screen tcmp">
       <div class="screen-head">
@@ -123,10 +144,27 @@ export function TeamComposition(props: { wsId: string }) {
             <Icon name="terminal" size={12} />
             {tf("기본 편성 채우기 ({name} 프리셋)", { name: presets()?.[0]?.name ?? FALLBACK_PRESET.name })}
           </button>
-          <button class="btn primary" onClick={() => setView({ kind: "workspace", id: props.wsId })}>
-            <Icon name="arrow-right" size={12} />
-            {t("관제 화면으로")}
+          <button class="btn" onClick={() => setView({ kind: "casting", wsId: props.wsId, wizard: wizard() || undefined })}>
+            {t("← 팀 캐스팅")}
           </button>
+          {/* '관제'는 앱 바 대시보드의 이름이다 — 이 버튼은 워크스페이스로 간다 (P50) */}
+          <Show
+            when={idle().length > 0}
+            fallback={
+              <button class="btn primary" onClick={() => openWorkspace(false)}>
+                <Icon name="arrow-right" size={12} />
+                {t("워크스페이스 열기")}
+              </button>
+            }
+          >
+            <button class="btn" onClick={() => openWorkspace(false)}>
+              {t("기동 없이 열기")}
+            </button>
+            <button class="btn primary" onClick={() => openWorkspace(true)}>
+              <Icon name="arrow-right" size={12} />
+              {tf("{n}개 모두 기동 → 워크스페이스", { n: idle().length })}
+            </button>
+          </Show>
         </div>
       </div>
 
@@ -148,6 +186,11 @@ export function TeamComposition(props: { wsId: string }) {
         )}
       </Show>
 
+      <Show when={wizard()}>
+        <div class="tcmp-steps">
+          <WizardSteps path="team" at={3} />
+        </div>
+      </Show>
       <div class="screen-body tcmp-main">
         <div class="card tcmp-board">
           <div class="tcmp-title">{t("팀 관계 표 (team.md 그대로)")}</div>
