@@ -238,3 +238,13 @@
 | 11-02 | W3 | 건너뛰기 팔레트 Ctrl+Shift+K(⌘⇧K, ⌘K는 터미널 비우기라 피함) · 단축키 표 보강 | `9d172aa` |
 | 11-02 | W7 | 판정 근거 표시 · 하루 예산 cost_summary 합계. 실기: 재시작 뒤 합계 | `62fe468` |
 | 11-02 | W0 | 실기 확인 목록 틀 `docs/update-0.6-qa-checklist.md`(스트림별 절) | 이 커밋 |
+| 11-02 | W0 | HEAD 검증(`62fe468`): tsc OK · npm test 244 · cargo 227 + ports 1 | — |
+| 11-02 | W2 | CLI 최소 버전 알림(claude 2.1.316 · codex 0.146.0) · Windows 레지스트리 stale 판정 | `51cfdd6` |
+| 11-02 | W4 | §11-3 역할 · 캐스팅 · 임무 문구 · U102 | `bec5a3a` |
+| 11-02 | W7 | §11-3 ①: 워크스페이스 통일(P51) · 내부 용어(P53) · P46 · P47 · U75 · LaunchMode 말투 · 알림 cli-version | `89940a1` |
+| 11-02 | W0 | 실기 목록 W1 · W2 · W4 절. W6 절 열 모양(4열/5열) 작업본 차이는 사용자 결정 대기 | `d3565ee` |
+| 11-02 | W2 | B121 트랜스크립트 경로 실경로 기준(NFD는 mac 실기) | `4b8f50f` |
+| 11-02 | W1 | §6 R1 최소화 · 트레이 숨김 때 WebView2 메모리 LOW. 실기: 전후 메모리 | `bad6f37` |
+| 11-02 | W3 | escalate `--severity high`(원장 v5) · 알림 센터 · OS 알림. 화면은 W7 | `e22fe46` |
+| 11-02 | W5 | 직함별 담당 경로 경고 `edit-outside-owns` · who 담당 줄 · path_keys(B132 · B151) · U102 | `5632dc5` |
+| 11-02 | W0 | HEAD 검증(`5632dc5`): tsc OK · npm test 244 · cargo 237 + ports 1 | — |
