@@ -255,10 +255,16 @@ const SECTIONS: Section[] = [
     fixed: [
       { k: "메시지 · 스크롤백 보존", label: "30일" },
       {
+        // 0.6 W1 §1-2 — .bak으로 넘기던 것을 스키마 이전으로 바꿨다
         k: "버전 업 때 session.db",
-        d: "지우지 않고 .bak으로 옮긴다 · workspaces.json · layout.json은 남긴다",
-        label: ".bak",
+        d: "스키마를 이전해 기록을 이어 쓴다 · 손상되면 옆으로 옮기고 새로 만든다",
+        label: "이전",
         tone: "blue",
+      },
+      {
+        k: "전체 보존 상한",
+        d: "모든 워크스페이스 합계 · 넘으면 오래된 스크롤백부터 지운다 (메시지는 남는다)",
+        label: "2GB",
       },
       { k: "세션당 상한", label: "1,000줄" },
       { k: "배치 커밋", label: "100ms / 200행" },

@@ -213,8 +213,12 @@ export const dict: Record<string, string> = {
   "메시지 · 스크롤백 보존": "Message · scrollback retention",
   "30일": "30 days",
   "버전 업 때 session.db": "session.db on version update",
-  "지우지 않고 .bak으로 옮긴다 · workspaces.json · layout.json은 남긴다":
-    "Moved to .bak, not deleted · workspaces.json · layout.json are kept",
+  "스키마를 이전해 기록을 이어 쓴다 · 손상되면 옆으로 옮기고 새로 만든다":
+    "Schema is migrated, history is kept · a damaged DB is moved aside and recreated",
+  이전: "Migrate",
+  "전체 보존 상한": "Total retention cap",
+  "모든 워크스페이스 합계 · 넘으면 오래된 스크롤백부터 지운다 (메시지는 남는다)":
+    "All workspaces combined · oldest scrollback goes first (messages are kept)",
   "캐릭터 시트 상한": "Character sheet limit",
   "SessionStart 훅이 싣는 시트 본문": "Sheet body loaded by the SessionStart hook",
   "4,000자": "4,000 chars",
