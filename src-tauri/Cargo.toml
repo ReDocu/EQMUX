@@ -62,6 +62,11 @@ lto = true
 codegen-units = 1
 strip = true
 
+# 개발 빌드의 의존성만 최적화한다 (0.6 §6) — 우리 크레이트는 디버그 그대로라 증분 빌드는 빠르고,
+# SQLite·ConPTY·웹뷰 쪽이 개발 중에도 릴리스에 가까운 속도로 돈다. 릴리스에는 영향이 없다
+[profile.dev.package."*"]
+opt-level = 2
+
 [lib]
 name = "eqmux_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
