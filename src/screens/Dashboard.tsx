@@ -236,7 +236,10 @@ export function Dashboard() {
             // 한도 (0.6 F1) — 구독 요금제에는 금액보다 한도가 의미 있다. 두 표시를 한 칸에 둔다 (§13-6)
             {
               k: "오늘 비용",
-              v: worstLimit(openSessions()) ? `${spendText()} · ${limitText(worstLimit(openSessions())!)}` : spendText(),
+              // 최소 너비(1100)에서 타일 안쪽이 ~120px — 금액은 작은 글자, 한도는 아래 줄로 (출시 전 점검)
+              v: spendText(),
+              sm: true,
+              sub: worstLimit(openSessions()) ? limitText(worstLimit(openSessions())!) : undefined,
               c: overBudget() || (worstLimit(openSessions())?.usedPct ?? 0) >= LIMIT_WARN ? "amber" : "",
               tip: [
                 t("모든 워크스페이스의 오늘 비용 합계 · 예산은 설정 › 알림"),
@@ -250,7 +253,12 @@ export function Dashboard() {
           {(m) => (
             <div class="card dash-metric" title={m().tip}>
               <div class="dash-metric-k">{capFirst(t(m().k))}</div>
-              <div class={`dash-metric-v mono ${m().c}`}>{m().v}</div>
+              <div class={`dash-metric-v mono ${m().c}`} classList={{ sm: !!m().sm }}>
+                {m().v}
+              </div>
+              <Show when={m().sub}>
+                <div class="dash-metric-sub mono muted">{m().sub}</div>
+              </Show>
             </div>
           )}
         </Index>
@@ -329,8 +337,10 @@ export function Dashboard() {
             {(ws) => (
               <div class="dash-ws">
                 <div class="ws-row-head">
-                  <span class="ws-name">{ws.name}</span>
-                  <span class="mono muted">
+                  <span class="ws-name" title={ws.name}>
+                    {ws.name}
+                  </span>
+                  <span class="mono muted" title={ws.path}>
                     {ws.path} · {ws.branch ?? "—"} · {tf("{n} 세션", { n: wsSessions(ws.id).length })}
                   </span>
                   <span class="ws-row-chips">
@@ -436,7 +446,9 @@ export function Dashboard() {
               <For each={closedWs()}>
                 {(ws) => (
                   <div class="card ws-closed-card">
-                    <span class="ws-closed-name">{ws.name}</span>
+                    <span class="ws-closed-name" title={ws.name}>
+                      {ws.name}
+                    </span>
                     <span class="badge" classList={{ amber: ws.pathMissing }}>
                       {t(ws.pathMissing ? "경로 소실" : "닫힘")}
                     </span>

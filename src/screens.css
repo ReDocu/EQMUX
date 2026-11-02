@@ -7342,3 +7342,92 @@ label.inbox-pop-row {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ── 0.6 W7: 출시 전 실패 경로 점검 — 최소 너비(1100) · 긴 이름 · 영어 화면 ──
+   워크스페이스 이름은 길이 상한이 없다(세션 이름은 24자). 이름이 길어도 옆 칩 · 버튼을 밀어내지 않는다 */
+/* 화면 머리 — 마법사 h1 "실행 방식 선택 · {이름}"이 오른쪽 버튼을 창 밖으로 밀던 것 */
+.screen-head > :first-child {
+  min-width: 0;
+}
+.screen-head h1 {
+  overflow-wrap: anywhere;
+}
+/* 대시보드 워크스페이스 행 — 이름 · 경로는 줄임표(전체는 title), 행동 · 확인 칩은 제자리 */
+.ws-row-head {
+  min-width: 0;
+}
+.ws-row-head .ws-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ws-row-head > .mono {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ws-row-chips {
+  flex-shrink: 0;
+}
+.ws-closed-name {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 오늘 비용 타일 — "$12.34 / $10"이 24px로는 최소 너비 타일(안쪽 ~120px)을 넘었다. 한도는 아래 줄 */
+.dash-metric {
+  min-width: 0;
+}
+.dash-metric-v.sm {
+  font-size: 16px;
+  line-height: 29px;
+  overflow-wrap: anywhere;
+}
+.dash-metric-sub {
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+/* 기다리는 행(오른쪽 300px 열) — "이름 · 워크스페이스"가 기다린 시간을 밀어내지 않게, 영어 버튼은 줄바꿈 */
+.wait-row-nm {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wait-row-t {
+  flex-shrink: 0;
+}
+.wait-row-acts {
+  flex-wrap: wrap;
+}
+.away-nm {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+/* 워크스페이스 열기 — 목록 · 상세의 긴 이름 */
+.ws-row-name,
+.conn-detail-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+/* 마법사 단계 · 바닥 막대 — 영어 라벨이 길어도 칩 단위로 줄바꿈한다 */
+.launch-steps {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+.launch-step {
+  white-space: nowrap;
+}
+.launch-footer {
+  flex-wrap: wrap;
+}
+.launch-footer-actions {
+  flex-shrink: 0;
+  margin-left: auto;
+}
