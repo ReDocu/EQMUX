@@ -756,13 +756,13 @@ async fn pty_spawn(
                 b.env("EQMUX_SESSION", &id);
                 b.env("EQMUX_TOKEN", &token);
                 b.env("EQMUX_TERMINAL", "eqmux");
-                if let Some(rf) = &role_file {
                 // 세션별 포트 범위 (§4, W6) — 사람이 쓰는 서버 셸(#server@)은 받지 않는다
                 if !id.starts_with("#server@") {
                     for (k, v) in ports::assign_range(&id).iter().flat_map(ports::range_env) {
                         b.env(k, v);
                     }
                 }
+                if let Some(rf) = &role_file {
                     b.env("EQMUX_ROLE_FILE", rf);
                 }
                 if let Some(tf) = &team_md {

@@ -382,6 +382,12 @@ pub fn agent_builders(
         // 추측 가능하므로, 스폰마다 새로 발급한 논스가 실제 신원이다
         b.env("EQMUX_TOKEN", token);
         b.env("EQMUX_TERMINAL", "eqmux");
+        // 세션별 포트 범위 (§4, W6 ports.rs) — dev 서버가 다른 세션과 부딪히지 않게. PORT는 심지 않는다
+        if let Some(r) = crate::ports::assign_range(app_session) {
+            for (k, v) in crate::ports::range_env(&r) {
+                b.env(k, v);
+            }
+        }
         // 어느 엔진 안에서 도는지 (M37) — 훅·CLI가 엔진별 분기를 해야 할 때의 근거
         b.env("EQMUX_AGENT", exe);
         // `eqmux` CLI(PRD I)가 PATH에서 잡히도록 앱 실행 파일 폴더를 앞에 붙인다 —
@@ -425,12 +431,6 @@ pub fn agent_builders(
     for a in args {
         via_cmd.arg(a);
     }
-        // 세션별 포트 범위 (§4, W6 ports.rs) — dev 서버가 다른 세션과 부딪히지 않게. PORT는 심지 않는다
-        if let Some(r) = crate::ports::assign_range(app_session) {
-            for (k, v) in crate::ports::range_env(&r) {
-                b.env(k, v);
-            }
-        }
     apply(&mut via_cmd);
     vec![direct, via_cmd]
 }
