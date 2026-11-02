@@ -305,6 +305,15 @@ export function Missions(props: { wsId: string }) {
                       {t("검토 중으로")}
                     </button>
                   </Show>
+                  {/* 임무 검토 (0.6 §13-3) — 완료 보고가 왔거나 검토 중인 임무 */}
+                  <Show when={m().status === "in-review" || (m().status === "in-progress" && doneReport(m()))}>
+                    <button
+                      class="btn"
+                      onClick={() => setView({ kind: "review", wsId: props.wsId, missionId: m().id, back: { kind: "missions", wsId: props.wsId } })}
+                    >
+                      {t("검토하기")}
+                    </button>
+                  </Show>
                 </div>
               </>
             )}

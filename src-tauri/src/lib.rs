@@ -3113,6 +3113,7 @@ pub fn run() {
             store_purge_scrollback,
             missions::mission_mark_base, // 임무 시작점 (§13-2) — 0.6 W4
             library::library_portrait, // 초상 이미지 (§15-4) — 0.6 W4
+            missions::mission_touched_files, // 임무 검토 필터 (§13-3) — 0.6 W4
             events_query,
             msg_list,
             msg_send,

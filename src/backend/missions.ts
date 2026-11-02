@@ -3,8 +3,10 @@
 // 목록을 다시 실측한다 (FR-E-59). 브라우저 dev에서는 기존 목 동작으로 폴백한다.
 import { invoke } from "@tauri-apps/api/core";
 import { backend } from "./mock";
-import { cancelBrief, injectLine, queueBrief } from "./conversation";
-import { isTauri } from "./pty";
+import { cancelBrief, injectLine, queueBrief, sendConversation } from "./conversation";
+import { isTauri, listAlivePty, onPtyOutput, writePty } from "./pty";
+import { serverTermId } from "./ports";
+import { exitMarkerSuffix, findExitCode } from "../screens/reviewRules";
 import { canInject } from "../types";
 import type { ConversationMessage, Mission, MissionStatus } from "../types";
 import { notify } from "../components/ui";
@@ -210,4 +212,45 @@ export async function autoAssignDefault(wsId: string, sessionId: string): Promis
     .listMissions()
     .find((m) => m.workspaceId === wsId && m.isDefault && m.status !== "done");
   if (def) await toggleAssign(wsId, def.id, sessionId); // 같은 경로 — 임무 블록 + 브리프
+}
+
+// ── 임무 검토 (0.6 §13-3) — 화면은 screens/MissionReview.tsx. 상태를 바꾸는 것은 사람의 버튼뿐이다 ──
+
+/** 이 임무 담당 세션들이 배정 뒤 편집 도구로 고친 파일 (C4 file_touch) — 저장소 기준 상대 경로 */
+export async function missionTouchedFiles(wsId: string, missionId: string): Promise<string[] | undefined> {
+  const path = wsPath(wsId);
+  if (!isTauri() || !path) return undefined;
+  return invoke<string[]>("mission_touched_files", { wsId, wsPath: path, id: missionId }).catch(() => undefined);
+}
+
+export type TestRun = number | "no-shell" | "unsupported" | "timeout";
+
+/** [테스트 실행] — 서버 탭 셸에 명령 + 종료 표식을 치고, 출력에서 표식을 찾아 종료 코드를 돌려준다.
+ *  서버 셸이 안 떠 있으면 "no-shell"(화면이 서버 탭을 연다), 표식을 못 붙이는 셸(cmd)은 "unsupported".
+ *  ponytail: 30분 넘게 표식이 없으면 "timeout" — 셸은 그대로 두고 기다리기만 그만둔다 */
+export async function runReviewTest(wsId: string, run: string, shellCmd: string): Promise<TestRun> {
+  const id = serverTermId(wsId);
+  if (!(await listAlivePty()).includes(id)) return "no-shell";
+  const suffix = exitMarkerSuffix(shellCmd);
+  if (!suffix) return "unsupported";
+  return new Promise((resolve) => {
+    let buf = "";
+    const off = onPtyOutput(id, (d) => {
+      buf = (buf + d).slice(-8000);
+      const code = findExitCode(buf);
+      if (code === undefined) return;
+      off();
+      clearTimeout(timer);
+      resolve(code);
+    });
+    const timer = setTimeout(() => (off(), resolve("timeout")), 30 * 60_000);
+    writePty(id, `${run}${suffix}\r`);
+  });
+}
+
+/** [되돌려 보내기] — 의견을 담당 세션 모두에게 review로 보내고 IN-PROGRESS로 되돌린다 */
+export async function sendBackMission(wsId: string, m: Mission, note: string, nameOf: (sid: string) => string): Promise<void> {
+  const body = `임무 '${m.name}' 검토 의견 — ${note.trim()}`;
+  await Promise.all(m.assigned.map((sid) => sendConversation(wsId, `@${nameOf(sid)}`, "review", body)));
+  await setMissionStatus(wsId, m.id, "in-progress");
 }

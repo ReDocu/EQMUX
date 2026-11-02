@@ -255,6 +255,55 @@ pub fn mission_mark_base(ws_path: String, id: String) -> Result<(), String> {
     mark_base(&ws_path, &id, true)
 }
 
+/// 편집 기록 경로 → 저장소 기준 상대 경로 (§13-3) — 훅의 file_path는 절대 경로일 수 있다.
+/// 슬래시로 맞추고 워크스페이스 접두를 걷는다(대소문자 무시 — Windows). 밖의 절대 경로는 버린다. 정렬·중복 제거
+pub fn touched_rel(ws_path: &str, paths: impl IntoIterator<Item = String>) -> Vec<String> {
+    let root = ws_path.replace('\\', "/").trim_end_matches('/').to_lowercase();
+    let mut out = std::collections::BTreeSet::new();
+    for p in paths {
+        let p = p.replace('\\', "/");
+        let abs = p.starts_with('/') || p.get(1..2) == Some(":");
+        let rel = if !abs {
+            Some(p.trim_start_matches("./").to_string())
+        } else if p.to_lowercase().starts_with(&format!("{root}/")) {
+            p.get(root.len() + 1..).map(str::to_string) // 경계가 안 맞으면(소문자 길이 차) 버린다
+        } else {
+            None
+        };
+        if let Some(r) = rel.filter(|r| !r.is_empty()) {
+            out.insert(r);
+        }
+    }
+    out.into_iter().collect()
+}
+
+/// 임무 검토 필터 (§13-3) — 이 임무에 배정된(됐던) 세션들이 첫 배정 뒤에 편집 도구로 고친 파일.
+/// 세션은 지금 배정 + assigned_at에 남은 세션, 시작은 assigned_at 중 가장 이른 시각(없으면 처음부터)
+#[tauri::command]
+pub async fn mission_touched_files(
+    store_state: tauri::State<'_, crate::StoreState>,
+    ws_id: String,
+    ws_path: String,
+    id: String,
+) -> Result<Vec<String>, String> {
+    let root = store_state.0.root();
+    tauri::async_runtime::spawn_blocking(move || {
+        let m = list(&ws_path).into_iter().find(|m| m.id == id).ok_or("임무 파일을 찾을 수 없습니다")?;
+        let since = m.assigned_at.values().copied().min().unwrap_or(0);
+        let mut sessions: Vec<String> = m.assigned_at.keys().cloned().collect();
+        sessions.extend(m.assigned.iter().cloned());
+        sessions.sort();
+        sessions.dedup();
+        let paths = sessions
+            .iter()
+            .flat_map(|s| crate::store::touches_for(&root, &ws_id, s, since))
+            .map(|t| t.path);
+        Ok(touched_rel(&ws_path, paths))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// 배정 시각 커맨드 (B92) — 프런트가 배정 토글 뒤에 repo 루트 경로로 부른다
 #[tauri::command]
 pub fn mission_mark_assigned(ws_path: String, id: String, session: String, assigned: bool) -> Result<(), String> {
@@ -560,6 +609,22 @@ mod tests {
         let text = fs::read_to_string(mission_path(&ws, &m.id)).unwrap();
         assert!(!text.contains("assigned_at"));
         fs::remove_dir_all(&ws).ok();
+    }
+
+    /// 검토 필터 경로 (§13-3) — 절대 경로는 워크스페이스 기준으로, 밖은 버리고, 정렬·중복 제거
+    #[test]
+    fn touched_paths_become_repo_relative() {
+        let got = touched_rel(
+            "D:\\w\\repo\\",
+            [
+                "D:/W/Repo/src/x.ts".to_string(),
+                "src\\y.ts".into(),
+                "./src/x.ts".into(),
+                "C:/other/z.ts".into(),
+                "D:/w/repo2/q.ts".into(),
+            ],
+        );
+        assert_eq!(got, vec!["src/x.ts", "src/y.ts"]);
     }
 
     /// 선행 임무 (§4) — 공백으로 나눈 id 목록, 다른 쓰기(상태 변경)가 보존한다
