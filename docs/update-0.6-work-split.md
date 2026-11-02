@@ -128,10 +128,11 @@
 |---|---|
 | eqmux-88 (W1) | B116 macOS 단일 인스턴스(lib.rs 잠금, eqmux-dd와 나눔) → **§12 스킬 · 플러그인 1~3단계 + MCP**(새 파일 `extensions.rs` · `ExtensionsPanelTab.tsx` · `backend/extensions.ts` · `i18n/extensions.ts`) |
 | eqmux-17 (W5) | §17 남은 것(탐색기 파일 히스토리 메뉴 · 세션 배지 · 첫 커밋 전 스테이지 내리기) → **§17 3단계** |
-| eqmux-dd (W3) | B116 ipc.rs 쪽(소켓 정리) |
-| eqmux-d7 (W2) | B122 macOS 유예 없는 SIGKILL 추가 |
-| eqmux-ae (W6) | B156 `eqmux browser open` 출력 주소 추가 |
-| eqmux-52 (W7) | B157 맨 셸 [EQ-report] 줄 추가 |
+| eqmux-dd (W3) | B116 ipc.rs 쪽(소켓 정리) → §4 depends_on 완료 알림(끝) → **과거 세션 검색 · 재개**(`history.rs` · `HistorySearch.tsx`) → **서브에이전트 목록** |
+| eqmux-d7 (W2) | B122 macOS 유예 없는 SIGKILL 추가(1라운드 ⑥⑦④ 뒤) |
+| eqmux-ae (W6) | B156(끝) → **사이드 패널 개편**: 파일 탐색기를 코드 그룹 `[git \| 파일 \| 문서]`로, §12 확장 그룹 붙이기(eqmux-88과 맞춤) |
+| eqmux-52 (W7) | B157(끝) → B168 '전달됨' 시점(W2 `message-injected`) · §13-3 검토 화면 라우팅 |
+| eqmux-79 (W4) | §4 depends_on(끝) → **§13-3 임무 검토 화면** |
 
 ## 계약 (스트림 사이 인터페이스)
 
@@ -193,3 +194,17 @@
 | 11-02 | W6 | 비밀값 패턴 TS · Rust 공유 · 로그 마스킹 · E4 문구 · B146 · B147 · B149 · B155 | `24e4138` |
 | 11-02 | W4 | 초상 이미지 · P26 역할 파일 줄 | `54bc416` |
 | 11-02 | W7 | 이 팀으로 시작 카드 · 승인 사유 코드. 실기: 클론 저장소에서 restoreTeams가 이 화면을 건너뛰는지 | `3dd3905` |
+| 11-02 | W2 | 직무별 모델 스폰 인자(Claude `--model` · Codex `-m`) | `8d977da` |
+| 11-02 | W3 | `eqmux read` 가리기 · 클립보드 기록 · 클라우드 제외(concealed). 실기: mac 빌드에서 clip 분기 | `f3beda3` |
+| 11-02 | W7 | 스크롤백 · 세션 로그 저장 끄기 설정 · `clipWriteText` concealed | `26ccf2d` |
+| 11-02 | W0 | HEAD 검증(`26ccf2d`): tsc OK · npm test 219 · cargo 204 통과 + ports 1(기준선) | — |
+| 11-02 | W4 | 임무 `depends_on` · 선행 임무 칩 | `7856f3d` |
+| 11-02 | W6 | B156 닫힌 패널 open · B148 환경변수 복사 기록 제외. 실기: 패널 닫힘 → `eqmux browser open` 첫 줄, mac 빌드 | `9810f4b` |
+| 11-02 | W3 | 선행 임무 완료 알림(mission_set_status done 경로만) | `59f971f` |
+| 11-02 | W2 | `diag_foreign_tools` · `diag_bundle`(C3). Codex `hooks.json`도 본다 | `1d77eea` |
+| 11-02 | W1 | `scrollbackPersist` Rust. 실기: 끈 뒤 세션 로그 · session.db 증가 멈춤, 켠 뒤 다시 증가 | `14f1b93` |
+| 11-02 | W2 | B10 · B168 주입 도착 로그 · `message-injected`. 한계: id 없는 메시지, 긴 붙여넣기 자리표시(미측정) | `8bf942b` |
+| 11-02 | W6 | G5 브라우저 안전장치(대화상자 · console · network · 낡은 `@eN`). 실기: confirm 버튼 click · `--accept`, console, SPA 전환 뒤 옛 참조 | `bbb0cd5` |
+| 11-02 | W7 | B157 맨 셸 메시지 알림 · D3 첫 화면 판정(깨어 있는 세션) · 완료 보고 [검토 →] | `dba51a6` |
+| 11-02 | W3 | browser 사용법(console · network · --accept) | `28164e7` |
+| 11-02 | W0 | 사용 설명서 갱신: 설계 경계(git 쓰기 · 승인함 · 트레이), git 패널, 창 닫기, browser 동작, Codex 설정 파일 | 이 커밋 |
