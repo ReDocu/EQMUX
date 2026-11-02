@@ -330,6 +330,8 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
     });
   });
 
+  /** 이 편집기가 화면 자체인가 — 아니면 다른 화면(임무 검토) 안에 들어 있다. base 유무와 상관없다 */
+  const standalone = () => view().kind === "gitdiff";
   /** 닫기 — 진입 시점 뷰로 복귀하고 git 패널 문맥도 되살린다 (U11) */
   const close = () => {
     const v = view();
@@ -346,7 +348,7 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
       const a = diffKeyAction(e, inInput);
       if (!a) return;
       if (a === "close") {
-        if (!props.base) close(); // 기준 모드는 품은 화면이 닫기를 맡는다
+        if (standalone()) close(); // 다른 화면 안에 들어 있으면(임무 검토) 그 화면이 닫기를 맡는다
       }
       else if (a === "next") jumpTo(blockIdx() + 1);
       else if (a === "prev") jumpTo(blockIdx() - 1);
@@ -545,7 +547,7 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
               <button class="btn ghost" classList={{ on: wrap() }} title={t("줄바꿈")} onClick={() => setWrap(!wrap())}>
                 ↩ {t("줄바꿈")}
               </button>
-              <Show when={!props.base}>
+              <Show when={standalone()}>
                 <button class="btn ghost" title={t("닫기 (Esc) — 진입한 화면으로 복귀")} onClick={close}>
                   <Icon name="x" size={11} />
                 </button>
