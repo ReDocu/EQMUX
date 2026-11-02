@@ -56,10 +56,12 @@ export function parseDotenv(text: string): EnvVar[] {
     const v: EnvVar = { key, value, line: i };
     if (q === '"' || q === "'" || q === "`") {
       v.quote = q;
-      if (value.length > 1 && value.endsWith(q)) {
-        value = value.slice(1, -1);
+      const close = value.indexOf(q, 1);
+      // 닫는 따옴표 뒤에는 공백·줄 끝 주석만 온다 — `A="quoted" # note` (B146)
+      if (close > 0 && /^\s*(#.*)?$/.test(value.slice(close + 1))) {
+        value = value.slice(1, close);
         if (q === '"') value = value.replace(/\\n/g, "\n");
-      } else {
+      } else if (close < 0) {
         // 닫는 따옴표가 뒤 줄에 있다 — 거기까지 건너뛴다
         v.multiline = true;
         while (i + 1 < lines.length && !lines[++i].trimEnd().endsWith(q));

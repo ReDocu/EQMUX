@@ -2,6 +2,8 @@
 // 브라우저에선 목 로그. 저장: 표시 중인 로그를 파일로 내보내고, 세션 로그 폴더를 연다.
 // Enter = 디스크 전문 검색 (FR-C-16 FTS) — 전체 스크롤백을 뒤지고, 히트 클릭 = 그 지점의
 // 앞뒤 기록을 디스크에서 조각 로드해 보여준다 (FR-C-13·14).
+// 비밀값 모양(토큰·KEY=값·URL 비밀번호)은 화면과 내보내기에서 가린다 (§2 · B150, backend/secrets.ts).
+// 디스크의 스크롤백·원시 로그 자체는 가리지 않는다 — 그 사실을 아래 세션 로그 카드에 적는다 (E4).
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { queryGlobalEvents } from "../backend/events";
 import type { FeedEvent } from "../backend/events";
@@ -10,6 +12,7 @@ import type { ServerLog } from "../backend/mock";
 import { pageScrollback, searchScrollback } from "../backend/panels";
 import type { ScrollbackHit } from "../backend/panels";
 import { isServerTermId } from "../backend/ports";
+import { maskSecrets } from "../backend/secrets";
 import { isTauri, openLogDir } from "../backend/pty";
 import { setPanelNote } from "../state";
 import { Icon } from "./icons";
@@ -121,7 +124,7 @@ export function LogsPanelTab() {
 
   const exportLogs = () => {
     const text = logs()
-      .map((l) => `${l.time} [${l.level.toUpperCase()}] [${l.type}] ${l.message}`)
+      .map((l) => `${l.time} [${l.level.toUpperCase()}] [${l.type}] ${maskSecrets(l.message)}`)
       .join("\n");
     const url = URL.createObjectURL(new Blob([text + "\n"], { type: "text/plain" }));
     const a = document.createElement("a");
@@ -194,7 +197,7 @@ export function LogsPanelTab() {
                   <div class="logsp-row" style={{ cursor: "pointer" }} onClick={() => void openContext(h)}>
                     <span class="mono muted logsp-time">{hhmmss(h.ts)}</span>
                     <span class="badge logsp-type">{shortId(h.sessionId)}</span>
-                    <span class="logsp-msg mono" style={{ "font-size": "10.5px" }}>{h.text}</span>
+                    <span class="logsp-msg mono" style={{ "font-size": "10.5px" }}>{maskSecrets(h.text)}</span>
                   </div>
                 )}
               </For>
@@ -222,7 +225,7 @@ export function LogsPanelTab() {
                     <For each={c().lines}>
                       {(l) => (
                         <div style={l.seq === c().hitSeq ? { background: "rgba(110,158,255,.18)" } : undefined}>
-                          {l.text}
+                          {maskSecrets(l.text)}
                         </div>
                       )}
                     </For>
@@ -240,7 +243,7 @@ export function LogsPanelTab() {
                 <span class="mono muted logsp-time">{l.time}</span>
                 <span class="mono logsp-src">{t(l.type)}</span>
                 <span class={`logsp-lv mono ${l.level}`}>{l.level.toUpperCase()}</span>
-                <span class="logsp-msg">{l.message}</span>
+                <span class="logsp-msg">{maskSecrets(l.message)}</span>
                 <Show when={l.expandable}>
                   <span class="mono muted">›</span>
                 </Show>
@@ -269,6 +272,9 @@ export function LogsPanelTab() {
             <div style={{ "font-weight": 700, "font-size": "11px" }}>{t("세션 로그 (PTY 원문)")}</div>
             <div class="mono muted" style={{ "font-size": "10px" }}>
               {t("~/.eqmux/logs/<세션>.log · 실시간 append")}
+            </div>
+            <div class="muted" style={{ "font-size": "10px" }}>
+              {t("이 파일과 스크롤백에는 토큰·비밀번호가 평문으로 남을 수 있습니다 — 이 화면에서만 가립니다")}
             </div>
           </div>
           <button class="btn" onClick={openLogDir}>

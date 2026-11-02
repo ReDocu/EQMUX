@@ -24,6 +24,7 @@ describe("parseDotenv", () => {
       "TOKEN='x'",
       "NAME=eq # 줄 끝 주석",
       'MULTI="l1\\nl2"',
+      'QC="quoted" # note',
       "EMPTY=",
       "=nokey",
       "garbage",
@@ -35,9 +36,10 @@ describe("parseDotenv", () => {
       { key: "TOKEN", value: "x" },
       { key: "NAME", value: "eq" },
       { key: "MULTI", value: "l1\nl2" },
+      { key: "QC", value: "quoted" },
       { key: "EMPTY", value: "" },
     ]);
-    expect(parseDotenv(text).map((v) => v.line)).toEqual([2, 3, 4, 5, 6, 7, 8]);
+    expect(parseDotenv(text).map((v) => v.line)).toEqual([2, 3, 4, 5, 6, 7, 8, 9]);
   });
 
   test("따옴표 안 줄바꿈은 multiline — 이어지는 줄을 변수로 읽지 않는다", () => {

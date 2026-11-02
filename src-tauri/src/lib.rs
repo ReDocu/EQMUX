@@ -38,6 +38,7 @@ mod ports;
 mod quit;
 mod recovery;
 mod roles;
+pub(crate) mod secrets; // 비밀값 가리기 (§2, W6) — eqmux read(W3)가 쓴다
 pub(crate) mod store;
 mod team;
 mod transcript;

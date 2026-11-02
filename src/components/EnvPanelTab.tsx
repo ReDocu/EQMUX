@@ -2,7 +2,7 @@
 // 값은 비밀(API 키·토큰)이 많아 기본으로 가린다 — 화면 공유·녹화 중에 그대로 새지 않게. 편집 칸도 같다.
 // 알림·오류에는 키만 쓰고 값은 쓰지 않는다. 변수 하나를 고치면 그 한 줄만 바뀐다(원문 보존).
 // 파일 목록은 SidePanel이 읽는다. 여기는 그리기와 편집 — 저장 뒤에는 onReload로 다시 읽힌다.
-import { createResource, createSignal, For, lazy, Show } from "solid-js";
+import { createEffect, createResource, createSignal, For, lazy, on, Show } from "solid-js";
 import {
   addToGitignore,
   appendLine,
@@ -42,6 +42,21 @@ export function EnvPanelTab(props: { files: EnvFile[]; wsPath?: string; onReload
   const [confirm, setConfirm] = createSignal<Confirm>();
   const [raw, setRaw] = createSignal<{ file: string; text: string; mtimeMs: number }>();
   const [savedNote, setSavedNote] = createSignal(false);
+
+  // 워크스페이스를 옮기면 [값 보기]와 편집 상태를 끈다 — 다른 저장소의 키가 확인 없이 펼쳐지지 않게 (B147)
+  createEffect(
+    on(
+      () => props.wsPath,
+      () => {
+        setReveal(false);
+        setEdit(undefined);
+        setRaw(undefined);
+        setErr(undefined);
+        setSavedNote(false);
+      },
+      { defer: true },
+    ),
+  );
 
   const envs = () => props.files.filter((f) => !f.example);
   const example = () => props.files.find((f) => f.example);
@@ -215,6 +230,8 @@ export function EnvPanelTab(props: { files: EnvFile[]; wsPath?: string; onReload
           <Icon name="refresh-cw" size={12} />
         </button>
       </div>
+      {/* 앱이 주입하는 값이 아니다 (B149) — 서버 탭 옆이라 서버 셸이 받는다고 오해하기 쉽다 */}
+      <div class="muted env-note">{t("페인·서버 셸 환경에 넣지 않습니다 — 서버가 dotenv로 직접 읽는 값입니다")}</div>
       <input
         class="panel-search mono"
         placeholder={t("변수 이름 검색")}

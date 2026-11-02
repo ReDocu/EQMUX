@@ -61,10 +61,12 @@ const dismissNotice = () => {
 
 export function SidePanel() {
   // .env 계열 — 워크스페이스가 바뀌면 다시 읽고, 탭의 [다시 읽기]·저장도 같은 결과를 고친다
-  const [envFiles, { refetch: reloadEnv }] = createResource(
+  // 결과에 경로를 붙여 둔다 — 다른 워크스페이스로 옮긴 직후 다시 읽는 동안 이전 워크스페이스 값이 보이지 않게 (B147)
+  const [envRes, { refetch: reloadEnv }] = createResource(
     () => scopeWorkspace()?.path,
-    (p) => loadEnvFiles(p),
+    async (p) => ({ path: p, files: await loadEnvFiles(p) }),
   );
+  const envFiles = () => (envRes()?.path === scopeWorkspace()?.path ? envRes()?.files : undefined);
   const active = () => groupOf(panelTab());
   createEffect(() => lastSub.set(groupOf(panelTab()).key, panelTab()));
   // 새 사용자(이전 layout.json 없음)는 묶이기 전 탭을 본 적이 없다 — 안내 없이 본 것으로 적어 둔다 (U40)
@@ -104,7 +106,7 @@ export function SidePanel() {
       </div>
       <Show when={notice() && priorLayout()}>
         <div class="panel-notice">
-          <span>{t("탭이 묶였습니다 — 대화 [대화 | 로그] · 코드 [git | 문서] · 실행 [서버 | 포트] · 브라우저")}</span>
+          <span>{t("탭이 묶였습니다 — 대화 [대화 | 로그] · 코드 [git | 문서] · 실행 [서버 | 포트 | 환경변수] · 브라우저")}</span>
           <button class="btn ghost" onClick={dismissNotice}>
             {t("확인")}
           </button>

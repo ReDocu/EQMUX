@@ -194,5 +194,9 @@ export const dict: Record<string, string> = {
   "{f}을(를) 읽지 못했습니다": "Couldn't read {f}",
   "쓸 수 없는 항목 {n}개를 건너뛰었습니다": "Skipped {n} unusable entries",
   "세션 포트 범위": "Session port ranges",
+  // 비밀값 노출 묶음 (§2 · B147–B155)
+  "페인·서버 셸 환경에 넣지 않습니다 — 서버가 dotenv로 직접 읽는 값입니다": "Not injected into panes or the server shell — your server reads these itself via dotenv",
+  "이 파일과 스크롤백에는 토큰·비밀번호가 평문으로 남을 수 있습니다 — 이 화면에서만 가립니다": "Tokens and passwords may remain in plain text in these files and the scrollback — they're only masked on this screen",
+  "탭이 묶였습니다 — 대화 [대화 | 로그] · 코드 [git | 문서] · 실행 [서버 | 포트 | 환경변수] · 브라우저": "Tabs are grouped — Talk [Conversation | Logs] · Code [git | Docs] · Run [Server | Ports | Env] · Browser",
   "세션마다 EQMUX_PORT_BASE ~ EQMUX_PORT_END로 알립니다 — 강제하지는 않습니다": "Each session is told its range via EQMUX_PORT_BASE ~ EQMUX_PORT_END — not enforced",
 };
