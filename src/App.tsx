@@ -23,14 +23,12 @@ import { startFileWatch } from "./backend/watch";
 import { refreshWorkspaces } from "./backend/workspaces";
 import {
   exitOpen,
-  explorerTab,
   layoutPickerOpen,
   modalOpen,
   overlay,
   panelOpen,
   scopeWorkspace,
   setExitOpen,
-  setExplorerTab,
   setLayoutPickerOpen,
   setPanelOpen,
   setView,
@@ -42,7 +40,6 @@ import { t } from "./i18n";
 import { ScreenOverlay } from "./components/ScreenOverlay";
 import { blocksNavKey, isNavChord } from "./components/keynav";
 import { notify } from "./components/ui";
-import { editorGuard, MissionExplorerTab } from "./components/MissionExplorerTab";
 import { ControlCenter } from "./screens/ControlCenter";
 import { CrashRecovery } from "./screens/CrashRecovery";
 import { Dashboard } from "./screens/Dashboard";
@@ -67,24 +64,6 @@ const WorkspaceConnection = lazy(() => import("./screens/WorkspaceConnection").t
 export function App() {
   const v = view;
 
-  // 임무 탐색기 팝업의 안쪽 전환 (0.3.7) — 임무는 화면 View, 탐색기는 팝업이라 서로 오갈
-  // 길이 단방향이었다. 팝업이 둘을 다 품고 이 세그먼트가 고른다. 임무는 워크스페이스
-  // 문맥이 있어야 성립하므로, 없으면 눌리지 않는다 (첫 실행 관제 화면)
-  const explorerNav = () => (
-    <div class="cc-seg">
-      <button classList={{ on: explorerTab() === "explorer" }} onClick={() => setExplorerTab("explorer")}>
-        {t("탐색기")}
-      </button>
-      <button
-        classList={{ on: explorerTab() === "missions" }}
-        disabled={!scopeWorkspace()}
-        title={scopeWorkspace() ? undefined : t("워크스페이스를 먼저 여세요")}
-        onClick={() => setExplorerTab("missions")}
-      >
-        {t("임무")}
-      </button>
-    </div>
-  );
   // 전역 pty-output/exit 수신 — spawnPty 경로에만 맡기면 에이전트 전용 실행·재부착 세션이
   // 출력을 못 받는다. 셸 exit은 여기서 상태에 반영한다 (에이전트는 agent-state가 관장)
   onMount(() => {
@@ -202,7 +181,7 @@ export function App() {
         setLayoutPickerOpen((o) => !o);
       } else if (k === "b") {
         e.preventDefault();
-        setPanelOpen((o) => !o);
+        setPanelOpen(!panelOpen());
       }
     };
     window.addEventListener("keydown", onKey);
@@ -328,9 +307,9 @@ export function App() {
       </Show>
       {/* 전체 화면 팝업 4종 — overlay 신호 하나라서 동시에 하나만 열린다 (M25 확장) */}
       <Show when={overlay() === "explorer"}>
-        <ScreenOverlay title={t("임무 · 파일 탐색기")} icon="briefcase-business" guard={editorGuard} nav={explorerNav()}>
-          {/* 임무는 워크스페이스 문맥이 있어야 성립한다 — 없으면(첫 실행 관제) 탐색기로 남는다 */}
-          <Show when={explorerTab() === "missions" && scopeWorkspace()} fallback={<MissionExplorerTab />}>
+        <ScreenOverlay title={t("임무")} icon="briefcase-business">
+          {/* 임무는 워크스페이스 문맥이 있어야 성립한다 — 파일 탐색기는 사이드 패널 files로 갔다 (결정 21) */}
+          <Show when={scopeWorkspace()} fallback={<div class="muted">{t("워크스페이스를 먼저 여세요")}</div>}>
             {(w) => <Missions wsId={w().id} />}
           </Show>
         </ScreenOverlay>

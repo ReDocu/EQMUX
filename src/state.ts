@@ -125,28 +125,32 @@ if (typeof window !== "undefined") {
   });
 }
 
-/** 임무 탐색기 팝업의 안쪽 전환 (0.3.7) — 탐색기 ↔ 임무를 팝업을 닫지 않고 오간다.
- *  임무는 원래 View(화면 #8)라 팝업에서 나가야만 볼 수 있었다. 팝업이 두 화면을 다 품고,
- *  이 신호가 어느 쪽을 그릴지 정한다. 팝업을 열 때마다 탐색기로 되돌린다 (App.tsx) —
- *  "로컬 폴더"를 눌렀는데 임무 목록이 뜨는 일이 없게. */
-export type ExplorerTab = "explorer" | "missions";
-export const [explorerTab, setExplorerTab] = createSignal<ExplorerTab>("explorer");
-
-/** 임무 탐색기 팝업을 지정한 자리에서 연다 (0.3.7) — 입구가 이름대로 열리게 한다:
- *  앱 바 "임무"는 임무로, 컨트롤 센터 "로컬 폴더"는 탐색기로. 이미 그 자리를 보고 있으면
- *  토글로 닫고, 다른 자리를 보고 있으면 닫지 않고 그 자리로 옮긴다.
- *  임무는 워크스페이스 문맥이 있어야 성립하므로, 없으면 탐색기로 착지한다 (첫 실행 관제). */
-export function toggleExplorer(tab: ExplorerTab): void {
-  const target: ExplorerTab = tab === "missions" && !scopeWorkspace() ? "explorer" : tab;
-  if (overlay() === "explorer" && explorerTab() === target) {
-    setOverlay(undefined);
+/** 임무 팝업 · 파일 탐색기 입구 (0.3.7 → 0.6 결정 21) — 탐색기는 사이드 패널 코드 그룹(files)으로 갔고,
+ *  팝업("explorer" 오버레이)은 임무만 그린다. 입구가 이름대로 열린다: 앱 바 "임무"는 팝업,
+ *  컨트롤 센터 "로컬 폴더"는 패널 files. 이미 그 자리를 보고 있으면 토글로 닫는다.
+ *  임무는 워크스페이스 문맥이 있어야 성립하므로, 없으면 파일 패널로 착지한다 (첫 실행 관제). */
+export function toggleExplorer(tab: "explorer" | "missions"): void {
+  if (tab === "explorer" || !scopeWorkspace()) {
+    if (panelOpen() && panelTab() === "files") setPanelOpen(false);
+    else openPanel("files");
     return;
   }
-  setExplorerTab(target);
-  setOverlay("explorer");
+  setOverlay(overlay() === "explorer" ? undefined : "explorer");
 }
 
-export type PanelTab = "conversation" | "git" | "ports" | "server" | "logs" | "browser" | "mdview" | "env";
+export type PanelTab =
+  | "conversation"
+  | "git"
+  | "ports"
+  | "server"
+  | "logs"
+  | "browser"
+  | "mdview"
+  | "env"
+  | "files" // 코드 그룹 [git | 파일 | 문서] (결정 21 · W6)
+  | "mcp" // 확장 그룹 [MCP | 플러그인 | 스킬]
+  | "plugins"
+  | "skills";
 
 const [viewSig, setViewRaw] = createSignal<View>({ kind: "control" });
 export const view = viewSig;
@@ -186,7 +190,26 @@ export function scopeWorkspace(): Workspace | undefined {
 }
 
 /** 사이드 패널 (M1 — 대화는 패널 탭이며 메인 화면이 아니다) */
-export const [panelOpen, setPanelOpen] = createSignal(false);
+const [panelOpenRaw, setPanelOpenRaw] = createSignal(false);
+export const panelOpen = panelOpenRaw;
+/** 사이드 패널 닫기 가드 (W6 · 결정 21) — 파일 탭 편집기의 미저장 편집. 닫는 길이 여럿이라 한 곳에서 막는다.
+ *  참이면 닫지 않고 panelCloseAsk를 세운다 — SidePanel이 확인창을 띄우고 [버리고 닫기]가 force로 닫는다.
+ *  ponytail: 전체 화면 터미널이 패널을 가리는 것은 닫기가 아니라 막지 않는다 */
+let panelGuard: (() => boolean) | undefined;
+export function setPanelGuard(g: () => boolean): () => void {
+  panelGuard = g;
+  return () => {
+    if (panelGuard === g) panelGuard = undefined;
+  };
+}
+export const [panelCloseAsk, setPanelCloseAsk] = createSignal(false);
+export function setPanelOpen(v: boolean, force = false): void {
+  if (!v && !force && panelOpenRaw() && panelGuard?.()) {
+    setPanelCloseAsk(true);
+    return;
+  }
+  setPanelOpenRaw(v);
+}
 /** 관제 화면 왼쪽 레일(슬롯 · 로컬 폴더 · 워크트리) 펼침 — 접으면 번호 띠만 남는다. layout.json에 남는다 */
 export const [railOpen, setRailOpen] = createSignal(true);
 export const [panelTab, setPanelTab] = createSignal<PanelTab>("conversation");

@@ -27,6 +27,7 @@ import {
   overlay,
   panelOpen,
   pushLayer,
+  scopeWorkspace,
   setExitOpen,
   setFocusRequest,
   setOverlay,
@@ -390,17 +391,31 @@ export function AppBar() {
           </Show>
         </button>
         {/* 도구는 전부 전체 화면 팝업이다 — overlay 신호 하나라서 동시에 하나만 열린다 */}
-        {/* 이름대로 임무 자리에서 연다 (0.3.7) — 파일 탐색기는 같은 팝업의 옆 세그먼트다.
-            컨트롤 센터의 "로컬 폴더"는 같은 팝업을 탐색기 자리에서 연다 */}
+        {/* 임무 팝업 (0.3.7) — 파일 탐색기는 사이드 패널 files로 갔다 (결정 21 · 컨트롤 센터 "로컬 폴더") */}
         <button
           class="tool"
           aria-label={t("임무")}
           classList={{ active: overlay() === "explorer" }}
-          title={t("임무 배정 — 전체 화면 팝업 (헤더에서 파일 탐색기로 전환)")}
+          title={t("임무 배정 — 전체 화면 팝업")}
           onClick={() => toggleExplorer("missions")}
         >
           <Icon name="briefcase-business" size={13} />
           <span class="tool-label">{t("임무")}</span>
+        </button>
+        {/* 과거 세션 검색 (§4 W3) — 화면(View)이라 팝업과 달리 back으로 돌아간다. 다시 누르면 닫는다 */}
+        <button
+          class="tool"
+          aria-label={t("과거 세션 검색")}
+          classList={{ active: view().kind === "history" }}
+          title={t("과거 세션 검색")}
+          onClick={() => {
+            const v = view();
+            if (v.kind === "history") setView(v.back ?? { kind: "control" });
+            else if (setOverlay(undefined)) setView({ kind: "history", wsId: scopeWorkspace()?.id, back: v });
+          }}
+        >
+          <Icon name="messages-square" size={13} />
+          <span class="tool-label">{t("기록")}</span>
         </button>
         <button
           class="tool"

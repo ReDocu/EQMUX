@@ -7197,3 +7197,8 @@ label.inbox-pop-row {
 .extp-table { border-collapse: collapse; font-size: 11px; }
 .extp-table th, .extp-table td { padding: 3px 6px; border-bottom: 1px solid var(--eq-line); text-align: left; white-space: nowrap; }
 .extp-cell { text-align: center !important; }
+
+/* 0.6 W6: 사이드 패널 파일 탭 (결정 21) — 팝업용 2단 탐색기를 좁은 패널에서 위아래로 쌓는다 */
+.panel-files { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.panel-files .msnp-content { grid-template-columns: 1fr; grid-template-rows: minmax(140px, 40%) 1fr; }
+.panel-files .msnp-path { display: none; }

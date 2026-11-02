@@ -6,8 +6,8 @@ export const dict: Record<string, string> = {
   "워크스페이스 연결": "Workspace connection",
   "역할 라이브러리": "Role Library",
   "워크스페이스 닫기 (세션은 백그라운드 유지)": "Close workspace (sessions stay in the background)",
-  "임무 배정 — 전체 화면 팝업 (헤더에서 파일 탐색기로 전환)":
-    "Mission assignment — fullscreen popup (switch to the file explorer in the header)",
+  "임무 배정 — 전체 화면 팝업": "Mission assignment — fullscreen popup",
+  "기록": "History",
   "워크스페이스 연결 — 전체 화면 팝업": "Workspace connection — fullscreen popup",
   "역할 라이브러리 — 전체 화면 팝업": "Role library — fullscreen popup",
   "설정 — 전체 화면 팝업": "Settings — fullscreen popup",
