@@ -3050,6 +3050,7 @@ pub fn run() {
             scrollback_export,
             store_usage_real,
             store_purge_scrollback,
+            missions::mission_mark_base, // 임무 시작점 (§13-2) — 0.6 W4
             events_query,
             msg_list,
             msg_send,

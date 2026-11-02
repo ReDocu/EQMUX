@@ -5,7 +5,7 @@ import { createEffect, createSignal, For, lazy, on, onMount, Show } from "solid-
 import { backend } from "../backend/mock";
 import { fsCreate, fsDelete, fsPreview, fsRead, fsRename, fsTree, fsWrite } from "../backend/panels";
 import type { FsNode, FsTree } from "../backend/panels";
-import { refreshMissions } from "../backend/missions";
+import { markMissionBase, refreshMissions } from "../backend/missions";
 import { sendConversation } from "../backend/conversation";
 import { isTauri, revealPath } from "../backend/pty";
 import { t, tf } from "../i18n";
@@ -272,6 +272,8 @@ export function MissionExplorerTab() {
     const wsId = ws()?.id;
     if (wsId) {
       void sendConversation(wsId, "@all", "handoff", `브리프 전달 · ${sel()?.rel ?? ".eqmux/missions/"}`);
+      const m = missionOf(sel()?.rel);
+      if (m) void markMissionBase(wsId, m.id); // 임무 시작점 = 지금 HEAD (§13-2)
     }
     // 전체 화면 팝업(M25)에서 부르므로 — 팝업을 접고 대화 패널을 연다
     setOverlay(undefined);

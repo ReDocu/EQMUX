@@ -91,4 +91,7 @@ export const dict: Record<string, string> = {
   "{session}은(는) '{from}'에서 빠지고 '{to}'에 배정됩니다. 세션의 임무는 하나입니다.":
     "{session} leaves '{from}' and is assigned to '{to}'. A session has one mission.",
   옮기기: "Move",
+  // 0.6 §13-2 임무 시작점
+  "시작 {sha}": "Started at {sha}",
+  "시작 {sha} · 그 뒤 커밋 {n}개": "Started at {sha} · {n} commits since",
 };

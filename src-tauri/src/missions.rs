@@ -31,6 +31,10 @@ pub struct MissionInfo {
     /// 배정 시각 (B92) — 세션 id → epoch ms. frontmatter `assigned_at: <세션>=<ms> …`.
     /// 완료 보고를 배정 뒤 것으로 한정하는 데 쓴다 — 재시작 뒤에도 같은 판정
     pub assigned_at: HashMap<String, i64>,
+    /// 임무 시작점 (§13-2) — 첫 배정 · [브리프 전달] 때의 HEAD. frontmatter `base_commit`
+    pub base_commit: Option<String>,
+    /// base_commit 뒤 커밋 수 — 목록 때 git으로 센다. 끝난 임무·저장소 아님·base 없음이면 None
+    pub commits_since: Option<u32>,
 }
 
 fn missions_dir(ws_path: &str) -> PathBuf {
@@ -164,6 +168,8 @@ fn parse_file(path: &Path) -> Option<(String, MissionInfo)> {
             assigned: Vec::new(),
             is_default: roles::fm_value(&fm, "default").map(|v| v == "true").unwrap_or(false),
             assigned_at: parse_assigned_at(&fm).into_iter().collect(),
+            base_commit: roles::fm_value(&fm, "base_commit"),
+            commits_since: None,
         },
     ))
 }
@@ -205,7 +211,43 @@ pub fn mark_assigned(ws_path: &str, id: &str, session: &str, at: Option<i64>) ->
     }
     out.push_str("---\n");
     out.push_str(&body);
+    atomic_write(&path, &out)?;
+    if at.is_some() {
+        mark_base(ws_path, id, false)?; // 첫 배정이 시작점 (§13-2) — 두 번째 세션 배정은 덮지 않는다
+    }
+    Ok(())
+}
+
+/// 임무 시작점 기록 (§13-2) — 지금 HEAD를 frontmatter `base_commit`에. 저장소가 아니거나 커밋이
+/// 없으면 조용히 건너뛴다. overwrite=false면 이미 있는 값을 지킨다(배정), true면 덮는다([브리프 전달])
+pub fn mark_base(ws_path: &str, id: &str, overwrite: bool) -> Result<(), String> {
+    let Ok(head) = crate::workspace::git(&["rev-parse", "HEAD"], ws_path) else {
+        return Ok(());
+    };
+    let path = find_path(ws_path, id).ok_or("임무 파일을 찾을 수 없습니다")?;
+    let text = fs::read_to_string(&path).map_err(|_| "임무 파일을 찾을 수 없습니다".to_string())?;
+    let (mut fm, body) = split_frontmatter(&text);
+    if let Some(old) = roles::fm_value(&fm, "base_commit") {
+        if !overwrite || old == head {
+            return Ok(());
+        }
+    }
+    fm.retain(|l| !l.starts_with("base_commit:"));
+    fm.push(format!("base_commit: {head}"));
+    let mut out = String::from("---\n");
+    for l in &fm {
+        out.push_str(l);
+        out.push('\n');
+    }
+    out.push_str("---\n");
+    out.push_str(&body);
     atomic_write(&path, &out)
+}
+
+/// [브리프 전달] 커맨드 (§13-2) — 사람이 "지금부터"라고 누른 것이라 시작점을 덮는다
+#[tauri::command]
+pub fn mission_mark_base(ws_path: String, id: String) -> Result<(), String> {
+    mark_base(&ws_path, &id, true)
 }
 
 /// 배정 시각 커맨드 (B92) — 프런트가 배정 토글 뒤에 repo 루트 경로로 부른다
@@ -260,6 +302,14 @@ pub fn list(ws_path: &str) -> Vec<MissionInfo> {
         .filter_map(|e| parse_file(&e.path()).map(|(_, m)| m))
         .collect();
     out.sort_by(|a, b| a.name.cmp(&b.name));
+    // ponytail: 임무마다 git 한 번 — 끝나지 않은 임무만 센다. 느려지면 rev-list 결과를 캐시한다
+    for m in out.iter_mut().filter(|m| m.status != "done") {
+        if let Some(base) = &m.base_commit {
+            m.commits_since = crate::workspace::git(&["rev-list", "--count", &format!("{base}..HEAD")], ws_path)
+                .ok()
+                .and_then(|n| n.parse().ok());
+        }
+    }
     for (session, mission_id) in roles::scan_assignments(ws_path) {
         if let Some(m) = out.iter_mut().find(|m| m.id == mission_id) {
             m.assigned.push(session);
@@ -299,6 +349,8 @@ pub fn create(
         assigned: Vec::new(),
         is_default: false,
         assigned_at: HashMap::new(),
+        base_commit: None,
+        commits_since: None,
     };
     atomic_write(&mission_path(ws_path, &id), &render(&m))?;
     Ok(m)
@@ -500,6 +552,37 @@ mod tests {
         let text = fs::read_to_string(mission_path(&ws, &m.id)).unwrap();
         assert!(!text.contains("assigned_at"));
         fs::remove_dir_all(&ws).ok();
+    }
+
+    /// 임무 시작점 (§13-2) — 첫 배정이 HEAD를 적고, 다음 배정은 덮지 않고, [브리프 전달]은 덮는다.
+    /// 목록이 그 뒤 커밋 수를 센다. 저장소가 아니면 배정은 되고 base_commit만 없다
+    #[test]
+    fn base_commit_on_assign_and_brief() {
+        let ws = temp_ws("base-commit");
+        let git = |args: &[&str]| crate::workspace::git(args, &ws).unwrap();
+        let commit = || git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "--allow-empty", "-m", "x"]);
+        git(&["init", "-q"]);
+        commit();
+        let first = git(&["rev-parse", "HEAD"]);
+        let m = create(&ws, "시작점", "목표", None, vec![]).unwrap();
+        mark_assigned(&ws, &m.id, "kai@w", Some(1)).unwrap();
+        assert_eq!(get(&ws, &m.id).unwrap().base_commit.as_deref(), Some(first.as_str()));
+        commit();
+        commit();
+        mark_assigned(&ws, &m.id, "hana@w", Some(2)).unwrap(); // 두 번째 배정은 시작점을 지킨다
+        let got = list(&ws).into_iter().next().unwrap();
+        assert_eq!(got.base_commit.as_deref(), Some(first.as_str()));
+        assert_eq!(got.commits_since, Some(2));
+        mark_base(&ws, &m.id, true).unwrap(); // [브리프 전달]
+        assert_eq!(list(&ws)[0].commits_since, Some(0));
+        assert_eq!(get(&ws, &m.id).unwrap().assigned_at.len(), 2); // 다른 키 보존
+        fs::remove_dir_all(&ws).ok();
+
+        let plain = temp_ws("base-none");
+        let m = create(&plain, "저장소 아님", "목표", None, vec![]).unwrap();
+        mark_assigned(&plain, &m.id, "kai@w", Some(1)).unwrap();
+        assert_eq!(get(&plain, &m.id).unwrap().base_commit, None);
+        fs::remove_dir_all(&plain).ok();
     }
 
     #[test]

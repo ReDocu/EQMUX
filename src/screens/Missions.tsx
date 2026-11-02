@@ -230,6 +230,14 @@ export function Missions(props: { wsId: string }) {
                       </button>
                     </Show>
                   </div>
+                  {/* 임무 시작점 (§13-2) — 첫 배정 · [브리프 전달] 때의 HEAD */}
+                  <Show when={m().baseCommit}>
+                    <div class="ma-hint mono muted" title={m().baseCommit}>
+                      {m().commitsSince === undefined
+                        ? tf("시작 {sha}", { sha: m().baseCommit!.slice(0, 7) })
+                        : tf("시작 {sha} · 그 뒤 커밋 {n}개", { sha: m().baseCommit!.slice(0, 7), n: m().commitsSince! })}
+                    </div>
+                  </Show>
                   <Show when={coNote()?.id === m().id}>
                     <div class="ma-hint mono muted">{coNote()!.text}</div>
                   </Show>

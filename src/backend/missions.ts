@@ -22,6 +22,8 @@ interface MissionFile {
   assigned: string[];
   isDefault: boolean; // 기본 임무 (FR-E-56)
   assignedAt?: Record<string, number>; // 배정 시각 (B92) — 세션 id → epoch ms, 임무 파일 frontmatter
+  baseCommit: string | null; // 임무 시작점 (§13-2)
+  commitsSince: number | null;
 }
 
 function wsPath(wsId: string): string | undefined {
@@ -43,7 +45,13 @@ export async function refreshMissions(wsId: string): Promise<void> {
     }
     backend.hydrateMissions(
       wsId,
-      list.map((m) => ({ ...m, branch: m.branch ?? undefined, workspaceId: wsId })),
+      list.map((m) => ({
+        ...m,
+        branch: m.branch ?? undefined,
+        baseCommit: m.baseCommit ?? undefined,
+        commitsSince: m.commitsSince ?? undefined,
+        workspaceId: wsId,
+      })),
     );
   }
 }
@@ -172,6 +180,14 @@ function sendBrief(sessionId: string, m: Mission): void {
   const line = `[EQ] 임무 배정: ${m.name}${goal} · 정의 ${m.file}`;
   if (canInject(s)) injectLine(sessionId, line); // 2단계 제출 (B94)
   else queueBrief(sessionId, line);
+}
+
+/** [브리프 전달] 때 임무 시작점을 지금 HEAD로 (§13-2) — 배정 때는 mission_mark_assigned가 처음 한 번 적는다 */
+export async function markMissionBase(wsId: string, missionId: string): Promise<void> {
+  const path = wsPath(wsId);
+  if (!isTauri() || !path) return;
+  await invoke("mission_mark_base", { wsPath: path, id: missionId }).catch(failed);
+  await refreshMissions(wsId);
 }
 
 /** 기본 임무 지정·해제 (FR-E-56, M33) — frontmatter default: true, 워크스페이스당 1개 */
