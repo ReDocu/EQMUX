@@ -3,9 +3,9 @@
 export const dict: Record<string, string> = {
   "{name} · 메시지 {n}건": "{name} · {n} message(s)",
   // ── 대화 탭 0.5 (W5) ──
-  "모든 프로젝트": "All projects",
+  "모든 워크스페이스": "All workspaces",
   "사람이 쓰는 메시지는 800자 상한에서 뺍니다": "Messages you write are exempt from the 800-character limit",
-  "끄면 다른 프로젝트와 오간 메시지를 숨깁니다": "Turn off to hide messages exchanged with other projects",
+  "끄면 다른 워크스페이스와 오간 메시지를 숨깁니다": "Turn off to hide messages exchanged with other workspaces",
   "이전 200건": "Previous 200",
   "완료 보고 — 에이전트가 맡은 일을 끝냈다고 밝혔습니다": "Done report — the agent says its assigned work is finished",
   "대기 중 · 상대 작업 중": "Queued · recipient busy",
@@ -14,8 +14,8 @@ export const dict: Record<string, string> = {
   "펼치기": "Expand",
   "파일을 열 수 없습니다 — {path}": "Cannot open file — {path}",
   "답장 (@{name})": "Reply (@{name})",
-  "다른 프로젝트로 전달…": "Forward to another project…",
-  "다른 프로젝트로 전달": "Forward to another project",
+  "다른 워크스페이스로 전달…": "Forward to another workspace…",
+  "다른 워크스페이스로 전달": "Forward to another workspace",
   "페인으로 점프": "Jump to pane",
   "본문 복사": "Copy text",
   "첨부 파일 열기": "Open attachment",
@@ -28,10 +28,9 @@ export const dict: Record<string, string> = {
   "이 팀의 대화 전체를 Markdown 파일로 저장": "Save this team's whole conversation to a Markdown file",
   "파일 저장은 앱에서만 됩니다 — 브라우저 목업에는 원장이 없습니다":
     "Saving to a file works in the app only — the browser mock has no ledger",
-  "{n}건 저장됨 — {path}": "Saved {n} message(s) — {path}",
+  "{n}건을 저장했습니다 — {path}": "Saved {n} — {path}",
   "저장 실패 — 로그 패널을 확인하세요": "Save failed — check the logs panel",
-  "본문이 없습니다 — 받는 사람 뒤에 보낼 내용을 적어주세요":
-    "No message body — write what you want to send after the recipient",
+  "본문이 없습니다 — 받는 사람 뒤에 보낼 내용을 적어 주세요": "No message — write what to send after the recipient",
   "화면 지우기": "Clear",
   "화면만 지웁니다 — 대화 원장과 저장 파일은 그대로 남습니다":
     "Clears the view only — the conversation ledger and saved files stay intact",
@@ -42,19 +41,16 @@ export const dict: Record<string, string> = {
     "Awaiting your answer — chat cannot reach it. Type in the pane itself",
   "인박스 대기 (턴 종료 시 전달)": "Inbox pending (delivered at turn end)",
   "{n}건": "{n} msg(s)",
-  "아직 메시지가 없습니다 — 아래에서 타입을 골라 팀에 보내보세요.":
-    "No messages yet — pick a type below and send one to the team.",
-  "idle 세션에는 즉시, 작업 중이면 턴 종료 시 전달됩니다":
-    "Delivered instantly to idle sessions; busy sessions receive at turn end",
+  "아직 메시지가 없습니다 — 아래에서 타입을 골라 팀에 보내 보세요": "No messages yet — pick a type below and send one to the team",
+  "쉬는 세션에는 바로, 작업 중이면 턴이 끝날 때 전달됩니다": "Delivered right away to resting sessions, or when the turn ends if busy",
   나: "Me",
   "@카이 질문… (@ 없으면 @all)": "@Kai your question… (no @ = @all)",
   "워크스페이스 탭을 먼저 여세요": "Open a workspace tab first",
   보내기: "Send",
-  "수신자 없음: @{name} — 이 워크스페이스의 페르소나·세션 이름으로":
-    "No recipient: @{name} — use a persona or session name in this workspace",
+  "수신자 없음: @{name} — 이 워크스페이스의 페르소나·세션 이름으로 지정하세요": "No recipient: @{name} — use a persona or session name in this workspace",
 
   // ── 대화 브리지 오류 (conversation.ts) ──
-  "분당 발신 상한에 닿았습니다 — 잠시 후 다시": "Per-minute send limit reached — try again shortly",
+  "분당 발신 상한에 닿았습니다 — 잠시 뒤 다시 보내세요": "Per-minute send limit reached — try again shortly",
   "본문이 너무 깁니다": "Body too long",
   "타입 5종과 본문이 필요합니다": "One of the 5 types and a body are required",
   "전송 실패 — 로그 패널을 확인하세요": "Send failed — check the logs panel",
@@ -123,7 +119,7 @@ export const dict: Record<string, string> = {
   "드래그 — 페인 폭 조정 · 더블클릭 — 초기화": "Drag — adjust pane width · double-click — reset",
   "드래그 — 페인 높이 조정 · 더블클릭 — 초기화": "Drag — adjust pane height · double-click — reset",
   // ── 0.5.x QA eqmux-66: 대화 탭 (B99 · U50 · U53 · U54) ──
-  "다른 프로젝트 포함": "Include other projects",
+  "다른 워크스페이스 포함": "Include other workspaces",
   "지운 {n}건 다시 보기": "Show {n} cleared",
   "원장에서 이전 200건 불러오기": "Load 200 older from the ledger",
   "불러오는 중…": "Loading…",
@@ -140,7 +136,7 @@ export const dict: Record<string, string> = {
   복사됨: "Copied",
   "복사하지 못했습니다": "Couldn't copy",
   // 넣기 팝오버 (U51 · U52) — 관제 화면 칩
-  "승인 대기이거나 상태를 몰라 쌓아 두었습니다 — idle이 되면 넣습니다": "Held because it's awaiting approval or its state is unknown — inserted once idle",
+  "승인 대기이거나 상태를 몰라 쌓아 두었습니다 — 쉬게 되면 넣습니다": "Held because it's waiting for approval or its status is unknown — sent once it's resting",
   "넣지 않고 치웁니다 — 원문은 대화 기록에 남습니다": "Clears without inserting — the original stays in the conversation log",
   "{n}건 버리기": "Discard {n}",
 

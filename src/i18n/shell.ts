@@ -55,7 +55,7 @@ export const dict: Record<string, string> = {
   "원격 저장소 열기": "Open remote repository",
   "워크스페이스 관리…": "Manage workspaces…",
   "알림 음소거": "Mute notifications",
-  "다른 프로젝트 메시지 받기": "Receive messages from other projects",
+  "다른 워크스페이스 메시지 받기": "Receive messages from other workspaces",
   "닫기 (세션은 유지)": "Close (sessions keep running)",
   "폴더를 열 수 없습니다 — 경로가 없어졌습니다": "Cannot open the folder — the path no longer exists",
   "받기 설정을 바꾸지 못했습니다 — {err}": "Could not change the receive setting — {err}",
@@ -80,7 +80,6 @@ export const dict: Record<string, string> = {
   포트: "Ports",
   서버: "Server",
   "종료됨 (exit {code})": "Exited (exit {code})",
-  "↻ 셸 다시 열기": "↻ Reopen shell",
   "dev 서버를 띄울 셸이 아직 없습니다": "No shell for the dev server yet",
   "서버 터미널 만들기": "Create server terminal",
   "dev 서버도 종료됩니다": "The dev server stops too",
@@ -135,7 +134,6 @@ export const dict: Record<string, string> = {
   "git repo 1개 = 팀 1개 = 탭 1개 · 등록 무제한 · 동시 오픈 10개":
     "1 git repo = 1 team = 1 tab · unlimited registrations · 10 open at once",
   "원격에서 Clone": "Clone from remote",
-  "+ 로컬 저장소 연결": "+ Connect local repository",
   "등록된 저장소": "Registered repositories",
   "· 목": "· mock",
   "{n} 등록 · {m} 열림": "{n} registered · {m} open",
@@ -181,9 +179,9 @@ export const dict: Record<string, string> = {
   "세션 상세에서 현재·피크를 확인하세요.": "Check current/peak in session details.",
   "클릭하면 해당 페인으로 점프 · 우클릭 메뉴": "Click to jump to that pane · right-click for menu",
   "미확인 — 열람하면 해제": "Unseen — cleared when viewed",
-  "터미널에서 실행 중인 에이전트 CLI — 프로세스 트리 실측": "Agent CLI running in the terminal — read from the process tree",
+  "터미널에서 실행 중인 에이전트 CLI": "Agent CLI running in the terminal",
   "팀 캐스팅으로 이동": "Go to team casting",
-  "+ 빈 슬롯 {n} · 캐스팅": "+ {n} empty slots · casting",
+  "+ 빈 슬롯 {n} · 캐스팅": "+ empty slots: {n} · casting", // U112 — n=1에도 맞게
   "열린 워크스페이스가 없습니다 — 상단 + 또는 워크스페이스 연결에서 git 저장소를 열어주세요":
     "No open workspaces — open a git repository via the + above or Workspace connection",
   닫힘: "Closed",
@@ -219,14 +217,13 @@ export const dict: Record<string, string> = {
 
   // ── 0.6 W7: 빠른 시작 · 첫 흐름 길 안내 (§10 · P49 · P50) ──
   "진행 단계": "Progress",
-  "저장소 연결": "Connect repository",
   "빠른 시작": "Quick start",
-  "폴더만 있으면 된다. 리드와 개발 Claude Code 세션 2개를 바로 띄운다. 캐스팅 · 페르소나 · 임무는 건너뛰고, 팀은 나중에 고칠 수 있다.":
+  "폴더만 있으면 됩니다. 리드와 개발 Claude Code 세션 2개를 바로 띄웁니다. 캐스팅 · 페르소나 · 임무는 건너뛰고, 팀은 나중에 고칠 수 있습니다.":
     "All you need is a folder. Starts two Claude Code sessions right away, a lead and a developer. Casting, personas and missions are skipped; you can change the team later.",
   "편성: {list}": "Team: {list}",
-  "페르소나가 없어 쓸 수 없다 — 역할 팀으로": "No personas, so this is unavailable. Use Role team",
-  "세션이 많을수록 사용 한도를 빨리 쓴다 — 2개로 시작한다": "More sessions use up your usage limits faster, so this starts with two",
-  "더 필요하면 팀 캐스팅에서 {n}개까지 늘린다": "Need more? Grow to {n} in Team casting",
+  "페르소나가 없어 쓸 수 없습니다 — 역할 팀으로 시작하세요": "No personas, so this is unavailable. Use Role team",
+  "세션이 많을수록 사용 한도를 빨리 씁니다 — 2개로 시작합니다": "More sessions use up your usage limits faster, so this starts with two",
+  "더 필요하면 팀 캐스팅에서 {n}개까지 늘릴 수 있습니다": "Need more? Grow to {n} in Team casting",
   "다음 → 워크스페이스 (Claude Code 2개 기동)": "Next → Workspace (launches 2 Claude Code sessions)",
   "페르소나가 없어 빠른 시작을 할 수 없습니다 — 역할 팀으로 시작하세요": "No personas, so quick start can't run. Start with Role team",
   "2세션으로 시작 → 워크스페이스": "Start with 2 sessions → Workspace",
@@ -285,7 +282,7 @@ export const dict: Record<string, string> = {
   "이 팀으로 시작": "Start with this team",
   "저장소의 편성(.eqmux/team.json) {n}명으로 바로 기동합니다": "Launch right away with the repo's {n}-member team (.eqmux/team.json)",
   "라이브러리에 없는 페르소나는 셸로 둡니다: {names}": "Personas not in your library stay as shells: {names}",
-  "편성은 팀 캐스팅에서 나중에 바꿀 수 있다": "You can change the team later in Team casting",
+  "편성은 팀 캐스팅에서 나중에 바꿀 수 있습니다": "You can change the team later in Team casting",
   "다음 → 워크스페이스 (편성대로 기동)": "Next → Workspace (launches the saved team)",
   "저장된 팀": "Saved team",
   "이 팀으로 시작 → 워크스페이스": "Start with this team → Workspace",

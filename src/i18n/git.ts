@@ -104,7 +104,7 @@ export const dict: Record<string, string> = {
   // ── 0.5.x QA eqmux-8a: 워크스페이스 연결 · 실행 방식 · 기본 터미널 구성 (같은 영역이라 여기 둔다) ──
   "선택한 워크스페이스": "Selected workspace",
   "탭으로 가기": "Go to tab",
-  "첫 세션을 어떻게 시작할까요? 나중에 바꿀 수 있어요 · 두 방식 모두 워크스페이스의 슬롯 {n}개를 써요":
+  "첫 세션을 어떻게 시작할지 고르세요 — 나중에 바꿀 수 있습니다 · 어느 방식이든 워크스페이스의 슬롯 {n}개를 씁니다":
     "How should the first session start? You can change it later · both use the workspace's {n} slots",
   "기본 터미널로 시작해요. 역할 팀은 나중에 추가할 수 있고, 두 방식 모두 슬롯 {n}개를 함께 써요.":
     "Starting with a default terminal. You can add a role team later; both share the {n} slots.",

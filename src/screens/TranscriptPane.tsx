@@ -132,7 +132,7 @@ export function TranscriptPane(props: { session: Session; onJump?: () => void })
       if (d.skipped > 0) parts.push(tf("건너뜀 {n}줄", { n: d.skipped }));
       return parts.join(" · ");
     }
-    return tr("스크롤백 폴백");
+    return tr("터미널 기록에서 읽음");
   };
 
   // 출처 (FR-G-80·86) — 도구 턴만 늘어놓으면 이게 어느 폴더의 로그인지 알 수 없다.
@@ -306,7 +306,7 @@ export function TranscriptPane(props: { session: Session; onJump?: () => void })
             )}
           </For>
           <div class="tr-rail-src">
-            <div class="tr-rail-src-t">{data() ? tr("1급 소스 · JSONL") : tr("스크롤백 폴백")}</div>
+            <div class="tr-rail-src-t">{data() ? tr("대화 로그") : tr("터미널 기록에서 읽음")}</div>
             <div class="mono muted">{sourceLabel()}</div>
           </div>
         </div>
@@ -314,7 +314,7 @@ export function TranscriptPane(props: { session: Session; onJump?: () => void })
       <div class="transcript-input">
         <input
           style={{ flex: 1, "min-width": 0 }}
-          placeholder={tf("{name}의 PTY로 입력 전달 (V3)", { name: who() })}
+          placeholder={tf("{name}에게 입력 보내기", { name: who() })}
           value={draft()}
           onInput={(e) => setDraft(e.currentTarget.value)}
           onKeyDown={(e) => isSubmitEnter(e) && send()}

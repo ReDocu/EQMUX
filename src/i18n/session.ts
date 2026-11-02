@@ -78,14 +78,12 @@ export const dict: Record<string, string> = {
   "일반 셸 · cwd 유지": "plain shell · cwd kept",
 
   // ── 종료 다이얼로그 (ExitDialog) ──
-  "저장소 flush 중…": "Flushing store…",
-  "flush가 2초를 넘겼습니다 — 계속 진행합니다": "Flush exceeded 2 seconds — continuing anyway",
-  "정상 종료 신호 → 유예 후 프로세스 트리 종료…": "Graceful shutdown signal → grace period, then process tree termination…",
+  "대화·로그 저장 중…": "Saving conversations and logs…",
+  "저장이 늦어지고 있습니다 — 그대로 종료를 계속합니다": "Saving is taking a while — continuing to quit",
+  "세션을 차례로 끄는 중…": "Shutting down sessions…",
   "EQMUX를 종료할까요?": "Quit EQMUX?",
   "실행 중인 세션 {n}개가 종료됩니다. 자동 재개하지 않습니다.":
     "{n} running session(s) will be terminated. They will not auto-resume.",
-  "입력 차단 → 저장소 flush → 정상 종료 신호 → 유예 후 트리 종료 (Job Object)":
-    "Block input → flush store → graceful shutdown signal → grace period, then tree termination (Job Object)",
   "실행 중인 세션이 없습니다 — 바로 종료합니다.": "No sessions running — quitting immediately.",
   "실행 중 {n} — 에이전트 {a} · 기본 터미널 {d} · 서버 {s}. 자동 재개하지 않습니다.":
     "{n} running — {a} agent(s) · {d} default terminal(s) · {s} server(s). Nothing auto-resumes.",
@@ -165,8 +163,7 @@ export const dict: Record<string, string> = {
   "세션으로 가기": "Go to session",
   "알 수 없는 워크스페이스": "Unknown workspace",
   "종료하지 못했습니다 — 다시 시도하세요": "Couldn't quit — try again",
-  "입력 차단 → 저장소 flush → 정상 종료 신호 → 유예 후 하위 프로세스까지 정리":
-    "Block input → flush store → graceful shutdown signal → grace period, then clean up child processes too",
+  "입력을 막고, 저장하고, 세션을 차례로 끈 뒤 닫습니다": "Blocks input, saves, shuts sessions down in order, then closes",
   "작업 중": "Working",
   대기: "Idle",
   "기동 중": "Starting",

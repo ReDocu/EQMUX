@@ -27,7 +27,7 @@ export const dict: Record<string, string> = {
   "재개 — 대화 복원": "Resume — restore conversation",
 
   // ── 상태바 ──
-  "활성 세션 프로세스 트리 메모리": "Active session process-tree memory",
+  "세션이 쓰는 메모리": "Memory used by sessions",
   "SessionService 이벤트 · 저장 상태": "SessionService events · storage status",
   이벤트: "Events",
   "(실측)": "(live)",
@@ -139,7 +139,7 @@ export const dict: Record<string, string> = {
   실측: "live",
   "끝 2MB 창": "last-2MB window",
   "건너뜀 {n}줄": "{n} lines skipped",
-  "스크롤백 폴백": "Scrollback fallback",
+  "터미널 기록에서 읽음": "Read from terminal history",
   출처: "Source",
   "출처 {path} — 클릭하면 경로를 복사합니다": "Source {path} — click to copy the path",
   "▸ 사람": "▸ Human",
@@ -159,8 +159,8 @@ export const dict: Record<string, string> = {
   "사람 → {name}": "Human → {name}",
   "턴 검색…": "Search turns…",
   "턴 개요": "Turn outline",
-  "1급 소스 · JSONL": "Primary source · JSONL",
-  "{name}의 PTY로 입력 전달 (V3)": "Send input to {name}'s PTY (V3)",
+  "대화 로그": "Conversation log",
+  "{name}에게 입력 보내기": "Send input to {name}",
   전송: "Send",
 
   // ── 0.5 W3 · 확인창·페인 헤더·주의 칩·세션 이름 ──
@@ -263,7 +263,7 @@ export const dict: Record<string, string> = {
   "세션 {n}개": "{n} SESSIONS",
   "엔진 1종": "1 ENGINE",
   "엔진 {n}종": "{n} ENGINES",
-  "PTY {n} 실행 중": "PTY {n} ONLINE",
+  "터미널 {n}개 실행 중": "{n} terminals running",
   "출력 {k}K": "OUTPUT {k}K",
   "저장 {kb} KB · {n}줄": "WAL {kb} KB · {n} lines",
   "저장 —": "WAL —",
@@ -325,4 +325,6 @@ export const dict: Record<string, string> = {
   "세션 레지스트리 재확인": "Session registry rescan",
   "프로세스 종료 · {note}": "Process ended · {note}",
   "붙였던 claude가 사라짐": "Adopted claude went away",
+  "엔진 CLI 버전": "Engine CLI version",
+  "열린 워크스페이스": "Open workspaces",
 };

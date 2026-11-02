@@ -201,7 +201,7 @@ export function ConversationTab() {
       const names: Record<string, string> = { 나: t("나") };
       for (const s of wsSessions()) names[s.id] = nameOf(s);
       const r = await exportConversation(w.id, w.name, names);
-      if (r) setNote({ ws: w.id, text: tf("{n}건 저장됨 — {path}", { n: r.count, path: r.path }) });
+      if (r) setNote({ ws: w.id, text: tf("{n}건을 저장했습니다 — {path}", { n: r.count, path: r.path }) });
     } catch (e) {
       setNote({ ws: w.id, text: `${t("저장 실패 — 로그 패널을 확인하세요")} (${String(e)})`, bad: true });
     } finally {
@@ -278,7 +278,7 @@ export function ConversationTab() {
         const hit = mentionMatch(rest);
         if (!hit) {
           // 어디까지가 이름인지 모르므로 첫 토큰만 보여준다 — 이름에 공백이 있으면 그 조각이다
-          setError(tf("수신자 없음: @{name} — 이 워크스페이스의 페르소나·세션 이름으로", { name: rest.split(/\s/)[0] }));
+          setError(tf("수신자 없음: @{name} — 이 워크스페이스의 페르소나·세션 이름으로 지정하세요", { name: rest.split(/\s/)[0] }));
           return;
         }
         to = hit.id;
@@ -287,7 +287,7 @@ export function ConversationTab() {
     }
     if (!text) {
       // 멘션만 치고 끝낸 경우 — 조용히 삼키면 "보내기가 안 먹는다"로 읽힌다
-      setError(t("본문이 없습니다 — 받는 사람 뒤에 보낼 내용을 적어주세요"));
+      setError(t("본문이 없습니다 — 받는 사람 뒤에 보낼 내용을 적어 주세요"));
       return;
     }
     // 다른 프로젝트 세션이면 그 프로젝트 원장으로 보낸다 — 받는 쪽 대화 탭에 프로젝트 배지와 함께 남는다
@@ -312,9 +312,9 @@ export function ConversationTab() {
           </For>
           {/* 라디오(전체·미확인)와 독립 토글은 모양을 달리한다 (U54) */}
           <span class="conv-sep" />
-          <label class="conv-toggle" title={t("끄면 다른 프로젝트와 오간 메시지를 숨깁니다")}>
+          <label class="conv-toggle" title={t("끄면 다른 워크스페이스와 오간 메시지를 숨깁니다")}>
             <input type="checkbox" checked={allProjects()} onChange={(e) => setAllProjects(e.currentTarget.checked)} />
-            {t("다른 프로젝트 포함")}
+            {t("다른 워크스페이스 포함")}
           </label>
           <Show when={wsMissions().length > 0}>
             <select
@@ -434,10 +434,10 @@ export function ConversationTab() {
               {t(
                 hiddenCount() > 0
                   ? "화면을 지웠습니다 — 새 메시지부터 여기에 표시됩니다"
-                  : "아직 메시지가 없습니다 — 아래에서 타입을 골라 팀에 보내보세요.",
+                  : "아직 메시지가 없습니다 — 아래에서 타입을 골라 팀에 보내 보세요",
               )}
               <div class="mono" style={{ "font-size": "10px", "margin-top": "6px" }}>
-                {t("idle 세션에는 즉시, 작업 중이면 턴 종료 시 전달됩니다")}
+                {t("쉬는 세션에는 바로, 작업 중이면 턴이 끝날 때 전달됩니다")}
               </div>
             </div>
           }
@@ -610,7 +610,7 @@ export function ConversationTab() {
                     },
                   },
                   {
-                    label: t("다른 프로젝트로 전달…"),
+                    label: t("다른 워크스페이스로 전달…"),
                     disabled: projectLabels().size < 2,
                     action: () => setForwarding(m),
                   },
@@ -672,8 +672,8 @@ function ForwardDialog(props: { m: ConversationMessage; from?: string; onClose: 
   });
   return (
     <div class="overlay" onClick={props.onClose}>
-      <div class="dialog card conv-forward" role="dialog" aria-label={t("다른 프로젝트로 전달")} onClick={(e) => e.stopPropagation()}>
-        <div class="eyebrow">{t("다른 프로젝트로 전달")}</div>
+      <div class="dialog card conv-forward" role="dialog" aria-label={t("다른 워크스페이스로 전달")} onClick={(e) => e.stopPropagation()}>
+        <div class="eyebrow">{t("다른 워크스페이스로 전달")}</div>
         <div style={{ display: "flex", gap: "6px" }}>
           <select
             value={wsId()}

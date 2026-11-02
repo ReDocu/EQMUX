@@ -13,9 +13,9 @@ import { effectiveTitle, paneNo, sessionName } from "../types";
 import { Icon } from "../components/icons";
 
 const PHASE_TEXT: Record<ShutdownPhase, string> = {
-  flush: "저장소 flush 중…",
-  "flush-late": "flush가 2초를 넘겼습니다 — 계속 진행합니다",
-  closing: "정상 종료 신호 → 유예 후 프로세스 트리 종료…",
+  flush: "대화·로그 저장 중…",
+  "flush-late": "저장이 늦어지고 있습니다 — 그대로 종료를 계속합니다",
+  closing: "세션을 차례로 끄는 중…",
 };
 
 const STATE_CLASS: Record<string, string> = { busy: "st-busy", waiting: "st-waiting" };
@@ -83,7 +83,7 @@ export function ExitDialog() {
         <div class="exit-notice">
           <span class="exit-notice-ic">⚠</span>
           <span classList={{ "st-waiting": busy() }}>
-            {busy() ? t(PHASE_TEXT[phase()!]) : t("입력 차단 → 저장소 flush → 정상 종료 신호 → 유예 후 하위 프로세스까지 정리")}
+            {busy() ? t(PHASE_TEXT[phase()!]) : t("입력을 막고, 저장하고, 세션을 차례로 끈 뒤 닫습니다")}
           </span>
         </div>
         <Show when={total() > 0}>

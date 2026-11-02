@@ -103,7 +103,7 @@ export function AppBar() {
       ],
       [
         { label: t("알림 음소거"), checked: settings().muted.includes(ws.id), action: () => toggleMuted(ws.id) },
-        { label: t("다른 프로젝트 메시지 받기"), checked: crossProjectOn(ws.id), action: toggleCross },
+        { label: t("다른 워크스페이스 메시지 받기"), checked: crossProjectOn(ws.id), action: toggleCross },
       ],
       [{ label: t("닫기 (세션은 유지)"), action: () => closeWs(ws.id) }],
     ];
@@ -120,7 +120,8 @@ export function AppBar() {
     return backend.listSessions().find((s) => s.id === it.session);
   };
   const itemRead = (it: NotifyItem) => {
-    if (it.open) return false; // 앱 알림 · 동시 편집 — 세션 신호가 아니라 늘 눈에 띄게 둔다 (목록 50건 상한이 걷는다)
+    // 앱 알림 · 동시 편집 · 엔진 버전 — 세션 신호가 아니라 늘 눈에 띄게 둔다 (목록 50건 상한이 걷는다)
+    if (it.open || it.kind === "cli-version") return false;
     const s = itemSession(it);
     return !s || !sessionNeedsLook(s);
   };
@@ -128,7 +129,7 @@ export function AppBar() {
     `${paneNo(s)} ${nameBesideNo(paneNo(s), sessionName(s, backend.listPersonas().find((p) => p.id === s.personaId)))}`;
   const itemName = (it: NotifyItem) => {
     const s = itemSession(it);
-    return s ? sessName(s) : it.kind === "app" ? "EQMUX" : it.session;
+    return s ? sessName(s) : it.kind === "app" ? "EQMUX" : it.kind === "cli-version" ? t("엔진 CLI 버전") : it.session;
   };
   // 지금 보고 있는 워크스페이스가 아니면 어디 것인지 붙인다
   const wsLabel = (wsId: string) => {

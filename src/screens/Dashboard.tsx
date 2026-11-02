@@ -225,7 +225,7 @@ export function Dashboard() {
         {/* Index (C5) — 매번 새 객체 배열이라 For면 tick마다 타일 6개를 다시 만든다 */}
         <Index
           each={[
-            { k: "워크스페이스", v: openWs().length, c: "blue" },
+            { k: "열린 워크스페이스", v: openWs().length, c: "blue" },
             { k: "전체 세션", v: openSessions().length, c: "" },
             { k: "실행 중", v: openSessions().length - count("dead"), c: "green", tip: subagents() > 0 ? `${t("서브")} ${subagents()}` : undefined },
             { k: "행동 필요", v: count("waiting") + count("dead"), c: "amber" },
@@ -378,7 +378,7 @@ export function Dashboard() {
                               title={
                                 s.personaId
                                   ? t("슬롯 엔진과 다른 에이전트가 실행 중입니다 — 손으로 띄워 역할·훅이 붙지 않았을 수 있습니다")
-                                  : t("터미널에서 실행 중인 에이전트 CLI — 프로세스 트리 실측")
+                                  : t("터미널에서 실행 중인 에이전트 CLI")
                               }
                             >
                               {s.personaId

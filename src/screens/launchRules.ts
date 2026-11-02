@@ -27,7 +27,7 @@ export type WizardPath = "quick" | "terminal" | "team";
  *  '시작'이 언제 일어나는지 보인다 (P50) */
 export function wizardSteps(path: WizardPath): string[] {
   const mid = path === "terminal" ? ["기본 터미널 구성"] : path === "team" ? ["팀 캐스팅", "팀 편성"] : [];
-  return ["저장소 연결", "실행 방식", ...mid, "워크스페이스"];
+  return ["워크스페이스 열기", "실행 방식", ...mid, "워크스페이스"];
 }
 
 /** 빠른 시작 편성 (§10) — 리드 + 개발 2세션. 기본 직무가 맞는 페르소나를 먼저, 없으면 라이브러리 순서.

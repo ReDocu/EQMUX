@@ -7279,3 +7279,11 @@ label.inbox-pop-row {
   border-top: 1px solid var(--eq-line);
   font-size: 10px;
 }
+
+/* 0.6 W7: 알림 센터 — 엔진 CLI 버전이 낮다 (W2 notify-item kind cli-version) */
+.bell-dot.cli-version {
+  background: var(--eq-purple);
+}
+.bell-title.cli-version {
+  color: var(--eq-purple);
+}

@@ -108,7 +108,7 @@ export function LaunchMode(props: { wsId: string }) {
                 ...(saved()!.missing.length > 0
                   ? [tf("라이브러리에 없는 페르소나는 셸로 둡니다: {names}", { names: saved()!.missing.join(", ") })]
                   : []),
-                t("편성은 팀 캐스팅에서 나중에 바꿀 수 있다"),
+                t("편성은 팀 캐스팅에서 나중에 바꿀 수 있습니다"),
               ],
               route: t("다음 → 워크스페이스 (편성대로 기동)"),
               example: () => <Identity slot={1} name={t("저장된 팀")} cli="claude" />,
@@ -119,7 +119,7 @@ export function LaunchMode(props: { wsId: string }) {
         id: "quick" as Mode,
         icon: "»",
         title: t("빠른 시작"),
-        copy: t("폴더만 있으면 된다. 리드와 개발 Claude Code 세션 2개를 바로 띄운다. 캐스팅 · 페르소나 · 임무는 건너뛰고, 팀은 나중에 고칠 수 있다."),
+        copy: t("폴더만 있으면 됩니다. 리드와 개발 Claude Code 세션 2개를 바로 띄웁니다. 캐스팅 · 페르소나 · 임무는 건너뛰고, 팀은 나중에 고칠 수 있습니다."),
         features: [
           quickSlots().length > 0
             ? tf("편성: {list}", {
@@ -127,9 +127,9 @@ export function LaunchMode(props: { wsId: string }) {
                   .map((sl) => `${personaName(sl.personaId)} (${sl.jobId === "lead" ? t("리드") : t("개발")})`)
                   .join(" · "),
               })
-            : t("페르소나가 없어 쓸 수 없다 — 역할 팀으로"),
-          t("세션이 많을수록 사용 한도를 빨리 쓴다 — 2개로 시작한다"),
-          tf("더 필요하면 팀 캐스팅에서 {n}개까지 늘린다", { n: maxSlots() }),
+            : t("페르소나가 없어 쓸 수 없습니다 — 역할 팀으로 시작하세요"),
+          t("세션이 많을수록 사용 한도를 빨리 씁니다 — 2개로 시작합니다"),
+          tf("더 필요하면 팀 캐스팅에서 {n}개까지 늘릴 수 있습니다", { n: maxSlots() }),
         ],
         route: t("다음 → 워크스페이스 (Claude Code 2개 기동)"),
         example: () => <Identity slot={1} name={personaName(quickSlots()[0]?.personaId ?? "")} title={t("리드")} cli="claude" />,
@@ -138,11 +138,11 @@ export function LaunchMode(props: { wsId: string }) {
         id: "terminal" as Mode,
         icon: ">_",
         title: t("기본 터미널"),
-        copy: t("셸만 연다. 에이전트는 필요할 때 사람이 직접 띄운다. 자동 이름은 프로젝트명XX(EQMUX01…)이고, 만들 때 직접 정할 수도 있다."),
+        copy: t("셸만 엽니다. 에이전트는 필요할 때 직접 띄웁니다. 이름은 워크스페이스명XX(EQMUX01…)로 붙고, 만들 때 바꿀 수 있습니다."),
         features: [
-          t("세션 이름 · 번호가 헤더와 레일에 붙는다"),
-          t("손으로 띄운 claude에는 기본으로 메시지를 쌓아 둔다 (넣기 칩) · 설정에서 idle 자동 넣기로 변경"),
-          t("역할 팀은 나중에 팀 캐스팅으로 추가"),
+          t("세션 이름 · 번호가 헤더와 레일에 붙습니다"),
+          t("손으로 띄운 claude에는 메시지를 쌓아 둡니다 (넣기 칩) · 설정에서 '쉬면 자동으로 넣기'로 바꿀 수 있습니다"),
+          t("역할 팀은 나중에 팀 캐스팅으로 더할 수 있습니다"),
         ],
         route: t("다음 → 기본 터미널 구성 (셸 · 브랜치 · 이름)"),
         example: () => <Identity slot={1} name={`${projectStem(ws()?.name ?? "")}01`} compact />,
@@ -151,10 +151,10 @@ export function LaunchMode(props: { wsId: string }) {
         id: "team" as Mode,
         icon: "⛬",
         title: t("역할 팀"),
-        copy: t("페르소나·직무·직함을 슬롯에 배정해 Claude Code·Codex 세션을 띄운다. 역할 파일과 team.md가 합성되고 메시지 버스가 켜진다."),
+        copy: t("역할을 맡긴 Claude Code 세션을 띄웁니다 — 서로 메시지를 주고받습니다."),
         features: [
-          t("직함으로 맡는 영역을 나눈다 (클라이언트 · 서버 개발자)"),
-          t("완료 신호 · 열린 handoff 회신 · 프로젝트 간 통신"),
+          t("직함으로 맡는 영역을 나눕니다 (클라이언트 · 서버 개발자)"),
+          t("완료 신호 · 넘김 회신 · 워크스페이스 간 통신"),
           tf("프리셋: {list}", { list: presetNames().map((n) => t(n)).join(" · ") }),
         ],
         route: t("다음 → 팀 캐스팅 → 팀 편성 → 관제"),
@@ -170,7 +170,7 @@ export function LaunchMode(props: { wsId: string }) {
             {t("실행 방식 선택")} · {ws()?.name}
           </h1>
           <div class="sub mono">
-            {tf("첫 세션을 어떻게 시작할까요? 나중에 바꿀 수 있어요 · 두 방식 모두 워크스페이스의 슬롯 {n}개를 써요", {
+            {tf("첫 세션을 어떻게 시작할지 고르세요 — 나중에 바꿀 수 있습니다 · 어느 방식이든 워크스페이스의 슬롯 {n}개를 씁니다", {
               n: maxSlots(),
             })}
           </div>
@@ -241,7 +241,7 @@ export function LaunchMode(props: { wsId: string }) {
           </div>
           <div class="launch-footer-actions">
             <button class="btn" onClick={() => setOverlay("connect")}>
-              {t("← 저장소 연결")}
+              {t("← 워크스페이스 열기")}
             </button>
             <button class="btn primary" onClick={next}>
               {nextLabel()}

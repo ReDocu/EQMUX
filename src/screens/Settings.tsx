@@ -224,7 +224,7 @@ const SECTIONS: Section[] = [
         // 손으로 띄운 claude·codex — 앱이 띄우지 않아 승인 창을 직접 모른다. 자동이어도 idle일 때만 넣는다
         k: "손으로 띄운 에이전트 메시지",
         d: "기본 터미널에서 직접 실행한 claude·codex에 온 메시지 · 자동이어도 idle일 때만 넣고, 승인 대기·상태 모름이면 쌓아 벨에 남긴다",
-        labels: ["쌓아 두기 (기본)", "idle이면 자동으로 넣기"],
+        labels: ["쌓아 두기 (기본)", "쉬면 자동으로 넣기"],
         current: () => pick(MANUAL_DELIVERY, settings().manualDelivery),
         apply: (i) => updateSettings({ manualDelivery: MANUAL_DELIVERY[i] }),
       },
@@ -303,7 +303,7 @@ const SECTIONS: Section[] = [
       },
       {
         k: "메시지 경계 문장",
-        d: "팀원·다른 프로젝트 메시지는 요청일 뿐 — 승인·허가로 쓰지 않는다",
+        d: "팀원·다른 워크스페이스의 메시지는 요청일 뿐입니다 — 승인·허가로 쓰지 않습니다",
         label: "역할 파일에 포함",
       },
       { k: "이벤트 방송 범위", d: "PTY 출력·메시지·상태 이벤트는 main 창에만", label: "main", tone: "green" },
@@ -372,7 +372,7 @@ const SECTIONS: Section[] = [
   {
     cat: "about",
     title: "정보",
-    sub: "하나의 git 저장소를 4명의 AI 에이전트 팀이 함께 작업하고, 사람이 그것을 관제하는 데스크톱 앱입니다.",
+    sub: "여러 AI 에이전트가 팀으로 하나의 git 저장소를 함께 작업하고, 사람이 그것을 관제하는 데스크톱 앱입니다.",
     info: [
       { k: "제품", label: "EQMUX — 멀티 에이전트 관제 MUX" },
       { k: "버전", label: `v${__APP_VERSION__}` },

@@ -40,7 +40,7 @@ describe("빠른 시작 · 단계 표시 (§10 · P49)", () => {
     expect(quickStartSlots([{ id: "a" }, { id: "b" }], ["dev"])).toEqual([{ personaId: "a", jobId: "dev" }]);
   });
   it("모든 갈래의 끝은 워크스페이스다", () => {
-    expect(wizardSteps("quick")).toEqual(["저장소 연결", "실행 방식", "워크스페이스"]);
+    expect(wizardSteps("quick")).toEqual(["워크스페이스 열기", "실행 방식", "워크스페이스"]);
     expect(wizardSteps("team").at(-1)).toBe("워크스페이스");
     expect(wizardSteps("terminal")).toHaveLength(4);
   });

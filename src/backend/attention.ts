@@ -75,7 +75,7 @@ export interface NotifyItem {
   session: string;
   workspace: string;
   /** app = 세션이 아닌 앱 알림(다른 도구 전역 지시 등) · conflict = 같은 파일 동시 편집 (0.6 W7) */
-  kind: "waiting" | "dead" | "report" | "turn" | "message" | "app" | "conflict";
+  kind: "waiting" | "dead" | "report" | "turn" | "message" | "app" | "conflict" | "cli-version"; // cli-version = 엔진 CLI가 최소 버전보다 낮다 (W2)
   title: string;
   body: string;
   ts: number;

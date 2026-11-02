@@ -311,7 +311,7 @@ export function WorkspaceConnection() {
               )}
             </For>
             <Show when={workspaces().length === 0}>
-              <div class="muted conn-empty">{t('등록된 저장소가 없습니다. "폴더 찾기…"로 시작하세요.')}</div>
+              <div class="muted conn-empty">{t('등록된 워크스페이스가 없습니다. "폴더 찾기…"로 시작하세요.')}</div>
             </Show>
           </div>
         </div>

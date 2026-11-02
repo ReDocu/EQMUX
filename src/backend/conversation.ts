@@ -138,7 +138,7 @@ export async function sendConversation(
     return null;
   } catch (e) {
     const s = String(e);
-    if (s.includes("RATE_LIMIT")) return t("분당 발신 상한에 닿았습니다 — 잠시 후 다시");
+    if (s.includes("RATE_LIMIT")) return t("분당 발신 상한에 닿았습니다 — 잠시 뒤 다시 보내세요");
     if (s.includes("TOO_LONG")) return t("본문이 너무 깁니다");
     if (s.includes("EMPTY") || s.includes("BAD_TYPE")) return t("타입 5종과 본문이 필요합니다");
     return t("전송 실패 — 로그 패널을 확인하세요");

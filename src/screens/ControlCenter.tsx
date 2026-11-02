@@ -587,7 +587,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
         // 설정에 맞춘 문구 (U52) — auto여도 승인 대기·상태 모름이면 쌓인다
         title: t(
           settings().manualDelivery === "auto"
-            ? "승인 대기이거나 상태를 몰라 쌓아 두었습니다 — idle이 되면 넣습니다"
+            ? "승인 대기이거나 상태를 몰라 쌓아 두었습니다 — 쉬게 되면 넣습니다"
             : "손으로 띄운 에이전트라 자동으로 넣지 않습니다",
         ),
         action: { label: t("넣기"), onClick: () => setInboxPop(s.id) },
@@ -1031,7 +1031,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
   const statusBar = () => (
     <div class="terminal-statusbar mono">
       <span>
-        <span style={{ color: "var(--eq-green)" }}>◉</span> {tf("PTY {n} 실행 중", { n: sessions().filter((x) => x.status !== "dead").length })}
+        <span style={{ color: "var(--eq-green)" }}>◉</span> {tf("터미널 {n}개 실행 중", { n: sessions().filter((x) => x.status !== "dead").length })}
       </span>
       <span>▦ {t(PANE_LAYOUTS.find((l) => l.key === paneLayout())?.name ?? "")}</span>
       <Show when={attachedByEngine()}>{(txt) => <span>{txt()}</span>}</Show>
@@ -1054,7 +1054,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
       {/* 활성 세션 메모리 (FR-C-09 · C11) — Job Object 트리 실측, 10초 주기. dead는 마지막 샘플이 남으므로 숨긴다 */}
       <Show when={memSession()}>
         {(s) => (
-          <span title={`${t("활성 세션 프로세스 트리 메모리")} · peak ${s().memoryPeakMb ?? "—"} MB`}>
+          <span title={`${t("세션이 쓰는 메모리")} · peak ${s().memoryPeakMb ?? "—"} MB`}>
             {tf("메모리 {mb} MB", { mb: s().memoryMb! })}
           </span>
         )}
