@@ -377,6 +377,8 @@ fn trim_to_cap(conn: &Connection) {
 
 /// 전역 보존 상한 (§1-2) — 모든 워크스페이스 session.db를 합쳐 이 크기를 넘지 않게 한다
 const GLOBAL_CAP_BYTES: u64 = 2 << 30;
+/// 전역 상한 정리 한 번에 쓰기 스레드를 쥐는 최대 시간
+const CAP_BUDGET: Duration = Duration::from_secs(2);
 
 /// DB가 실제로 쓰는 바이트 — 지운 페이지는 freelist로 가서 다음 쓰기가 재사용한다.
 /// VACUUM으로 파일을 줄이지 않는다: scrollback은 INTEGER PRIMARY KEY가 없어 VACUUM이 rowid를 다시 매기고,
@@ -388,9 +390,12 @@ fn used_bytes(conn: &Connection) -> u64 {
 
 /// 합계가 cap을 넘으면 모든 DB를 통틀어 가장 오래된 스크롤백 줄부터 지운다. 지운 줄 수를 돌려준다.
 /// 메시지 원장·세션·이벤트·재개 앵커·편집 기록은 건드리지 않는다 — 크기의 대부분은 스크롤백이고,
-/// 원장을 지울지는 제품 결정이다(목록 §5 메시지 보존 기간). 스크롤백을 다 비워도 넘으면 진단에 남기고 멈춘다
-pub(crate) fn enforce_global_cap(root: &Path, cap: u64) -> u64 {
-    let Ok(entries) = std::fs::read_dir(root.join("workspaces")) else { return 0 };
+/// 원장을 지울지는 제품 결정이다(목록 §5 메시지 보존 기간). 스크롤백을 다 비워도 넘으면 진단에 남기고 멈춘다.
+/// budget을 넘기면 멈추고 (지운 줄, true)를 돌려준다 — 쓰기 스레드에서 돌므로 오래 쥐면 큐(50k)가 차서
+/// PTY 리더가 막힌다. 나머지는 run이 다음 쉬는 틈마다 이어서 한다. 지우기는 문장마다 자동 커밋이라 중간에 앱이 꺼져도 안전하다
+pub(crate) fn enforce_global_cap(root: &Path, cap: u64, budget: Duration) -> (u64, bool) {
+    let started = std::time::Instant::now();
+    let Ok(entries) = std::fs::read_dir(root.join("workspaces")) else { return (0, false) };
     let dirs: Vec<String> = entries
         .flatten()
         .filter(|e| e.path().join("session.db").exists())
@@ -404,7 +409,7 @@ pub(crate) fn enforce_global_cap(root: &Path, cap: u64) -> u64 {
         .map(|m| m.len())
         .sum();
     if file_total <= cap {
-        return 0;
+        return (0, false);
     }
     // 디렉터리 이름은 이미 sanitize된 것이라 open_db가 같은 경로로 연다
     let conns: Vec<Connection> = dirs.iter().filter_map(|d| open_db(root, d).ok()).collect();
@@ -412,9 +417,14 @@ pub(crate) fn enforce_global_cap(root: &Path, cap: u64) -> u64 {
         c.query_row("SELECT MIN(ts) FROM scrollback", [], |r| r.get::<_, Option<i64>>(0)).ok().flatten()
     };
     let mut dropped = 0u64;
+    let mut more = false;
     for _ in 0..10_000 {
         let total: u64 = conns.iter().map(used_bytes).sum();
         if total <= cap {
+            break;
+        }
+        if started.elapsed() > budget {
+            more = true;
             break;
         }
         let mut by_age: Vec<(i64, &Connection)> = conns.iter().filter_map(|c| oldest(c).map(|t| (t, c))).collect();
@@ -436,12 +446,14 @@ pub(crate) fn enforce_global_cap(root: &Path, cap: u64) -> u64 {
         dropped += n as u64;
     }
     let total: u64 = conns.iter().map(used_bytes).sum();
-    if total > cap {
+    if more {
+        crate::diag::write(&format!("store: 전역 상한 정리 {dropped}줄 — 시간 예산을 넘어 다음 틈에 잇는다"));
+    } else if total > cap {
         crate::diag::write(&format!("store: 전역 상한 {cap}바이트를 스크롤백 정리만으로 맞추지 못함 (지금 {total})"));
     } else if dropped > 0 {
         crate::diag::write(&format!("store: 전역 상한으로 오래된 스크롤백 {dropped}줄 정리"));
     }
-    dropped
+    (dropped, more)
 }
 
 /// 세션의 seq 이하 줄을 본문·색인에서 함께 지운다. FTS 행의 rowid는 scrollback 행의 rowid와 같게
@@ -587,7 +599,8 @@ fn run(root: PathBuf, rx: Receiver<StoreMsg>) {
     // 넘는 순간부터 줄 하나마다 flush(= DB 열기 재시도)가 돈다
     let mut fresh = 0usize;
     let mut last_maintain = std::time::Instant::now(); // 첫 열기(open_writer)가 이미 한 번 돈다
-    enforce_global_cap(&root, GLOBAL_CAP_BYTES); // 기동 때 한 번 — 상한 안이면 파일 크기만 보고 끝난다
+    // 기동 때 한 번 — 상한 안이면 파일 크기만 보고 끝난다. 한 번에 CAP_BUDGET까지만, 남으면 쉬는 틈마다 잇는다
+    let mut cap_more = enforce_global_cap(&root, GLOBAL_CAP_BYTES, CAP_BUDGET).1;
 
     loop {
         match rx.recv_timeout(Duration::from_millis(100)) {
@@ -611,7 +624,10 @@ fn run(root: PathBuf, rx: Receiver<StoreMsg>) {
                     for conn in dbs.values() {
                         maintain(conn);
                     }
-                    enforce_global_cap(&root, GLOBAL_CAP_BYTES);
+                    cap_more = true;
+                }
+                if cap_more {
+                    cap_more = enforce_global_cap(&root, GLOBAL_CAP_BYTES, CAP_BUDGET).1;
                 }
             }
             Err(RecvTimeoutError::Disconnected) => {
@@ -1366,7 +1382,8 @@ mod tests {
         drop((old, new));
         let cap = total - 300_000;
 
-        assert!(enforce_global_cap(&dir, cap) > 0);
+        assert_eq!(enforce_global_cap(&dir, cap, Duration::ZERO), (0, true), "예산이 없으면 지우지 않고 다음으로 미룬다");
+        assert!(enforce_global_cap(&dir, cap, Duration::MAX).0 > 0);
         let count = |ws: &str, sql: &str| -> i64 {
             Connection::open(db_path(&dir, ws)).unwrap().query_row(sql, [], |r| r.get(0)).unwrap()
         };
@@ -1375,7 +1392,7 @@ mod tests {
         assert_eq!(count("old", "SELECT COUNT(*) FROM message"), 1, "원장은 지우지 않는다");
         let after: u64 = ["old", "new"].iter().map(|w| used_bytes(&open_db(&dir, w).unwrap())).sum();
         assert!(after <= cap, "{after} > {cap}");
-        assert_eq!(enforce_global_cap(&dir, u64::MAX), 0, "상한 안이면 아무것도 안 한다");
+        assert_eq!(enforce_global_cap(&dir, u64::MAX, Duration::MAX), (0, false), "상한 안이면 아무것도 안 한다");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

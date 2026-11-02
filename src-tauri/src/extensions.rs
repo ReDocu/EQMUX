@@ -81,7 +81,30 @@ fn spawn(cli: &str, args: &[String], cwd: Option<&str>, via_shell: bool) -> std:
         use std::os::windows::process::CommandExt;
         c.creation_flags(0x0800_0000); // CREATE_NO_WINDOW — agentscan과 같다
     }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        c.process_group(0); // kill_tree가 그룹째 끝낼 수 있게
+    }
     c.spawn()
+}
+
+/// 시한 초과 — 셸 폴백(cmd /c · sh -lc)이나 `mcp list`가 띄운 서버까지 나무째 끝낸다. 자식만 죽이면 손자가 남는다
+fn kill_tree(child: &mut std::process::Child) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", &child.id().to_string(), "/T", "/F"])
+            .creation_flags(0x0800_0000)
+            .status();
+    }
+    #[cfg(unix)]
+    {
+        // spawn이 process_group(0)으로 띄웠으므로 그룹 id = 자식 pid
+        let _ = std::process::Command::new("kill").args(["-KILL", &format!("-{}", child.id())]).status();
+    }
+    let _ = child.kill();
 }
 
 /// 실행 → (성공 여부, stdout, stderr). 상한을 넘으면 죽이고 오류
@@ -94,13 +117,14 @@ fn run(cli: &str, args: &[String], cwd: Option<&str>) -> Result<(bool, String, S
         Err(e) => return Err(format!("{cli}를 실행하지 못했습니다 — {e}")),
     };
     // 파이프는 따로 비운다 — 한쪽이 차면 자식이 멈춰 상한까지 기다리게 된다
+    // 바이트로 읽어 손실 변환 — Windows cmd의 "명령을 찾을 수 없습니다"는 코드 페이지(cp949)라 UTF-8 읽기는 통째로 버린다
     let drain = |p: Option<Box<dyn Read + Send>>| {
         std::thread::spawn(move || {
-            let mut s = String::new();
+            let mut b = Vec::new();
             if let Some(mut p) = p {
-                let _ = p.read_to_string(&mut s);
+                let _ = p.read_to_end(&mut b);
             }
-            s
+            String::from_utf8_lossy(&b).into_owned()
         })
     };
     let out = drain(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
@@ -111,7 +135,7 @@ fn run(cli: &str, args: &[String], cwd: Option<&str>) -> Result<(bool, String, S
             Ok(Some(st)) => break st,
             Ok(None) if start.elapsed() < TIMEOUT => std::thread::sleep(Duration::from_millis(100)),
             _ => {
-                let _ = child.kill();
+                kill_tree(&mut child);
                 let _ = child.wait();
                 return Err(format!("{}초 안에 끝나지 않아 멈췄습니다", TIMEOUT.as_secs()));
             }
@@ -130,7 +154,8 @@ pub async fn engine_plugin(cli: String, args: Vec<String>, cwd: Option<String>) 
         if ok {
             Ok(out)
         } else {
-            Err(if err.trim().is_empty() { out } else { err }.trim().to_string())
+            let msg = if err.trim().is_empty() { out } else { err };
+            Err(if msg.trim().is_empty() { format!("{cli}가 실패했습니다 (출력 없음)") } else { msg.trim().to_string() })
         }
     })
     .await

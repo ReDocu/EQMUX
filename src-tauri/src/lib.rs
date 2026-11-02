@@ -304,7 +304,8 @@ fn epoch_ms() -> u64 {
 /// 스토어 대기 배치 flush — ack 채널 왕복 (FR-C-62②·63 공용). true = 시한 안 완료.
 fn flush_store(store: &Store, timeout: std::time::Duration) -> bool {
     let (ack_tx, ack_rx) = std::sync::mpsc::channel();
-    if store.sender().send(StoreMsg::Flush(ack_tx)).is_err() {
+    // try_send — 큐(50k)가 가득하면 send는 시한 없이 막힌다. 로그오프 · 종료 경로는 시한이 있어야 한다
+    if store.sender().try_send(StoreMsg::Flush(ack_tx)).is_err() {
         return false;
     }
     ack_rx.recv_timeout(timeout).is_ok()
@@ -2563,7 +2564,9 @@ fn finish_store_and_flag(app: &AppHandle) {
         winstate::save(&win, &store.0.root());
     }
     // 최대 1초 — 이미 ②를 거쳤으므로 잔량은 적다
-    let _ = flush_store(&store.0, std::time::Duration::from_secs(1));
+    if !flush_store(&store.0, std::time::Duration::from_secs(1)) {
+        diag::write("EXIT flush 시한 초과 — 마지막 줄 일부가 저장되지 않았을 수 있다");
+    }
     // 클린 종료 표식 제거 (FR-C-35) — 이 줄에 도달했다는 것이 곧 정상 종료의 정의다
     let _ = std::fs::remove_file(store.0.root().join("running.flag"));
     ipc::remove_socket(); // 버스 소켓 파일도 남기지 않는다 (B116 · macOS)
