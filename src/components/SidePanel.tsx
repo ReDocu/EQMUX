@@ -5,7 +5,7 @@
 // 파일 탐색기는 임무 팝업에서 코드 그룹으로 옮겼다 (결정 21) — 임무 팝업은 임무만 그린다.
 // 파일 탭은 한 번 열면 숨겨도 살려 둔다 — 탭을 오가도 편집 중인 내용이 사라지지 않게. 패널을 닫을 때만 묻는다.
 // 위치 전환 — 플렉스 order로 좌/우를 오간다 (app-row · tf-body 양쪽 컨테이너 공용).
-import { createEffect, createResource, createSignal, For, onCleanup, Show } from "solid-js";
+import { createEffect, createResource, createSignal, For, lazy, onCleanup, Show } from "solid-js";
 import { loadEnvFiles } from "../backend/env";
 import { priorLayout } from "../backend/layout";
 import { unseenPortCount } from "../backend/ports";
@@ -25,17 +25,20 @@ import type { PanelTab } from "../state";
 import { t, tf } from "../i18n";
 import { BrowserPanelTab } from "./BrowserPanelTab";
 import { EnvPanelTab } from "./EnvPanelTab";
-import { ExtensionsPanelTab } from "./ExtensionsPanelTab";
 import { editorGuard, MissionExplorerTab } from "./MissionExplorerTab";
 import { ConversationTab } from "./ConversationTab";
 import { GitPanelTab } from "./GitPanelTab";
 import { LogsPanelTab } from "./LogsPanelTab";
-import { MdViewTab } from "./MdViewTab";
 import { PortsPanelTab } from "./PortsPanelTab";
 import { ServerPanelTab } from "./ServerPanelTab";
 import { Icon } from "./icons";
 import type { IconName } from "./icons";
 import { ConfirmDialog, Segmented } from "./ui";
+
+// 마크다운 파서(lezer)를 끌고 오는 두 탭은 처음 열 때 받는다 — 메인 청크에서 뺀다.
+// 상위에 Suspense가 없어 첫 방문에만 잠깐 비고, 그 뒤로는 바로 그린다. 상태는 원래대로(Show 언마운트) 그대로다
+const MdViewTab = lazy(() => import("./MdViewTab").then((m) => ({ default: m.MdViewTab })));
+const ExtensionsPanelTab = lazy(() => import("./ExtensionsPanelTab").then((m) => ({ default: m.ExtensionsPanelTab })));
 
 const GROUPS: { key: string; label: string; icon: IconName; tabs: { key: PanelTab; label: string }[] }[] = [
   { key: "talk", label: "대화", icon: "messages-square", tabs: [{ key: "conversation", label: "대화" }, { key: "logs", label: "로그" }] },
