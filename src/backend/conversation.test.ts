@@ -1,7 +1,7 @@
 // 주입 본문 단위 테스트 — 전달 경로(PTY·인박스)는 통합의 몫이고, 여기서는 "여러 건을 어떻게
 // 한 줄로 접는가"만 본다: 단건/묶음 접두 · 개행 평탄화 · 상한에서 덩어리 갈리기.
 import { describe, expect, test } from "vitest";
-import { batches, cancelBrief, capQueue, deliveredIds, flushInboxOnState, fmt, fmtEcho, goneName, orphanedInbox, pendingBrief, queueBrief, pendingReason, prependOlder, splitPending, unmanagedAgent } from "./conversation";
+import { batches, cancelBrief, consumeTaken, noteTaken, capQueue, deliveredIds, flushInboxOnState, fmt, fmtEcho, goneName, orphanedInbox, pendingBrief, queueBrief, pendingReason, prependOlder, splitPending, unmanagedAgent } from "./conversation";
 import { typedText } from "./pty";
 import type { ConversationMessage } from "../types";
 
@@ -205,5 +205,16 @@ describe("capQueue (CPU·RAM M6)", () => {
     const q = [1, 2, 3];
     expect(capQueue(q, 5)).toBe(q);
     expect(capQueue([1, 2, 3, 4, 5, 6], 4)).toEqual([3, 4, 5, 6]);
+  });
+});
+
+describe("--wait로 받아 간 회신 (W3 §4)", () => {
+  test("message-new보다 먼저 온 표시는 그 세션에 한 번만 쓰이고, 10초가 지나면 걷힌다", () => {
+    noteTaken("kai@ws", 7, 1000);
+    expect(consumeTaken("rin@ws", 7, 1001)).toBe(false);
+    expect(consumeTaken("kai@ws", 7, 1002)).toBe(true);
+    expect(consumeTaken("kai@ws", 7, 1003)).toBe(false);
+    noteTaken("kai@ws", 8, 1000);
+    expect(consumeTaken("kai@ws", 8, 20_000)).toBe(false);
   });
 });

@@ -652,6 +652,33 @@ function retryWhenFree(sessionId: string, left = 25): void {
   }, RETRY_MS);
 }
 
+// ── `eqmux send --wait`로 받아 간 회신 (W3 §4) — 기다린 세션은 CLI 출력으로 이미 읽었다. 같은 회신이
+// 턴 끝에 다시 주입되면 중복이라 인박스에서 뺀다. 대화 탭 표시는 그대로 둔다.
+// 이벤트가 message-new보다 먼저 오면 잠깐 기억했다가 그 메시지가 올 때 그 세션에만 넣지 않는다
+const TAKEN_TTL_MS = 10_000;
+const takenEarly = new Map<string, number>(); // `${session}#${rowId}` → 만료 시각
+
+/** 먼저 온 받아 감 표시를 쓴다 — 있으면 true이고 지운다. 만료된 것은 함께 걷는다. now는 테스트용 */
+export function consumeTaken(session: string, rowId: number | undefined, now = Date.now()): boolean {
+  for (const [k, exp] of takenEarly) if (exp < now) takenEarly.delete(k);
+  if (rowId === undefined) return false;
+  return takenEarly.delete(`${session}#${rowId}`);
+}
+
+/** message-taken 수신 — 인박스에 있으면 빼고, 아직 안 왔으면 기억한다 */
+export function noteTaken(session: string, rowId: number, now = Date.now()): void {
+  const q = inbox.get(session);
+  const keep = q?.filter((x) => x.rowId !== rowId);
+  if (q && keep && keep.length < q.length) {
+    if (keep.length) inbox.set(session, keep);
+    else inbox.delete(session);
+    setInboxTick((t) => t + 1);
+    scheduleInboxSave();
+    return;
+  }
+  takenEarly.set(`${session}#${rowId}`, now + TAKEN_TTL_MS);
+}
+
 function deliver(wsId: string, m: ConversationMessage): void {
   let queued = false;
   let reached = false;
@@ -667,6 +694,7 @@ function deliver(wsId: string, m: ConversationMessage): void {
   };
   for (const s of recipients(wsId, m.to)) {
     if (s.id === m.from) continue; // 에이전트 발신(@all)이 자기 자신에게 되돌아가지 않게
+    if (consumeTaken(s.id, m.rowId)) continue; // --wait로 이미 받아 간 회신 (W3 §4)
     if (s.status === "dead") {
       park(s.id); // 프로세스가 없다 — 재개하면 idle 전이에서 흘러간다 (B50)
     } else if (unmanagedAgent(s)) {
@@ -759,6 +787,10 @@ export function startMessageBus(): Promise<void> {
       if (backend.appendMessage(m)) setOlderLeft((o) => ({ ...o, [workspace]: true }));
       deliver(workspace, m);
     }).then(() => {});
+    // --wait 회신을 CLI가 받아 갔다 (W3 §4) — 같은 회신을 턴 끝에 다시 넣지 않는다
+    void listen<{ workspace: string; session: string; id: number }>("message-taken", (e) =>
+      noteTaken(e.payload.session, e.payload.id),
+    );
     backend.subscribe(releaseOrphans); // 에이전트 감지(applyAgents)가 agent를 지우면 방송이 온다
   }
   return busReady;
