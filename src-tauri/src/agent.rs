@@ -76,6 +76,25 @@ pub struct Tracked {
     pub context_pct: Option<i64>,
     /// statusLine 한도 중 가장 찬 창 (F1) — 구독 요금제에서만 온다
     pub rate_limit: Option<RateLimit>,
+    /// 지금 상태로 바꾼 근거 (§4 상태 판정 근거 보기) — 전이마다 찍는다
+    pub reason: Option<StateReason>,
+    /// 마지막으로 받은 훅 (이벤트, ms) — 멈춤의 근거로 보인다
+    pub last_hook: Option<(String, i64)>,
+}
+
+/// 상태 판정 근거 (§4) — 무엇이(event) 언제(ts, epoch ms) 이 상태로 바꿨나.
+/// event: 훅 이름(Stop·Notification·PreToolUse…) · "registry"(세션 레지스트리 파일) ·
+/// "pty-exit"(프로세스 종료) · "process-gone"(채택 세션이 사라짐). stalled면 마지막 훅과 note "stalled"
+#[derive(Clone, Serialize, PartialEq, Debug)]
+pub struct StateReason {
+    pub event: String,
+    pub ts: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+fn reason(event: &str, ts: i64, note: Option<String>) -> Option<StateReason> {
+    Some(StateReason { event: event.into(), ts, note })
 }
 
 /// 사용 한도 한 창 (F1) — statusLine `rate_limits.<window>` 중 사용률이 가장 높은 것
@@ -308,6 +327,17 @@ pub struct AgentStateEvt {
     /// 가장 찬 사용 한도 창 (F1)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rate_limit: Option<RateLimit>,
+    /// 상태 판정 근거 (§4) — 상태 칩 툴팁·세션 상세
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<StateReason>,
+}
+
+/// 방송할 근거 (순수 함수) — 멈춤이면 마지막 훅이 근거다(그 뒤로 아무것도 안 왔다). 아니면 마지막 전이
+fn reason_of(t: &Tracked) -> Option<StateReason> {
+    match (&t.last_hook, t.stalled && t.last_status == "busy") {
+        (Some((event, ts)), true) => reason(event, *ts, Some("stalled".into())),
+        _ => t.reason.clone(),
+    }
 }
 
 /// 추적 → 방송 한 건. 호출부는 다른 칸만 `..evt_of(t, uuid)`로 덮어쓴다
@@ -331,6 +361,7 @@ pub fn evt_of(t: &Tracked, uuid: &str) -> AgentStateEvt {
         stalled: t.stalled && t.last_status == "busy",
         context_pct: t.context_pct,
         rate_limit: t.rate_limit.clone(),
+        reason: reason_of(t),
     }
 }
 
@@ -1212,6 +1243,7 @@ fn note_hook(t: &mut Tracked, event: &str, payload: &serde_json::Value, now: i64
         _ => {}
     }
     t.signal_ms = now;
+    t.last_hook = Some((event.to_string(), now));
     std::mem::take(&mut t.stalled)
 }
 
@@ -1465,6 +1497,17 @@ fn adopt_codex_session(app: &AppHandle, session: &str, payload: &serde_json::Val
     let _ = app.emit_to("main", "agent-state", evt);
 }
 
+/// 훅 한 건을 추적에 싣는다 (순수 함수) — 부연(note_hook) → 효과(apply_effect) → 전이면 근거를 찍는다.
+/// Ignore인 이벤트도 생존 신호다 (A5) — 멈춤이 풀렸으면 효과가 없어도 조용히 방송한다
+fn hook_step(t: &mut Tracked, event: &str, effect: &HookEffect, payload: &serde_json::Value, now: i64) -> Option<bool> {
+    let unstalled = note_hook(t, event, payload, now);
+    let out = apply_effect(t, effect, payload, now);
+    if out == Some(false) {
+        t.reason = reason(event, now, None); // 상태 전이 — 이 훅이 근거다
+    }
+    out.or(unstalled.then_some(true))
+}
+
 pub fn apply_hook(app: &AppHandle, session: &str, event: &str, payload: &serde_json::Value) {
     // Codex의 진짜 세션 id는 여기서 처음 알게 된다 (M37) — 상태 반영보다 먼저 앵커를 옮긴다
     if event == "SessionStart" {
@@ -1486,10 +1529,7 @@ pub fn apply_hook(app: &AppHandle, session: &str, event: &str, payload: &serde_j
     if let Ok(mut map) = rt.by_uuid.lock() {
         if let Some(uuid) = current_uuid(&map, session) {
             let Some(t) = map.get_mut(&uuid) else { return };
-            let now = crate::workspace::now_ms();
-            // Ignore인 이벤트도 생존 신호다 (A5) — 멈춤이 풀렸으면 효과가 없어도 조용히 방송한다
-            let unstalled = note_hook(t, event, payload, now);
-            if let Some(quiet) = apply_effect(t, &effect, payload, now).or(unstalled.then_some(true)) {
+            if let Some(quiet) = hook_step(t, event, &effect, payload, crate::workspace::now_ms()) {
                 t.seq = next_seq();
                 let completed = std::mem::take(&mut t.turn_done);
                 out = Some((
@@ -1635,6 +1675,7 @@ pub fn on_pty_exit(app: &AppHandle, id: &str, code: Option<u32>, gen: u64) {
             if t.app_session == id && t.pty_gen == gen && t.last_status != "dead" {
                 t.last_status = "dead".into();
                 t.status_ms = crate::workspace::now_ms();
+                t.reason = reason("pty-exit", t.status_ms, code.map(|c| format!("exit {c}")));
                 t.activity = None;
                 t.subagents = 0;
                 t.seq = next_seq();
@@ -1782,6 +1823,7 @@ fn apply_registry(
     t.last_status = status;
     t.last_waiting = waiting;
     t.status_ms = mtime_ms; // 레지스트리가 그 상태를 쓴 시각 (B19)
+    t.reason = reason("registry", mtime_ms, None);
     if t.last_status == "idle" {
         t.activity = None; // 턴 종료 부연 정리 — 훅 경로(apply_effect)와 같은 규칙
         t.subagents = 0;
@@ -1934,6 +1976,7 @@ fn scan(app: &AppHandle) {
                     seq,
                     // 앱이 붙기 전부터 그 상태였다 — 레코드가 쓰인 시각이 전이 시각이다 (B19)
                     since_ms: Some(*mtime_ms),
+                    reason: reason("registry", *mtime_ms, Some("adopted".into())),
                     ..Default::default()
                 });
                 let name = app_session.split('@').next().unwrap_or(&app_session).to_string();
@@ -1946,6 +1989,7 @@ fn scan(app: &AppHandle) {
                         name,
                         last_status: status,
                         last_waiting: waiting,
+                        reason: reason("registry", *mtime_ms, Some("adopted".into())),
                         status_ms: *mtime_ms, // 채택 시점이 아니라 그 상태가 된 시각 (B19)
                         pty_gen: gen, // 페인이 죽으면 on_pty_exit이 dead로 닫을 수 있게
                         seq,
@@ -1991,6 +2035,7 @@ fn scan(app: &AppHandle) {
                     degraded: false,
                     seq: next_seq(),
                     since_ms: Some(crate::workspace::now_ms()),
+                    reason: reason("process-gone", crate::workspace::now_ms(), None),
                     ..evt_of(t, uuid)
                 });
             }
@@ -2822,5 +2867,30 @@ mod tests {
             Some("b".into())
         );
         assert_eq!(pick(vec![("a", "in-progress", true, None), ("b", "todo", true, Some(1))]), Some("b".into()), "시각 없는 옛 배정은 뒤로");
+    }
+    /// §4 상태 판정 근거 — 전이를 만든 훅·레지스트리가 근거로 남고, 부연은 근거를 바꾸지 않으며, 멈춤은 마지막 훅이다
+    #[test]
+    fn state_reason_names_what_caused_the_state() {
+        use super::{apply_registry, hook_effect, hook_step, reason_of, stall_step, StateReason, STALL_MS};
+        let r = |event: &str, ts: i64, note: Option<&str>| Some(StateReason { event: event.into(), ts, note: note.map(Into::into) });
+        let mut t = tracked("idle");
+        let step = |t: &mut Tracked, ev: &str, p: serde_json::Value, now: i64| hook_step(t, ev, &hook_effect(ev, &p), &p, now);
+        step(&mut t, "UserPromptSubmit", nil(), 1_000);
+        assert_eq!(reason_of(&t), r("UserPromptSubmit", 1_000, None));
+        step(&mut t, "PreToolUse", serde_json::json!({ "tool_name": "Bash" }), 2_000);
+        assert_eq!(reason_of(&t), r("UserPromptSubmit", 1_000, None), "도구명 부연은 전이가 아니다");
+        let perm = serde_json::json!({ "message": "Claude needs your permission to use Bash" });
+        step(&mut t, "Notification", perm, 3_000);
+        assert_eq!((t.last_status.as_str(), reason_of(&t)), ("waiting", r("Notification", 3_000, None)));
+        step(&mut t, "PostToolUse", serde_json::json!({ "tool_name": "Bash" }), 4_000);
+        assert_eq!((t.last_status.as_str(), reason_of(&t)), ("busy", r("PostToolUse", 4_000, None)), "답이 들어와 풀렸다");
+        // 멈춤 — 근거는 마지막 훅과 "stalled"
+        assert_eq!(stall_step(&mut t, 4_000 + STALL_MS), Some(()));
+        assert_eq!(reason_of(&t), r("PostToolUse", 4_000, Some("stalled")));
+        assert_eq!(super::evt_of(&t, "u").reason, r("PostToolUse", 4_000, Some("stalled")));
+        // 레지스트리 재스캔이 바꾼 상태
+        t.stalled = false;
+        assert!(apply_registry(&mut t, Some("idle"), None, 900_000));
+        assert_eq!(reason_of(&t), r("registry", 900_000, None));
     }
 }
