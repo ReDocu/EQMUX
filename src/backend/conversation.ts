@@ -497,9 +497,15 @@ function shellNotice(sessionId: string, wsId: string, m: ConversationMessage): v
       if (jumpToSession(wsId, sessionId)) setFocusRequest({ session: sessionId });
     },
   });
-  // 토스트 — 늦게 싣는다: ui.tsx는 window를 만지므로 정적 import면 이 모듈을 싣는 node 테스트가 깨진다
-  void import("../components/ui").then((u) => u.notify(line));
+  shellToast(line);
 }
+
+/** 토스트 훅 — 앱 셸이 ui.notify를 꽂는다. ui.tsx는 window를 만져서 여기서 import하면 이 모듈을 싣는
+ *  node 테스트가 깨진다. 꽂기 전(테스트)에는 알림 센터 항목만 남는다 */
+let shellToast: (line: string) => void = () => {};
+export const setShellToast = (fn: (line: string) => void): void => {
+  shellToast = fn;
+};
 
 /** 수신 세션 결정 (M4) — "@all"이면 그 워크스페이스의 살아 있는 참여자 전원.
  *  기본 터미널(역할 없음)은 참여자다 — 프롬프트 앞의 사람이 읽는다.

@@ -1,11 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { createEffect, createSignal, lazy, Match, onCleanup, onMount, Show, Switch } from "solid-js";
 import { AppBar } from "./components/AppBar";
 import { SidePanel } from "./components/SidePanel";
 import { ensureAgentListeners } from "./backend/agent";
 import { nextUnseen, startConflictFeed, startNotifyFeed } from "./backend/attention";
 import { startAwayWatch } from "./backend/away";
-import { startDirectorySync, startMessageBus } from "./backend/conversation";
+import { setShellToast, startDirectorySync, startMessageBus } from "./backend/conversation";
 import { backend } from "./backend/mock";
 import { startAgentProbe } from "./backend/agentprobe";
 import { startMemorySampling } from "./backend/memory";
@@ -44,14 +46,14 @@ import { notify } from "./components/ui";
 import { ControlCenter } from "./screens/ControlCenter";
 import { CrashRecovery } from "./screens/CrashRecovery";
 import { Dashboard } from "./screens/Dashboard";
-import { DefaultTerminalSetup } from "./screens/DefaultTerminalSetup";
 import { ExitDialog } from "./screens/ExitDialog";
-import { LaunchMode } from "./screens/LaunchMode";
 import { LayoutPicker } from "./screens/LayoutPicker";
-import { Missions } from "./screens/Missions";
 
 // 첫 화면 밖 화면은 나눠 싣는다 (최적화 D6) — 설정·역할 라이브러리·diff 편집기·캐스팅 등은
 // 열 때 처음 받는다. 관제·워크스페이스·대화는 첫 화면이라 그대로 둔다
+const DefaultTerminalSetup = lazy(() => import("./screens/DefaultTerminalSetup").then((m) => ({ default: m.DefaultTerminalSetup })));
+const LaunchMode = lazy(() => import("./screens/LaunchMode").then((m) => ({ default: m.LaunchMode })));
+const Missions = lazy(() => import("./screens/Missions").then((m) => ({ default: m.Missions })));
 const GitDiffEditor = lazy(() => import("./screens/GitDiffEditor").then((m) => ({ default: m.GitDiffEditor })));
 const GitScreen = lazy(() => import("./screens/GitScreen").then((m) => ({ default: m.GitScreen }))); // §17 W5
 const MissionReview = lazy(() => import("./screens/MissionReview").then((m) => ({ default: m.MissionReview }))); // §13-3 W4
@@ -68,6 +70,7 @@ export function App() {
   // 전역 pty-output/exit 수신 — spawnPty 경로에만 맡기면 에이전트 전용 실행·재부착 세션이
   // 출력을 못 받는다. 셸 exit은 여기서 상태에 반영한다 (에이전트는 agent-state가 관장)
   onMount(() => {
+    setShellToast(notify); // 맨 셸 슬롯 메시지의 토스트 (B157)
     void ensurePtyListeners();
     setPtyExitHook((id, code) => backend.sessionExited(id, code));
   });
@@ -144,16 +147,15 @@ export function App() {
       if (running) setExitOpen(true);
       else void performShutdown();
     };
-    void import("@tauri-apps/api/window").then(({ getCurrentWindow }) =>
-      getCurrentWindow().onCloseRequested(async (e) => {
-        e.preventDefault();
-        // 트레이로 숨겼으면 끝 (W1 §1-1) — Rust는 closeAction이 quit가 아니고 PTY가 돌 때만 true다
-        if (await invoke<boolean>("window_close_to_tray").catch(() => false)) return;
-        await requestQuit();
-      }),
-    );
+    // 정적 import — 다른 모듈이 이미 같은 패키지를 정적으로 실어서 동적 import는 청크를 나누지 못했다
+    void getCurrentWindow().onCloseRequested(async (e) => {
+      e.preventDefault();
+      // 트레이로 숨겼으면 끝 (W1 §1-1) — Rust는 closeAction이 quit가 아니고 PTY가 돌 때만 true다
+      if (await invoke<boolean>("window_close_to_tray").catch(() => false)) return;
+      await requestQuit();
+    });
     // 앱 수명 동안 듣는다 — 위 onCloseRequested와 같다
-    void import("@tauri-apps/api/event").then(({ listen }) => listen("app-quit-requested", () => void requestQuit()));
+    void listen("app-quit-requested", () => void requestQuit());
   });
 
   // 모달(종료·배치·복구·확인창)이 떠 있는 동안은 화면을 옮기는 단축키를 막는다 (B72) — 캡처 단계라
