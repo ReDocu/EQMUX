@@ -478,6 +478,7 @@ mod tests {
                 persona_name: None,
                 title: None,
             }],
+            ..Default::default()
         }
     }
 

@@ -93,6 +93,7 @@ export function RoleLibrary() {
   const [draftColor, setDraftColor] = createSignal<Persona["color"]>("blue");
   const [draftJob, setDraftJob] = createSignal(""); // 기본 직무 — 역할 부여가 따라간다. "" = 미지정
   const [draftTitle, setDraftTitle] = createSignal(""); // 직함 (0.5) — "" = 직함 없음
+  const [draftRemind, setDraftRemind] = createSignal(false); // 매 턴 캐릭터 상기 (0.6 §15-3)
   // ── 단계별 독립 프로필 3벌 — 단계 전환은 편집 대상 교체일 뿐, 다른 단계 값은 그대로 남는다 ──
   type DraftProfile = { hint: string; tone: string; personality: string };
   const emptyProf = (): DraftProfile => ({ hint: "", tone: "", personality: "" });
@@ -122,6 +123,7 @@ export function RoleLibrary() {
     setDraftColor(p.color);
     setDraftJob(p.job ?? "");
     setDraftTitle(p.title ?? "");
+    setDraftRemind(!!p.remind);
     setDraftProfiles({ basic: profileOf(p, "basic"), mid: profileOf(p, "mid"), adv: profileOf(p, "adv") });
     setEditLevel(personaLevel(p));
     setPersonaBase(personaKey());
@@ -130,7 +132,7 @@ export function RoleLibrary() {
     closeSheet();
   };
   // 편집 여부 (B95 · U57) — 고른/저장한 시점의 draft와 다르면 dirty. '저장됨 ✓'과 이탈 확인이 이 값을 본다
-  const personaKey = () => JSON.stringify([draftName(), draftColor(), draftJob(), draftTitle(), draftProfiles(), editLevel()]);
+  const personaKey = () => JSON.stringify([draftName(), draftColor(), draftJob(), draftTitle(), draftProfiles(), editLevel(), draftRemind()]);
   const [personaBase, setPersonaBase] = createSignal("");
   const personaDirty = () => !!sel() && !selIsWs() && personaKey() !== personaBase();
   const nameErr = () => (sel() ? libNameError(draftName(), sel()!.id, personas()) : undefined);
@@ -155,9 +157,13 @@ export function RoleLibrary() {
       color: draftColor(),
       job: draftJob(),
       title: draftTitle().trim() || undefined,
+      remind: draftRemind(),
       mtimeMs: editMtime(),
     });
     setSaveErr(err ?? undefined);
+    // 상기를 켜고 껐다 — 역할 파일의 remind: 줄만 다시 만든다. 훅이 매 프롬프트마다 파일을 다시 읽으니
+    // '다시 읽기' 안내도 재시작도 필요 없다 (§15-3 반영 시점)
+    if (!err && !!p.remind !== draftRemind()) resaveTeams();
     // 직함이 바뀌었다 — 역할 파일은 팀 동기화(500ms 디바운스)가 다시 만든다. 그 페르소나가 있는
     // 워크스페이스의 살아 있는 팀원 모두에게 '다시 읽기' 한 줄 (팀 관계 표도 바뀌므로). 재시작 없음
     if (!err && (p.title ?? "").trim() !== draftTitle().trim()) {
@@ -642,6 +648,16 @@ export function RoleLibrary() {
                   )}
                 </For>
               </div>
+            </div>
+            {/* 매 턴 캐릭터 상기 (0.6 §15-3) — 단계와 무관. 꺼짐이 기본. Codex는 훅 출력을 실측하지 않아 내지 않는다 */}
+            <div class="rl-field">
+              <label style={{ display: "flex", gap: "6px", "align-items": "center", cursor: "pointer" }}>
+                <input type="checkbox" checked={draftRemind()} onChange={(e) => setDraftRemind(e.currentTarget.checked)} />
+                {t("매 턴 캐릭터 상기")}
+              </label>
+              <span class="rl-hint muted">
+                {t("프롬프트마다 캐릭터 한 줄을 다시 싣습니다 — 턴당 수십 토큰. Claude Code만 (Codex는 나가지 않음)")}
+              </span>
             </div>
             <div class="rl-field">
               <label class="rl-label">{t("이름 (세션 이름과 분리 가능)")}</label>

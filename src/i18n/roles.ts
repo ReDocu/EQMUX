@@ -276,4 +276,8 @@ export const dict: Record<string, string> = {
   "저장하지 않은 편집이 있습니다": "You have unsaved edits",
   "이동하면 고친 내용이 사라집니다. 남기려면 취소하고 [저장]을 누르세요.": "Moving on discards your edits. To keep them, cancel and press [Save].",
   "버리고 이동": "Discard and move on",
+  // 0.6 §15-3 매 턴 캐릭터 상기
+  "매 턴 캐릭터 상기": "Remind character every turn",
+  "프롬프트마다 캐릭터 한 줄을 다시 싣습니다 — 턴당 수십 토큰. Claude Code만 (Codex는 나가지 않음)":
+    "Re-adds one character line on every prompt — a few dozen tokens per turn. Claude Code only (not sent to Codex)",
 };

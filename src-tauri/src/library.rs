@@ -77,6 +77,9 @@ pub struct PersonaInfo {
     pub character_name: Option<String>,
     #[serde(default)]
     pub character_source: Option<String>,
+    /// 매 턴 캐릭터 상기 (0.6 §15-3) — frontmatter `remind: on`. 꺼짐이 기본이고 키도 없다
+    #[serde(default)]
+    pub remind: bool,
     /// 읽은 시점의 파일 mtime (P-7) — 저장 시 외부 변경 충돌 감지에 쓴다
     #[serde(default)]
     pub mtime_ms: i64,
@@ -347,6 +350,7 @@ fn parse_persona(path: &Path) -> Option<PersonaInfo> {
         character_path,
         character_name,
         character_source,
+        remind: fm_value(&fm, "remind").as_deref() == Some("on"),
         mtime_ms: file_mtime_ms(path),
     })
 }
@@ -474,9 +478,10 @@ fn render_persona(p: &PersonaInfo) -> String {
     // 직함도 같은 규칙 — 한 줄로 접어 frontmatter를 깨지 않게 한다 (입력 단계에서 이미 막지만 한 번 더)
     let title = p.title.split_whitespace().collect::<Vec<_>>().join(" ");
     let title_line = if title.is_empty() { String::new() } else { format!("title: {title}\n") };
+    let remind_line = if p.remind { "remind: on\n" } else { "" };
     let mut s = format!(
-        "---\nid: {}\nname: {}\ncolor: {}\n{}{}{}---\n",
-        p.id, p.name, p.color, level_line, job_line, title_line
+        "---\nid: {}\nname: {}\ncolor: {}\n{}{}{}{}---\n",
+        p.id, p.name, p.color, level_line, job_line, title_line, remind_line
     );
     // 저장의 원본은 프로필 3벌 — 최상위 편의 필드(hint 등)는 쓰지 않는다.
     // 단, 구 호출 경로(프로필 없이 hint만 온 페이로드)는 세 프로필에 복사해 받아준다.
@@ -879,6 +884,22 @@ mod tests {
         save_persona(&root, &titled, None).unwrap();
         let again = list(&root, None).personas.into_iter().find(|p| p.id == "kai").unwrap();
         assert_eq!(again.title, "UI | C# 개발자");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// 매 턴 상기 (0.6 §15-3 · 검증 ①) — 꺼짐이 기본이고 키가 없다. 켜면 `remind: on`, 다시 읽으면 켜짐
+    #[test]
+    fn persona_remind_roundtrip() {
+        let root = temp_root("remind");
+        seed(&root);
+        let kai = list(&root, None).personas.into_iter().find(|p| p.id == "kai").unwrap();
+        assert!(!kai.remind);
+        let path = root.join("personas").join("kai.md");
+        save_persona(&root, &kai, None).unwrap();
+        assert!(!fs::read_to_string(&path).unwrap().contains("remind:"));
+        save_persona(&root, &PersonaInfo { remind: true, ..kai.clone() }, None).unwrap();
+        assert!(fs::read_to_string(&path).unwrap().contains("\nremind: on\n"));
+        assert!(list(&root, None).personas.into_iter().find(|p| p.id == "kai").unwrap().remind);
         fs::remove_dir_all(&root).ok();
     }
 
