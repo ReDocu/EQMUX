@@ -145,3 +145,4 @@
 | 11-02 | W3 | PowerShell 파이프 인코딩(콘솔 CP 변환). 실기: 한국어 Windows 기본 pwsh에서 `eqmux who \| Select-Object` | `be185da` |
 | 11-02 | W4 | 임무 시작점 `base_commit` + 카드 "그 뒤 커밋 N개" | `deafa88` |
 | 11-02 | W3 | 매 턴 상기 `remind:` 훅 출력 · 기억 `memory:` 싣기(C6). 실기: 30턴 말투, 끈 뒤 빠짐, Codex 무해, 기억 언급 | `babd05a` |
+| 11-02 | W1 | 트레이 · 창 닫기 동작(Rust) · WM_QUERYENDSESSION. 프런트 연결은 W7 대기. 실기: 트레이 표시 · 수 갱신 · 알림, 실제 로그오프 뒤 복구 창 · 고아 프로세스, mac Dock | `530c4d1` |
