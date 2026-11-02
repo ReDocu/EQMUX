@@ -13,9 +13,12 @@
 | **§17 3단계** | merge · rebase(비대화형) · cherry-pick · revert · stash(push/apply/pop/drop) · reset(soft/mixed/hard) · 분리 체크아웃. 진행 중 배너([충돌 보기] · [세션에게 해결 맡기기] · [계속] · [중단]). 충돌 덩어리별 우리 것/저쪽 것/둘 다. reset --hard는 사라질 커밋 · 변경 수 · 되돌릴 해시를 보이고 두 번 묻는다. `GIT_EDITOR=true`로 편집기에서 멈추지 않는다 | f0514a0 |
 | §13-3 기준 모드 (W4 부탁) | `GitDiffEditor` `base` · `only` props, `diff.rs` `diff_changed_files_since` · `file_diff_since`(HEAD 자리에 base) | 4bb8860 |
 | 품은 diff 닫기 | `GitDiffEditor`가 화면 자체(`view().kind === "gitdiff"`)일 때만 Esc · ✕로 닫는다. 기준 없는 임무에 품으면 Esc가 관제로 튀던 것 | b792d0d |
-| 직함별 담당 경로 (§4 · §13-1) | 배관(직무 · 역할 파일 frontmatter `owns:`, 직무 편집 입력칸)은 W4가 2bff0ba로 넣었다. W5는 새 `owns.rs`: glob(`**` · `*` · `?`, `docs/` · `docs` = 그 폴더 전부, Windows 대소문자 무시), `repo_rel`(gitx에서 옮김 — 워크트리 접두를 뗀다), 역할 파일 owns 읽기, (세션, 파일) 10분 1회. `record_edit`(agent.rs)가 담당 밖 편집이면 `edit-outside-owns` `{ workspace, session, path, owns: string[], ts }`를 낸다. 막지 않는다. owns가 없거나 저장소 밖 파일이면 아무것도 하지 않는다. `eqmux who` 끝에 `내 담당: …` 한 줄(owns 있을 때, list에는 없음). Bash · Codex 편집은 못 잡는다 | 미커밋 |
-| U102 | diff 화면 [줄바꿈] 버튼의 ↩ 기호 → `wrap-text` 아이콘(icons.tsx에 Lucide 경로 한 줄) | 미커밋 |
-| B132 · B151 워크트리 소속 | `workspace::canon_key` — 실경로(심링크 · mac `/tmp` → `/private/tmp`), Windows `\\?\` 접두 제거, `/`, 끝 `/` 없음, Windows만 소문자. `WorktreeInfo.key`와 새 커맨드 `path_keys(paths)`(세션 cwd용)가 같은 키를 낸다. 프런트 비교(ControlCenter)는 W7 몫. **mac 실기 확인 필요**(대소문자 무시 볼륨에서 철자가 다르면 갈린다) | 미커밋 |
+| 직함별 담당 경로 (§4 · §13-1) | 배관(직무 · 역할 파일 frontmatter `owns:`, 직무 편집 입력칸)은 W4가 2bff0ba로 넣었다. W5는 새 `owns.rs`: glob(`**` · `*` · `?`, `docs/` · `docs` = 그 폴더 전부, Windows 대소문자 무시), `repo_rel`(gitx에서 옮김 — 워크트리 접두를 뗀다), 역할 파일 owns 읽기, (세션, 파일) 10분 1회. `record_edit`(agent.rs)가 담당 밖 편집이면 `edit-outside-owns` `{ workspace, session, path, owns: string[], ts }`를 낸다. 막지 않는다. owns가 없거나 저장소 밖 파일이면 아무것도 하지 않는다. `eqmux who` 끝에 `내 담당: …` 한 줄(owns 있을 때, list에는 없음). Bash · Codex 편집은 못 잡는다 | 5632dc5 |
+| U102 | diff 화면 [줄바꿈] 버튼의 ↩ 기호 → `wrap-text` 아이콘(icons.tsx에 Lucide 경로 한 줄) | 5632dc5 |
+| B132 · B151 워크트리 소속 | `workspace::canon_key` — 실경로(심링크 · mac `/tmp` → `/private/tmp`), Windows `\\?\` 접두 제거, `/`, 끝 `/` 없음, Windows만 소문자. `WorktreeInfo.key`와 새 커맨드 `path_keys(paths)`(세션 cwd용)가 같은 키를 낸다. 프런트 비교(ControlCenter)는 W7 몫. **mac 실기 확인 필요**(대소문자 무시 볼륨에서 철자가 다르면 갈린다) | 5632dc5 |
+| QA 목록 W5 절 | `update-0.6-qa-checklist.md` "## W5 — git" K1~K25 | 4be6ee5 |
+| 설명서 0.6 초안 | `docs/site/drafts/0.6-w5.md` — git 화면 · 작업 중 경고 · 로그인 · 세션 배지 · .env 가림 · 담당 밖 편집 경고 · who 한 줄 · 문제 해결 7항목 · 설계 경계 3행 · diff 뷰어 문단 바꿈. docs.md 합치기는 리드 | 초안 · docs.md 합침 fd63a4e(리드) |
+| git 패널 안내 줄 | 커밋 메뉴 "cherry-pick · revert는 다음 단계" → "… git 화면에서"(한 · 영), 안 쓰는 "다음 단계 — 터미널에서" 키 4개 삭제 | 404cf40 |
 
 테스트(마지막): `npx tsc --noEmit` 통과, `npm test` 244/244, `cargo test --lib` 237 통과 · 1 실패(ports 기준선, W6), owns 4/4 · canon_key 1/1 · gitx attribute(`repo_rel` 이동 뒤) 통과, clippy W5 파일 경고 없음.
 
