@@ -132,7 +132,8 @@
 | eqmux-d7 (W2) | B122 macOS 유예 없는 SIGKILL 추가(1라운드 ⑥⑦④ 뒤) |
 | eqmux-ae (W6) | B156(끝) → **사이드 패널 개편**: 파일 탐색기를 코드 그룹 `[git \| 파일 \| 문서]`로, §12 확장 그룹 붙이기(eqmux-88과 맞춤) |
 | eqmux-52 (W7) | B157(끝) → B168 '전달됨' 시점(W2 `message-injected`) · §13-3 검토 화면 라우팅 |
-| eqmux-79 (W4) | §4 depends_on(끝) → **§13-3 임무 검토 화면** |
+| eqmux-79 (W4) | §4 depends_on(끝) → §13-3 임무 검토 화면(끝) → §11-3 W4 문구 |
+| — 3라운드 | eqmux-dd **Jump 팔레트 + 단축키 표 + U92 · U93 · U97** · eqmux-17 **직함별 담당 경로 + 담당 밖 편집 경고** · eqmux-d7 **상태 판정 근거** · eqmux-ae §11-3 W6 문구 + mac 잔여(B132 · B151 · B121 · B163 · U100–U102) · eqmux-52 **§11-3 용어 · 문체**(규칙: 사용자 문장 합니다체, 라벨 명사형, 작업 대상 '워크스페이스') |
 
 ## 계약 (스트림 사이 인터페이스)
 
@@ -211,3 +212,19 @@
 | 11-02 | W2 | B122 macOS 종료 유예 · 낡은 레지스트리 기록 무시. **mac cargo check · 페인 닫기 실기 필요**. 앱 종료는 세션마다 최대 1.5초 차례로 쌓일 수 있음 | `9d6d358` |
 | 11-02 | W0 | HEAD 검증(`9d6d358`): tsc OK · npm test 219 · cargo 211 통과 + ports 1(기준선) | — |
 | 11-02 | W0 | `CHANGELOG.md` 0.6.0(미출시) | 이 커밋 |
+| 11-02 | W7 | B168 '보내는 중' → `message-injected` 때 '전달됨'(훅 없는 엔진은 30초 뒤) · B10 INJECT-TRY · 대화 탭 임무 필터(담당 세션 기준) | `820ad76` |
+| 11-02 | W5 | §17 3단계(merge · rebase · cherry-pick · revert · stash · reset, 충돌 고르기, 진행 중 배너) · 커밋 세션 배지(file_touch 추정) · 첫 커밋 전 내리기 · B154 .env diff 가리기 · 앱 git 호출 --no-optional-locks. 실기: 전부 | `f0514a0` |
+| 11-02 | W4 | §13-3 임무 검토 화면(1차: diff는 HEAD↔작업 트리, base · 담당 파일 필터는 W5 다음). [테스트 실행]은 C7 kind test + 종료 코드 표식 | `0b500ca` |
+| 11-02 | W0 | 사용 설명서 · CHANGELOG git 3단계 반영 | `90e17e8` |
+| 11-02 | W2 | F1 사용 한도 · 컨텍스트 사용률(`contextPct` · `rateLimit`). 실측 2.1.316: seven_day만 보임 | `ada05f7` |
+| 11-02 | W3 | 과거 세션 검색 · 재개(Claude만, 워크트리 cwd 제외). 진입 버튼은 W7 | `0030e8e` |
+| 11-02 | W0 | 결정 §13-6: 임무별 비용은 store에(임무 파일 아님). 증분 순간 담당 임무 = assigned에 있고 done 아닌 임무 중 assigned_at 최신, 없으면 임무 밖. 재시작으로 줄면 새 기준 | — |
+| 11-02 | W0 | HEAD 검증(`0030e8e`): tsc OK · npm test 231 · cargo 219 통과 + ports 1 | — |
+| 11-02 | W1 | §12 확장 1~3단계 + MCP(엔진 CLI 다리 · MCP 읽기 · 스킬 · 세션별 표) · 자동 승인 browser console · network. X4 실측: --settings enabledPlugins는 키 단위로 합쳐짐. 실기: 켜기/끄기 · details 토큰 · MCP 점검 · 스킬 CRUD | `4b064e5` |
+| 11-02 | W4 | 탐색기 푸터 [임무 관리] · 모델 입력 문자 필터 | `09ccc14` |
+| 11-02 | W6 · W7 | 사이드 패널 개편(코드 그룹 · 확장 그룹 · 닫기 가드 · 임무 팝업 임무만) · 앱 바 [기록]. 실기: 로컬 폴더 → 파일 탭, 편집 유지 · 닫기 확인, 확장 세 탭, 좁은 패널 | `b444948` |
+| 11-02 | W3 | 서브에이전트 호출 목록(읽기 전용, 종류 없음) | `d2dba10` |
+| 11-02 | W5 | diff 시작점 기준(diff_changed_files_since · file_diff_since · base · only) | `4bb8860` |
+| 11-02 | W1 | 비용 store(v4 cost 표, 30일) | `53d0ecc` |
+| 11-02 | W4 | 임무 검토 diff를 시작점 · 담당 파일 기준으로, [전체 변경 보기] | `a758473` |
+| 11-02 | W2 | §13-6 임무별 비용 cost_summary(첫 값은 기준선, 담당 임무 60초 캐시) | `9cd0a54` |
