@@ -6596,3 +6596,8 @@ label.inbox-pop-row {
   gap: 6px;
   margin-top: 2px;
 }
+
+/* 0.6 W7: 상한으로 버려진 내 메시지 (§2 M3) */
+.conv-delivery.dropped {
+  color: var(--eq-red);
+}

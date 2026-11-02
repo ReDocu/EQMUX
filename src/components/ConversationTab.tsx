@@ -448,10 +448,16 @@ export function ConversationTab() {
                     {(d) => (
                       <span
                         class="mono conv-delivery"
-                        classList={{ queued: d() === "queued" }}
-                        title={d() === "queued" ? t("받을 사람 인박스에 남아 있습니다 — 사유는 위 인박스 대기 줄에") : undefined}
+                        classList={{ queued: d() === "queued", dropped: d() === "dropped" }}
+                        title={
+                          d() === "queued"
+                            ? t("받을 사람 인박스에 남아 있습니다 — 사유는 위 인박스 대기 줄에")
+                            : d() === "dropped"
+                              ? t("받는 세션의 대기가 50건을 넘어 오래된 것부터 버렸습니다 — 원문은 대화 기록에 남아 있습니다")
+                              : undefined
+                        }
                       >
-                        {d() === "queued" ? t("대기 중") : t("전달됨")}
+                        {d() === "queued" ? t("대기 중") : d() === "dropped" ? t("버려짐") : t("전달됨")}
                       </span>
                     )}
                   </Show>

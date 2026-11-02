@@ -187,7 +187,16 @@ const [inboxTick, setInboxTick] = createSignal(0);
 const INBOX_MAX = 50;
 export const capQueue = <T>(q: T[], max: number): T[] => (q.length > max ? q.slice(-max) : q);
 function enqueue(id: string, msgs: ConversationMessage[]): void {
-  inbox.set(id, capQueue([...(inbox.get(id) ?? []), ...msgs], INBOX_MAX));
+  const all = [...(inbox.get(id) ?? []), ...msgs];
+  inbox.set(id, capQueue(all, INBOX_MAX));
+  // 상한으로 밀려난 "나"의 메시지 (§2 M3) — `대기 중`에 영영 남지 않게 `버려짐`으로 바꾼다
+  const gone = droppedIds(all.slice(0, Math.max(0, all.length - INBOX_MAX)));
+  if (gone.length) setDeliveries((d) => ({ ...d, ...Object.fromEntries(gone.map((x) => [x, "dropped" as const])) }));
+}
+
+/** 상한으로 밀려난 메시지 중 사람이 보낸 것 — @all은 한 수신자에게서라도 밀려나면 버려짐이다. 순수 함수 */
+export function droppedIds(fell: readonly ConversationMessage[]): string[] {
+  return fell.filter((m) => m.from === "나").map((m) => m.id);
 }
 
 // 세션을 지우면 그 대기분도 지운다 (M6) — 남기면 저장 때마다 다시 직렬화되고, 같은 id로 다시 생긴
@@ -556,7 +565,8 @@ export function discardPending(sessionId: string, only?: ReadonlySet<string>): v
 
 // ── 사람이 보낸 메시지의 전달 상태 — `eqmux send`가 에이전트에게 돌려주는 것과 같은 판정 ──
 
-export type Delivery = "delivered" | "queued";
+/** dropped = 받는 세션의 대기가 상한(50)을 넘어 오래된 것부터 버렸다 (§2 M3) — 원문은 원장에 남는다 */
+export type Delivery = "delivered" | "queued" | "dropped";
 const [deliveries, setDeliveries] = createSignal<Record<string, Delivery>>({});
 
 /** 대화 탭이 "나"의 메시지 옆에 붙이는 `전달됨` · `대기 중` (반응형). 앱을 다시 켜면 비운다 */
@@ -574,7 +584,7 @@ function markDelivered(msgs: ConversationMessage[]): void {
   if (ids.length === 0) return;
   setDeliveries((d) => {
     const n = { ...d };
-    for (const id of ids) n[id] = "delivered";
+    for (const id of ids) if (n[id] !== "dropped") n[id] = "delivered"; // 한 수신자에게서 버려졌으면 그 표시가 남는다
     return n;
   });
 }

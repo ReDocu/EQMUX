@@ -280,4 +280,8 @@ export const dict: Record<string, string> = {
   "동시 편집": "Concurrent edit",
   "{path}를 {others}도 방금 편집했습니다. 서로 덮어쓰지 않게 {others}와 나눠 맡아 주세요.":
     "{others} also just edited {path}. Split the work with {others} so you don't overwrite each other.",
+  // ── 0.6 W7: 상한으로 버려진 메시지 (§2 M3) ──
+  버려짐: "Dropped",
+  "받는 세션의 대기가 50건을 넘어 오래된 것부터 버렸습니다 — 원문은 대화 기록에 남아 있습니다":
+    "The recipient's queue passed 50, so the oldest were dropped. The original stays in the conversation history",
 };
