@@ -48,8 +48,8 @@ export function groupByConversation(hits: HistoryHit[]): HistoryGroup[] {
 /** 앱 밖에서 이어 갈 때 — 기존 재개 경로가 없는 대화(옛 대화 · 앱 밖 대화)에 준다 */
 export const resumeCommand = (uuid: string): string => `claude --resume ${uuid}`;
 
-/** 서브에이전트 호출 (§4) — 트랜스크립트의 Agent(옛 이름 Task) 도구 턴. 설명은 tool_summary가 고른 description이다.
- *  ponytail: 종류(subagent_type)는 뺐다 — detail이 2000자에서 잘리고 키가 정렬돼 긴 prompt 뒤로 밀린다 */
+/** 서브에이전트 호출 (§4) — 트랜스크립트의 Agent(옛 이름 Task) 도구 턴.
+ *  summary는 transcript.rs tool_summary가 만든 `{subagent_type} · {description}`이다 */
 export function subagentCalls<T extends { role: string; text: string; summary: string | null }>(turns: T[]): T[] {
   return turns.filter((t) => t.role === "tool" && (t.text === "⚙ Agent" || t.text === "⚙ Task"));
 }

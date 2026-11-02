@@ -7219,3 +7219,63 @@ label.inbox-pop-row {
 
 /* 0.6 W6: 문서 보기 작업 목록 체크박스 (U101) — 읽기 전용이라 disabled지만 흐리게 그리지 않는다 */
 .mdview-body input[type="checkbox"]:disabled { opacity: 1; cursor: default; }
+
+/* 0.6 W3: 건너뛰기 팔레트 (§4 — JumpPalette.tsx) ───────────────────────── */
+.jump-overlay {
+  align-items: flex-start;
+  padding-top: 12vh;
+}
+.dialog.jump {
+  width: 560px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  max-height: 60vh;
+}
+.jump-input {
+  margin: 10px;
+  font-size: 13px;
+}
+.jump-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 6px 6px;
+}
+.jump-opt {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: var(--eq-r-sm);
+  cursor: pointer;
+  font-size: 12px;
+}
+.jump-opt.on {
+  background: var(--eq-blue-soft);
+}
+.jump-kind {
+  flex-shrink: 0;
+  min-width: 72px;
+  font-size: 10px;
+  color: var(--eq-blue);
+}
+.jump-label {
+  white-space: nowrap;
+}
+.jump-sub {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+.jump-empty {
+  padding: 8px;
+  font-size: 11px;
+}
+.jump-foot {
+  padding: 6px 12px;
+  border-top: 1px solid var(--eq-line);
+  font-size: 10px;
+}

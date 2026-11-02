@@ -16,6 +16,7 @@ import { dict as session } from "./i18n/session";
 import { dict as shell } from "./i18n/shell";
 import { dict as panels } from "./i18n/panels";
 import { dict as history } from "./i18n/history"; // §4 과거 세션 검색 (W3)
+import { dict as jump } from "./i18n/jump"; // §4 건너뛰기 팔레트 · 단축키 표 (W3)
 import { dict as extensions } from "./i18n/extensions"; // §12 확장 그룹 (W1)
 
 const EN: Record<string, string> = Object.assign(
@@ -30,6 +31,7 @@ const EN: Record<string, string> = Object.assign(
   shell,
   panels,
   history,
+  jump,
   extensions,
 );
 

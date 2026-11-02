@@ -39,6 +39,7 @@ import type { View } from "./state";
 import { t } from "./i18n";
 import { ScreenOverlay } from "./components/ScreenOverlay";
 import { blocksNavKey, isNavChord } from "./components/keynav";
+import { JumpPalette, jumpOpen, toggleJump } from "./components/JumpPalette"; // §4 W3
 import { notify } from "./components/ui";
 import { ControlCenter } from "./screens/ControlCenter";
 import { CrashRecovery } from "./screens/CrashRecovery";
@@ -160,6 +161,7 @@ export function App() {
   onMount(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!blocksNavKey(e, modalOpen(), layoutPickerOpen())) return;
+      if (jumpOpen() && e.key.toLowerCase() === "k") return; // 팔레트 위의 Ctrl+Shift+K는 그 팔레트를 닫는 토글 (W3)
       e.preventDefault();
       e.stopImmediatePropagation();
       notify(t("열린 창을 먼저 닫으세요"));
@@ -182,6 +184,9 @@ export function App() {
       } else if (k === "b") {
         e.preventDefault();
         setPanelOpen(!panelOpen());
+      } else if (k === "k") {
+        e.preventDefault();
+        toggleJump(); // §4 건너뛰기 팔레트 (W3)
       }
     };
     window.addEventListener("keydown", onKey);
@@ -338,6 +343,7 @@ export function App() {
       <Show when={layoutPickerOpen()}>
         <LayoutPicker />
       </Show>
+      <JumpPalette /> {/* §4 건너뛰기 팔레트 (W3) — Ctrl+Shift+K */}
       {/* 복구 창이 먼저다 — 두 모달이 겹치지 않게 그것이 닫힌 뒤에 뜬다 */}
       <Show when={settingsReady() && firstRunPending() && !crashOpen()}>
         <FirstRunNotice />
