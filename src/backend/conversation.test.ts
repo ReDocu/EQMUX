@@ -16,6 +16,11 @@ const msg = (from: string, body: string, type: ConversationMessage["type"] = "as
 });
 
 describe("fmt", () => {
+  test("원장 id와 회신 대상을 머리에 싣는다 — eqmux send --re <id> (W3 §4)", () => {
+    expect(fmt([{ ...msg("린", "봐줘"), rowId: 42 }])).toBe("[EQ·ask #42] 린: 봐줘");
+    expect(fmt([{ ...msg("린", "끝"), rowId: 43, re: 41 }])).toBe("[EQ·ask #43 (#41에 회신)] 린: 끝");
+    expect(fmt([{ ...msg("린", "a"), rowId: 1 }, msg("카이", "b")])).toBe("[EQ 2건] 1) 린·ask #1: a 2) 카이·ask: b");
+  });
   test("단건은 짧은 접두 하나", () => {
     expect(fmt([msg("나", "빌드 봐줘")])).toBe("[EQ·ask] 나: 빌드 봐줘");
   });

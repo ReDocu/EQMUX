@@ -33,6 +33,7 @@ interface MsgRow {
   file?: { path: string; size: number } | null;
   fromName?: string; // 보낸 때의 세션 이름 (원장) — 세션이 사라진 뒤의 표시용
   toName?: string;
+  re?: number; // 회신 대상 원장 id (W3 §4)
 }
 
 /** 원장에 남은 보낸 때의 이름 — 세션 id → 이름. 세션이 사라져 nameOf가 풀지 못할 때만 쓴다 */
@@ -55,6 +56,7 @@ function toMsg(wsId: string, r: MsgRow): ConversationMessage {
     workspaceId: wsId,
     ts: r.ts,
     rowId: r.id,
+    ...(r.re ? { re: r.re } : {}),
     ...(r.done ? { done: true } : {}),
     ...(r.file ? { file: r.file } : {}),
   };
@@ -383,8 +385,10 @@ export function fmt(
   label: (m: ConversationMessage) => string = (m) => m.from,
 ): string {
   const flat = (m: ConversationMessage) => m.body.replace(/\s*\r?\n\s*/g, " ") + attach(m);
-  if (msgs.length === 1) return `[EQ·${msgs[0].type}] ${label(msgs[0])}: ${flat(msgs[0])}${tail}`;
-  const items = msgs.map((m, i) => `${i + 1}) ${label(m)}·${m.type}: ${flat(m)}`).join(" ");
+  // 원장 id · 회신 대상 — 받는 쪽이 `eqmux send --re <id>`로 답을 이을 수 있게 (W3 §4). 없으면 머리는 예전 그대로
+  const id = (m: ConversationMessage) => (m.rowId !== undefined ? ` #${m.rowId}` : "") + (m.re ? ` (#${m.re}에 회신)` : "");
+  if (msgs.length === 1) return `[EQ·${msgs[0].type}${id(msgs[0])}] ${label(msgs[0])}: ${flat(msgs[0])}${tail}`;
+  const items = msgs.map((m, i) => `${i + 1}) ${label(m)}·${m.type}${id(m)}: ${flat(m)}`).join(" ");
   return `[EQ ${msgs.length}건] ${items}${tail}`;
 }
 
