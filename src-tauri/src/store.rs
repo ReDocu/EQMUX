@@ -489,7 +489,6 @@ impl Store {
     }
 
     /// 비용 증분 한 건 (§13-6) — touch_file과 같이 쓰기 스레드 배치로 넘긴다
-    #[allow(dead_code)] // W2가 agent.rs에 붙이면 뗀다
     pub fn cost_delta(&self, ws: &str, session: &str, mission: Option<&str>, ts: i64, usd: f64) {
         let _ = self.tx.send(StoreMsg::Cost {
             ws: ws.into(),
@@ -502,7 +501,6 @@ impl Store {
 }
 
 /// 임무별 비용 합 (§13-6) — mission None = 임무 밖
-#[allow(dead_code)] // W2가 agent.rs에 붙이면 뗀다
 #[derive(serde::Serialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct MissionCost {
@@ -511,7 +509,6 @@ pub struct MissionCost {
 }
 
 /// since_ms 이후 비용을 임무별로 합친다. DB·테이블이 없으면 빈 목록
-#[allow(dead_code)] // W2가 agent.rs에 붙이면 뗀다
 pub fn cost_by_mission(root: &Path, ws: &str, since_ms: i64) -> Vec<MissionCost> {
     let path = db_path(root, ws);
     if !path.exists() {

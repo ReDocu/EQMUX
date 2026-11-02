@@ -243,6 +243,8 @@ pub struct AgentRt {
     /// 승인함 응답 대기 (§13-4 · Q1(b)) — 세션 → (도구명, 대기 표식, 훅 연결 스레드에 답을 넘길 끝).
     /// 끝을 버리면(remove) 기다리던 훅이 "결정 없음"으로 풀려 페인의 승인 창이 그대로 쓰인다
     approvals: Mutex<HashMap<String, (String, u64, std::sync::mpsc::Sender<bool>)>>,
+    /// 세션 → (맡은 임무, 조회 시각 ms) — 비용 증분을 붙일 임무 (§13-6, MISSION_CACHE_MS)
+    mission_cache: Mutex<HashMap<String, (Option<String>, i64)>>,
 }
 
 /// 레지스트리 파일별 (수정 시각, 크기) → 파싱 결과. 둘이 같으면 다시 읽지 않는다.
@@ -1549,12 +1551,15 @@ fn apply_usage(t: &mut Tracked, payload: &serde_json::Value) -> bool {
 pub fn apply_statusline(app: &AppHandle, session: &str, payload: &serde_json::Value) {
     let rt: tauri::State<AgentRt> = app.state();
     let mut evt = None;
+    let mut delta = None;
     if let Ok(mut map) = rt.by_uuid.lock() {
         if let Some(uuid) = current_uuid(&map, session) {
             let Some(t) = map.get_mut(&uuid) else { return };
+            let prev = t.cost_usd;
             if !apply_usage(t, payload) {
                 return;
             }
+            delta = cost_delta(prev, t.cost_usd);
             t.seq = next_seq();
             evt = Some(evt_of(t, &uuid));
         }
@@ -1562,6 +1567,63 @@ pub fn apply_statusline(app: &AppHandle, session: &str, payload: &serde_json::Va
     if let Some(e) = evt {
         let _ = app.emit_to("main", "agent-state", e);
     }
+    if let Some(usd) = delta {
+        record_cost(app, session, usd);
+    }
+}
+
+// ── 비용 증분 → 임무 (§13-6 · 리드 결정 2026-11-02: store에 둔다) ─────────────
+// 임무 파일은 에이전트도 고치는 파일이라 센트마다 쓰면 편집 충돌·mtime 경고가 난다 — 그래서 store다.
+
+/// 기록할 증분 (순수 함수). 처음 본 값은 기준일 뿐이다 — 재개한 세션이 옛 누적을 들고 와도 두 번 세지
+/// 않는다(실측: 새 프로세스의 첫 statusLine은 0이다). 줄었으면(재시작) 새 기준, 음수·0은 버린다
+fn cost_delta(prev: Option<f64>, now: Option<f64>) -> Option<f64> {
+    let d = now? - prev?;
+    (d > 0.0).then_some(d)
+}
+
+/// 그 순간 세션이 맡은 임무 (순수 함수) — 배정돼 있고 done이 아닌 것 중 assigned_at이 가장 늦은 것.
+/// 후보: (임무 id, 상태, 이 세션이 배정됐나, 이 세션의 assigned_at)
+fn pick_mission<'a>(cands: impl Iterator<Item = (&'a str, &'a str, bool, Option<i64>)>) -> Option<String> {
+    cands
+        .filter(|(_, status, assigned, _)| *assigned && *status != "done")
+        .max_by_key(|(_, _, _, at)| at.unwrap_or(i64::MIN))
+        .map(|(id, ..)| id.to_string())
+}
+
+/// 임무 조회 캐시 수명 — missions::list는 임무마다 git을 한 번 돌리므로 증분마다 부르지 않는다.
+/// ponytail: 배정이 바뀐 직후 최대 1분은 앞 임무에 쌓인다. 정확해야 하면 배정 이벤트로 캐시를 지운다
+const MISSION_CACHE_MS: i64 = 60_000;
+
+fn mission_of(app: &AppHandle, session: &str, ws_path: &str, now: i64) -> Option<String> {
+    let rt: tauri::State<AgentRt> = app.state();
+    if let Some((m, at)) = rt.mission_cache.lock().ok()?.get(session).cloned() {
+        if now - at < MISSION_CACHE_MS {
+            return m;
+        }
+    }
+    let list = crate::missions::list(ws_path);
+    let m = pick_mission(list.iter().map(|m| {
+        (m.id.as_str(), m.status.as_str(), m.assigned.iter().any(|s| s == session), m.assigned_at.get(session).copied())
+    }));
+    rt.mission_cache.lock().ok()?.insert(session.to_string(), (m.clone(), now));
+    m
+}
+
+fn record_cost(app: &AppHandle, session: &str, usd: f64) {
+    let Some((ws, cwd)) = crate::session_origin(app, session) else { return };
+    let now = crate::workspace::now_ms();
+    let mission = mission_of(app, session, &cwd, now);
+    let store: tauri::State<crate::StoreState> = app.state();
+    store.0.cost_delta(&ws, session, mission.as_deref(), now, usd);
+}
+
+/// 임무별 비용 합계 (§13-6) — since_ms 뒤의 증분. 하루 합계는 프런트가 오늘 0시(현지)를 넘긴다.
+/// mission이 null인 줄은 "임무 밖"이다
+#[tauri::command]
+pub fn cost_summary(app: AppHandle, workspace: String, since_ms: i64) -> Vec<crate::store::MissionCost> {
+    let store: tauri::State<crate::StoreState> = app.state();
+    crate::store::cost_by_mission(&store.0.root(), &workspace, since_ms)
 }
 
 /// PTY EOF → dead 전이 (FR-D-50). 세대(gen)가 다르면 이미 재기동된 세션이므로 무시한다.
@@ -2736,5 +2798,29 @@ mod tests {
         assert_eq!((e.context_pct, e.rate_limit.map(|l| l.used_pct)), (Some(5), Some(43)));
         assert!(!super::apply_usage(&mut t, &serde_json::json!({})), "빈 payload는 이전 값을 지우지 않는다");
         assert_eq!(t.context_pct, Some(5));
+    }
+    /// §13-6 — 처음 본 값은 기준, 늘어난 만큼만, 재시작으로 줄면 버린다
+    #[test]
+    fn cost_delta_counts_only_growth_after_a_baseline() {
+        use super::cost_delta;
+        assert_eq!(cost_delta(None, Some(0.0)), None, "첫 값은 기준");
+        assert_eq!(cost_delta(None, Some(3.2)), None, "재개 세션의 옛 누적도 기준일 뿐");
+        assert_eq!(cost_delta(Some(0.10), Some(0.25)).map(|d| (d * 100.0).round()), Some(15.0));
+        assert_eq!(cost_delta(Some(0.40), Some(0.02)), None, "재시작 — 음수 증분은 버린다");
+        assert_eq!(cost_delta(Some(0.40), None), None);
+    }
+
+    /// §13-6 — 배정됐고 done이 아닌 임무 중 이 세션의 assigned_at이 가장 늦은 것. 없으면 임무 밖
+    #[test]
+    fn pick_mission_takes_the_latest_live_assignment() {
+        let pick = |c: Vec<(&'static str, &'static str, bool, Option<i64>)>| super::pick_mission(c.into_iter());
+        assert_eq!(pick(vec![]), None);
+        assert_eq!(pick(vec![("a", "in-progress", false, None)]), None, "배정 안 됨");
+        assert_eq!(pick(vec![("a", "done", true, Some(9))]), None, "끝난 임무");
+        assert_eq!(
+            pick(vec![("a", "in-progress", true, Some(100)), ("b", "todo", true, Some(200)), ("c", "done", true, Some(300))]),
+            Some("b".into())
+        );
+        assert_eq!(pick(vec![("a", "in-progress", true, None), ("b", "todo", true, Some(1))]), Some("b".into()), "시각 없는 옛 배정은 뒤로");
     }
 }

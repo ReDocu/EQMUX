@@ -3152,6 +3152,7 @@ pub fn run() {
             agent::approval_respond,
             diag::diag_foreign_tools, // §14 · C3 (W2)
             diag::diag_bundle, // §9-3 · C3 (W2)
+            agent::cost_summary, // §13-6 (W2)
             fsx::fs_tree,
             fsx::fs_preview,
             fsx::fs_read,
