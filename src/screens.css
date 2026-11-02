@@ -7216,3 +7216,6 @@ label.inbox-pop-row {
   color: var(--eq-amber);
   border-color: var(--eq-amber);
 }
+
+/* 0.6 W6: 문서 보기 작업 목록 체크박스 (U101) — 읽기 전용이라 disabled지만 흐리게 그리지 않는다 */
+.mdview-body input[type="checkbox"]:disabled { opacity: 1; cursor: default; }

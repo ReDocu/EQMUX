@@ -8,6 +8,7 @@ import { fsRead, fsTree } from "../backend/panels";
 import { isTauri, revealPath } from "../backend/pty";
 import { openInBrowserPanel, scopeWorkspace, setPanelNote } from "../state";
 import { t } from "../i18n";
+import { fileManagerName } from "../labels"; // mac은 Finder (U76)
 import { Icon } from "./icons";
 import { markdownHtml } from "./markdownHtml";
 import { notify } from "./ui";
@@ -82,7 +83,9 @@ export function MdViewTab() {
         <input
           list="mdview-files"
           style={{ flex: 1, "min-width": 0, background: "transparent", border: "none", color: "inherit" }}
-          placeholder={t("상대 경로 — Enter로 열기 (docs/guide.md)")}
+          placeholder="docs/guide.md"
+          title={t("상대 경로를 입력하고 Enter를 누르면 엽니다")}
+          aria-label={t("상대 경로를 입력하고 Enter를 누르면 엽니다")}
           value={rel()}
           onChange={(e) => void open(e.currentTarget.value)}
         />
@@ -102,7 +105,7 @@ export function MdViewTab() {
       </div>
         <button class="btn" disabled={!ws()} onClick={() => void reveal()}>
           <Icon name="folder-open" size={12} />
-          {t("탐색기")}
+          {fileManagerName()}
         </button>
       </div>
       <Show when={error()}>
@@ -114,7 +117,9 @@ export function MdViewTab() {
         fallback={
           <div class="card inset browserp-view">
             <div class="muted" style={{ "text-align": "center" }}>
-              <div style={{ "font-size": "22px", "margin-bottom": "8px" }}>≡</div>
+              <div style={{ "margin-bottom": "8px" }}>
+                <Icon name="file-text" size={22} />
+              </div>
               {t("마크다운 파일 보기")}
               <div class="mono" style={{ "font-size": "10px", "margin-top": "6px" }}>
                 {t("워크스페이스의 .md 파일을 고르거나 상대 경로를 입력하세요")}

@@ -62,20 +62,20 @@ export const dict: Record<string, string> = {
   // ── 서버 로그 패널 (LogsPanelTab) ──
   "서버 로그": "Server logs",
   "표시 중인 로그를 파일로 저장": "Save displayed logs to a file",
-  "필터 입력 · Enter = 디스크 전문 검색(FTS)": "Type to filter · Enter = disk full-text search (FTS)",
+  "필터 · Enter로 전체 스크롤백 검색": "Filter · Enter searches the full scrollback",
   "분류 · 세션 · 내용 검색": "Search by type · session · content",
-  "디스크 검색 · {n}건 (전체 스크롤백 FTS)": "Disk search · {n} hits (full scrollback FTS)",
+  "스크롤백 검색 · {n}건": "Scrollback search · {n}",
   "결과 닫기": "Close results",
   "검색 중…": "Searching…",
   "디스크 스크롤백에서 찾지 못했습니다": "No matches in disk scrollback",
-  "문맥 {n}줄 (디스크 페이징)": "context · {n} lines (disk paging)",
+  "앞뒤 {n}줄": "{n} surrounding lines",
   "더 이전 60줄": "60 older lines",
   "조건에 맞는 로그가 없습니다": "No logs match the filters",
-  "event 테이블 스트림 연결됨": "event table stream connected",
+  "실시간 연결됨": "Live",
   "실시간 스트림 (목)": "Live stream (mock)",
-  "event 테이블 실측": "measured from event table",
+  "앱 기록": "App events",
   "세션 로그 (PTY 원문)": "Session logs (raw PTY)",
-  "~/.eqmux/logs/<세션>.log · 실시간 append": "~/.eqmux/logs/<session>.log · live append",
+  "~/.eqmux/logs/<세션>.log · 실시간으로 덧붙임": "~/.eqmux/logs/<session>.log · appended live",
   "폴더 열기": "Open folder",
 
   // ── 포트 패널 (PortsPanelTab) ──
@@ -108,16 +108,15 @@ export const dict: Record<string, string> = {
   "브라우저 닫기": "Close browser",
   "목 모드는 localhost 미리보기만 됩니다 — 앱에서 실행하세요":
     "The browser mock previews localhost only — run the app for the real webview",
-  "주소 입력 — Enter로 열기 (127.0.0.1:5173 · https://…)":
-    "Type an address — Enter opens (127.0.0.1:5173 · https://…)",
+  "주소를 입력하고 Enter를 누르면 엽니다": "Type an address and press Enter to open it",
   "위 포트 칩을 누르거나 주소를 입력하세요": "Click a port chip above or type an address",
   "세션이 LISTENING 포트를 열면 칩이 나타납니다": "Chips appear when a session opens a LISTENING port",
-  "Tauri에서 실행하면 실측 포트가 연결됩니다": "Run in Tauri to see live ports",
+  "앱에서 실행하면 실제 포트가 이어집니다": "Run the app to see real ports",
 
   // ── MDView 패널 (MdViewTab) ──
   "마크다운 파일 보기": "Markdown viewer",
   "워크스페이스의 .md 파일을 고르거나 상대 경로를 입력하세요": "Pick a .md file in the workspace or type a relative path",
-  "상대 경로 — Enter로 열기 (docs/guide.md)": "Relative path — Enter opens (docs/guide.md)",
+  "상대 경로를 입력하고 Enter를 누르면 엽니다": "Type a relative path and press Enter to open it",
   "목 모드에서는 파일을 읽을 수 없습니다 — 앱에서 실행하세요": "The mock cannot read files — run the app",
 
   // ── 분할선 (PaneDividers) ──
@@ -197,6 +196,7 @@ export const dict: Record<string, string> = {
   "세션 포트 범위": "Session port ranges",
   // 사이드 패널 개편 (결정 21 · §12)
   파일: "Files",
+  "셸 다시 열기": "Reopen shell",
   "저장하지 않은 편집": "Unsaved edits",
   "파일 탭에 저장하지 않은 편집이 있습니다. 패널을 닫으면 사라집니다.": "The Files tab has unsaved edits. Closing the panel discards them.",
   "버리고 닫기": "Discard and close",

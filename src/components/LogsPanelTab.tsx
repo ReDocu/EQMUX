@@ -105,7 +105,7 @@ export function LogsPanelTab() {
     const info = all.filter((l) => l.level === "info").length;
     const warn = all.filter((l) => l.level === "warn").length;
     const error = all.filter((l) => l.level === "error").length;
-    return { info, warn, error, total: all.length, rate: "event 테이블 실측" };
+    return { info, warn, error, total: all.length, rate: "앱 기록" };
   });
 
   const logs = createMemo(() =>
@@ -154,7 +154,7 @@ export function LogsPanelTab() {
 
       <input
         class="panel-search mono"
-        placeholder={t(isTauri() ? "필터 입력 · Enter = 디스크 전문 검색(FTS)" : "분류 · 세션 · 내용 검색")}
+        placeholder={t(isTauri() ? "필터 · Enter로 전체 스크롤백 검색" : "분류 · 세션 · 내용 검색")}
         value={query()}
         onInput={(e) => {
           setQuery(e.currentTarget.value);
@@ -186,7 +186,7 @@ export function LogsPanelTab() {
         fallback={
           <div class="logsp-list">
             <div class="panel-head-row" style={{ padding: "4px 0" }}>
-              <span class="eyebrow">{tf("디스크 검색 · {n}건 (전체 스크롤백 FTS)", { n: hits()!.length })}</span>
+              <span class="eyebrow">{tf("스크롤백 검색 · {n}건", { n: hits()!.length })}</span>
               <button class="btn ghost" style={{ "margin-left": "auto", padding: "2px 7px" }} onClick={() => { setHits(null); setCtx(null); }}>
                 <Icon name="x" size={11} /> {t("결과 닫기")}
               </button>
@@ -212,7 +212,7 @@ export function LogsPanelTab() {
                 <div class="card inset" style={{ "margin-top": "6px", padding: "6px 8px" }}>
                   <div class="panel-head-row" style={{ padding: "0 0 4px" }}>
                     <span class="eyebrow">
-                      {c().session} · {tf("문맥 {n}줄 (디스크 페이징)", { n: c().lines.length })}
+                      {c().session} · {tf("앞뒤 {n}줄", { n: c().lines.length })}
                     </span>
                     <button class="btn ghost" aria-label={t("닫기")} style={{ "margin-left": "auto", padding: "1px 6px" }} onClick={() => setCtx(null)}>
                       <Icon name="x" size={11} />
@@ -261,7 +261,7 @@ export function LogsPanelTab() {
       <div class="logsp-footer">
         <span class="logsp-live">
           <span class="logsp-live-dot" />
-          {t(isTauri() ? "event 테이블 스트림 연결됨" : "실시간 스트림 (목)")}
+          {t(isTauri() ? "실시간 연결됨" : "실시간 스트림 (목)")}
         </span>
         <span class="mono muted">{t(metrics().rate)}</span>
       </div>
@@ -271,7 +271,7 @@ export function LogsPanelTab() {
           <div>
             <div style={{ "font-weight": 700, "font-size": "11px" }}>{t("세션 로그 (PTY 원문)")}</div>
             <div class="mono muted" style={{ "font-size": "10px" }}>
-              {t("~/.eqmux/logs/<세션>.log · 실시간 append")}
+              {t("~/.eqmux/logs/<세션>.log · 실시간으로 덧붙임")}
             </div>
             <div class="muted" style={{ "font-size": "10px" }}>
               {t("이 파일과 스크롤백에는 토큰·비밀번호가 평문으로 남을 수 있습니다 — 이 화면에서만 가립니다")}

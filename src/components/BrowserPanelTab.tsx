@@ -222,7 +222,10 @@ export function BrowserPanelTab() {
       <div class="card inset browserp-url mono">
         <input
           style={{ flex: 1, "min-width": 0, background: "transparent", border: "none", color: "inherit" }}
-          placeholder={t("주소 입력 — Enter로 열기 (127.0.0.1:5173 · https://…)")}
+          // 좁은 패널에서 잘리지 않게 자리표시는 예시만, 설명은 title · 이름으로 (U112)
+          placeholder="127.0.0.1:5173 · https://…"
+          title={t("주소를 입력하고 Enter를 누르면 엽니다")}
+          aria-label={t("주소를 입력하고 Enter를 누르면 엽니다")}
           value={addr()}
           onInput={(e) => setAddr(e.currentTarget.value)}
           onKeyDown={(e) => isSubmitEnter(e) && open(addr())}
@@ -273,7 +276,7 @@ export function BrowserPanelTab() {
                     ? "위 포트 칩을 누르거나 주소를 입력하세요"
                     : isTauri()
                       ? "세션이 LISTENING 포트를 열면 칩이 나타납니다"
-                      : "Tauri에서 실행하면 실측 포트가 연결됩니다",
+                      : "앱에서 실행하면 실제 포트가 이어집니다",
                 )}
               </div>
             </div>

@@ -22,6 +22,7 @@ import { fsRead } from "../backend/panels";
 import { isTauri, listAlivePty, revealPath, spawnPty, writePty } from "../backend/pty";
 import { defaultShell, scopeWorkspace, setPanelNote } from "../state";
 import { t, tf } from "../i18n";
+import { fileManagerName } from "../labels"; // mac은 Finder (U76)
 import { sessionTermSize, TerminalPane } from "./TerminalPane";
 import { Icon } from "./icons";
 import { notify } from "./ui";
@@ -116,7 +117,8 @@ function ServerTerm(props: { wsId: string }) {
         >
           {/* 셸만 다시 연다 — 서버 명령은 [실행]으로 사람이 친다 (자동 실행 금지, U39) */}
           <button class="btn primary" onClick={() => void reopen()}>
-            {t("↻ 셸 다시 열기")}
+            <Icon name="refresh-cw" size={12} />
+            {t("셸 다시 열기")}
           </button>
         </Show>
         {/* 포트는 탭을 열 때와 서버 셸에 명령을 친 몇 초 뒤에 다시 본다 (B145) — 그 밖에는 여기서 실측한다 */}
@@ -132,7 +134,7 @@ function ServerTerm(props: { wsId: string }) {
         </button>
         <button class="btn" disabled={!path} onClick={() => void reveal()}>
           <Icon name="folder-open" size={12} />
-          {t("탐색기")}
+          {fileManagerName()}
         </button>
       </div>
       <Show when={saved()}>

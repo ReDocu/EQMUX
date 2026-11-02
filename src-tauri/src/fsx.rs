@@ -176,7 +176,7 @@ fn resolve_existing(ws_path: &str, rel: &str) -> Result<PathBuf, String> {
 fn guard_git(rel: &str) -> Result<(), String> {
     let norm = rel.replace('\\', "/");
     if norm == ".git" || norm.starts_with(".git/") || norm.contains("/.git/") || norm.ends_with("/.git") {
-        return Err(".git은 탐색기에서 조작할 수 없습니다".into());
+        return Err(".git 폴더는 파일 탭에서 고칠 수 없습니다 — git 명령으로 다루세요".into());
     }
     Ok(())
 }
