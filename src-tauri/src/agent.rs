@@ -347,8 +347,24 @@ pub(crate) fn peer_name(pids: &[u32]) -> Option<String> {
         if v.get("kind").and_then(|k| k.as_str()).is_some_and(|k| k != "interactive") {
             return None;
         }
+        // B122 — pid 재사용이 잦은 macOS: 지금 그 pid의 프로세스보다 먼저 쓰인 기록은 옛 주인의 것이다
+        #[cfg(target_os = "macos")]
+        {
+            let started = v.get("startedAt").and_then(|s| s.as_i64());
+            if !crate::macproc::info(*pid).is_some_and(|i| record_is_current(started, i.start)) {
+                return None;
+            }
+        }
         v.get("name")?.as_str().filter(|n| !n.is_empty()).map(str::to_string)
     })
+}
+
+/// 레지스트리 기록이 지금 그 pid의 프로세스 것인가 (B122) — startedAt(epoch ms)이 프로세스 시작
+/// (epoch µs)보다 앞서면 같은 pid를 먼저 쓰던 프로세스가 남긴 것이다. 시계 오차로 2초는 봐준다.
+/// startedAt이 없는 옛 버전 기록은 판별할 수 없어 받아들인다
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn record_is_current(started_at_ms: Option<i64>, proc_start_us: u64) -> bool {
+    started_at_ms.is_none_or(|ms| ms + 2_000 >= (proc_start_us / 1_000) as i64)
 }
 
 fn sessions_dir() -> PathBuf {
@@ -2643,5 +2659,14 @@ mod tests {
         );
         assert_eq!(super::injected_ids("[EQ·handoff] 사람: 번호 없는 옛 메시지"), Vec::<i64>::new());
         assert_eq!(super::injected_ids("·ask #5 를 사람이 직접 쳤다"), Vec::<i64>::new(), "주입이 아니다");
+    }
+    /// B122 — 지금 그 pid의 프로세스보다 먼저 쓰인 레지스트리 기록은 옛 주인의 것이다
+    #[test]
+    fn registry_record_older_than_the_process_is_stale() {
+        let start_us = 1_000_000_000u64 * 1_000; // 프로세스 시작 = 1_000_000_000 ms
+        assert!(super::record_is_current(Some(1_000_000_500), start_us), "시작 직후에 쓴 기록");
+        assert!(super::record_is_current(Some(999_999_000), start_us), "시계 오차 2초 안");
+        assert!(!super::record_is_current(Some(990_000_000), start_us), "10초 먼저 = 옛 주인");
+        assert!(super::record_is_current(None, start_us), "startedAt 없는 옛 버전은 받는다");
     }
 }

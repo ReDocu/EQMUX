@@ -329,10 +329,43 @@ mod mac {
             out
         }
 
+        /// 정리 순서 (B122) — 곧바로 SIGKILL하면 claude가 ~/.claude/sessions/<pid>.json을 지울 틈이 없고,
+        /// 나중에 같은 pid를 받은 프로세스에 옛 이름이 붙는다. 그래서 먼저 끝낼 기회를 준다:
+        /// 루트 셸에는 SIGHUP(대화형 zsh는 SIGTERM을 무시한다 — 터미널을 닫은 것과 같은 신호),
+        /// 나머지에는 SIGTERM → 최대 GRACE 동안 사라지기를 기다림 → 남은 것만 SIGKILL.
+        /// 다시 볼 때 시작 시각까지 맞춰 pid 재사용으로 남의 프로세스를 죽이지 않는다.
+        /// ponytail: 부모가 거두기 전의 좀비도 "살아 있음"으로 보여 그 경우 유예를 다 쓴다(페인 닫기는
+        /// 배경 스레드라 화면은 안 멈춘다). 종료 때 세션이 많으면 그만큼 늦어진다 — 문제면 병렬로 돌린다
         pub fn terminate(&self) {
-            let pids = self.tree_in(&macproc::all());
-            for pid in pids.iter().rev() {
-                unsafe { libc::kill(*pid as libc::pid_t, libc::SIGKILL) };
+            const GRACE: std::time::Duration = std::time::Duration::from_millis(1500);
+            let table = macproc::all();
+            let pids = self.tree_in(&table);
+            let procs: Vec<(u32, u64)> = pids
+                .iter()
+                .filter_map(|p| table.iter().find(|i| i.pid == *p).map(|i| (i.pid, i.start)))
+                .collect();
+            let root = self.root.lock().ok().and_then(|r| *r).map(|(pid, _)| pid);
+            for (pid, _) in procs.iter().rev() {
+                let sig = if Some(*pid) == root { libc::SIGHUP } else { libc::SIGTERM };
+                unsafe { libc::kill(*pid as libc::pid_t, sig) };
+            }
+            let deadline = std::time::Instant::now() + GRACE;
+            loop {
+                let alive: Vec<u32> = procs
+                    .iter()
+                    .filter(|(p, s)| macproc::info(*p).is_some_and(|i| i.start == *s))
+                    .map(|(p, _)| *p)
+                    .collect();
+                if alive.is_empty() {
+                    return;
+                }
+                if std::time::Instant::now() >= deadline {
+                    for pid in alive.iter().rev() {
+                        unsafe { libc::kill(*pid as libc::pid_t, libc::SIGKILL) };
+                    }
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
             }
         }
 
