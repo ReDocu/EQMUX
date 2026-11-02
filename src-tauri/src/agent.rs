@@ -409,6 +409,22 @@ pub fn resumable(cwd: &str, uuid: &str) -> bool {
 /// exe는 엔진 이름(claude · codex)이고 인자는 호출부가 엔진별로 짠다. 환경변수는 두 엔진이
 /// 같다 — `eqmux` CLI·훅이 보는 것은 세션 신원(EQMUX_SESSION·TOKEN)과 역할 파일뿐이라서.
 /// bypassPermissions는 어떤 경로로도 만들지 않는다.
+/// 역할 파일 frontmatter `model:` (W4가 쓴다) → Claude `--model <값>`, Codex `-m <값>`.
+/// 값은 검증 없이 오지만 via_cmd가 cmd.exe /c를 거치므로 셸 메타문자가 든 값은 버린다.
+/// 인자에 이미 모델이 있으면 그것이 이긴다
+pub fn model_args(exe: &str, role_text: &str, args: &[String]) -> Vec<String> {
+    if args.iter().any(|a| a == "--model" || a == "-m" || a.starts_with("--model=")) {
+        return Vec::new();
+    }
+    let (fm, _) = crate::roles::split_frontmatter(role_text);
+    match crate::roles::fm_value(&fm, "model") {
+        Some(m) if m.chars().all(|c| c.is_ascii_alphanumeric() || "._-:/[]".contains(c)) => {
+            vec![if is_codex(exe) { "-m" } else { "--model" }.into(), m]
+        }
+        _ => Vec::new(),
+    }
+}
+
 pub fn agent_builders(
     exe: &str,
     args: &[String],
@@ -420,6 +436,10 @@ pub fn agent_builders(
 ) -> Vec<CommandBuilder> {
     let team_md = std::path::Path::new(cwd).join(".eqmux").join("team.md");
     let team_md = team_md.exists().then(|| team_md.to_string_lossy().into_owned());
+    // 직무별 모델 (§3 · C5) — 앞에 붙인다: Codex는 `-m`이 `resume` 같은 하위 명령보다 앞이어야 한다
+    let role_text = role_file.and_then(|p| fs::read_to_string(p).ok()).unwrap_or_default();
+    let args: Vec<String> = model_args(exe, &role_text, args).into_iter().chain(args.iter().cloned()).collect();
+    let args = &args[..];
     let apply = |b: &mut CommandBuilder| {
         b.cwd(cwd);
         // FR-D-04 환경변수 — 역할·팀 파일은 존재할 때만 (파일이 원본, FR-E-41)
@@ -2555,5 +2575,17 @@ mod tests {
         let mut a = super::Tracked { adopted: true, last_status: "busy".into(), ..Default::default() };
         assert_eq!(stall_step(&mut a, 100 * STALL_MS), None);
     }
+    /// C5 — 역할 frontmatter model → 엔진별 플래그. 없거나 위험한 값이면 아무것도 붙이지 않는다
+    #[test]
+    fn model_args_reads_role_frontmatter() {
+        let role = |m: &str| format!("\u{feff}---\nname: kai\nmodel: {m}\n---\nbody\n");
+        assert_eq!(super::model_args("claude", &role("sonnet"), &[]), vec!["--model", "sonnet"]);
+        assert_eq!(super::model_args("codex", &role("gpt-5-codex"), &[]), vec!["-m", "gpt-5-codex"]);
+        assert_eq!(super::model_args("claude", &role("claude-opus-5-5[1m]"), &[]), vec!["--model", "claude-opus-5-5[1m]"]);
+        assert!(super::model_args("claude", &role("x&calc"), &[]).is_empty(), "cmd.exe 메타문자");
+        assert!(super::model_args("claude", "---\nname: kai\n---\n", &[]).is_empty(), "키 없음");
+        assert!(super::model_args("claude", "", &[]).is_empty(), "역할 파일 없음");
+        let given = vec!["--model".to_string(), "opus".to_string()];
+        assert!(super::model_args("claude", &role("sonnet"), &given).is_empty(), "인자가 이긴다");
+    }
 }
-
