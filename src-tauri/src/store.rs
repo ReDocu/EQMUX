@@ -23,6 +23,8 @@ pub enum StoreMsg {
     ForgetAgentSession { ws: String, id: String },
     /// 마지막 한 줄 요약 (M35) — Stop 훅이 트랜스크립트에서 뽑아 보낸다. 세션당 덮어쓴다
     Recap { ws: String, id: String, text: String },
+    /// 편집 도구로 고친 파일 (§13-1 · C4) — 훅이 보낸다. 배치에 실려 쓴다
+    Touch { ws: String, session: String, path: String, tool: String, ts: i64 },
     /// 종료 flush (FR-C-62②) — 대기 배치를 즉시 커밋하고 ack를 보낸다
     Flush(Sender<()>),
 }
@@ -105,6 +107,45 @@ CREATE INDEX IF NOT EXISTS message_recipient_kind ON message(recipient, kind);
 CREATE INDEX IF NOT EXISTS message_sender_kind ON message(sender, kind);
 CREATE INDEX IF NOT EXISTS message_unread ON message(id) WHERE read = 0;
 ";
+
+/// 스키마 이전 (§1-2) — MIGRATIONS[i]는 버전 i+1 → i+2. 새 DB도 SCHEMA(버전 1) 뒤에 여기를 차례로 탄다.
+/// 항목은 뒤에 덧붙이기만 한다 — 이미 나간 항목을 고치면 그 버전을 지난 DB에는 반영되지 않는다.
+/// 그 전부터 있던 ALTER 열 추가(open_db)는 버전 1 DB의 들쭉날쭉한 모양을 메우는 것이라 그대로 둔다
+const MIGRATIONS: &[&str] = &[
+    // 2 — 편집 기록 (§13-1 · C4). DB가 워크스페이스별이라 workspace 열은 두지 않는다
+    "CREATE TABLE IF NOT EXISTS file_touch (
+       session TEXT NOT NULL,
+       path TEXT NOT NULL,
+       tool TEXT NOT NULL,
+       ts INTEGER NOT NULL
+     );
+     CREATE INDEX IF NOT EXISTS file_touch_ts ON file_touch(ts);
+     CREATE INDEX IF NOT EXISTS file_touch_session ON file_touch(session, ts);",
+];
+
+/// 버전을 하나씩 올린다 — 단계마다 트랜잭션이라 중간에 실패해도 그 앞 버전에 멈춘다.
+/// 앱보다 새 버전의 DB(내려 깐 경우)는 건드리지 않는다
+fn migrate(conn: &Connection) -> rusqlite::Result<()> {
+    let current: i64 = conn
+        .query_row("SELECT value FROM meta WHERE key = 'schema_version'", [], |r| r.get::<_, String>(0))
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    for (i, sql) in MIGRATIONS.iter().enumerate() {
+        let to = i as i64 + 2;
+        if current >= to {
+            continue;
+        }
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(sql)?;
+        tx.execute(
+            "INSERT OR REPLACE INTO meta VALUES ('schema_version', ?1)",
+            params![to.to_string()],
+        )?;
+        tx.commit()?;
+    }
+    Ok(())
+}
 
 const SCROLLBACK_CAP_PER_SESSION: i64 = 1_000; // FR-C-50 — 0.3.7에서 10만 → 1,000줄
 const CAP_CHECK_EVERY: i64 = 200; // 상한의 1/5마다 점검 — 실보관량이 상한을 크게 넘지 않게
@@ -192,6 +233,7 @@ pub(crate) fn open_db(root: &Path, ws: &str) -> rusqlite::Result<Connection> {
     let _ = conn.execute_batch(
         "CREATE VIRTUAL TABLE IF NOT EXISTS scrollback_fts USING fts5(text, session_id UNINDEXED, seq UNINDEXED, ts UNINDEXED)",
     );
+    migrate(&conn)?;
     if let Ok(mut m) = MIGRATED.lock() {
         m.get_or_insert_with(Default::default).insert(path);
     }
@@ -234,6 +276,7 @@ fn maintain(conn: &Connection) {
     // 이벤트 피드도 같은 30일 (최적화 B5) — 상태 전이마다 쌓여 지우는 길이 없었다.
     // 세션 상세가 세션별로 최신순 조회하므로 (session_id, id) 인덱스를 둔다 (SCHEMA)
     let _ = conn.execute("DELETE FROM event WHERE ts < ?1", params![cutoff]);
+    let _ = conn.execute("DELETE FROM file_touch WHERE ts < ?1", params![cutoff]);
     // 세션당 상한도 열 때 한 번 적용한다 — 상한을 낮춘 뒤 처음 여는 DB에는 옛 상한으로 쌓인
     // 줄이 남아 있고, 그 세션이 다시 살아나지 않으면 적재 경로의 정리는 영영 돌지 않는다.
     // 검색이 최신 SCROLLBACK_CAP_PER_SESSION줄만 보게 하려면 여는 김에 여기서 끊어 준다.
@@ -294,6 +337,59 @@ impl Store {
     pub fn root(&self) -> PathBuf {
         self.root.clone()
     }
+
+    /// 편집 기록 한 건 (C4) — 쓰기 스레드의 배치로 넘긴다. 훅 경로를 DB 잠금에 묶지 않는다
+    pub fn touch_file(&self, ws: &str, session: &str, path: &str, tool: &str, ts: i64) {
+        let _ = self.tx.send(StoreMsg::Touch {
+            ws: ws.into(),
+            session: session.into(),
+            path: path.into(),
+            tool: tool.into(),
+            ts,
+        });
+    }
+}
+
+/// 편집 기록 행 (C4)
+#[derive(serde::Serialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Touch {
+    pub session: String,
+    pub path: String,
+    pub tool: String,
+    pub ts: i64,
+}
+
+fn read_touches(root: &Path, ws: &str, session: Option<&str>, since_ms: i64) -> Vec<Touch> {
+    let path = db_path(root, ws);
+    if !path.exists() {
+        return Vec::new();
+    }
+    let Ok(conn) = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY) else {
+        return Vec::new();
+    };
+    let _ = conn.busy_timeout(Duration::from_secs(2));
+    // 이전 전 DB(테이블 없음)면 prepare가 실패한다 — 기록 없음으로 본다
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT session, path, tool, ts FROM file_touch
+         WHERE ts >= ?1 AND (?2 IS NULL OR session = ?2) ORDER BY ts ASC",
+    ) else {
+        return Vec::new();
+    };
+    let rows = stmt.query_map(params![since_ms, session], |r| {
+        Ok(Touch { session: r.get(0)?, path: r.get(1)?, tool: r.get(2)?, ts: r.get(3)? })
+    });
+    rows.map(|it| it.flatten().collect()).unwrap_or_default()
+}
+
+/// 워크스페이스의 since_ms 이후 편집 기록, 오래된 순 (C4)
+pub fn recent_touches(root: &Path, ws: &str, since_ms: i64) -> Vec<Touch> {
+    read_touches(root, ws, None, since_ms)
+}
+
+/// 한 세션의 since_ms 이후 편집 기록, 오래된 순 (C4 — 임무 검토 필터 §13-3)
+pub fn touches_for(root: &Path, ws: &str, session: &str, since_ms: i64) -> Vec<Touch> {
+    read_touches(root, ws, Some(session), since_ms)
 }
 
 struct SessionCursor {
@@ -355,7 +451,8 @@ fn ws_of(msg: &StoreMsg) -> &str {
         | StoreMsg::Event { ws, .. }
         | StoreMsg::AgentSession { ws, .. }
         | StoreMsg::ForgetAgentSession { ws, .. }
-        | StoreMsg::Recap { ws, .. } => ws,
+        | StoreMsg::Recap { ws, .. }
+        | StoreMsg::Touch { ws, .. } => ws,
         StoreMsg::Flush(_) => "default", // 도달 불가 — run 루프가 pending에 넣지 않는다
     }
 }
@@ -481,6 +578,12 @@ fn flush(
                 StoreMsg::ForgetAgentSession { id, .. } => {
                     // 앵커만 지운다 — 스크롤백·이벤트는 보존 정책(30일)이 따로 관장한다
                     let _ = tx.execute("DELETE FROM agent_session WHERE session_id = ?1", params![id]);
+                }
+                StoreMsg::Touch { session, path, tool, ts, .. } => {
+                    let _ = tx.execute(
+                        "INSERT INTO file_touch (session, path, tool, ts) VALUES (?1, ?2, ?3, ?4)",
+                        params![session, path, tool, ts],
+                    );
                 }
                 StoreMsg::Flush(_) => {} // pending에 들어오지 않는다 (run 루프에서 즉시 처리)
             }
@@ -974,6 +1077,39 @@ mod tests {
         assert_eq!(v, "v");
         drop(again);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// §1-2 · C4 — 버전 1 DB가 열리며 최신 버전으로 올라가고, 편집 기록이 쓰기 스레드를 거쳐 조회된다
+    #[test]
+    fn v1_db_migrates_and_touches_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("eqmux-touch-{}", crate::workspace::now_ms()));
+        {
+            let path = db_path(&dir, "ws");
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT); INSERT INTO meta VALUES ('schema_version', '1');")
+                .unwrap();
+        }
+        assert!(recent_touches(&dir, "ws", 0).is_empty(), "이전 전 DB는 기록 없음");
+        let store = Store::new(dir.clone());
+        store.touch_file("ws", "kai@ws", "src/x.ts", "Edit", 100);
+        store.touch_file("ws", "rin@ws", "src/x.ts", "Write", 200);
+        store.touch_file("ws", "kai@ws", "src/y.ts", "Edit", 300);
+        let (ack, done) = std::sync::mpsc::channel();
+        store.sender().send(StoreMsg::Flush(ack)).unwrap();
+        done.recv_timeout(Duration::from_secs(10)).unwrap();
+
+        let v: String = Connection::open(db_path(&dir, "ws"))
+            .unwrap()
+            .query_row("SELECT value FROM meta WHERE key = 'schema_version'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, (MIGRATIONS.len() + 1).to_string());
+        let all = recent_touches(&dir, "ws", 150);
+        assert_eq!(all.iter().map(|t| t.ts).collect::<Vec<_>>(), [200, 300]);
+        let kai = touches_for(&dir, "ws", "kai@ws", 0);
+        assert_eq!(kai.iter().map(|t| t.path.as_str()).collect::<Vec<_>>(), ["src/x.ts", "src/y.ts"]);
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
