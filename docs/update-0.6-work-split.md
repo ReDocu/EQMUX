@@ -151,3 +151,5 @@
 | 11-02 | W7 | 창 닫기 설정 closeAction · onCloseRequested 연결 | `412b303` |
 | 11-02 | W7 | 주입 머리에 원장 id · 회신 표시 | `02cd23b` |
 | 11-02 | W4 | 매 턴 상기 remind(페르소나 체크박스 · 역할 frontmatter) | `94272d4` |
+| 11-02 | W0 | `ba499fb`에 섞인 gitx · AgentStateEvt 줄 되돌림(경로 붙인 commit 실수) | `6a1f38d` |
+| 11-02 | W6 | §16 환경변수 CRUD 1~4단계. 목록과 다른 점: 값은 이스케이프 대신 dotenv가 같은 값으로 읽는 따옴표를 고른다 · [원문 편집]은 탭 안 CodeEditor. git 칩은 W5 `git_path_status` 커밋 뒤 동작. 실기: §16-7 전부, dotenv 대조 | `f1adaa6` |
