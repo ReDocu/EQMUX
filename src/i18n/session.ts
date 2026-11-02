@@ -47,7 +47,7 @@ export const dict: Record<string, string> = {
     "If the effective permissions change, a restart is required",
   "권한 변경 감지 · 재시작 필요": "Permission change detected · restart needed",
   "권한 변경 감지 · 다음 기동 때 적용됩니다": "Permission change detected · applies at the next start",
-  "재개 기반 재시작 — 대화를 잃지 않는다":
+  "이어서 다시 시작 — 대화를 잃지 않습니다":
     "Resume-based restart — the conversation is preserved",
   "대화 유지 재시작": "Restart, keep conversation",
   "역할 부여": "Assign role",
@@ -147,9 +147,9 @@ export const dict: Record<string, string> = {
   // ── 0.5 W3 · 시안 적용 — 세션 상세 ──
   "기동됨": "running",
   "직함 (이 워크스페이스만)": "Title (this workspace only)",
-  "비어 있으면 페르소나 직함을 물려받는다 · 덮어쓰면 team.json 슬롯 title에만 남는다": "Empty inherits the persona title · an override is kept only in the team.json slot title",
-  "비우면 페르소나 이름({name})으로 돌아간다 · 공백·@·줄바꿈 불가 · claude --name과 @멘션에 쓴다": "Empty returns to the persona name ({name}) · no spaces, @ or line breaks · used for claude --name and @mentions",
-  "비우면 자동 이름({name})으로 돌아간다 · 공백·@·줄바꿈 불가 · @멘션에 쓴다": "Empty returns to the automatic name ({name}) · no spaces, @ or line breaks · used for @mentions",
+  "비어 있으면 페르소나 직함을 물려받습니다 · 덮어쓰면 이 슬롯에만 남습니다": "Empty inherits the persona title · an override is kept only in the team.json slot title",
+  "비우면 페르소나 이름({name})으로 돌아갑니다 · 공백·@·줄바꿈 불가 · claude --name과 @멘션에 씁니다": "Empty returns to the persona name ({name}) · no spaces, @ or line breaks · used for claude --name and @mentions",
+  "비우면 자동 이름({name})으로 돌아갑니다 · 공백·@·줄바꿈 불가 · @멘션에 씁니다": "Empty returns to the automatic name ({name}) · no spaces, @ or line breaks · used for @mentions",
   "권한·엔진 변경 감지 · 다음 기동 때 적용됩니다": "Permission or engine change detected · applies at next start",
   "권한·엔진 변경 감지 · 재시작 필요": "Permission or engine change detected · restart needed",
   "새로 시작": "Start fresh",

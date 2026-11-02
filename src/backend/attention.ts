@@ -9,12 +9,13 @@ import { backend } from "./mock";
 import { isTauri } from "./pty";
 import { jumpToSession, modalOpen, setFocusRequest } from "../state";
 import { t, tf } from "../i18n";
-import type { Session } from "../types";
+import type { ConversationMessage, Session } from "../types";
 import { sessionName } from "../types";
 
 /** 주의 순위 — 작을수록 급하다. 0은 봐야 할 것이 없다.
- *  1 waiting · 2 dead(본 적 없음) · 3 메시지 대기 · 4 보고 전 · 5 완료 보고 · 6 턴 완료 */
-export function attentionRank(s: Session, pending = 0): number {
+ *  0.5 긴급 에스컬레이션(안 읽음) · 1 waiting · 2 dead(본 적 없음) · 3 메시지 대기 · 4 보고 전 · 5 완료 보고 · 6 턴 완료 */
+export function attentionRank(s: Session, pending = 0, urgent = false): number {
+  if (urgent) return 0.5; // escalate --severity high (W3 §4) — 무엇보다 위
   if (s.status === "waiting") return 1;
   if (s.status === "dead" && s.unseen) return 2;
   if (pending > 0) return 3;
@@ -29,9 +30,13 @@ export function attentionRank(s: Session, pending = 0): number {
 export const inboxWaiting = (s: Session): number => (unmanagedAgent(s) ? pendingCount(s.id) : 0);
 
 /** 순위 순, 같은 순위면 오래 기다린 순(sinceMs가 큰 쪽). 순수 함수 — 테스트가 여기를 겨눈다 */
-export function attentionOrder(sessions: readonly Session[], pending: (s: Session) => number = () => 0): Session[] {
+export function attentionOrder(
+  sessions: readonly Session[],
+  pending: (s: Session) => number = () => 0,
+  urgent: (s: Session) => boolean = () => false,
+): Session[] {
   return sessions
-    .map((s) => ({ s, r: attentionRank(s, pending(s)) }))
+    .map((s) => ({ s, r: attentionRank(s, pending(s), urgent(s)) }))
     .filter((x) => x.r > 0)
     .sort((a, b) => a.r - b.r || b.s.sinceMs - a.s.sinceMs)
     .map((x) => x.s);
@@ -41,7 +46,13 @@ export function attentionOrder(sessions: readonly Session[], pending: (s: Sessio
  *  닫은 워크스페이스(탭만 접기 — 세션은 돈다)도 넣는다. 예전엔 여기만 열린 것으로 걸러서 벨은
  *  1인데 `다음 미확인으로`는 무반응이었다 (B74). 데려갈 때 jumpToSession이 그 탭을 다시 연다 (B18) */
 export function attentionSessions(): Session[] {
-  return attentionOrder(backend.listSessions(), inboxWaiting);
+  const u = urgentSenders(backend.listMessages());
+  return attentionOrder(backend.listSessions(), inboxWaiting, (s) => u.has(s.id));
+}
+
+/** 안 읽은 긴급 에스컬레이션을 보낸 세션 (W3 §4) — 주의 맨 위. 순수 함수 */
+export function urgentSenders(msgs: readonly ConversationMessage[]): Set<string> {
+  return new Set(msgs.filter((m) => m.type === "escalate" && m.severity === "high" && m.unread).map((m) => m.from));
 }
 
 /** 직전에 데려간 세션 — waiting처럼 보기만 해서는 안 지워지는 신호가 있어, 누를 때마다
@@ -75,7 +86,7 @@ export interface NotifyItem {
   session: string;
   workspace: string;
   /** app = 세션이 아닌 앱 알림(다른 도구 전역 지시 등) · conflict = 같은 파일 동시 편집 (0.6 W7) */
-  kind: "waiting" | "dead" | "report" | "turn" | "message" | "app" | "conflict" | "cli-version"; // cli-version = 엔진 CLI가 최소 버전보다 낮다 (W2)
+  kind: "waiting" | "dead" | "report" | "turn" | "message" | "app" | "conflict" | "cli-version" | "escalate"; // cli-version = 엔진 CLI가 최소 버전보다 낮다 (W2)
   title: string;
   body: string;
   ts: number;
@@ -239,5 +250,27 @@ export function startConflictFeed(): void {
       const first = c.sessions[0];
       if (first && !modalOpen() && jumpToSession(c.workspace, first)) setFocusRequest({ session: first });
     });
+  });
+  // 담당 밖 편집 (W5 · 역할 owns:) — 막지 않고 알리기만. Rust가 (세션, 파일)마다 10분에 한 번으로 줄인다
+  void listen<OutsideOwns>("edit-outside-owns", (e) => receiveOutsideOwns(e.payload));
+}
+
+export interface OutsideOwns {
+  workspace: string;
+  session: string;
+  path: string; // 저장소 상대 · "/"
+  owns: string[];
+  ts: number;
+}
+export function receiveOutsideOwns(o: OutsideOwns): void {
+  notifyLocal({
+    session: `app:owns:${o.session}:${o.path}`,
+    workspace: o.workspace,
+    kind: "conflict",
+    title: tf("{name}이(가) 담당 밖 {path}를 편집", { name: conflictName(o.session), path: o.path }),
+    body: tf("담당: {owns}", { owns: o.owns.join(" ") }),
+    open: () => {
+      if (!modalOpen() && jumpToSession(o.workspace, o.session)) setFocusRequest({ session: o.session });
+    },
   });
 }

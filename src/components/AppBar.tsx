@@ -121,7 +121,7 @@ export function AppBar() {
   };
   const itemRead = (it: NotifyItem) => {
     // 앱 알림 · 동시 편집 · 엔진 버전 — 세션 신호가 아니라 늘 눈에 띄게 둔다 (목록 50건 상한이 걷는다)
-    if (it.open || it.kind === "cli-version") return false;
+    if (it.open || it.kind === "cli-version" || it.kind === "escalate") return false;
     const s = itemSession(it);
     return !s || !sessionNeedsLook(s);
   };

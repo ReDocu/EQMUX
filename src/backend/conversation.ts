@@ -35,6 +35,7 @@ interface MsgRow {
   fromName?: string; // 보낸 때의 세션 이름 (원장) — 세션이 사라진 뒤의 표시용
   toName?: string;
   re?: number; // 회신 대상 원장 id (W3 §4)
+  severity?: "high"; // escalate 심각도 (W3 §4)
 }
 
 /** 원장에 남은 보낸 때의 이름 — 세션 id → 이름. 세션이 사라져 nameOf가 풀지 못할 때만 쓴다 */
@@ -58,6 +59,7 @@ function toMsg(wsId: string, r: MsgRow): ConversationMessage {
     ts: r.ts,
     rowId: r.id,
     ...(r.re ? { re: r.re } : {}),
+    ...(r.severity ? { severity: r.severity } : {}),
     ...(r.done ? { done: true } : {}),
     ...(r.file ? { file: r.file } : {}),
   };

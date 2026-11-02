@@ -10,6 +10,7 @@ import {
   mergeConflict,
   attentionOrder,
   attentionRank,
+  urgentSenders,
   fmtAgo,
   inboxWaiting,
   NOTIFY_MAX,
@@ -20,7 +21,7 @@ import {
   unlistedAttention,
 } from "./attention";
 import type { NotifyItem } from "./attention";
-import type { Session } from "../types";
+import type { ConversationMessage, Session } from "../types";
 
 const s = (id: string, over: Partial<Session>): Session =>
   ({ id, status: "idle", sinceMs: 0, ...over }) as Session;
@@ -115,4 +116,11 @@ describe("같은 파일 동시 편집 (§13-1 · C1)", () => {
     expect(l).toHaveLength(2);
     expect(mergeConflict(l, c("z.ts", ["x", "y"], 2000 + CONFLICT_WINDOW_MS + 1))).toHaveLength(1);
   });
+});
+
+test("긴급 에스컬레이션은 주의 맨 위 (W3 §4)", () => {
+  const m = (from: string, severity?: "high", unread = true) => ({ id: from, time: "", from, to: "나", type: "escalate", body: "", unread, severity }) as ConversationMessage;
+  const u = urgentSenders([m("a", "high"), m("b"), m("c", "high", false)]);
+  expect([...u]).toEqual(["a"]);
+  expect(attentionRank(s("a", { status: "waiting" }), 0, true)).toBe(0.5);
 });

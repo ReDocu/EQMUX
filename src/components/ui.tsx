@@ -452,7 +452,7 @@ export function StopConfirm(props: {
       info={[
         `${t("세션")}  ${s().id} · ${t("슬롯")} ${slotNo(s().slot)}`,
         `${t("상태")}  ${statusText(s().status)}${s().status === "waiting" && s().waitingFor ? ` · ${t("승인 대기 중")} (${t(s().waitingFor!)})` : ""}`,
-        ...(props.openHandoff ? [`${t("열린 handoff")}  ${t("있음 — 중지해도 원장에 남는다")}`] : []),
+        ...(props.openHandoff ? [`${t("열린 handoff")}  ${t("있음 — 중지해도 기록에 남습니다")}`] : []),
       ]}
       danger
       confirmLabel={t("중지")}

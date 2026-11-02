@@ -9,11 +9,11 @@ import { backend, MAX_OPEN_WORKSPACES, onEventLog } from "../backend/mock";
 import { isTauri, killPty, revealPath } from "../backend/pty";
 import { maxSlots, settings } from "../backend/settings";
 import { t, tf } from "../i18n";
-import { focusSession, jumpToSession, openPanel, setOverlay, setView, tick } from "../state";
+import { focusSession, jumpToSession, openPanel, setOverlay, setView, tick, view } from "../state";
 import { Chip, ContextMenu, Identity, notify, PaneNoText, StopConfirm } from "../components/ui";
 import type { ChipTone } from "../components/ui";
 import { approvalRespond, canRespondInline, canStartFresh, resumeAgent, startFresh } from "../backend/agent";
-import { attentionRank, fmtAgo, inboxWaiting } from "../backend/attention";
+import { attentionRank, fmtAgo, inboxWaiting, urgentSenders } from "../backend/attention";
 import { awayCard, dismissAway } from "../backend/away";
 import { overBudget, spendText } from "../backend/budget";
 import { LIMIT_WARN, limitText, resetAt, worstLimit } from "../backend/usage";
@@ -158,8 +158,9 @@ export function Dashboard() {
   };
   // 주의 필요 순 정렬 (FR-G-07 · 0.5 §주의 신호) — waiting > dead > 확인 신호(메시지·보고 전·완료·턴) >
   // 나머지는 상태 순. 같은 순위는 오래 기다린 순
+  const urgent = createMemo(() => (tick(), urgentSenders(backend.listMessages()))); // 긴급 에스컬레이션 — 맨 위 (W3 §4)
   const sortKey = (s: Session) => {
-    const r = attentionRank(s, pendingOf(s));
+    const r = attentionRank(s, pendingOf(s), urgent().has(s.id));
     return r > 0 ? r : 10 + ATTENTION_ORDER[s.status];
   };
   // 워크스페이스별 정렬 목록을 tick당 한 번만 만든다 (C5) — 카드 하나가 wsSessions를 4~5번 부르고,
@@ -284,6 +285,7 @@ export function Dashboard() {
               {(r) => {
                 const s = () => sessions().find((x) => x.id === r.session);
                 return (
+                  <div class="away-line">
                   <button class="away-row" onClick={() => jumpToSession(r.workspace, r.session)}>
                     <span class="mono away-nm">
                       {s() ? personaName(s()!) : r.session} · {workspaces().find((w) => w.id === r.workspace)?.name ?? ""}
@@ -302,6 +304,18 @@ export function Dashboard() {
                       <span class="away-done">✓ {r.done}</span>
                     </Show>
                   </button>
+                  {/* 완료 보고를 낸 세션이 맡은 임무가 있으면 검토 화면으로 (§13-3) */}
+                  <Show when={r.done && s()?.missionId}>
+                    {(mid) => (
+                      <button
+                        class="btn btn-sm away-review"
+                        onClick={() => setView({ kind: "review", wsId: r.workspace, missionId: mid(), back: view() })}
+                      >
+                        {t("검토 →")}
+                      </button>
+                    )}
+                  </Show>
+                  </div>
                 );
               }}
             </For>

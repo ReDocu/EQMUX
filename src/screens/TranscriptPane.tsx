@@ -206,7 +206,7 @@ export function TranscriptPane(props: { session: Session; onJump?: () => void })
           <span class="muted mono tr-count">{countText()}</span>
           <button
             class="btn"
-            title={tr("세션 저장 — 스크롤백 전체(디스크 포함, VT 제거 평문)를 .txt로 내보낸다")}
+            title={tr("세션 저장 — 스크롤백 전체(디스크 포함)를 평문 .txt로 내보냅니다")}
             disabled={saving() || !isTauri()}
             onClick={() => void saveSession()}
           >

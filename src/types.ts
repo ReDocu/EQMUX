@@ -470,6 +470,7 @@ export interface ConversationMessage {
   file?: { path: string; size: number }; // send --file 첨부 — 저장소 상대 경로
   rowId?: number; // 원장 행 id — 이전 페이지(beforeId) 커서
   re?: number; // 무엇에 대한 회신인지 — 원장 행 id (W3 §4 `eqmux send --re`)
+  severity?: "high"; // escalate --severity high (W3 §4) — 긴급 칩 · 주의 맨 위. normal이면 없다
 }
 
 /** 워크스페이스당 메모리에 두는 메시지 수 (CPU·RAM M3) — 원장 첫 페이지(200)보다 넉넉히.

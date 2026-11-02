@@ -45,7 +45,7 @@ export const dict: Record<string, string> = {
   "{branch} · {n} 세션": "{branch} · {n} sessions",
   "{branch} · {n} 세션 저장됨": "{branch} · {n} sessions saved",
   "경로 재지정": "Relocate path",
-  '등록된 저장소가 없습니다. "폴더 찾기…"로 시작하세요.': 'No repositories registered. Start with "Browse folder…".',
+  '등록된 워크스페이스가 없습니다. "폴더 찾기…"로 시작하세요.': 'No workspaces registered. Start with "Browse folder…".',
   "원격 (origin)": "Remote (origin)",
   "저장된 세션": "Saved sessions",
   "{n} · 재개 가능 {m}": "{n} · {m} resumable",
@@ -139,8 +139,6 @@ export const dict: Record<string, string> = {
   "{n} 등록 · {m} 열림": "{n} registered · {m} open",
   재지정: "Re-path",
   열림: "Open",
-  '등록된 저장소가 없습니다. "+ 로컬 저장소 연결"로 시작하세요.':
-    'No repositories registered. Start with "+ Connect local repository".',
   "저장소를 선택하세요": "Select a repository",
   "팀 편성": "Team composition",
   "마지막 사용": "Last used",
@@ -229,7 +227,7 @@ export const dict: Record<string, string> = {
   "2세션으로 시작 → 워크스페이스": "Start with 2 sessions → Workspace",
   "다음: 기본 터미널 구성 →": "Next: Default terminal setup →",
   "다음: 팀 캐스팅 →": "Next: Team casting →",
-  "리드와 개발 2세션으로 시작해요. 워크스페이스가 열리면 Claude Code가 바로 떠요. 슬롯 {n}개 중 2개를 써요.":
+  "리드와 개발 2세션으로 시작합니다. 워크스페이스가 열리면 Claude Code가 바로 뜹니다. 슬롯 {n}개 중 2개를 씁니다.":
     "Starts with two sessions, a lead and a developer. Claude Code launches as soon as the workspace opens. Uses 2 of {n} slots.",
   "← 실행 방식": "← Launch mode",
   "셸 열기 → 워크스페이스": "Open shell → Workspace",
@@ -286,7 +284,7 @@ export const dict: Record<string, string> = {
   "다음 → 워크스페이스 (편성대로 기동)": "Next → Workspace (launches the saved team)",
   "저장된 팀": "Saved team",
   "이 팀으로 시작 → 워크스페이스": "Start with this team → Workspace",
-  "저장소의 편성대로 시작해요. 워크스페이스가 열리면 역할 세션이 바로 떠요. 슬롯은 {n}개까지 써요.":
+  "저장소의 편성대로 시작합니다. 워크스페이스가 열리면 역할 세션이 바로 뜹니다. 슬롯은 {n}개까지 씁니다.":
     "Starts with the repo's team. Role sessions launch as soon as the workspace opens. Uses up to {n} slots.",
   // ── 0.6 W7: 스크롤백 저장 토글 (E4 · W6) ──
   "스크롤백 · 세션 로그 저장": "Save scrollback and session logs",

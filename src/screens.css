@@ -7287,3 +7287,19 @@ label.inbox-pop-row {
 .bell-title.cli-version {
   color: var(--eq-purple);
 }
+
+/* 0.6 W7: 긴급 에스컬레이션 (W3 §4 --severity high) — 대화 칩 · 벨 줄 */
+.conv-urgent {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 0 5px;
+  border-radius: var(--eq-r-sm);
+  color: #fff;
+  background: var(--eq-red);
+}
+.bell-dot.escalate {
+  background: var(--eq-red);
+}
+.bell-title.escalate {
+  color: var(--eq-red);
+}

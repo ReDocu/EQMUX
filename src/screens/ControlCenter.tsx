@@ -37,7 +37,7 @@ import { attentionOrder, inboxWaiting, pickNext } from "../backend/attention";
 import { canStartFresh, resumeAgent, startFresh } from "../backend/agent";
 import { queryEvents } from "../backend/events";
 import type { FeedEvent } from "../backend/events";
-import { gitOverview, worktreeList } from "../backend/git";
+import { gitOverview, pathKeys, worktreeList } from "../backend/git";
 import type { GitOverview, WorktreeInfo } from "../backend/git";
 import { agentClis, agentClisReady, refreshAgentClis } from "../backend/agentprobe";
 import { autoAssignDefault, refreshMissions } from "../backend/missions";
@@ -304,9 +304,24 @@ export function ControlCenter(props: { workspace: Workspace }) {
     onCleanup(() => clearInterval(t));
   });
   const gitBranch = () => gitInfo()?.branch ?? props.workspace.branch;
-  const normPath = (p: string) => p.replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase();
+  // 경로 비교 키 (B132 · B151) — Rust가 준 실경로 키(wt.key · path_keys)를 쓴다. 없으면 구분자 · 끝 `/`만 맞추고
+  // 소문자화는 Windows에서만 (macOS는 대소문자를 가르는 볼륨이 있다)
+  const normPath = (p: string) => {
+    const n = p.replace(/\\/g, "/").replace(/\/+$/, "");
+    return IS_MAC ? n : n.toLowerCase();
+  };
+  // 세션 cwd → 키. cwd는 세션마다 바뀌지 않으니 한 번 받아 둔다
+  const [cwdKeys, setCwdKeys] = createSignal<Record<string, string>>({});
+  createEffect(() => {
+    const miss = [...new Set(sessions().map((s) => s.cwd))].filter((c) => c && !(c in cwdKeys()));
+    if (miss.length)
+      void pathKeys(miss).then((k) => setCwdKeys((m) => ({ ...m, ...Object.fromEntries(miss.map((c, i) => [c, k[i]])) })));
+  });
   /** 이 워크트리에서 도는 세션들 — cwd 실측 일치 */
-  const wtMembers = (wt: WorktreeInfo) => sessions().filter((s) => normPath(s.cwd) === normPath(wt.path));
+  const wtMembers = (wt: WorktreeInfo) => {
+    const key = wt.key ?? normPath(wt.path);
+    return sessions().filter((s) => (cwdKeys()[s.cwd] ?? normPath(s.cwd)) === key);
+  };
   const wtTail = (p: string) => p.replace(/\\/g, "/").split("/").slice(-2).join("/");
 
   // 저장 기록 초기화 (FR-C-52 — 사용자 조작) — 상태바의 WAL·lines를 직접 0으로 되돌린다.

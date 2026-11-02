@@ -147,8 +147,7 @@ export const dict: Record<string, string> = {
   에이전트: "Agent",
   "참조만 저장 (V2)": "Reference only (V2)",
   "검색": "Search",
-  "세션 저장 — 스크롤백 전체(디스크 포함, VT 제거 평문)를 .txt로 내보낸다":
-    "Save session — exports the full scrollback (incl. disk, VT-stripped plain text) to .txt",
+  "세션 저장 — 스크롤백 전체(디스크 포함)를 평문 .txt로 내보냅니다": "Save session — export the full scrollback (including disk) as plain .txt",
   "저장 중…": "Saving…",
   "세션 저장": "Save session",
   "트랜스크립트 없음 — 에이전트 로그도 스크롤백도 아직 없습니다": "No transcript — no agent log or scrollback yet",
@@ -212,7 +211,7 @@ export const dict: Record<string, string> = {
   "셸 프로세스를 끝내고 이 슬롯({no})을 비웁니다. 되돌릴 수 없습니다. 스크롤백은 30일 보존 규칙대로 남습니다.": "Ends the shell process and frees slot {no}. This can't be undone. Scrollback is kept under the 30-day retention rule.",
   "승인 대기 중": "waiting for approval",
   "열린 handoff": "Open handoff",
-  "있음 — 중지해도 원장에 남는다": "yes — it stays in the ledger after stopping",
+  "있음 — 중지해도 기록에 남습니다": "yes — it stays in the ledger after stopping",
   "종료됨": "Exited",
   "메시지 {n}": "{n} msgs",
   "✓ 보고 전": "✓ No report",
@@ -327,4 +326,7 @@ export const dict: Record<string, string> = {
   "붙였던 claude가 사라짐": "Adopted claude went away",
   "엔진 CLI 버전": "Engine CLI version",
   "열린 워크스페이스": "Open workspaces",
+  긴급: "Urgent",
+  "{name}이(가) 담당 밖 {path}를 편집": "{name} edited {path} outside its ownership",
+  "담당: {owns}": "Owns: {owns}",
 };

@@ -359,8 +359,8 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
         error={nameErr() && t(nameErr()!)}
         hint={tf(
           persona()
-            ? "비우면 페르소나 이름({name})으로 돌아간다 · 공백·@·줄바꿈 불가 · claude --name과 @멘션에 쓴다"
-            : "비우면 자동 이름({name})으로 돌아간다 · 공백·@·줄바꿈 불가 · @멘션에 쓴다",
+            ? "비우면 페르소나 이름({name})으로 돌아갑니다 · 공백·@·줄바꿈 불가 · claude --name과 @멘션에 씁니다"
+            : "비우면 자동 이름({name})으로 돌아갑니다 · 공백·@·줄바꿈 불가 · @멘션에 씁니다",
           { name: persona()?.name ?? backend.autoSessionName(s().workspaceId, s().slot, s().id) },
         )}
         count={nameDraft().length}
@@ -396,7 +396,7 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
           </button>
         </div>
         <FieldHint
-          hint={t("비어 있으면 페르소나 직함을 물려받는다 · 덮어쓰면 team.json 슬롯 title에만 남는다")}
+          hint={t("비어 있으면 페르소나 직함을 물려받습니다 · 덮어쓰면 이 슬롯에만 남습니다")}
           count={titleDraft().length}
           max={TITLE_MAX}
         />
@@ -488,7 +488,7 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
               title={
                 engineSwitched(s())
                   ? t("엔진 사이에는 대화를 이을 수 없습니다 — 새 엔진으로 새 대화를 시작합니다")
-                  : t("재개 기반 재시작 — 대화를 잃지 않는다")
+                  : t("이어서 다시 시작 — 대화를 잃지 않습니다")
               }
               onClick={() => void doRestart()}
             >

@@ -457,6 +457,9 @@ export function ConversationTab() {
                     <span title={titleTip(m.from)}>{label(m.from)}</span> → {label(m.to)}
                   </span>
                   <span class={`conv-type mono t-${TYPE_COLOR[m.type]}`}>{m.type.toUpperCase()}</span>
+                  <Show when={m.type === "escalate" && m.severity === "high"}>
+                    <span class="conv-urgent">{t("긴급")}</span>
+                  </Show>
                   <Show when={otherProject(m)}>{(p) => <span class="conv-proj mono">{p()}</span>}</Show>
                   <Show when={m.done}>
                     <span class="conv-done" title={t("완료 보고 — 에이전트가 맡은 일을 끝냈다고 밝혔습니다")}>

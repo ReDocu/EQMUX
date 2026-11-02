@@ -136,7 +136,7 @@ const SECTIONS: Section[] = [
       },
       {
         k: "웹 페이지 열기",
-        d: "누른 링크와 에이전트의 eqmux browser open이 열리는 곳 · Chrome이면 에이전트가 페이지를 조작(snapshot·click)하지 못한다",
+        d: "누른 링크와 에이전트의 eqmux browser open이 열리는 곳 · Chrome이면 에이전트가 페이지를 조작하지 못합니다",
         labels: ["EQMUX 브라우저 (기본)", "Chrome"],
         current: () => pick(WEB_OPEN, settings().webOpen),
         apply: (i) => updateSettings({ webOpen: WEB_OPEN[i] }),
@@ -160,7 +160,7 @@ const SECTIONS: Section[] = [
       },
       {
         k: "슬롯 수",
-        d: "워크스페이스당 세션 수의 상한 · 줄여도 이미 열린 세션은 닫지 않는다",
+        d: "워크스페이스당 세션 수의 상한 · 줄여도 이미 열린 세션은 닫지 않습니다",
         labels: ["4개 (기본)", "6개", "8개"],
         current: () => pick(SLOTS, settings().maxSlots),
         apply: (i) => updateSettings({ maxSlots: SLOTS[i] }),
@@ -169,7 +169,7 @@ const SECTIONS: Section[] = [
     fixed: [
       {
         k: "열린 탭·배치 복원",
-        d: "workspaces.json · layout.json은 버전 업에도 남는다",
+        d: "workspaces.json · layout.json은 버전 업에도 남습니다",
         label: "항상 (layout.json)",
       },
       { k: "복원 허용", label: "team.json 최대 8슬롯 — 설정과 무관" },
@@ -182,7 +182,7 @@ const SECTIONS: Section[] = [
     wired: [
       {
         k: "세션 상태 줄",
-        d: "검증된 CLI와 관측 어댑터는 고정 정책이다 · 상태 줄 표시만 고른다",
+        d: "검증된 CLI와 관측 방식은 고정입니다 · 상태 줄 표시만 고릅니다",
         labels: ["모델 · 비용 (기본)", "모델만 — 비용 숨김", "숨김"],
         current: () => pick(STATUSLINES, settings().statusLine),
         apply: (i) => updateSettings({ statusLine: STATUSLINES[i] }),
@@ -201,7 +201,7 @@ const SECTIONS: Section[] = [
       {
         // 0.6 §13-6 — 넘으면 알림 센터 + OS 알림 한 번. 세션은 멈추지 않는다
         k: "하루 비용 예산",
-        d: "모든 세션의 비용(statusLine) 합계 · 넘으면 하루에 한 번 알린다 · 세션은 멈추지 않는다",
+        d: "모든 세션의 비용 합계 · 넘으면 하루에 한 번 알립니다 · 세션은 멈추지 않습니다",
         labels: ["끔 (기본)", "$5", "$10", "$20", "$50"],
         current: () => pick(BUDGETS, settings().dailyBudgetUsd),
         apply: (i) => updateSettings({ dailyBudgetUsd: BUDGETS[i] }),
@@ -215,7 +215,7 @@ const SECTIONS: Section[] = [
       },
       {
         k: "완료 OS 알림",
-        d: "완료 보고는 에이전트가 끝났다고 밝힌 것 · 턴 완료는 하루 수십 번이라 기본 끔 · 인앱 칩은 설정과 무관하게 뜬다",
+        d: "완료 보고는 에이전트가 끝났다고 밝힌 것입니다 · 턴 완료는 하루 수십 번이라 기본으로 끕니다 · 앱 안의 칩은 설정과 관계없이 뜹니다",
         labels: ["완료 보고만 (기본)", "턴 끝날 때마다", "끔"],
         current: () => pick(DONE_NOTI, settings().doneNotifications),
         apply: (i) => updateSettings({ doneNotifications: DONE_NOTI[i] }),
@@ -223,7 +223,7 @@ const SECTIONS: Section[] = [
       {
         // 손으로 띄운 claude·codex — 앱이 띄우지 않아 승인 창을 직접 모른다. 자동이어도 idle일 때만 넣는다
         k: "손으로 띄운 에이전트 메시지",
-        d: "기본 터미널에서 직접 실행한 claude·codex에 온 메시지 · 자동이어도 idle일 때만 넣고, 승인 대기·상태 모름이면 쌓아 벨에 남긴다",
+        d: "기본 터미널에서 직접 실행한 claude·codex에 온 메시지 · 자동이어도 쉬는 중일 때만 넣고, 승인 대기·상태 모름이면 쌓아 벨에 남깁니다",
         labels: ["쌓아 두기 (기본)", "쉬면 자동으로 넣기"],
         current: () => pick(MANUAL_DELIVERY, settings().manualDelivery),
         apply: (i) => updateSettings({ manualDelivery: MANUAL_DELIVERY[i] }),
@@ -231,7 +231,7 @@ const SECTIONS: Section[] = [
       {
         // 실제 동작 — waiting 진입 때 앱이 직접 소리를 낸다(창이 포커스면 내지 않는다). "예약"이 아니다
         k: "응답 대기 알림 소리",
-        d: "승인·입력 대기가 되면 소리를 냅니다 · 창이 포커스면 내지 않는다",
+        d: "승인·입력 대기가 되면 소리를 냅니다 · 창을 보고 있으면 내지 않습니다",
         labels: ["꺼짐 (기본)", "켜짐"],
         current: () => (settings().waitingSound ? 1 : 0),
         apply: (i) => updateSettings({ waitingSound: i === 1 }),
@@ -245,9 +245,9 @@ const SECTIONS: Section[] = [
       },
     ],
     fixed: [
-      { k: "같은 세션 반복 합치기", d: "60초 안의 반복을 합친다 · 완료 알림은 따로 센다", label: "60초" },
-      { k: "훅 기반 상태 감지", d: "Stop · Notification 훅으로 idle·waiting을 판정한다", label: "항상 켬" },
-      { k: "창 포커스 시", d: "창이 포커스면 OS 알림을 내지 않는다", label: "억제" },
+      { k: "같은 세션 반복 합치기", d: "60초 안의 반복을 합칩니다 · 완료 알림은 따로 셉니다", label: "60초" },
+      { k: "훅 기반 상태 감지", d: "Stop · Notification 훅으로 쉬는 중 · 승인 대기를 판정합니다", label: "항상 켬" },
+      { k: "창 포커스 시", d: "창을 보고 있으면 OS 알림을 내지 않습니다", label: "억제" },
     ],
   },
   {
@@ -275,13 +275,13 @@ const SECTIONS: Section[] = [
       {
         // 0.6 W1 §1-2 — .bak으로 넘기던 것을 스키마 이전으로 바꿨다
         k: "버전 업 때 session.db",
-        d: "스키마를 이전해 기록을 이어 쓴다 · 손상되면 옆으로 옮기고 새로 만든다",
+        d: "기록을 새 버전 형식으로 옮겨 이어 씁니다 · 손상되면 옆으로 옮기고 새로 만듭니다",
         label: "이전",
         tone: "blue",
       },
       {
         k: "전체 보존 상한",
-        d: "모든 워크스페이스 합계 · 넘으면 오래된 스크롤백부터 지운다 (메시지는 남는다)",
+        d: "모든 워크스페이스 합계 · 넘으면 오래된 스크롤백부터 지웁니다 (메시지는 남습니다)",
         label: "2GB",
       },
       { k: "세션당 상한", label: "1,000줄" },
@@ -297,7 +297,7 @@ const SECTIONS: Section[] = [
       { k: "권한 우회", d: "bypass를 쓰지 않는다 — 승인은 사람이 터미널 페인에서", label: "항상 끔" },
       {
         k: "외부 열기",
-        d: "http/https만 연다 · 원격 주소의 토큰은 화면·툴팁·링크 어디에도 나오지 않는다",
+        d: "http/https만 엽니다 · 원격 주소의 토큰은 화면·툴팁·링크 어디에도 나오지 않습니다",
         label: "http · https",
         tone: "green",
       },
