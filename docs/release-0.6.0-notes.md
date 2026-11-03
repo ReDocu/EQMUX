@@ -1,6 +1,6 @@
 # EQMUX 0.6.0 릴리스 노트
 
-2026-11-03 · main `e88e212` + 버전 0.6.0 · 변경 전체는 `CHANGELOG.md` [0.6.0]
+2026-11-03 · 태그 `v0.6.0` (`34c65d0`) · 변경 전체는 `CHANGELOG.md` [0.6.0]
 
 ## 다운로드
 
@@ -8,9 +8,8 @@
 |---|---|---|
 | Windows 10·11 (x64) | `EQMUX_0.6.0_x64-setup.exe` | 설치 파일(현재 사용자) |
 | Windows 10·11 (x64) | `EQMUX_0.6.0_x64_portable.zip` | 압축을 풀어 `eqmux.exe` 실행 |
-| macOS 11 이상 | `EQMUX_0.6.0_universal.dmg` | CI(`v0.6.0` 태그)에서 만든다 |
 
-아직 코드 서명이 없습니다. Windows는 SmartScreen에서 [추가 정보] → [실행]을 누릅니다.
+macOS 판은 나중에 따로 올립니다. 아직 코드 서명이 없습니다. Windows는 SmartScreen에서 [추가 정보] → [실행]을 누릅니다.
 
 ## 팀을 지켜보는 앱에서, 팀과 같이 일하는 앱으로
 
@@ -42,14 +41,15 @@
 ### 아는 한계
 
 - 코드 서명이 없습니다(SignPath 신청 전).
+- 일부 Windows(11 10.0.26300에서 확인)에서는 셸에서 `exit`를 치거나 에이전트가 스스로 끝나도 페인이 '실행 중'으로 남습니다. 슬롯 목록 우클릭 [중지…]로 정리됩니다. 0.6.1에서 고칩니다(B271).
 - macOS는 0.6 QA를 Windows만큼 하지 못했습니다(B269 · 메뉴 막대 템플릿 아이콘).
 - 실앱으로 확인하지 못한 동작이 있습니다 — Codex만 깔린 PC의 빠른 시작, 큰 저장소 clone 취소 등. 목록은 `docs/update-0.6-next-steps.md` §3.
 
-## 파일 해시 (로컬 빌드)
+## 파일 해시 (SHA-256)
 
 ```
-7abbb785ee68b6075ff11d961c71fe194df52371828844557fdebf5d6e736ba3  EQMUX_0.6.0_x64_portable.zip
-06f581eb9d91e7a8fc9486a09cbb13df128be8502a016ac6ea7371b7190df630  EQMUX_0.6.0_x64-setup.exe
+2c3e010e25c7191bf5922b78f0ffd76b3ec5701f22ba1b68ccf95bc0f61312e0  EQMUX_0.6.0_x64-setup.exe
+bf36b1737cbdd2c04576f473612e83e219964cee2cfa1a57dd1b4a32c4271877  EQMUX_0.6.0_x64_portable.zip
 ```
 
-CI에서 다시 빌드하면 해시가 달라집니다. GitHub 릴리스에는 CI 산출물의 `SHA256SUMS.txt`를 씁니다.
+GitHub Actions가 `v0.6.0` 태그에서 만든 파일입니다. `SHA256SUMS.txt`도 같이 올렸습니다.

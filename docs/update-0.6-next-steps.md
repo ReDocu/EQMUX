@@ -4,14 +4,23 @@
 
 0.6 작업과 QA 수정은 main에 들어갔습니다. 0.6.0 Windows 릴리스 파일은 로컬에서 만들었습니다(`release-0.6.0-notes.md`). 아래는 다음에 이어서 할 일입니다. 위에서부터 차례로 하면 됩니다.
 
+## 0. 0.6.1에서 먼저 고칠 것 (QA 4차, `qa-0.6.0-release-usability.md`)
+
+| 행 | 내용 |
+|---|---|
+| B271 (높음) | 셸 `exit` · 에이전트 종료를 감지하지 못한다 — 자식 대기 스레드로 의사 콘솔을 닫아 EOF를 만든다 |
+| B272 (중간) | 등록 해제 처리 중 잠금 · 표시 |
+| B273 · U177–U181 (낮음) | 기본 셸 표시, 옛 이름 '워크스페이스 열기', 같은 이름 탭, 이벤트 날짜, 트레이 '다시 묻지 않기' 되돌리기, 좁은 창 패널 |
+
 ## 1. 0.6.0 출시 마무리
 
 | 할 일 | 내용 |
 |---|---|
-| 버전 · 변경 기록 커밋 | `package.json` · `tauri.conf.json` · `Cargo.toml` · `Cargo.lock`을 0.6.0으로 올리고, `CHANGELOG.md` 날짜를 정하고 QA 항목을 더한 변경이 아직 커밋되지 않았다. 원장 P81 · 결과 문서 수정도 같이 커밋한다 |
-| 태그 · CI 빌드 | `v0.6.0` 태그를 밀면 `.github/workflows/build.yml`이 Windows(포터블 zip · NSIS) · macOS(universal dmg) · `SHA256SUMS.txt`로 **초안** 릴리스를 만든다. 공개는 사람이 누른다 |
-| CI 테스트 확인 | 이 PC에서는 `ports::tests::attributes_a_port_opened_inside_a_session_job`이 실패한다(node 리스너가 `netstat`에 안 나옴 — 환경). CI의 `cargo test --lib`가 통과하는지 본다. CI에서도 실패하면 테스트를 고친다 |
-| 릴리스 본문 | `release-0.6.0-notes.md`를 초안 릴리스 본문에 붙인다. 로컬 파일과 CI 파일은 해시가 다르므로 CI 산출물의 `SHA256SUMS.txt`를 쓴다 |
+| ~~버전 · 변경 기록 커밋~~ | 끝 — `34c65d0`(태그 `v0.6.0`) |
+| ~~Windows 릴리스~~ | 끝 — 2026-11-03 [EQMUX 0.6.0](https://github.com/ReDocu/EQMUX/releases/tag/v0.6.0) 공개(설치 파일 · 포터블 zip · `SHA256SUMS.txt`, CI 산출물). 첫 CI는 mac 번들에서 실패했다(`eqmux-console` universal 없음) → `75377cd`에서 CI 수정 |
+| macOS 릴리스 | 남음 — 고친 CI로 dmg를 만들어 v0.6.0 릴리스에 더하거나 0.6.1에 같이 낸다. `v0.6.0` 태그는 수정 전 커밋이라 태그 빌드를 다시 하려면 태그를 옮겨야 한다(사람 승인 필요) |
+| ~~CI 테스트 확인~~ | 끝 — CI(windows-latest)에서 `cargo test --lib` 통과. 이 PC의 `ports` 실패는 환경(리스너가 TCP 표에 LISTENING으로 안 나옴) |
+| ~~릴리스 본문~~ | 끝 — `release-0.6.0-notes.md`(B271을 아는 한계에 적음) |
 | 설치 실기 | 0.5.1 위에 0.6.0을 덮어 설치 · 포터블 실행. 등록 · 배치 · 설정 · 라이브러리가 남는지, `session.db`가 제자리 이전되는지, 메시지 버스 이름이 바뀌어 다시 켜야 하는 점 |
 
 ## 2. mac 실기 (mac이 있어야 함)
