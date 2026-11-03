@@ -567,6 +567,12 @@ pub fn model_args(exe: &str, role_text: &str, args: &[String]) -> Vec<String> {
     }
 }
 
+/// 세션 cwd → 배정된 저장소 루트. 세션 워크트리(`<repo>/.eqmux/worktrees/<세션>`)면 그 위 저장소
+pub fn repo_root(cwd: &str) -> String {
+    let c = cwd.replace('\\', "/");
+    c.split("/.eqmux/worktrees/").next().unwrap_or(&c).trim_end_matches('/').to_string()
+}
+
 pub fn agent_builders(
     exe: &str,
     args: &[String],
@@ -586,6 +592,8 @@ pub fn agent_builders(
         b.cwd(cwd);
         // FR-D-04 환경변수 — 역할·팀 파일은 존재할 때만 (파일이 원본, FR-E-41)
         b.env("EQMUX_SESSION", app_session);
+        // 저장소 경계 (eqmux _guard) — 워크트리 세션도 배정 단위는 저장소 전체다
+        b.env("EQMUX_REPO", repo_root(cwd));
         // 세션 토큰 (P-1) — 파이프 IPC의 신원 증명. 세션 id는 공개 관례(`이름@ws`)라
         // 추측 가능하므로, 스폰마다 새로 발급한 논스가 실제 신원이다
         b.env("EQMUX_TOKEN", token);

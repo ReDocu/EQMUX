@@ -7,6 +7,7 @@
 //   eqmux who                         (열린 프로젝트의 세션과 주소)
 //   eqmux browser <동작> …            (브라우저 패널 조종 — browser.rs가 동작을 소유한다)
 //   eqmux _hook <Event>               (Claude Code 훅이 부른다 — stdin JSON, 항상 exit 0)
+//   eqmux _guard                      (파일 도구 PreToolUse 훅 — 저장소 밖 경로 거부, 앱 불필요)
 //   eqmux ping
 // 세션 신원은 EQMUX_SESSION 환경변수 — 에이전트 세션 PTY에만 심어져 있다 (FR-D-04).
 
@@ -106,7 +107,7 @@ fn unknown_flag(flag: &str, usage: &str, en: bool) -> String {
 pub fn is_cli_command(cmd: &str) -> bool {
     matches!(
         cmd,
-        "ping" | "send" | "report" | "who" | "list" | "read" | "browser" | "_hook" | "_statusline" | "help" | "--help" | "-h" | "--version"
+        "ping" | "send" | "report" | "who" | "list" | "read" | "browser" | "_hook" | "_guard" | "_statusline" | "help" | "--help" | "-h" | "--version"
     )
 }
 
@@ -693,6 +694,89 @@ fn prompt_context(role_path: &str, agent: &str) -> Option<String> {
     )
 }
 
+/// 저장소 경계 (사용자 결정 2026-11-03) — `eqmux _guard`는 파일 도구의 PreToolUse 훅이다.
+/// 배정된 저장소(EQMUX_REPO) 밖 경로면 거부 결정을 낸다. 앱을 거치지 않으므로 앱이 바쁘거나(BUSY)
+/// 꺼져 있어도 판정이 같다. 엔진 자기 작업 폴더(큰 출력 파일·계획·스크래치)는 열어 둔다 —
+/// 막으면 Claude Code가 자기 출력을 못 읽는다.
+// ponytail: Bash·PowerShell 명령 속 경로는 못 본다 — 안내문 규칙이 맡는다. 심볼릭 링크도 따라가지 않는다
+fn guard_main() -> i32 {
+    let Some(root) = std::env::var("EQMUX_REPO").ok().filter(|r| !r.is_empty()) else { return 0 };
+    let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).unwrap_or_default();
+    let claude = std::env::var("CLAUDE_CONFIG_DIR").unwrap_or_else(|_| format!("{home}/.claude"));
+    let engine = [
+        format!("{claude}/projects"),
+        format!("{claude}/plans"),
+        std::env::temp_dir().join("claude").to_string_lossy().into_owned(),
+    ];
+    if let Some(out) = repo_guard(&root, &home, &engine, &read_stdin_json(), english()) {
+        println!("{out}");
+    }
+    0
+}
+
+/// 판정 본체 (순수 함수). 걸리면 PreToolUse 거부 JSON
+fn repo_guard(root: &str, home: &str, engine: &[String], payload: &serde_json::Value, en: bool) -> Option<String> {
+    let tool = payload["tool_name"].as_str()?;
+    let keys: &[&str] = match tool {
+        "Read" | "Edit" | "Write" | "MultiEdit" => &["file_path"],
+        "NotebookEdit" => &["notebook_path"],
+        "Grep" => &["path"],
+        "Glob" => &["path", "pattern"], // 절대 경로 패턴으로도 밖을 훑을 수 있다
+        _ => return None,
+    };
+    let base = payload["cwd"].as_str().filter(|c| !c.is_empty()).unwrap_or(root);
+    let inside = |p: &str, dir: &str| {
+        let d = norm_path(dir, dir, home);
+        p == d || p.starts_with(&format!("{}/", d.trim_end_matches('/')))
+    };
+    let raw = keys
+        .iter()
+        .filter_map(|k| payload["tool_input"][k].as_str().filter(|s| !s.is_empty()))
+        .find(|raw| {
+            let p = norm_path(base, raw, home);
+            !inside(&p, root) && !engine.iter().any(|e| inside(&p, e))
+        })?;
+    let reason = if en {
+        format!("Blocked: {raw} is outside the assigned repository ({root}). Work only inside this repository.")
+    } else {
+        format!("막음: {raw} 는 배정된 저장소({root}) 밖이다. 이 저장소 안에서만 작업한다.")
+    };
+    Some(
+        serde_json::json!({
+            "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": reason }
+        })
+        .to_string(),
+    )
+}
+
+/// 비교용 절대 경로 — 구분자 `/`, `~`·상대 경로 풀기, `.`·`..` 접기, Git Bash 꼴(`/d/x`)은 드라이브로.
+/// Windows는 대소문자를 접는다. 루트 위로 넘친 `..`은 드라이브까지 먹어 밖으로 판정된다(안전한 쪽)
+fn norm_path(base: &str, raw: &str, home: &str) -> String {
+    let mut p = raw.replace('\\', "/");
+    if let Some(rest) = p.strip_prefix("~/").or((p == "~").then_some("")) {
+        p = format!("{}/{rest}", home.replace('\\', "/"));
+    }
+    if !(p.starts_with('/') || p.get(1..2) == Some(":")) {
+        p = format!("{}/{p}", base.replace('\\', "/"));
+    }
+    let b = p.as_bytes();
+    if cfg!(windows) && b.len() >= 2 && b[0] == b'/' && b[1].is_ascii_alphabetic() && (b.len() == 2 || b[2] == b'/') {
+        p = format!("{}:{}", b[1] as char, &p[2..]);
+    }
+    let mut out: Vec<&str> = Vec::new();
+    for seg in p.split('/') {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                out.pop();
+            }
+            s => out.push(s),
+        }
+    }
+    let s = if p.starts_with('/') { format!("/{}", out.join("/")) } else { out.join("/") };
+    if cfg!(windows) { s.to_lowercase() } else { s }
+}
+
 /// 역할 파일 → 훅 출력 JSON. 환경변수를 벗겨 둬야 테스트할 수 있다 (env는 프로세스 전역).
 ///
 /// 고급 단계(캐릭터 시트)는 역할 파일에 경로 포인터만 실린다 (roles.rs) — 그런데 포인터는
@@ -791,6 +875,9 @@ fn wait_reply(session: &str, token: Option<&str>, id: i64, en: bool) -> i32 {
 /// CLI 모드 본체 — 종료 코드 반환. _hook·_statusline은 어떤 실패에도 0
 /// (에이전트 흐름·상태 줄을 깨지 않는다).
 pub fn run(args: Vec<String>) -> i32 {
+    if args.first().map(String::as_str) == Some("_guard") {
+        return guard_main();
+    }
     let session = std::env::var("EQMUX_SESSION").ok().filter(|s| !s.is_empty());
     let token = std::env::var("EQMUX_TOKEN").ok().filter(|s| !s.is_empty());
     let silent = matches!(args.first().map(String::as_str), Some("_hook") | Some("_statusline"));
@@ -1004,9 +1091,40 @@ mod tests {
         assert_eq!(encode_cp("한 —\n", 949).unwrap(), vec![0xC7, 0xD1, b' ', 0xA1, 0xAA, b'\n']);
     }
 
+    /// 저장소 경계 — 저장소 안·엔진 작업 폴더는 통과, 밖·`..` 탈출·`~`·Glob 절대 패턴은 거부
+    #[test]
+    fn repo_guard_blocks_paths_outside_repo() {
+        let engine = ["C:/Users/u/.claude/projects".to_string()];
+        let call = |tool: &str, input: serde_json::Value| {
+            let p = serde_json::json!({ "tool_name": tool, "tool_input": input, "cwd": "/w/app/src" });
+            repo_guard("/w/app", "/home/u", &engine, &p, false)
+        };
+        let fp = |p: &str| serde_json::json!({ "file_path": p });
+        assert_eq!(call("Read", fp("/w/app/src/x.ts")), None);
+        assert_eq!(call("Edit", fp("x.ts")), None, "상대 경로는 cwd 기준 — 안이다");
+        assert_eq!(call("Write", fp("/w/app")), None);
+        assert_eq!(call("Read", fp("C:/Users/u/.claude/projects/p/tool-results/1.txt")), None, "엔진 작업 폴더");
+        assert_eq!(call("Bash", serde_json::json!({ "command": "cat /etc/passwd" })), None, "Bash는 이 훅 밖");
+        for bad in ["/w/other/x.ts", "/w/apple/x.ts", "../../etc/passwd", "/w/app/../other", "~/.ssh/id_rsa"] {
+            let out = call("Read", fp(bad)).unwrap_or_else(|| panic!("{bad}가 통과했다"));
+            assert!(out.contains(r#""permissionDecision":"deny""#) && out.contains("배정된 저장소"), "{out}");
+        }
+        assert!(call("Glob", serde_json::json!({ "pattern": "/w/other/**" })).is_some());
+        assert!(call("Grep", serde_json::json!({ "pattern": "x", "path": "/w" })).is_some());
+        assert_eq!(call("Glob", serde_json::json!({ "pattern": "**/*.ts" })), None);
+        if cfg!(windows) {
+            let p = serde_json::json!({ "tool_name": "Read", "tool_input": fp(r"d:\W\App\src\x.ts") });
+            assert_eq!(repo_guard("D:/w/app", "", &[], &p, false), None, "대소문자·구분자 무시");
+            let p = serde_json::json!({ "tool_name": "Read", "tool_input": fp("/d/w/other.ts") });
+            assert!(repo_guard("D:/w/app", "", &[], &p, false).is_some(), "Git Bash 꼴도 드라이브로");
+        }
+        assert_eq!(crate::agent::repo_root(r"D:\w\app\.eqmux\worktrees\kai@w"), "D:/w/app");
+        assert_eq!(crate::agent::repo_root("D:/w/app/"), "D:/w/app");
+    }
+
     #[test]
     fn cli_branch_covers_every_subcommand() {
-        for cmd in ["ping", "send", "report", "who", "browser", "_hook", "_statusline"] {
+        for cmd in ["ping", "send", "report", "who", "browser", "_hook", "_guard", "_statusline"] {
             assert!(is_cli_command(cmd), "{cmd}가 main.rs CLI 분기에서 빠졌다");
         }
         // 미지의 토큰은 CLI 커맨드가 아니다 — main.rs 게이트가 사용법(exit 2)으로 받는다.
