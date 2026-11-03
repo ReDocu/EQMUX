@@ -2,6 +2,18 @@
 
 이 프로젝트의 눈에 띄는 변경을 적습니다. 0.5.x 이전 기록은 [GitHub Releases](https://github.com/ReDocu/EQMUX/releases)를 보세요.
 
+## [0.6.1] — 2026-11-04
+
+### 고침
+
+- **재시작 후 스크롤백 재생**: Claude Code 같은 TUI가 제자리에서 다시 그리던 스피너 · 상태 줄(`Puzzling…`, `Cogitated for 2s`)과 서로 붙은 글자 조각이 이전 세션 재생에 섞이던 문제. 이제 가상 화면으로 실제 터미널과 같은 모양을 만들고, 화면 위로 밀려난 줄만 저장합니다. 이미 저장된 잔해는 컨트롤 센터의 저장 기록 초기화로 지울 수 있습니다.
+- **열린 포트 목록(Windows)**: 일부 Windows 빌드에서 세션이 연 리스닝 포트가 목록에 안 나오던 문제. `netstat` 대신 OS의 TCP 표를 직접 읽고, IPv6 리스너도 보입니다.
+
+### 배포
+
+- Windows 배포물은 포터블 zip 하나입니다. 1.0 전에는 설치 파일(`setup.exe`)을 내지 않습니다.
+- macOS universal dmg를 함께 냅니다(0.6.0에서 빠졌던 판).
+
 ## [0.6.0] — 2026-11-03
 
 ### 새 기능
@@ -61,5 +73,5 @@
 
 ### 배포
 
-- GitHub Actions 빌드: Windows 포터블 zip · NSIS 설치 파일, macOS universal dmg, `SHA256SUMS`.
+- GitHub Actions 빌드: Windows 포터블 zip(1.0 전에는 설치 파일을 내지 않는다), macOS universal dmg, `SHA256SUMS`.
 - `CODE_SIGNING_POLICY.md` · `SECURITY.md` · `CONTRIBUTING.md` · 이슈 템플릿.
