@@ -351,7 +351,7 @@ export function startPortWatch(): void {
 //  - name: 버튼 글자 (40자까지). run: 서버 셸에 그대로 치는 한 줄. kind: "server" | "test" | "other" (없으면 other).
 //  - 클론한 저장소의 파일이라 믿지 않는다: 자동 실행 경로는 없고, 버튼은 run 원문을 셸 입력줄에 채우기만 한다 —
 //    Enter는 사람이 누른다 (U145). 실제로 무엇이 들어가는지 셸 화면에서 보고 나서 친다.
-//    줄바꿈이 든 run은 버린다 — 한 번 눌러 여러 명령이 들어가지 않게.
+//    줄바꿈 · 제어문자가 든 run은 버린다 — 한 번 눌러 여러 명령이 들어가지 않게 (B251).
 // §13-3 [테스트 실행]은 kind "test"를 고른다.
 
 export const COMMANDS_FILE = ".eqmux/commands.json";
@@ -376,7 +376,8 @@ export function parseCommands(text: string): { commands: SavedCommand[]; skipped
   for (const c of list as Record<string, unknown>[]) {
     const name = typeof c?.name === "string" ? c.name.trim() : "";
     const run = typeof c?.run === "string" ? c.run.trim() : "";
-    if (!name || name.length > 40 || !run || /[\r\n]/.test(run)) continue;
+    // 줄바꿈뿐 아니라 C0 제어문자 · DEL도 버린다 (B251) — \x0f(Ctrl+O) 같은 키가 셸을 움직여, 버튼 한 번에 실행될 수 있다
+    if (!name || name.length > 40 || !run || /[\x00-\x1f\x7f]/.test(run)) continue;
     const kind = c.kind === "server" || c.kind === "test" ? c.kind : "other";
     commands.push({ name, run, kind });
   }

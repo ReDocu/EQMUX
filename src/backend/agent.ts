@@ -10,7 +10,7 @@ import { settings } from "./settings";
 import { beepWaiting } from "./sound";
 import { noteCost } from "./budget";
 import type { AgentCliId, AgentStatus, PendingTool, Permissions, RateLimit, Session, StateReason } from "../types";
-import { agentFlagsToString, cliOf, engineSwitched, sessionName, translatePermissions } from "../types";
+import { agentFlagsToString, cliOf, engineSwitched, runCliOf, sessionName, translatePermissions } from "../types";
 
 export interface AgentStateEvt {
   session: string;
@@ -245,17 +245,21 @@ export async function restartAgent(
 /** 훅이 앱의 답을 기다려 주는 시간 — Rust APPROVAL_WAIT(570초)와 같은 값. 넘으면 훅이 손을 뗀다 (B212) */
 export const APPROVAL_WAIT_MS = 570_000;
 
-type Inline = Pick<Session, "status" | "pendingTool"> & { cli?: AgentCliId; sinceMs?: number };
+type Inline = Pick<Session, "status" | "pendingTool"> & { cli?: AgentCliId; spawnCli?: AgentCliId; sinceMs?: number };
+
+/** 훅 대기가 있는 도구 승인인가 — 엔진은 슬롯(cli)이 아니라 돌고 있는 프로세스(spawnCli)로 본다 (B267):
+ *  승인 대기 중 슬롯을 Codex로 바꾸면 버튼이 사라졌고, 반대면 버튼이 보이고 NO_HOOK이 났다 */
+const hookApproval = (s: Inline): boolean =>
+  s.status === "waiting" && s.pendingTool?.kind === "tool" && runCliOf(s) !== "codex";
 
 /** 승인함에서 바로 답할 수 있는가 — 질문 · 계획 승인은 답을 고르는 일이라 페인에서 한다.
  *  Codex는 훅 대기를 만들지 않고, 시한이 지난 대기는 Rust가 이미 지웠다 (B212). 순수 함수 */
 export function canRespondInline(s: Inline): boolean {
-  return s.status === "waiting" && s.pendingTool?.kind === "tool" && s.cli !== "codex" && (s.sinceMs ?? 0) < APPROVAL_WAIT_MS;
+  return hookApproval(s) && (s.sinceMs ?? 0) < APPROVAL_WAIT_MS;
 }
 
 /** 도구 승인인데 앱이 기다리는 시간이 지났다 — 버튼 대신 '페인에서 답하세요'를 보인다 (B212). 순수 함수 */
-export const approvalExpired = (s: Inline): boolean =>
-  s.status === "waiting" && s.pendingTool?.kind === "tool" && s.cli !== "codex" && (s.sinceMs ?? 0) >= APPROVAL_WAIT_MS;
+export const approvalExpired = (s: Inline): boolean => hookApproval(s) && (s.sinceMs ?? 0) >= APPROVAL_WAIT_MS;
 
 /** 누르기 직전 확인 — 화면에 보인 도구와 지금 기다리는 도구가 같은가. 순수 함수 */
 export function stillWaitingFor(s: Pick<Session, "status" | "pendingTool"> | undefined, seen: PendingTool): boolean {

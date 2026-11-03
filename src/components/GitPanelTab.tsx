@@ -10,6 +10,7 @@ import type { GitOverview } from "../backend/git";
 import { GIT_STATE, backend } from "../backend/mock";
 import { clipWriteText, isTauri, revealPath } from "../backend/pty";
 import { openLink } from "../backend/browser";
+import { fmtAgo } from "../backend/attention";
 import { t, tf } from "../i18n";
 import { pushLayer, scopeWorkspace, setPanelNote, setPanelOpen, setView, tick, view } from "../state";
 import { Icon } from "./icons";
@@ -21,7 +22,8 @@ interface CommitRow {
   hash: string;
   message: string;
   author: string;
-  when: string;
+  /** 실측은 epoch ms (U173), 목 데이터는 이미 만든 문구 */
+  when: number | string;
   badges: string[];
 }
 
@@ -46,6 +48,9 @@ export function GitPanelTab() {
     equals: (a, b) => JSON.stringify(a) === JSON.stringify(b),
   });
   const [failed, setFailed] = createSignal(false);
+  // 상대 시각 기준 — 폴링이 같은 값을 주면 행이 다시 그려지지 않으므로 시각은 따로 흐른다 (U173)
+  const [now, setNow] = createSignal(Date.now());
+  const whenText = (w: number | string) => (typeof w === "number" ? fmtAgo(Math.max(0, now() - w)) : w);
 
   let loadReq = 0; // 워크스페이스 전환·10초 폴링의 늦은 응답이 현재 저장소 표시를 덮지 않게
   const load = async () => {
@@ -66,7 +71,11 @@ export function GitPanelTab() {
     if (!isTauri()) return;
     createEffect(on(createMemo(() => ws()?.id), () => void load())); // 메모 — on()은 같은 값에도 돌아 방송마다 git을 다시 띄웠다 (B249 계열)
     // 숨김 중 쉰다 (CPU 점검 2) — 한 번에 git 5개를 띄우는 호출이다. 다시 보이면 다음 틱(≤10초)에 따라잡는다
-    const t = setInterval(() => !document.hidden && void load(), 10_000);
+    const t = setInterval(() => {
+      if (document.hidden) return;
+      setNow(Date.now());
+      void load();
+    }, 10_000);
     onCleanup(() => clearInterval(t));
   });
 
@@ -227,14 +236,22 @@ export function GitPanelTab() {
     return backend.listWorkspaces().filter((w) => !w.pathMissing);
   };
 
+  const noWs = () => isTauri() && !ws(); // U174 — 브라우저 dev는 목 저장소를 그대로 보인다
   // 커밋 행 우클릭 메뉴 (UI 리파인 §06)
   const [cmMenu, setCmMenu] = createSignal<{ x: number; y: number; c: CommitRow } | undefined>(undefined);
 
   return (
     <div class="gitp">
-      <Show when={isTauri() && (failed() || !ws())}>
+      <Show when={isTauri() && ws() && failed()}>
         <div class="card conn-error mono" style={{ "font-size": "11px" }}>
-          {t(ws() ? "저장소를 읽을 수 없습니다 — git 저장소가 아니거나 git CLI가 없습니다" : "워크스페이스 문맥이 없습니다 — 워크스페이스 탭을 먼저 여세요")}
+          {t("저장소를 읽을 수 없습니다 — git 저장소가 아니거나 git CLI가 없습니다")}
+        </div>
+      </Show>
+      {/* 앱을 켠 직후처럼 문맥이 없는 것은 오류가 아니다 (U174) — 회색 안내만, 아래 git 본문(Pull · Commit · Push)은 그리지 않는다.
+          머리의 저장소 드롭다운으로 바로 고를 수 있다 */}
+      <Show when={noWs()}>
+        <div class="muted mono" style={{ "font-size": "11px", padding: "8px 2px" }}>
+          {t("워크스페이스 문맥이 없습니다 — 워크스페이스 탭을 먼저 여세요")}
         </div>
       </Show>
 
@@ -294,6 +311,7 @@ export function GitPanelTab() {
           <Icon name="refresh-cw" size={12} />
         </button>
       </div>
+      <Show when={!noWs()}>
       {/* 원격 주소 — 토큰·사용자 정보를 뗀 주소만 (시안의 `origin:` 한 줄) */}
       <Show when={ws()?.remote}>
         {(r) => <div class="gitp-remote-hint mono">origin: {remoteWebUrl(r()) ?? r()}</div>}
@@ -409,7 +427,7 @@ export function GitPanelTab() {
                   </For>
                 </div>
                 <div class="gitp-commit-meta mono">
-                  {c.author} · {c.when}
+                  {c.author} · {whenText(c.when)}
                 </div>
               </div>
             </div>
@@ -494,6 +512,7 @@ export function GitPanelTab() {
             ]}
           />
         )}
+      </Show>
       </Show>
     </div>
   );

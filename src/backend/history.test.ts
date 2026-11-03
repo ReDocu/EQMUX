@@ -28,6 +28,9 @@ describe("groupByConversation", () => {
 
   test("앱 밖 재개 명령", () => {
     expect(resumeCommand("abc-1", "D:\\work\\내 앱")).toBe('cd "D:\\work\\내 앱"; claude --resume abc-1');
+    // cmd는 ;를 구분자로 쓰지 않고 /d 없이는 드라이브를 바꾸지 않는다 (B259)
+    expect(resumeCommand("abc-1", "D:\\work", "cmd")).toBe('cd /d "D:\\work" && claude --resume abc-1');
+    expect(resumeCommand("abc-1", "D:\\work", "pwsh")).toBe('cd "D:\\work"; claude --resume abc-1');
   });
 });
 

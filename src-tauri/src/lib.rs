@@ -2965,6 +2965,7 @@ pub fn run() {
     }
     tauri::Builder::default()
         .plugin(tauri_plugin_notification::init())
+        .plugin(browser::main_nav_guard()) // 메인 웹뷰가 앱 화면 밖으로 끌려가지 않게 (B250)
         .manage(PtyState::default())
         .manage(PtyOutChannel::default())
         // 화면 손상 진단 (임시 계측, diag.rs) — 배율·모니터가 바뀌는 순간을 남긴다.

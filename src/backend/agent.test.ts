@@ -45,6 +45,13 @@ describe("승인함 (§13-4 · C2)", () => {
     expect(approvalExpired({ status: "waiting", pendingTool: bash, sinceMs: 1000 })).toBe(false);
     expect(approvalExpired({ status: "waiting", pendingTool: bash, cli: "codex", sinceMs: APPROVAL_WAIT_MS })).toBe(false);
   });
+  test("엔진은 슬롯(cli)이 아니라 돌고 있는 프로세스(spawnCli)로 본다 (B267)", () => {
+    // Claude가 기다리는 중 슬롯을 Codex로 바꿨다 — 훅은 그대로 기다린다
+    expect(canRespondInline({ status: "waiting", pendingTool: bash, cli: "codex", spawnCli: "claude" })).toBe(true);
+    expect(approvalExpired({ status: "waiting", pendingTool: bash, cli: "codex", spawnCli: "claude", sinceMs: APPROVAL_WAIT_MS })).toBe(true);
+    // 돌고 있는 것이 Codex면 슬롯이 Claude여도 훅 대기가 없다
+    expect(canRespondInline({ status: "waiting", pendingTool: bash, spawnCli: "codex" })).toBe(false);
+  });
   test("누르기 직전 — 같은 도구·원문으로 아직 기다릴 때만 넣는다", () => {
     expect(stillWaitingFor({ status: "waiting", pendingTool: bash }, bash)).toBe(true);
     expect(stillWaitingFor({ status: "busy", pendingTool: undefined }, bash)).toBe(false);

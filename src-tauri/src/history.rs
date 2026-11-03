@@ -71,31 +71,55 @@ fn snippet(text: &str, q_lower: &str) -> String {
     s
 }
 
-/// 폴더의 *.jsonl을 최근 수정 순으로 훑는다. slots: 대화 uuid → (슬롯 세션 id, 재개 가능)
-fn search_dir(dir: &Path, query: &str, slots: &HashMap<String, (String, bool)>) -> Vec<HistoryHit> {
+/// 검색 결과 — unreadable: 열지 못한 대화 파일 수 (B252). 0이 아니면 화면이 '일부 기록을 읽지 못했습니다'를 보인다
+#[derive(Serialize, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryResult {
+    pub hits: Vec<HistoryHit>,
+    pub unreadable: usize,
+}
+
+/// 폴더의 *.jsonl을 최근 수정 순으로 훑는다. slots: 대화 uuid → (슬롯 세션 id, 재개 가능).
+/// 폴더가 없으면 이 폴더에서 돈 대화가 없는 것이라 빈 결과, 그 밖에 폴더를 못 읽으면 Err다 (B252 —
+/// 예전에는 빈 결과로 삼켜 '맞는 대화가 없습니다'와 읽기 실패가 같아 보였다)
+fn search_dir(dir: &Path, query: &str, slots: &HashMap<String, (String, bool)>) -> std::io::Result<HistoryResult> {
     let q = query.trim().to_lowercase();
     if q.is_empty() {
-        return Vec::new();
+        return Ok(HistoryResult::default());
     }
-    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
-    let mut files: Vec<(std::time::SystemTime, std::path::PathBuf)> = entries
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|x| x == "jsonl"))
-        .filter_map(|p| Some((std::fs::metadata(&p).ok()?.modified().ok()?, p)))
-        .collect();
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(HistoryResult::default()),
+        Err(e) => return Err(e),
+    };
+    let mut unreadable = 0;
+    let mut files: Vec<(std::time::SystemTime, std::path::PathBuf)> = Vec::new();
+    for p in entries.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "jsonl")) {
+        match std::fs::metadata(&p).and_then(|m| m.modified()) {
+            Ok(t) => files.push((t, p)),
+            Err(_) => unreadable += 1,
+        }
+    }
     files.sort_by_key(|f| std::cmp::Reverse(f.0));
     let mut hits = Vec::new();
     for (mtime, path) in files {
         let Some(uuid) = path.file_stem().map(|s| s.to_string_lossy().into_owned()) else { continue };
-        let Ok(f) = std::fs::File::open(&path) else { continue };
+        let Ok(f) = std::fs::File::open(&path) else {
+            unreadable += 1;
+            continue;
+        };
         let file_ms = mtime.duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
         let slot = slots.get(&uuid);
         let mut n = 0;
         // ponytail: 파일 전체를 줄마다 훑는다 — 큰 저장소에서 느려지면 FTS 색인을 둔다
         // 바이트로 나눠 손실 디코딩한다 — lines()는 UTF-8이 아닌 줄(쓰다 끊긴 줄)에서 Err를 내고, map_while이
         // 거기서 그 파일의 나머지를 통째로 버렸다. 깨진 JSON 줄은 turn_text가 건너뛴다
-        for line in std::io::BufReader::new(f).split(b'\n').map_while(Result::ok) {
+        for line in std::io::BufReader::new(f).split(b'\n') {
+            // 읽기 오류(디렉터리 · 잠긴 파일)는 그 파일의 나머지를 못 본 것이다 — 센다 (B252)
+            let Ok(line) = line else {
+                unreadable += 1;
+                break;
+            };
             let line = String::from_utf8_lossy(&line);
             if !line.to_lowercase().contains(&q) {
                 continue; // 원문 줄로 먼저 거른다 — JSON 해석은 맞을 법한 줄에만
@@ -121,7 +145,7 @@ fn search_dir(dir: &Path, query: &str, slots: &HashMap<String, (String, bool)>) 
             break;
         }
     }
-    hits
+    Ok(HistoryResult { hits, unreadable })
 }
 
 /// 슬롯의 마지막 대화 매핑 (FR-D-24 agent_session) — 읽기 전용. 없으면 빈 표
@@ -145,9 +169,9 @@ pub fn history_search(
     workspace: String,
     cwd: String,
     query: String,
-) -> Vec<HistoryHit> {
-    let Some(dir) = crate::agent::transcript_path(&cwd, "_").parent().map(Path::to_path_buf) else { return Vec::new() };
-    search_dir(&dir, &query, &slot_map(&store_state.0.root(), &workspace))
+) -> Result<HistoryResult, String> {
+    let Some(dir) = crate::agent::transcript_path(&cwd, "_").parent().map(Path::to_path_buf) else { return Ok(HistoryResult::default()) };
+    search_dir(&dir, &query, &slot_map(&store_state.0.root(), &workspace)).map_err(|e| format!("{} — {e}", dir.display()))
 }
 
 #[cfg(test)]
@@ -178,16 +202,21 @@ mod tests {
         std::fs::write(dir.join("note.txt"), "login").unwrap();
         let slots = HashMap::from([("aaa".to_string(), ("kai@w".to_string(), true))]);
 
-        let hits = search_dir(&dir, "  LOGIN ", &slots);
+        let hits = search_dir(&dir, "  LOGIN ", &slots).unwrap().hits;
         assert_eq!(hits.len(), 2, "{hits:?}");
         assert_eq!((hits[0].role.as_str(), hits[1].role.as_str()), ("user", "agent"));
         assert_eq!(hits[1].snippet, "Login API 수정을 시작합니다"); // 도구 블록은 빠지고 텍스트만
         assert!(hits.iter().all(|h| h.uuid == "aaa" && h.session.as_deref() == Some("kai@w") && h.resumable));
         assert_eq!(hits[0].ts, chrono::DateTime::parse_from_rfc3339("2026-11-02T01:00:00Z").unwrap().timestamp_millis());
-        let other = search_dir(&dir, "다른", &slots);
+        let other = search_dir(&dir, "다른", &slots).unwrap().hits;
         assert_eq!((other.len(), other[0].session.clone(), other[0].resumable), (1, None, false)); // 매핑 없는 대화
-        assert!(search_dir(&dir, " ", &slots).is_empty());
-        assert!(search_dir(&dir.join("없음"), "login", &slots).is_empty());
+        assert!(search_dir(&dir, " ", &slots).unwrap().hits.is_empty());
+        assert!(search_dir(&dir.join("없음"), "login", &slots).unwrap().hits.is_empty()); // 폴더가 없음 = 대화 없음
+        // 폴더가 아닌 곳은 오류, 못 연 대화 파일은 센다 (B252)
+        assert!(search_dir(&dir.join("note.txt"), "login", &slots).is_err());
+        std::fs::create_dir_all(dir.join("ddd.jsonl")).unwrap();
+        let r = search_dir(&dir, "login", &slots).unwrap();
+        assert_eq!((r.hits.len(), r.unreadable), (2, 1));
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -200,7 +229,7 @@ mod tests {
         bytes.extend_from_slice(b"\r\n{\"type\":\"user\",\"message\":{\"content\":\"deploy \xEA\xB0\n");
         bytes.extend_from_slice(line("assistant", "2026-11-02T01:01:00Z", serde_json::json!("deploy 둘째")).as_bytes());
         std::fs::write(dir.join("ccc.jsonl"), bytes).unwrap();
-        let hits = search_dir(&dir, "deploy", &HashMap::new());
+        let hits = search_dir(&dir, "deploy", &HashMap::new()).unwrap().hits;
         assert_eq!(hits.iter().map(|h| h.snippet.as_str()).collect::<Vec<_>>(), ["deploy 첫째", "deploy 둘째"]);
         std::fs::remove_dir_all(&dir).ok();
     }

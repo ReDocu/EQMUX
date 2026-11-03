@@ -748,7 +748,11 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
 
   const [hunkFile, setHunkFile] = createSignal<{ path: string; staged: boolean } | undefined>();
   const [hunks, setHunks] = createSignal<FilePatch | undefined>();
-  const [openHunks, setOpenHunks] = createSignal<number[]>([]); // U114 — 39줄 넘는 덩어리 중 펼친 것
+  // U114 — 39줄 넘는 덩어리 중 펼친 것. 순번이 아니라 덩어리 내용으로 기억한다 (B257 — 위 덩어리를 스테이지하면
+  // 순번이 밀려 다른 덩어리가 펼쳐졌다. @@ 머리도 반대쪽 줄 번호가 밀려 바뀌므로 머리 아래 본문을 키로 쓴다. B236과 같은 길).
+  // ponytail: 본문이 똑같은 두 덩어리는 함께 펼쳐진다
+  const [openHunks, setOpenHunks] = createSignal<string[]>([]);
+  const hunkKey = (hk: string) => hk.slice(hk.indexOf("\n") + 1);
   /** 덩어리 본문 줄 — 머리(@@) 다음부터, 끝 줄바꿈이 만든 빈 줄은 뺀다 */
   const hunkBody = (hk: string) => {
     const l = hk.split("\n").slice(1);
@@ -1459,7 +1463,7 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
                     <For each={hunks()!.hunks}>
                       {(hk, i) => {
                         const body = hunkBody(hk);
-                        const folded = () => body.length > HUNK_LINES && !openHunks().includes(i());
+                        const folded = () => body.length > HUNK_LINES && !openHunks().includes(hunkKey(hk));
                         return (
                           <div class="gx-hunk mono">
                             <div class="gx-hunk-head">
@@ -1480,7 +1484,7 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
                             </pre>
                             {/* U114 — 잘린 덩어리는 잘렸다고 보인다. [덩어리 스테이지]는 전체를 옮긴다 */}
                             <Show when={folded()}>
-                              <button class="btn ghost gx-mini" onClick={() => setOpenHunks([...openHunks(), i()])}>
+                              <button class="btn ghost gx-mini" onClick={() => setOpenHunks([...openHunks(), hunkKey(hk)])}>
                                 ⋯ {tf("{n}줄 접힘 — 펼치기", { n: body.length - HUNK_LINES })}
                               </button>
                             </Show>

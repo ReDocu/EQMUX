@@ -24,4 +24,6 @@ export const dict: Record<string, string> = {
   // ── 0.6 QA eqmux-52: B186 · P85 ──
   "복사했습니다 — 터미널에 붙여 넣으면 {path}로 옮겨 재개합니다": "Copied — paste it into a terminal to move to {path} and resume",
   "검색하지 못했습니다 — {err}": "Search failed — {err}",
+  // ── 0.6 QA 3차: B252 ──
+  "일부 기록을 읽지 못했습니다 — 대화 파일 {n}개": "Some history couldn't be read — {n} conversation files",
 };

@@ -22,6 +22,7 @@ import {
   setTerminalFull,
   setView,
   SHELLS,
+  shellCmdOf,
   ptyShells,
   terminalFull,
   tick,
@@ -56,6 +57,7 @@ import {
   isRespawning,
   launchAgentInSession,
   roleAgentOf,
+  sessionInAltBuffer,
   sessionTermSize,
   syncSessionTerminal,
   TerminalPane,
@@ -382,7 +384,8 @@ export function ControlCenter(props: { workspace: Workspace }) {
     if (!el?.closest?.(".xterm")) return false;
     const id = (el.closest("[data-session-id]") as HTMLElement | null)?.dataset.sessionId;
     const s = sessions().find((x) => x.id === id);
-    return !!s && agentAttached(s);
+    // 맨 셸이라도 vim · less · fzf처럼 대체 화면(TUI)에 있으면 ESC는 그 TUI 몫이다 (B254)
+    return !!s && (agentAttached(s) || sessionInAltBuffer(s.id));
   };
 
   // ESC = 상세 드로어 → 줌 → 전체 화면 순으로 한 겹씩 닫는다
@@ -396,7 +399,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
         // 에이전트가 붙은 터미널에 커서가 있으면 ESC는 그 TUI의 것이다 — 작업 중이면 턴 중단,
         // 선택 프롬프트면 "Esc to cancel"이다. 앱이 가져가면 답을 취소하거나 일을 끊는다.
         // 나가는 길은 머리의 [전체 화면 종료]이고, 머리 안내(escToTui)도 그렇게 바뀐다 (B199).
-        // 맨 셸이거나 터미널 밖이면 ESC로 한 겹 닫는다 — 셸에는 ESC를 흘리지 않는다
+        // 맨 셸 프롬프트이거나 터미널 밖이면 ESC로 한 겹 닫는다. 맨 셸의 TUI(대체 화면)는 escToTui가 넘긴다 (B254)
         e.preventDefault();
         e.stopPropagation();
         if (zoomed()) applyZoom(undefined);
@@ -525,7 +528,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
   const addNoSlot = () => !emptySlots()[0];
   const addCliMissing = () => agentClisReady() && !agentClis().some((a) => a.cmd === addCli() && a.installed);
   const [shellMenuOpen, setShellMenuOpen] = createSignal(false);
-  const shellCmdFor = (s: Session) => SHELLS.find((x) => x.label === s.shell)?.cmd;
+  const shellCmdFor = (s: Session) => shellCmdOf(s.shell);
   const addRoleSession = async () => {
     if (!addPersona() || !addJob() || addNameErr()) return;
     setAddErr(undefined);
@@ -1488,7 +1491,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
               </Show>
               <span class="mono muted" style={{ "font-size": "10px" }}>
                 {/* 에이전트 터미널의 ESC는 TUI 몫이라 앱이 받지 않는다 (B199 · U15) — 안내도 그에 맞춘다 */}
-                {selected() && agentAttached(selected()!) ? t("ESC는 에이전트로 · 나가기는 [전체 화면 종료]") : t("ESC 종료")}
+                {selected() && agentAttached(selected()!) ? t("ESC는 에이전트로 · 나가기는 [전체 화면 종료]") : t("ESC 종료 · vim 같은 TUI 안에서는 TUI로")}
               </span>
               <button class="btn" onClick={() => setTerminalFull(false)}>
                 <Icon name="x" size={11} /> {t("전체 화면 종료")}

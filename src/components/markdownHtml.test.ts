@@ -30,4 +30,11 @@ describe("markdownHtml", () => {
     expect(html).toContain('<a href="docs/a.png" class="md-img">🖼 shot</a>');
     expect(html).toContain('<img alt="w" src="https://x/a.png">');
   });
+
+  it("제목 앵커는 링크 주소 · 강조 기호를 뺀 보이는 글자로 만든다 — GitHub와 같게 (B263)", () => {
+    const html = markdownHtml("## [EQMUX](https://x.io) 소개\n\n### **굵게** `code` 끝 ##\n\nA <b>b</b>\n===\n");
+    expect(html).toContain('<h2 id="eqmux-소개">');
+    expect(html).toContain('<h3 id="굵게-code-끝">');
+    expect(html).toContain('<h1 id="a-b">');
+  });
 });

@@ -11,6 +11,9 @@ export type AgentStatus = "starting" | "busy" | "waiting" | "shell" | "idle" | "
 export type AgentCliId = "claude" | "codex";
 export const AGENT_CLI_LABEL: Record<AgentCliId, string> = { claude: "Claude Code", codex: "Codex" };
 export const cliOf = (s: { cli?: AgentCliId } | undefined): AgentCliId => s?.cli ?? "claude";
+/** 돌고 있는 프로세스의 엔진 — 슬롯 엔진(cli)을 바꿔도 이미 뜬 프로세스는 spawnCli다 (B82 · B267) */
+export const runCliOf = (s: { cli?: AgentCliId; spawnCli?: AgentCliId } | undefined): AgentCliId =>
+  s?.spawnCli ?? cliOf(s);
 
 /** 감지된 에이전트 표시 이름(Job 트리 실측 `Claude`·`Codex`) → 엔진 id (U42). 모르는 CLI면 undefined */
 export const detectedCli = (agent: string | undefined): AgentCliId | undefined =>

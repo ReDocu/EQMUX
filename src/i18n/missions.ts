@@ -122,6 +122,9 @@ export const dict: Record<string, string> = {
   "담당 세션이 없어 보낼 곳이 없습니다 — 임무 화면에서 먼저 배정하세요":
     "No assigned session to send to — assign one on the Missions screen first",
   "보내지 못해 임무 상태를 그대로 두었습니다 — {err}": "Couldn't send, so the mission status is unchanged — {err}",
+  "{names}에게는 보냈지만 못 받은 세션이 있어 임무 상태를 그대로 두었습니다 — {err} · 다시 보내면 못 받은 세션에만 갑니다":
+    "Sent to {names}, but some sessions didn't receive it, so the mission status is unchanged — {err} · Sending again goes only to those sessions",
+  "이미 받은 세션은 빼고 보냅니다: {names}": "Skipping sessions that already received it: {names}",
   "임무를 찾을 수 없습니다": "Mission not found",
   "되돌려 보낼까요?": "Send it back?",
   "고칠 점 — 담당 세션에게 review 메시지로 갑니다": "What to fix — sent to the assigned sessions as a review message",

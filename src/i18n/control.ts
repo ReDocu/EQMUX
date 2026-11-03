@@ -23,6 +23,7 @@ export const dict: Record<string, string> = {
   "응답 대기": "Awaiting answer",
   "ESC 종료": "ESC to exit",
   "ESC는 에이전트로 · 나가기는 [전체 화면 종료]": "ESC goes to the agent · leave with [Exit fullscreen]",
+  "ESC 종료 · vim 같은 TUI 안에서는 TUI로": "ESC to exit · inside a TUI like vim, ESC goes to the TUI",
   "이 자리에서 재개 — --resume · 대화 복원":
     "Resume in place — --resume · restores the conversation",
   "재개 — 대화 복원": "Resume — restore conversation",

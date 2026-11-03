@@ -160,7 +160,8 @@ export function LaunchMode(props: { wsId: string }) {
         icon: ">_",
         title: t("기본 터미널"),
         // 예는 지금 워크스페이스 이름으로 (U139) — 아래 헤더 예와 같은 이름
-        copy: tf("셸만 엽니다. 에이전트는 필요할 때 직접 띄웁니다. 이름은 워크스페이스명XX({name}01…)로 붙고, 만들 때 바꿀 수 있습니다.", {
+        // 구성 화면에는 고칠 칸이 없다 (U172) — 셸은 설정 값, 이름은 자동이고 연 뒤에 바꾼다고 실제대로 말한다
+        copy: tf("셸만 엽니다. 에이전트는 필요할 때 직접 띄웁니다. 셸은 설정의 기본 셸이고, 이름은 워크스페이스명XX({name}01…)로 붙습니다 — 연 뒤 세션 상세에서 바꿀 수 있습니다.", {
           name: projectStem(ws()?.name ?? ""),
         }),
         features: [
@@ -168,7 +169,7 @@ export function LaunchMode(props: { wsId: string }) {
           t("손으로 띄운 claude에는 메시지를 쌓아 둡니다 (넣기 칩) · 설정에서 '쉬면 자동으로 넣기'로 바꿀 수 있습니다"),
           t("역할 팀은 나중에 팀 캐스팅으로 더할 수 있습니다"),
         ],
-        route: t("다음 → 기본 터미널 구성 (셸 · 브랜치 · 이름)"),
+        route: t("다음 → 기본 터미널 구성 (셸 · 브랜치 확인)"),
         example: () => <Identity slot={1} name={`${projectStem(ws()?.name ?? "")}01`} compact />,
       },
       {

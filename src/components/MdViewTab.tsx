@@ -24,13 +24,42 @@ const [error, setError] = createSignal<string | null>(null);
 const [docWs, setDocWs] = createSignal<string | undefined>(undefined);
 
 /** 현재 문서 기준 상대 링크 → 워크스페이스 상대 경로 (`/`로 시작하면 루트 기준) */
-function resolveRel(from: string, href: string): string {
+export function resolveRel(from: string, href: string): string {
   const out = href.startsWith("/") ? [] : from.split("/").slice(0, -1);
   for (const seg of href.split("/")) {
     if (seg === "..") out.pop();
     else if (seg && seg !== ".") out.push(seg);
   }
   return out.join("/");
+}
+
+/** 마크다운 본문(.mdview-body) 링크 클릭을 가로챈다 — 웹뷰가 앱 화면째 이동해 버리므로 (B250, 스킬 미리보기도 쓴다).
+ *  앵커는 본문 안 제목으로 스크롤, http는 브라우저 패널, mailto는 복사. 상대 링크는 onRel이 연다 */
+export function mdLinkClick(e: MouseEvent, onRel: (href: string) => void): void {
+  const a = (e.target as HTMLElement).closest("a");
+  if (!a) return;
+  e.preventDefault();
+  const raw = a.getAttribute("href") ?? "";
+  // 같은 문서 앵커 — 제목 id로 스크롤 (B242). '#50%'처럼 깨진 인코딩은 원문으로 찾는다 (B263)
+  if (raw.startsWith("#")) {
+    let id = raw.slice(1);
+    try {
+      id = decodeURIComponent(id);
+    } catch {
+      /* 원문 그대로 */
+    }
+    a.closest(".mdview-body")?.querySelector(`[id="${CSS.escape(id.toLowerCase())}"]`)?.scrollIntoView({ block: "start" });
+    return;
+  }
+  const href = raw.split("#")[0];
+  if (/^https?:/i.test(href)) openInBrowserPanel(href);
+  else if (/^mailto:/i.test(href)) {
+    // 앱은 http(s)만 밖으로 연다 (launch_web) — 메일 주소는 복사해 준다. 실패하면 실패라고 (B262)
+    const addr = href.slice(7);
+    void clipWriteText(addr).then((ok) =>
+      ok ? notify(tf("메일 주소를 복사했습니다 — {addr}", { addr }), "ok") : notify(t("복사하지 못했습니다")),
+    );
+  } else if (href) onRel(href);
 }
 
 export function MdViewTab() {
@@ -42,6 +71,8 @@ export function MdViewTab() {
   );
 
   const open = async (target: string) => {
+    // 워크스페이스는 읽기 전에 잡는다 — 읽는 사이 바뀌었으면 결과를 버린다 (B264)
+    const wsId = ws()?.id;
     const path = ws()?.path;
     const r = target.trim().replace(/\\/g, "/");
     if (!path || !r) return;
@@ -51,12 +82,13 @@ export function MdViewTab() {
     }
     try {
       const fc = await fsRead(path, r);
+      if (ws()?.id !== wsId) return;
       setRel(r);
-      setDocWs(ws()?.id);
+      setDocWs(wsId);
       setHtml(markdownHtml(fc.text));
       setError(null);
     } catch (e) {
-      setError(String(e));
+      if (ws()?.id === wsId) setError(String(e));
     }
   };
 
@@ -70,32 +102,13 @@ export function MdViewTab() {
     }
   });
 
-  let body: HTMLDivElement | undefined;
-  const onClick = (e: MouseEvent) => {
-    const a = (e.target as HTMLElement).closest("a");
-    if (!a) return;
-    e.preventDefault();
-    const raw = a.getAttribute("href") ?? "";
-    // 같은 문서 앵커 — 제목 id로 스크롤 (B242)
-    if (raw.startsWith("#")) {
-      const id = decodeURIComponent(raw.slice(1)).toLowerCase();
-      body?.querySelector(`[id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: "start" });
-      return;
-    }
-    const href = raw.split("#")[0];
-    if (/^https?:/i.test(href)) openInBrowserPanel(href);
-    else if (/^mailto:/i.test(href)) {
-      // 앱은 http(s)만 밖으로 연다 (launch_web) — 메일 주소는 복사해 준다
-      clipWriteText(href.slice(7));
-      notify(tf("메일 주소를 복사했습니다 — {addr}", { addr: href.slice(7) }), "ok");
-    }
-    else if (MD_RE.test(href)) void open(resolveRel(rel(), href));
-    else if (href) {
+  const onClick = (e: MouseEvent) =>
+    mdLinkClick(e, (href) => {
+      if (MD_RE.test(href)) return void open(resolveRel(rel(), href));
       // .md가 아닌 상대 링크(소스 · 라이선스 · 그림)는 파일 탭에서 연다 (B242)
       setExplorerPick(resolveRel(rel(), href));
       openPanel("files");
-    }
-  };
+    });
 
   // 세그먼트 줄 오른쪽 요약 (0.5 시안 E7Ixk6) — `docs/ · 42 files`
   createEffect(() => {
@@ -160,7 +173,7 @@ export function MdViewTab() {
           </div>
         }
       >
-        <div ref={body} class="card inset mdview-body" innerHTML={html()} onClick={onClick} />
+        <div class="card inset mdview-body" innerHTML={html()} onClick={onClick} />
       </Show>
     </div>
   );

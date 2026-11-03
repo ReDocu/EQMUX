@@ -338,6 +338,9 @@ const MAC_SHELLS: ShellChoice[] = [
 /** 셸 목록 — 배열은 그대로 두고 내용만 채운다 (layout 복원·설정 화면이 같은 참조를 읽는다) */
 export const SHELLS: ShellChoice[] = [...(IS_MAC ? MAC_SHELLS : WINDOWS_SHELLS)];
 export const [defaultShell, setDefaultShell] = createSignal<ShellChoice>(SHELLS[0]);
+/** Session.shell(라벨) → pty_spawn에 넘길 실행 파일 (B253). 라벨을 그대로 넘기면 'git-bash'는 pwsh로 물러나고
+ *  mac 'login'은 /usr/bin/login이 뜬다. 모르는 라벨 · cmd 없는 셸(로그인 셸)은 undefined → Rust가 기본 셸 */
+export const shellCmdOf = (label: string | undefined): string | undefined => SHELLS.find((s) => s.label === label)?.cmd;
 
 /** 세션별로 실제로 뜬 셸 이름 (B114) — pty_spawn이 돌려준 값. 페인 머리가 '셸' 대신 'zsh'·'bash'를 보인다 */
 export const [ptyShells, setPtyShells] = createSignal<Record<string, string>>({});

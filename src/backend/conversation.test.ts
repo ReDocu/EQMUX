@@ -252,10 +252,12 @@ describe("받는 사람 · 사본 (U121 · B210)", () => {
     expect(titlePrefix("서버 개발자 확인", "클라이언트 개발자")).toBe(0);
     expect(titlePrefix("아무거나", undefined)).toBe(0);
   });
-  test("보낸 쪽 사본은 다른 워크스페이스의 한 세션에게 보낼 때만", () => {
-    expect(crossCopy("B", "lin@B", "A")).toBe(true);
-    expect(crossCopy("A", "kai@A", "A")).toBe(false);
-    expect(crossCopy("B", "@all", "A")).toBe(false); // 보낸 쪽 @all은 보낸 쪽 팀 전체에게 간다
-    expect(crossCopy("B", "lin@B")).toBe(false);
+  test("보낸 쪽 사본은 다른 워크스페이스로 보낼 때만", () => {
+    expect(crossCopy("B", "lin@B", "A")).toBe("lin@B");
+    expect(crossCopy("A", "kai@A", "A")).toBeUndefined();
+    expect(crossCopy("B", "lin@B")).toBeUndefined();
+    // @all 전달도 사본을 남긴다 (B266) — 그대로 @all이면 보낸 쪽 팀 전체에게 가므로 받는 프로젝트를 붙인다
+    expect(crossCopy("B", "@all", "A", "app-b")).toBe("@all@app-b");
+    expect(crossCopy("B", "@all", "A")).toBe("@all@B");
   });
 });

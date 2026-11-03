@@ -93,9 +93,9 @@ export function DefaultTerminalSetup(props: { wsId: string }) {
                 when={target() === n}
                 fallback={
                   <div class="card dts-card">
+                    {/* 누를 수 없는 체크 상자 아이콘은 토글처럼 보였다 (U172) — 슬롯 번호만 */}
                     <div class="dts-card-head">
                       <span class="mono dts-card-slot">SLOT {slotNo(n)}</span>
-                      <Icon name={occupant(n) ? "square-check" : "square"} size={14} class="muted" />
                     </div>
                     <div class="dts-card-empty muted">
                       <Show when={occupant(n)} fallback={<Icon name="plus" size={18} />}>
@@ -111,7 +111,6 @@ export function DefaultTerminalSetup(props: { wsId: string }) {
                 <div class="card dts-card on">
                   <div class="dts-card-head">
                     <span class="mono dts-card-slot">SLOT {slotNo(n)}</span>
-                    <Icon name="square-check" size={14} />
                   </div>
                   <div class="kv">
                     <span class="k">{t("셸")}</span>
@@ -123,8 +122,9 @@ export function DefaultTerminalSetup(props: { wsId: string }) {
                   </div>
                   <div class="kv">
                     <span class="k">{t("작업 폴더")}</span>
-                    <span class="v mono" title={ws()?.path}>
-                      {ws()?.path ?? "—"}
+                    {/* 앞을 줄인다 (U172) — 끝이 잘려 정작 폴더 이름이 안 보였다. 바깥 rtl은 말줄임 쪽만, 글자 순서는 bdi가 지킨다 */}
+                    <span class="v mono dts-path" title={ws()?.path}>
+                      <bdi dir="ltr">{ws()?.path ?? "—"}</bdi>
                     </span>
                   </div>
                 </div>
@@ -135,7 +135,7 @@ export function DefaultTerminalSetup(props: { wsId: string }) {
 
         <div class="dts-footer">
           <Icon name="info" size={13} />
-          <span class="muted">{t("기본 셸은 설정의 '기본 셸' 값입니다. 열기 전에는 아무것도 실행하지 않습니다.")}</span>
+          <span class="muted">{t("기본 셸은 설정의 '기본 셸' 값이고, 이름은 자동으로 붙습니다 — 연 뒤 세션 상세에서 바꿀 수 있습니다. 열기 전에는 아무것도 실행하지 않습니다.")}</span>
         </div>
       </div>
     </div>

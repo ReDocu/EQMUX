@@ -104,8 +104,8 @@ export const dict: Record<string, string> = {
   "역할 세션은 팀 캐스팅에서": "Role sessions are set up in team casting",
   "작업 폴더": "Working folder",
   "서버를 다시 실행하지 못했습니다 — {err}": "Could not restart the server — {err}",
-  "기본 셸은 설정의 '기본 셸' 값입니다. 열기 전에는 아무것도 실행하지 않습니다.":
-    "The shell is the Default shell from Settings. Nothing runs before you open it.",
+  "기본 셸은 설정의 '기본 셸' 값이고, 이름은 자동으로 붙습니다 — 연 뒤 세션 상세에서 바꿀 수 있습니다. 열기 전에는 아무것도 실행하지 않습니다.":
+    "The shell is the Default shell from Settings, and the name is set automatically — rename it in session details after opening. Nothing runs before you open it.",
   로그: "Logs",
   브라우저: "Browser",
   "패널을 왼쪽으로": "Move panel to the left",
@@ -131,6 +131,7 @@ export const dict: Record<string, string> = {
 
   // ── WorkspaceConnection ──
   "clone 실패": "clone failed",
+  "clone 완료 · 목록에 등록했습니다 — {name}": "Clone finished · added to the list — {name}",
   "git repo 1개 = 팀 1개 = 탭 1개 · 등록 무제한 · 동시 오픈 10개":
     "1 git repo = 1 team = 1 tab · unlimited registrations · 10 open at once",
   "원격에서 Clone": "Clone from remote",
@@ -265,6 +266,8 @@ export const dict: Record<string, string> = {
   "{tool}의 전역 지시가 EQMUX 세션에도 실립니다 — 세션 안내문으로 덮어 두었습니다":
     "{tool}'s global instructions also load into EQMUX sessions. The session briefing overrides them",
   "세션 안내문으로 덮어 두었습니다 · 누르면 자세히": "Overridden by the session briefing · click for details",
+  "세션 안내문으로 덮어 두었습니다 · 훅 {n}개는 막을 수 없습니다 · 누르면 자세히":
+    "Overridden by the session briefing · {n} hooks can't be blocked · click for details",
   "자동 관리 구역": "Auto-managed block",
   "도구를 쓸 때마다 도는 훅 {n}개": "{n} hooks that run on every tool call",
   '"You are running inside …" 문장': '"You are running inside …" sentence',

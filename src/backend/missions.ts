@@ -235,8 +235,9 @@ function depsNote(m: Mission): string {
 export async function setMissionDepends(wsId: string, missionId: string, deps: string[]): Promise<void> {
   const path = wsPath(wsId);
   if (!isTauri() || !path) {
-    const m = backend.listMissions().find((x) => x.id === missionId && x.workspaceId === wsId);
-    if (m) m.dependsOn = deps;
+    // 목 경로도 방송한다 (B270) — 예전에는 배열만 고쳐 브라우저 dev 화면이 바뀌지 않았다. 실모드의 재실측과 같은 길
+    const list = backend.listMissions().filter((x) => x.workspaceId === wsId);
+    backend.hydrateMissions(wsId, list.map((x) => (x.id === missionId ? { ...x, dependsOn: deps } : x)));
     return;
   }
   await invoke("mission_set_depends", { wsPath: path, id: missionId, deps }).catch(failed);
@@ -312,21 +313,27 @@ export async function runReviewTest(wsId: string, run: string, shellCmd: string)
   });
 }
 
-/** [되돌려 보내기] — 의견을 담당 세션 모두에게 review로 보내고 IN-PROGRESS로 되돌린다.
+/** [되돌려 보내기] — 의견을 담당 세션(to, 기본은 모두)에게 review로 보내고 IN-PROGRESS로 되돌린다.
  *  수신자는 세션 id다 (B169) — `@이름` 문자열은 원장에서 어느 세션에도 맞지 않아 아무에게도 닿지 않았다.
- *  하나라도 못 보내면 상태를 바꾸지 않고 실패한 세션 이름과 이유를 돌려준다 */
+ *  받은 세션과 못 받은 세션을 나눠 돌려준다 (B255) — 화면이 누가 받았는지 보이고, 다시 보내기는 못 받은 쪽에만 간다.
+ *  하나라도 못 받았으면 상태를 바꾸지 않는다 */
 export async function sendBackMission(
   wsId: string,
   m: Mission,
   note: string,
-  nameOf: (sid: string) => string,
-): Promise<string | null> {
+  to: readonly string[] = m.assigned,
+): Promise<{ sent: string[]; failed: { sid: string; err: string }[] }> {
   const body = `${sendBackHead(m.name)}${note.trim()}`;
-  const errs = await Promise.all(m.assigned.map((sid) => sendConversation(wsId, sid, "review", body)));
-  const failedTo = m.assigned.flatMap((sid, i) => (errs[i] ? [`${nameOf(sid)}: ${errs[i]}`] : []));
-  if (failedTo.length) return failedTo.join(" · ");
-  await setMissionStatus(wsId, m.id, "in-progress");
-  return null;
+  const rs = await Promise.allSettled(to.map((sid) => sendConversation(wsId, sid, "review", body)));
+  const sent: string[] = [];
+  const failed: { sid: string; err: string }[] = [];
+  rs.forEach((r, i) => {
+    const err = r.status === "rejected" ? String(r.reason) : r.value;
+    if (err) failed.push({ sid: to[i], err });
+    else sent.push(to[i]);
+  });
+  if (!failed.length) await setMissionStatus(wsId, m.id, "in-progress");
+  return { sent, failed };
 }
 
 /** 임무별 비용 (§13-6 · W2 cost_summary) — 임무 id → USD, 보존 기간(30일) 전체. 임무 밖 비용(null)은 뺀다 */

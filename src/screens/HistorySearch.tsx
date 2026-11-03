@@ -11,7 +11,7 @@ import { Icon } from "../components/icons";
 import { sessionTermSize } from "../components/TerminalPane";
 import { notify } from "../components/ui";
 import { t, tf } from "../i18n";
-import { jumpToSession, scopeWorkspace, setView, tick, view } from "../state";
+import { defaultShell, jumpToSession, scopeWorkspace, setView, tick, view } from "../state";
 import type { View } from "../state";
 import type { Session } from "../types";
 import { cliOf, sessionDisplayName, sessionName } from "../types";
@@ -28,6 +28,8 @@ export function HistorySearch(props: { wsId?: string }) {
   const [busy, setBusy] = createSignal(false);
   // 검색 실패 사유 (B186) — 결과 0건과 가른다
   const [err, setErr] = createSignal<string | undefined>();
+  // 열지 못한 대화 파일 수 (B252) — 결과가 일부일 때 알린다
+  const [unreadable, setUnreadable] = createSignal(0);
   let input: HTMLInputElement | undefined;
   const groups = createMemo(() => groupByConversation(hits() ?? []));
 
@@ -37,8 +39,11 @@ export function HistorySearch(props: { wsId?: string }) {
     if (!w || !q || busy()) return;
     setBusy(true);
     setErr(undefined);
+    setUnreadable(0);
     try {
-      setHits(await historySearch(w.id, w.path, q));
+      const r = await historySearch(w.id, w.path, q);
+      setHits(r.hits);
+      setUnreadable(r.unreadable);
     } catch (e) {
       setHits(undefined);
       setErr(String(e));
@@ -70,11 +75,13 @@ export function HistorySearch(props: { wsId?: string }) {
     backend.resumeSession(s.id);
     jumpToSession(s.workspaceId, s.id);
   };
-  const copyResume = (uuid: string) => {
+  const copyResume = async (uuid: string) => {
     const w = ws();
     if (!w) return;
-    clipWriteText(resumeCommand(uuid, w.path));
-    notify(tf("복사했습니다 — 터미널에 붙여 넣으면 {path}로 옮겨 재개합니다", { path: w.path }), "ok");
+    // 클립보드 쓰기가 실패하면 성공 토스트를 띄우지 않는다 (B262) · 기본 셸이 cmd면 cmd 문법으로 (B259)
+    if (await clipWriteText(resumeCommand(uuid, w.path, defaultShell().label)))
+      notify(tf("복사했습니다 — 터미널에 붙여 넣으면 {path}로 옮겨 재개합니다", { path: w.path }), "ok");
+    else notify(t("복사하지 못했습니다"));
   };
 
   const close = () => {
@@ -135,6 +142,9 @@ export function HistorySearch(props: { wsId?: string }) {
               </button>
             </p>
           </Show>
+          <Show when={unreadable()}>
+            <p class="muted hs-empty">{tf("일부 기록을 읽지 못했습니다 — 대화 파일 {n}개", { n: unreadable() })}</p>
+          </Show>
           <Show when={hits() && !groups().length}>
             <p class="muted hs-empty">{t("맞는 대화가 없습니다")}</p>
           </Show>
@@ -153,7 +163,7 @@ export function HistorySearch(props: { wsId?: string }) {
                       <button
                         class="btn ghost"
                         title={t("슬롯의 마지막 대화가 아니라 앱에서 재개할 수 없습니다 — 명령을 복사해 터미널에서 이어 가세요")}
-                        onClick={() => copyResume(g.uuid)}
+                        onClick={() => void copyResume(g.uuid)}
                       >
                         <Icon name="copy" size={12} /> {t("재개 명령 복사")}
                       </button>

@@ -24,6 +24,26 @@ fn parse_http(url: &str) -> Result<Url, String> {
     }
 }
 
+/// 메인 웹뷰가 가도 되는 주소 (B250) — 앱 화면(mac `tauri://localhost` · Windows `http(s)://tauri.localhost`
+/// · 디버그 빌드의 devUrl)만. 본문 링크는 프런트가 가로채지만, 놓친 링크가 앱 화면째 끌고 가는 것을 여기서 막는다
+fn main_nav_allowed(u: &Url, dev: Option<&Url>) -> bool {
+    u.scheme() == "tauri" || u.host_str() == Some("tauri.localhost") || dev.is_some_and(|d| d.origin() == u.origin())
+}
+
+/// 메인 창은 설정 파일로 만들어 빌더의 on_navigation을 걸 자리가 없다 — 플러그인 훅으로 건다.
+/// 자식 웹뷰(브라우저 패널)는 자기 on_navigation이 지키므로 라벨 "main"만 본다
+pub(crate) fn main_nav_guard<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    tauri::plugin::Builder::new("main-nav-guard")
+        .on_navigation(|wv, u| {
+            if wv.label() != "main" {
+                return true;
+            }
+            let dev = if cfg!(debug_assertions) { wv.config().build.dev_url.clone() } else { None };
+            main_nav_allowed(u, dev.as_ref())
+        })
+        .build()
+}
+
 /// 열기 — 웹뷰가 없으면 만들고, 있으면 이동·재배치 후 보여준다
 #[tauri::command]
 pub async fn browser_open(app: AppHandle, url: String, x: f64, y: f64, w: f64, h: f64) -> Result<(), String> {
@@ -485,6 +505,22 @@ mod tests {
         assert_eq!(normalize_url(" https://example.com/a ").unwrap(), "https://example.com/a");
         assert!(normalize_url("file:///C:/secret.txt").is_err());
         assert!(normalize_url("").is_err());
+    }
+
+    /// B250 — 메인 웹뷰는 앱 화면 안에서만. 상대 링크가 풀린 주소 · 외부 http는 막는다
+    #[test]
+    fn main_webview_stays_on_app_origin() {
+        let u = |s: &str| s.parse::<Url>().unwrap();
+        let dev = u("http://localhost:1420/");
+        assert!(main_nav_allowed(&u("tauri://localhost/index.html"), None));
+        assert!(main_nav_allowed(&u("http://tauri.localhost/"), None));
+        assert!(main_nav_allowed(&u("https://tauri.localhost/a#b"), None));
+        assert!(main_nav_allowed(&u("http://localhost:1420/docs/a.png"), Some(&dev)));
+        assert!(!main_nav_allowed(&u("http://localhost:1420/"), None)); // 배포판에는 devUrl이 없다
+        assert!(!main_nav_allowed(&u("http://localhost:5173/"), Some(&dev)));
+        assert!(!main_nav_allowed(&u("https://example.com/"), Some(&dev)));
+        assert!(!main_nav_allowed(&u("https://tauri.localhost.evil.com/"), None));
+        assert!(!main_nav_allowed(&u("file:///C:/a.png"), None));
     }
 
     /// 래퍼는 본문을 그대로 심는다 (eval 없음) — CSP가 unsafe-eval을 막아도 돌아야 한다

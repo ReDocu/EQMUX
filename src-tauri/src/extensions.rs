@@ -112,8 +112,10 @@ fn run(cli: &str, args: &[String], cwd: Option<&str>) -> Result<(bool, String, S
     let mut child = match spawn(cli, args, cwd, false) {
         Ok(c) => c,
         // 셸 폴백 전에 PATH부터 본다 (B182) — 없으면 cmd의 "내부 또는 외부 명령이 아닙니다"가 OEM 코드 페이지로
-        // 와서 깨져 보이고, 종료 코드(1)로는 다른 실패와 가를 수 없다. 문구를 여기서 만든다
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound && !crate::agentscan::on_path(cli) => {
+        // 와서 깨져 보이고, 종료 코드(1)로는 다른 실패와 가를 수 없다. 문구를 여기서 만든다.
+        // macOS는 이 거름을 건너뛴다 (B269) — on_path도 같은 프로세스 PATH를 봐서, 로그인 PATH 들여오기가
+        // 시한을 넘기면 ~/.local/bin/claude를 못 찾는다. 로그인 셸($SHELL -lc)로 한 번은 띄워 본다
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && !cfg!(target_os = "macos") && !crate::agentscan::on_path(cli) => {
             return Err(format!("{cli}가 PATH에 없습니다"));
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {

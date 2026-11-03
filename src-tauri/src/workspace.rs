@@ -371,7 +371,8 @@ pub struct GitCommitInfo {
     pub hash: String,
     pub message: String,
     pub author: String,
-    pub when: String,
+    /// 커밋 시각 epoch ms — 상대 시각은 프런트가 화면 언어로 만든다 (U173 · git %cr은 늘 영어였다)
+    pub when: i64,
     pub refs: String,
 }
 
@@ -429,7 +430,7 @@ pub fn overview(path: &str) -> Result<GitOverview, String> {
             }
         }
     }
-    let commits = git(&["log", "-n", "8", "--pretty=format:%h\t%s\t%an\t%cr\t%D"], path)
+    let commits = git(&["log", "-n", "8", "--pretty=format:%h\t%s\t%an\t%ct\t%D"], path)
         .map(|out| {
             out.lines()
                 .map(|l| {
@@ -438,7 +439,7 @@ pub fn overview(path: &str) -> Result<GitOverview, String> {
                         hash: p.next().unwrap_or_default().into(),
                         message: p.next().unwrap_or_default().into(),
                         author: p.next().unwrap_or_default().into(),
-                        when: p.next().unwrap_or_default().into(),
+                        when: p.next().and_then(|t| t.parse::<i64>().ok()).unwrap_or(0) * 1000,
                         refs: p.next().unwrap_or_default().into(),
                     }
                 })
@@ -597,6 +598,7 @@ mod tests {
         assert_eq!((o.changed, o.added), (1, 1));
         assert_eq!(o.commits.len(), 1);
         assert_eq!(o.commits[0].message, "first");
+        assert!((now_ms() - o.commits[0].when).abs() < 120_000, "커밋 시각은 epoch ms (U173)");
         assert_eq!((o.ahead, o.behind), (0, 0)); // 업스트림 없음 = 0/0
         fs::remove_dir_all(&dir).ok();
     }

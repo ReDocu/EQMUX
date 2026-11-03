@@ -96,15 +96,20 @@ fn slug(name: &str) -> String {
     }
 }
 
-fn split_frontmatter(text: &str) -> (Vec<String>, String) {
-    let normalized = text.replace("\r\n", "\n");
-    if let Some(rest) = normalized.strip_prefix("---\n") {
-        if let Some(end) = rest.find("\n---\n") {
-            let fm = rest[..end].lines().map(str::to_string).collect();
-            return (fm, rest[end + 5..].to_string());
-        }
+// 앞의 BOM을 걷는 roles::split_frontmatter를 쓴다 (B270) — 예전 사본은 BOM을 못 넘어 frontmatter가 본문으로
+// 밀렸고, 고쳐 쓰는 함수들이 새 frontmatter 뒤에 원래 파일 전체를 붙였다
+use roles::split_frontmatter;
+
+/// frontmatter를 고쳐 쓴다 — 본문은 그대로, 원래 파일이 BOM으로 시작했으면 BOM도 지킨다 (B270)
+fn write_fm(path: &Path, orig: &str, fm: &[String], body: &str) -> Result<(), String> {
+    let mut out = String::from(if orig.starts_with(roles::BOM) { "\u{feff}---\n" } else { "---\n" });
+    for l in fm {
+        out.push_str(l);
+        out.push('\n');
     }
-    (Vec::new(), normalized)
+    out.push_str("---\n");
+    out.push_str(body);
+    atomic_write(path, &out)
 }
 
 /// 산출물 한 줄 — `- [ ] 항목` / `- [x] 항목` / 체크 칸 없는 옛 `- 항목`(미체크)
@@ -209,14 +214,7 @@ pub fn mark_assigned(ws_path: &str, id: &str, session: &str, at: Option<i64>) ->
         let v: Vec<String> = map.iter().map(|(s, t)| format!("{s}={t}")).collect();
         fm.push(format!("assigned_at: {}", v.join(" ")));
     }
-    let mut out = String::from("---\n");
-    for l in &fm {
-        out.push_str(l);
-        out.push('\n');
-    }
-    out.push_str("---\n");
-    out.push_str(&body);
-    atomic_write(&path, &out)?;
+    write_fm(&path, &text, &fm, &body)?;
     if at.is_some() {
         mark_base(ws_path, id, false)?; // 첫 배정이 시작점 (§13-2) — 두 번째 세션 배정은 덮지 않는다
     }
@@ -239,14 +237,7 @@ pub fn mark_base(ws_path: &str, id: &str, overwrite: bool) -> Result<(), String>
     }
     fm.retain(|l| !l.starts_with("base_commit:"));
     fm.push(format!("base_commit: {head}"));
-    let mut out = String::from("---\n");
-    for l in &fm {
-        out.push_str(l);
-        out.push('\n');
-    }
-    out.push_str("---\n");
-    out.push_str(&body);
-    atomic_write(&path, &out)
+    write_fm(&path, &text, &fm, &body)
 }
 
 /// 선행 임무 지정 (P60) — frontmatter `depends_on`만 바꾸고 나머지는 보존한다. 자기 자신 · 빈 id는 뺀다. 비면 줄을 지운다
@@ -260,14 +251,7 @@ pub fn set_depends(ws_path: &str, id: &str, deps: &[String]) -> Result<(), Strin
     if !deps.is_empty() {
         fm.push(format!("depends_on: {}", deps.join(" ")));
     }
-    let mut out = String::from("---\n");
-    for l in &fm {
-        out.push_str(l);
-        out.push('\n');
-    }
-    out.push_str("---\n");
-    out.push_str(&body);
-    atomic_write(&path, &out)
+    write_fm(&path, &text, &fm, &body)
 }
 
 #[tauri::command]
@@ -449,14 +433,7 @@ pub fn set_status(ws_path: &str, id: &str, status: &str) -> Result<(), String> {
     fm.retain(|l| !l.starts_with("status:") && !l.starts_with("updated:"));
     fm.push(format!("status: {status}"));
     fm.push(format!("updated: {}", now_stamp()));
-    let mut out = String::from("---\n");
-    for l in &fm {
-        out.push_str(l);
-        out.push('\n');
-    }
-    out.push_str("---\n");
-    out.push_str(&body);
-    atomic_write(&path, &out)
+    write_fm(&path, &text, &fm, &body)
 }
 
 /// 임무 이벤트 기록 (0.5 C1) — 생성·배정·상태 변경을 이벤트 피드에 남긴다. 원본은 여전히 파일이다.
@@ -495,14 +472,7 @@ fn write_default_flag(path: &Path, on: bool) -> Result<(), String> {
         fm.push("default: true".into());
     }
     fm.push(format!("updated: {}", now_stamp()));
-    let mut out = String::from("---\n");
-    for l in &fm {
-        out.push_str(l);
-        out.push('\n');
-    }
-    out.push_str("---\n");
-    out.push_str(&body);
-    atomic_write(path, &out)
+    write_fm(path, &text, &fm, &body)
 }
 
 /// 워크스페이스 기본 임무 지정 (FR-E-56, M33) — 켜면 다른 임무의 default는 걷어낸다 (1개 규칙).
@@ -673,6 +643,24 @@ mod tests {
         assert_eq!((got.depends_on, got.status.as_str()), (vec!["db-schema".to_string()], "in-progress"));
         set_depends(&ws, &m.id, &[]).unwrap();
         assert!(!fs::read_to_string(&path).unwrap().contains("depends_on"));
+        fs::remove_dir_all(&ws).ok();
+    }
+
+    /// 메모장 'UTF-8(BOM)' 임무 파일 (B270) — 읽을 때 BOM을 넘어 frontmatter를 보고, 고쳐 써도 BOM 하나와 본문이 그대로다
+    #[test]
+    fn bom_mission_file_keeps_frontmatter() {
+        let ws = temp_ws("bom");
+        let m = create(&ws, "비오엠", "목표", None, vec![]).unwrap();
+        let path = mission_path(&ws, &m.id);
+        let text = fs::read_to_string(&path).unwrap().replacen("status: todo", "status: in-progress", 1);
+        fs::write(&path, format!("\u{feff}{}", text.replace('\n', "\r\n"))).unwrap();
+        set_depends(&ws, &m.id, &["api".into()]).unwrap();
+        mark_assigned(&ws, &m.id, "kai@w", Some(1)).unwrap();
+        let got = get(&ws, &m.id).unwrap();
+        assert_eq!((got.name.as_str(), got.status.as_str(), got.goal.as_str()), ("비오엠", "in-progress", "목표"));
+        assert_eq!(got.depends_on, vec!["api"]);
+        let after = fs::read_to_string(&path).unwrap();
+        assert!(after.starts_with("\u{feff}---\n") && after.matches('\u{feff}').count() == 1 && after.matches("## 목표").count() == 1, "{after}");
         fs::remove_dir_all(&ws).ok();
     }
 

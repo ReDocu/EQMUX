@@ -25,13 +25,14 @@ import {
 import type { Cell, ExtScope, McpHealth, PluginRow, SkillRow } from "../backend/extensions";
 import { backend } from "../backend/mock";
 import { fsDelete, fsRead, fsWrite } from "../backend/panels";
-import { serverTermId } from "../backend/ports";
-import { isTauri, listAlivePty, onPtyOutput, writePty } from "../backend/pty";
+import { serverExited, serverTermId } from "../backend/ports";
+import { isTauri, listAlivePty, onPtyOutput, revealPath, writePty } from "../backend/pty";
 import { scopeWorkspace, setPanelTab } from "../state";
 import { agentAttached, cliOf, sessionName } from "../types";
 import type { Session } from "../types";
 import { t, tf } from "../i18n";
 import { markdownHtml } from "./markdownHtml";
+import { mdLinkClick, resolveRel } from "./MdViewTab";
 import { openServerTerm } from "./ServerPanelTab";
 import { ConfirmDialog, notify, Segmented } from "./ui";
 
@@ -573,7 +574,18 @@ function SkillDetail(props: {
       </div>
       <Show
         when={editing()}
-        fallback={<div class="mdview-body" innerHTML={file() ? markdownHtml(file()!.text) : ""} />}
+        fallback={
+          <div
+            class="mdview-body"
+            innerHTML={file() ? markdownHtml(file()!.text) : ""}
+            // 링크가 메인 웹뷰를 끌고 가지 않게 문서 탭과 같이 가로챈다 (B250). 상대 링크는 스킬 폴더 기준으로 탐색기에서 연다
+            onClick={(e) =>
+              mdLinkClick(e, (href) => {
+                void revealPath(resolveRel(r.rel, href), r.root).then((ok) => ok || notify(t("폴더를 열 수 없습니다 — 경로가 없어졌습니다")));
+              })
+            }
+          />
+        }
       >
         {(ed) => (
           <CodeEditor
@@ -643,6 +655,8 @@ export function McpPanelTab() {
     const id = serverTermId(w.id);
     setPanelTab("server");
     if (!(await listAlivePty()).includes(id)) {
+      // 서버 셸에서 exit했으면 openServerTerm은 아무것도 하지 않는다 — 10초 기다려 죽은 PTY에 쓰지 말고 알린다 (B260)
+      if (serverExited(id)) return void notify(t("셸이 끝났습니다 — [셸 다시 열기]를 누르세요"));
       const ready = shellQuiet(id);
       openServerTerm(w.id);
       await ready;

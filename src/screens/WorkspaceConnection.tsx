@@ -31,6 +31,13 @@ function Layer(props: { close: () => void; box?: () => HTMLElement | undefined }
   return null;
 }
 
+// 진행 중 clone (B258) — 화면 지역 상태면 창 · 연결 팝업을 닫을 때 실패가 사라지고 같은 clone을 또 시작할 수
+// 있었다. 모듈에 두어 다시 열어도 '진행 중'이 보이고, 끝나면 토스트로 알린다.
+// ponytail: 한 번에 하나 — 예전에도 창 하나에서 하나씩이었다. 여러 개가 필요하면 주소별 Map으로
+const [cloneBusy, setCloneBusy] = createSignal<string | undefined>(undefined); // clone 중인 주소
+// clone 경과 초 (0.6 QA P72) — 진행률은 못 받지만 멈춘 것인지 도는 것인지는 보인다
+const [cloneSecs, setCloneSecs] = createSignal(0);
+
 export function WorkspaceConnection() {
   const workspaces = () => {
     tick();
@@ -69,9 +76,6 @@ export function WorkspaceConnection() {
   const [initTarget, setInitTarget] = createSignal<string | undefined>(undefined); // FR-E-01 — git init 확인
   const [cloneOpen, setCloneOpen] = createSignal(false);
   const [cloneUrl, setCloneUrl] = createSignal("");
-  const [cloneBusy, setCloneBusy] = createSignal(false);
-  // clone 경과 초 (0.6 QA P72) — 진행률은 못 받지만 멈춘 것인지 도는 것인지는 보인다
-  const [cloneSecs, setCloneSecs] = createSignal(0);
   let cloneBox: HTMLDivElement | undefined;
 
   // 선택 창이 열려 있는 동안 [폴더 찾기…]를 막는다 (B135) — 다시 누르면 선택 창이 하나 더 열렸다
@@ -115,7 +119,7 @@ export function WorkspaceConnection() {
 
   const runClone = async () => {
     const url = cloneUrl().trim();
-    if (!url) return;
+    if (!url || cloneBusy()) return; // 창을 닫았다 다시 열어도 진행 중 clone이 막는다 (B258)
     setError(undefined);
     if (!isTauri()) {
       backend.addWorkspace(url);
@@ -123,8 +127,8 @@ export function WorkspaceConnection() {
       return;
     }
     const parent = await pickFolder();
-    if (!parent) return;
-    setCloneBusy(true);
+    if (!parent || cloneBusy()) return;
+    setCloneBusy(url);
     setCloneSecs(0);
     const timer = setInterval(() => setCloneSecs((n) => n + 1), 1000);
     try {
@@ -134,11 +138,14 @@ export function WorkspaceConnection() {
       setSelectedId(info.entry.id);
       setCloneOpen(false);
       setCloneUrl("");
+      notify(tf("clone 완료 · 목록에 등록했습니다 — {name}",{ name: info.entry.name }), "ok");
     } catch (e) {
-      setError(`${t("clone 실패")} · ${String(e)}`);
+      const msg = `${t("clone 실패")} · ${String(e)}`;
+      setError(msg);
+      notify(msg); // 창 · 팝업을 닫았으면 위 오류 줄은 아무도 못 본다 (B258)
     } finally {
       clearInterval(timer);
-      setCloneBusy(false);
+      setCloneBusy(undefined);
     }
   };
 
@@ -468,7 +475,7 @@ export function WorkspaceConnection() {
 
       {/* 원격 Clone (FR-E-02) */}
       <Show when={cloneOpen()}>
-        {/* clone 중에도 닫을 수 있다 (P72) — clone은 뒤에서 계속되고, 끝나면 등록되고 실패는 목록 위에 보인다 */}
+        {/* clone 중에도 닫을 수 있다 (P72) — clone은 뒤에서 계속되고, 끝나면 등록되고 결과는 토스트로 알린다 (B258) */}
         <Layer close={() => setCloneOpen(false)} box={() => cloneBox} />
         <div class="overlay" onClick={() => setCloneOpen(false)}>
           <div
@@ -487,6 +494,7 @@ export function WorkspaceConnection() {
             <Show when={cloneBusy()}>
               <div class="muted mono" style={{ "font-size": "11px", margin: "0 0 8px" }}>
                 {tf("clone 중… {s}초 · 창을 닫아도 계속됩니다", { s: cloneSecs() })}
+                <div>{cloneBusy()}</div>
                 <Show when={cloneSecs() >= 30}>
                   <div>{t("오래 걸리면 Git 로그인 창이 다른 창 뒤에 떠 있을 수 있습니다.")}</div>
                 </Show>
@@ -497,7 +505,7 @@ export function WorkspaceConnection() {
               style={{ width: "100%", "font-size": "12px" }}
               placeholder="https://github.com/user/repo.git"
               value={cloneUrl()}
-              disabled={cloneBusy()}
+              disabled={!!cloneBusy()}
               onInput={(e) => setCloneUrl(e.currentTarget.value)}
               ref={(el) => queueMicrotask(() => el.focus())}
               onKeyDown={(e) => {
@@ -520,7 +528,7 @@ export function WorkspaceConnection() {
               <button class="btn" onClick={() => setCloneOpen(false)}>
                 {t(cloneBusy() ? "닫기" : "취소")}
               </button>
-              <button class="btn primary" disabled={cloneBusy() || !cloneUrl().trim()} onClick={() => void runClone()}>
+              <button class="btn primary" disabled={!!cloneBusy() || !cloneUrl().trim()} onClick={() => void runClone()}>
                 {t(cloneBusy() ? "clone 중…" : "폴더 선택 후 Clone")}
               </button>
             </div>

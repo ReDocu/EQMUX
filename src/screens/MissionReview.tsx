@@ -56,11 +56,13 @@ export function MissionReview(props: { wsId: string; missionId: string; back?: V
   const [pick, setPick] = createSignal(0);
   const [testState, setTestState] = createSignal<"running" | TestRun | undefined>(undefined);
 
-  // 입력 칸의 Esc는 그 칸 몫이다 (B185 — diff 파일 필터를 지우려다 화면이 닫혔다). HistorySearch와 같은 가드
+  // 입력 칸의 Esc는 그 칸 몫이다 (B185 — diff 파일 필터를 지우려다 화면이 닫혔다). HistorySearch와 같은 가드.
+  // 글자를 치는 칸만 뺀다 (B256) — 체크박스 · select를 누른 뒤에도 ESC가 막혀 화면이 닫히지 않았다
   const onKey = (e: KeyboardEvent) => {
     if (e.key !== "Escape" || sendBackOpen()) return;
     const el = e.target as HTMLElement | null;
-    if (el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) return;
+    if (el?.tagName === "TEXTAREA") return;
+    if (el instanceof HTMLInputElement && !/^(checkbox|radio|button|submit|reset|range|color|file)$/.test(el.type)) return;
     close();
   };
   onMount(() => {
@@ -103,15 +105,33 @@ export function MissionReview(props: { wsId: string; missionId: string; back?: V
   };
   const [sendBackOpen, setSendBackOpen] = createSignal(false);
   const [note, setNote] = createSignal("");
+  // 앞 보내기에서 못 받은 세션 (B255) — 다시 보내기는 여기에만. 받은 세션이 같은 의견을 두 번 받지 않게
+  const [retryTo, setRetryTo] = createSignal<string[] | undefined>(undefined);
+  const sendTo = () => {
+    const assigned = m()?.assigned ?? [];
+    return retryTo()?.filter((sid) => assigned.includes(sid)) ?? assigned;
+  };
   const sendBack = async () => {
     const mm = m();
     if (!mm) return;
     if (!note().trim()) return notify(t("고칠 점을 적어야 보낼 수 있습니다"));
-    if (!mm.assigned.length) return notify(t("담당 세션이 없어 보낼 곳이 없습니다 — 임무 화면에서 먼저 배정하세요"));
+    const to = sendTo();
+    if (!to.length) return notify(t("담당 세션이 없어 보낼 곳이 없습니다 — 임무 화면에서 먼저 배정하세요"));
     setSendBackOpen(false);
-    const err = await sendBackMission(props.wsId, mm, note(), nameOf);
-    if (err) return notify(tf("보내지 못해 임무 상태를 그대로 두었습니다 — {err}", { err }));
-    notify(tf("{n}명에게 검토 의견을 보내고 진행 중으로 되돌렸습니다", { n: mm.assigned.length }), "ok");
+    const { sent, failed } = await sendBackMission(props.wsId, mm, note(), to);
+    if (failed.length) {
+      setRetryTo(failed.map((f) => f.sid));
+      const err = failed.map((f) => `${nameOf(f.sid)}: ${f.err}`).join(" · ");
+      if (!sent.length) return notify(tf("보내지 못해 임무 상태를 그대로 두었습니다 — {err}", { err }));
+      return notify(
+        tf("{names}에게는 보냈지만 못 받은 세션이 있어 임무 상태를 그대로 두었습니다 — {err} · 다시 보내면 못 받은 세션에만 갑니다", {
+          names: sent.map(nameOf).join(", "),
+          err,
+        }),
+      );
+    }
+    setRetryTo(undefined);
+    notify(tf("{n}명에게 검토 의견을 보내고 진행 중으로 되돌렸습니다", { n: sent.length }), "ok");
     close();
   };
 
@@ -244,7 +264,13 @@ export function MissionReview(props: { wsId: string; missionId: string; back?: V
                     onInput={(e) => setNote(e.currentTarget.value)}
                   />
                 }
-                info={[tf("받는 세션: {names}", { names: mm().assigned.map(nameOf).join(", ") }), t("임무는 진행 중으로 돌아갑니다")]}
+                info={[
+                  tf("받는 세션: {names}", { names: sendTo().map(nameOf).join(", ") }),
+                  ...((got) => (got.length ? [tf("이미 받은 세션은 빼고 보냅니다: {names}", { names: got.map(nameOf).join(", ") })] : []))(
+                    mm().assigned.filter((sid) => !sendTo().includes(sid)),
+                  ),
+                  t("임무는 진행 중으로 돌아갑니다"),
+                ]}
                 confirmLabel={t("보내기")}
                 onConfirm={() => void sendBack()}
                 onCancel={() => setSendBackOpen(false)}

@@ -38,7 +38,7 @@ import { spawnAgent } from "../backend/agent";
 import { backend } from "../backend/mock";
 import { settings } from "../backend/settings";
 import { t, tf } from "../i18n";
-import { notePtyShell, selectedSession } from "../state";
+import { notePtyShell, selectedSession, shellCmdOf } from "../state";
 import { ContextMenu } from "./ui";
 import type { MenuGroup } from "./ui";
 import type { AgentCliId, Permissions, Session } from "../types";
@@ -238,6 +238,9 @@ export function syncSessionTerminal(id: string): void {
 /** 키보드 포커스를 이 세션 터미널로 (Focus) — 선택 전이에 붙은 이펙트로는 모자란 자리가 쓴다.
  *  이미 선택돼 있는 세션을 다시 잡을 때(대기 배지 클릭)는 selectedSession이 안 바뀌어
  *  그 이펙트가 다시 돌지 않는다. 여기서 답을 쳐야 하므로 포커스는 확실해야 한다. */
+/** 이 세션 터미널이 대체 화면(vim · less · fzf 같은 TUI)인가 (B254) — 전체 화면의 ESC를 그 TUI에 넘길지 가른다 */
+export const sessionInAltBuffer = (id: string): boolean => REGISTRY.get(id)?.term.buffer.active.type === "alternate";
+
 export function focusSessionTerminal(id: string): void {
   REGISTRY.get(id)?.term.focus();
 }
@@ -275,6 +278,7 @@ async function killAndWait(id: string): Promise<void> {
 
 /** 브랜치 부여 (워크트리 이동) — 기존 셸 PTY를 끝내고 같은 세션 id로 새 cwd에서 다시 연다.
  *  출력·종료 구독은 세션 id 키라 재스폰 후에도 그대로 이어진다. */
+/** shell은 Session.shell 라벨이다 — 실행 파일로는 여기서 바꾼다 (B253, ControlCenter의 shellCmdFor와 같은 길) */
 export async function respawnSessionShell(id: string, cwd: string, wsId?: string, shell?: string): Promise<void> {
   if (!isTauri()) return;
   const e = REGISTRY.get(id); // 페인 미마운트 세션도 이동은 된다 — 크기만 기본값 폴백
@@ -282,7 +286,7 @@ export async function respawnSessionShell(id: string, cwd: string, wsId?: string
   e?.term.writeln(`\x1b[90m─── ${tf("브랜치 부여 → {cwd}", { cwd })} ───\x1b[0m`);
   const size = sessionTermSize(id); // 재개/재시작과 같은 크기 규약 — 미마운트면 기본값 폴백
   try {
-    notePtyShell(id, await spawnPty(id, cwd, size.cols, size.rows, wsId, shell));
+    notePtyShell(id, await spawnPty(id, cwd, size.cols, size.rows, wsId, shellCmdOf(shell)));
   } finally {
     doneRespawning(id);
   }

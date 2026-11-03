@@ -768,7 +768,9 @@ export class MockBackend implements Backend {
       sess.sinceTs = Date.now();
       sess.waitingFor = undefined;
       sess.lastOutput = `프로세스 종료 · exit ${code ?? "?"}`;
-      this.logEvent("state", `프로세스 종료 · exit ${code ?? "?"}`, id);
+      // 실행 모드에서는 Rust가 session-exit 줄을 이미 적는다 — 같은 종료를 또 적지 않고 피드만 깨운다 (U175)
+      if (isTauri()) eventLogged();
+      else this.logEvent("state", `세션 종료 · ${code == null ? "종료 코드 없음" : `exit ${code}`}`, id);
     }
     this.broadcast();
   }

@@ -34,11 +34,19 @@ const text = (n: SyntaxNode, src: string) => src.slice(n.from, n.to);
 export const slugOf = (s: string) =>
   s.trim().toLowerCase().replace(/[^\p{L}\p{N}\s_-]/gu, "").replace(/\s/g, "-");
 let slugSeen = new Map<string, number>(); // 한 문서 안 같은 제목은 -1, -2 (markdownHtml이 문서마다 비운다)
+/** 보이는 글자만 — 구문 기호 · 링크 주소 · HTML 태그를 뺀다. 제목 앵커를 원문이 아니라 이것으로 만든다 (B263) */
+function plain(n: SyntaxNode, src: string): string {
+  if (MARKS.has(n.name) || n.name === "URL" || n.name === "HTMLTag") return "";
+  let out = "";
+  let pos = n.from;
+  for (let c = n.firstChild; c; c = c.nextSibling) {
+    out += src.slice(pos, c.from) + plain(c, src);
+    pos = c.to;
+  }
+  return out + src.slice(pos, n.to);
+}
 function headingId(n: SyntaxNode, src: string): string {
-  const raw = n.name.startsWith("ATX")
-    ? text(n, src).replace(/^#+|#+\s*$/g, "")
-    : text(n, src).split("\n")[0];
-  const base = slugOf(raw);
+  const base = slugOf(plain(n, src));
   const k = slugSeen.get(base) ?? 0;
   slugSeen.set(base, k + 1);
   return k ? `${base}-${k}` : base;

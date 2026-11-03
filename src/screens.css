@@ -2686,6 +2686,9 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.dts-card .kv .v.dts-path {
+  direction: rtl; /* 말줄임을 앞에 (U172) — 폴더 이름(끝)이 보이게 */
+}
 .dts-card-head {
   display: flex;
   justify-content: space-between;

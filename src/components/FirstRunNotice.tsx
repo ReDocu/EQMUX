@@ -38,7 +38,12 @@ export function startForeignCheck(): void {
         title: g.directive
           ? tf("{tool}의 전역 지시가 EQMUX 세션에도 실립니다", { tool: g.tool })
           : tf("{tool}의 훅 {n}개가 EQMUX 세션의 도구 호출마다 실행됩니다", { tool: g.tool, n: g.hooks }),
-        body: g.directive ? t("세션 안내문으로 덮어 두었습니다 · 누르면 자세히") : t("EQMUX가 막을 수 없습니다 · 누르면 끄는 방법"),
+        // 구역과 훅이 함께 있으면 막을 수 없는 훅도 말한다 (B261) — '덮어 두었다'만 보면 다 막은 줄 안다
+        body: !g.directive
+          ? t("EQMUX가 막을 수 없습니다 · 누르면 끄는 방법")
+          : g.hooks > 0
+            ? tf("세션 안내문으로 덮어 두었습니다 · 훅 {n}개는 막을 수 없습니다 · 누르면 자세히", { n: g.hooks })
+            : t("세션 안내문으로 덮어 두었습니다 · 누르면 자세히"),
         open: openWhere,
       });
   });
@@ -109,10 +114,14 @@ function ForeignList() {
               {(g) => (
                 <div class="frn-tool">
                   <div class="frn-tool-t">
-                    {/* 덮을 수 있는 것은 구역 · 문장뿐이다 — 훅만이면 막을 수 없다고 말한다 (U128 · §14-2) */}
-                    {g.directive
-                      ? tf("{tool}의 전역 지시가 EQMUX 세션에도 실립니다 — 세션 안내문으로 덮어 두었습니다", { tool: g.tool })
-                      : tf("{tool}의 훅 {n}개가 EQMUX 세션의 도구 호출마다 실행됩니다 — EQMUX가 막을 수 없습니다", { tool: g.tool, n: g.hooks })}
+                    {/* 덮을 수 있는 것은 구역 · 문장뿐이다 — 훅은 막을 수 없다고 말한다 (U128 · §14-2).
+                        둘 다 있으면 두 문장을 다 보인다 (B261) */}
+                    <Show when={g.directive}>
+                      <div>{tf("{tool}의 전역 지시가 EQMUX 세션에도 실립니다 — 세션 안내문으로 덮어 두었습니다", { tool: g.tool })}</div>
+                    </Show>
+                    <Show when={g.hooks > 0}>
+                      <div>{tf("{tool}의 훅 {n}개가 EQMUX 세션의 도구 호출마다 실행됩니다 — EQMUX가 막을 수 없습니다", { tool: g.tool, n: g.hooks })}</div>
+                    </Show>
                   </div>
                   <For each={list().filter((f) => f.tool === g.tool)}>
                     {(f) => (

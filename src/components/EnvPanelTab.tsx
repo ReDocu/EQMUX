@@ -77,9 +77,10 @@ export function EnvPanelTab(props: { files: EnvFile[]; loading?: boolean; wsPath
   const gitOf = (file: string) => git()?.find((g) => g.path === file);
 
   const hit = (k: string) => k.toLowerCase().includes(q().trim().toLowerCase());
-  const copy = (k: string, v: string) => {
-    clipWriteText(v, true); // 클립보드 기록·클라우드 동기화에서 뺀다 (B148)
-    notify(tf("{k} 값을 복사했습니다", { k }), "ok");
+  const copy = async (k: string, v: string) => {
+    // 클립보드 기록·클라우드 동기화에서 뺀다 (B148). 실패하면 성공 토스트를 띄우지 않는다 (B262)
+    if (await clipWriteText(v, true)) notify(tf("{k} 값을 복사했습니다", { k }), "ok");
+    else notify(t("복사하지 못했습니다"));
   };
 
   /** 쓰기 하나 — 실패 사유를 보이고, 외부 변경이면 다시 읽는다. 성공하면 다시 읽고 "재시작 필요" 한 줄 */

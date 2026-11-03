@@ -57,6 +57,25 @@ export function t(ko: string): string {
  *  어순이 언어마다 다른 문장에만 쓴다. 단순 병기는 JSX에서 t() 조각으로 충분하다 */
 export function tf(ko: string, vars: Record<string, string | number>): string {
   let s = t(ko);
-  for (const [k, v] of Object.entries(vars)) s = s.replaceAll(`{${k}}`, String(v));
+  // 자리표시자 뒤 '을(를)'·'이(가)'는 넣은 낱말의 받침으로 고른다 (U176) — 영어 문장에는 없어 그대로다
+  for (const [k, v] of Object.entries(vars))
+    s = s.replace(new RegExp(`\\{${k}\\}(${JOSA.source})?`, "g"), (_, p?: string) => String(v) + (p ? josa(String(v), p) : ""));
   return s;
+}
+
+const JOSA = /을\(를\)|이\(가\)|은\(는\)|와\(과\)/;
+
+/** 받침이 있으면 앞 조사, 없으면 뒤 조사 — '을(를)' → '을' | '를'. 판정이 안 서면 원문 그대로 (U176).
+ *  끝의 기호는 건너뛴다(`stash@{0}` → 0). 숫자는 읽는 소리로(일·삼·육·칠·팔·십·영 → 받침).
+ *  ponytail: 영어 낱말은 끝 글자로 어림한다 — l·m·n·ng로 끝나거나 L·M·N·R 한 글자면 받침.
+ *  file(파일)처럼 묵음 e는 틀린다. 정확히 하려면 발음 사전이 필요하다 */
+export function josa(word: string, pair: string): string {
+  const w = word.replace(/[^\p{L}\p{N}]+$/u, "");
+  const c = w.slice(-1);
+  const code = c.charCodeAt(0);
+  let batchim: boolean | undefined;
+  if (code >= 0xac00 && code <= 0xd7a3) batchim = (code - 0xac00) % 28 !== 0;
+  else if (/\d/.test(c)) batchim = "013678".includes(c); // 10 · 100 · 1000 · 10000(십 · 백 · 천 · 만)도 0으로 끝나 받침
+  else if (/[a-z]/i.test(c)) batchim = /^r$/i.test(w) || /(?:[lmn]|ng)$/i.test(w);
+  return batchim === undefined ? pair : batchim ? pair[0] : pair[2];
 }

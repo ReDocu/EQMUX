@@ -1232,7 +1232,7 @@ fn record_edit(app: &AppHandle, session: &str, payload: &serde_json::Value) {
     // 13-3 · 13-5가 쓸 기록 (C4) — 쓰기 스레드로 넘길 뿐 막지 않는다
     let store: tauri::State<crate::StoreState> = app.state();
     store.0.touch_file(&ws, session, path, tool, now);
-    // 같은 페르소나 두 슬롯이 같은 기억 파일에 덧붙이는 것은 허용된 사용이다 (U113) — .eqmux/ 아래는 경고하지 않는다
+    // 같은 페르소나 두 슬롯이 같은 기억 파일에 덧붙이는 것은 허용된 사용이다 (U113) — 기억 · 노트 폴더는 경고하지 않는다 (B268)
     if let Some(sessions) = hit.filter(|_| !crate::owns::app_file(&crate::owns::repo_rel(&cwd, path))) {
         let _ = app.emit_to(
             "main",

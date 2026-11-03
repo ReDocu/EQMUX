@@ -123,9 +123,11 @@ export function ensureConversation(wsId: string): void {
   void refreshConversation(wsId);
 }
 
-/** 보낸 쪽 원장에도 사본을 적는가 (B210) — 다른 워크스페이스의 한 세션에게 보낼 때만. 순수 함수 */
-export const crossCopy = (wsId: string, to: string, fromWs?: string): fromWs is string =>
-  !!fromWs && fromWs !== wsId && to !== "@all";
+/** 보낸 쪽 원장에 적을 사본의 받는 사람 (B210) — 다른 워크스페이스로 보낼 때만, 아니면 undefined. 순수 함수.
+ *  @all은 그대로 적으면 보낸 쪽 팀 전체에게 전달되므로 `@all@받는프로젝트`로 적는다 — 어느 세션 id와도
+ *  맞지 않아 전달은 없고, 대화 탭에는 그 글자 그대로 보인다 (B266 — 기본 수신자 @all 전달이 흔적 없이 사라졌다) */
+export const crossCopy = (wsId: string, to: string, fromWs?: string, toLabel: string = wsId): string | undefined =>
+  !fromWs || fromWs === wsId ? undefined : to === "@all" ? `@all@${toLabel}` : to;
 
 /** 직함 접두 길이 (U121) — `@클라이언트 개발자 확인 부탁`에서 직함이 차지한 글자 수. 띄어쓰기는 빼고 비교한다
  *  (Rust title_matches와 같은 규칙 — `@클라이언트개발자`도 닿는다). 직함 뒤는 공백이나 끝이어야 한다. 안 맞으면 0. 순수 함수 */
@@ -159,10 +161,10 @@ export async function sendConversation(
   }
   try {
     await invoke("msg_send", { workspace: wsId, from: "나", to, msgType: type, body });
-    // @all 사본은 적지 않는다 — 보낸 쪽 원장의 @all은 보낸 쪽 팀 전체에게 전달된다.
     // ponytail: 보낸 쪽 사본에는 '대기 중·전달됨'이 붙지 않는다(전달 상태는 받는 쪽 원장 id에 붙는다) — 필요하면 두 id를 짝짓는다
-    if (crossCopy(wsId, to, fromWs))
-      await invoke("msg_send", { workspace: fromWs, from: "나", to, msgType: type, body }).catch(() => {});
+    const copyTo = crossCopy(wsId, to, fromWs, projectLabels().get(wsId));
+    if (fromWs && copyTo)
+      await invoke("msg_send", { workspace: fromWs, from: "나", to: copyTo, msgType: type, body }).catch(() => {});
     return null;
   } catch (e) {
     const s = String(e);

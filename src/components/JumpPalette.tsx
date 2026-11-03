@@ -7,7 +7,7 @@ import { backend } from "../backend/mock";
 import { t, tf } from "../i18n";
 import { setMissionToOpen } from "../screens/Missions";
 import { isSubmitEnter } from "../platform";
-import { openPanel, pushLayer, scopeWorkspace, setOverlay, setSettingsCat, setView, tick, view, jumpToSession } from "../state";
+import { openPanel, overlay, pushLayer, scopeWorkspace, setOverlay, setSettingsCat, setView, tick, view, jumpToSession } from "../state";
 import type { PanelTab } from "../state";
 import { sessionName, statusText } from "../types";
 import { stepIndex } from "./keynav";
@@ -111,9 +111,14 @@ function Palette() {
     if (!it) return;
     // 화면 · 세션 · 임무로 가는 항목은 도착한 자리가 포커스를 갖는다 (B245) — 연 자리(패널 탭 버튼 등)로
     // 돌려 두면 키보드로 연 검색 화면에 친 글자가 아무 데도 들어가지 않았다. 패널 탭만 연 자리로 돌린다
+    const v0 = view();
+    const o0 = overlay();
     setOpen(false);
     if (it.kind === "panel" && opener?.isConnected) opener.focus();
     it.run();
+    // 화면이 바뀌지 않은 고르기(지금 보는 워크스페이스 · 관제)는 close()처럼 연 자리로 돌린다 (B265) — 포커스가
+    // body로 빠져 터미널에 이어 친 글자가 사라졌다. setView는 같은 화면이면 지금 객체를 그대로 둔다. 세션은 페인이 갖는다
+    if (it.kind !== "panel" && it.kind !== "session" && view() === v0 && overlay() === o0 && opener?.isConnected) opener.focus();
   };
   onMount(() => {
     input.focus();

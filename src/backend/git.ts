@@ -12,7 +12,8 @@ export interface GitCommitInfo {
   hash: string;
   message: string;
   author: string;
-  when: string;
+  /** 커밋 시각 epoch ms — 패널이 화면 언어의 상대 시각(fmtAgo)으로 그린다 (U173) */
+  when: number;
   refs: string;
 }
 

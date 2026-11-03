@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { josa, tf } from "./i18n";
 import { dict as common } from "./i18n/common";
 import { dict as settingsDict } from "./i18n/settings";
 import { dict as control } from "./i18n/control";
@@ -25,5 +26,28 @@ describe("i18n 사전", () => {
       }
     }
     expect(clashes).toEqual([]);
+  });
+});
+
+describe("josa (U176)", () => {
+  test("받침으로 을/를 · 이/가를 고른다", () => {
+    expect(josa("기능", "을(를)")).toBe("을");
+    expect(josa("기록", "이(가)")).toBe("이");
+    expect(josa("파이프", "을(를)")).toBe("를");
+    expect(josa("A", "을(를)")).toBe("를");
+    expect(josa("feature", "을(를)")).toBe("를");
+    expect(josa("main", "을(를)")).toBe("을");
+    expect(josa("R", "이(가)")).toBe("이");
+    expect(josa("commands.json", "을(를)")).toBe("을");
+    expect(josa("stash@{0}", "이(가)")).toBe("이");
+    expect(josa("v2", "을(를)")).toBe("를");
+    expect(josa("日本", "을(를)")).toBe("을(를)");
+    expect(josa("", "은(는)")).toBe("은(는)");
+  });
+
+  test("tf가 자리표시자 뒤 조사를 고른다", () => {
+    expect(tf("{k}을(를) 저장했습니다", { k: "A" })).toBe("A를 저장했습니다");
+    expect(tf("{b}을(를) 현재 브랜치로 merge", { b: "main" })).toBe("main을 현재 브랜치로 merge");
+    expect(tf("{names}이(가) {path}를 동시에 편집 중", { names: "셸1 · 셸2", path: "a.ts" })).toBe("셸1 · 셸2가 a.ts를 동시에 편집 중");
   });
 });

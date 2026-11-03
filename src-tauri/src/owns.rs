@@ -52,10 +52,12 @@ fn seg(p: &[char], s: &[char]) -> bool {
     }
 }
 
-/// 앱이 세션에게 쓰라고 시킨 파일(`.eqmux/` 아래 기억 · 노트 · 역할 · 임무)인가 — 담당 밖 · 동시 편집 판정과
-/// 검토 화면의 '고친 파일'에서 뺀다 (U113). rel은 repo_rel을 거친 것(워크트리 접두가 떨어진 것)이다
+/// 앱이 세션에게 쓰라고 시킨 파일인가 — 기억(roles.rs memory_rule)과 노트(COMMS_RULES)뿐이다. 담당 밖 · 동시 편집
+/// 판정과 검토 화면의 '고친 파일'에서 뺀다 (U113). rel은 repo_rel을 거친 것(워크트리 접두가 떨어진 것)이다.
+/// `.eqmux/` 전체를 빼면 commands.json · team.json · 임무 파일 같은 커밋 대상 편집도 세지 않았다 (B268)
 pub fn app_file(rel: &str) -> bool {
-    rel.replace('\\', "/").to_lowercase().starts_with(".eqmux/")
+    let rel = rel.replace('\\', "/").to_lowercase();
+    rel.starts_with(".eqmux/memory/") || rel.starts_with(".eqmux/notes/")
 }
 
 /// 담당 밖인가 — owns가 비면 언제나 false(경고 없음)
@@ -148,6 +150,9 @@ mod tests {
         assert_eq!(edit_warning(&ws, "kai@w", "Z:/elsewhere/x.ts", 3), None, "저장소 밖");
         assert_eq!(edit_warning(&ws, "kai@w", &format!("{ws}/.eqmux/memory/kai.md"), 3), None, "앱이 시킨 기억 파일 (U113)");
         assert_eq!(edit_warning(&ws, "kai@w", &format!("{ws}/.eqmux/worktrees/kai@w/.eqmux/notes/a.md"), 3), None, "워크트리 안 노트");
+        // 앱이 시키지 않은 .eqmux/ 파일은 프로젝트 파일이다 (B268)
+        assert_eq!(edit_warning(&ws, "kai@w", &format!("{ws}/.eqmux/commands.json"), 3).map(|w| w.0).as_deref(), Some(".eqmux/commands.json"));
+        assert!(!app_file(".eqmux/missions/login.md") && app_file(r".EQMUX\Memory\kai.md"));
         assert_eq!(edit_warning(&ws, "rin@w", &format!("{ws}/src/app.tsx"), 4), None, "역할 파일 없음");
         std::fs::remove_dir_all(&dir).ok();
     }

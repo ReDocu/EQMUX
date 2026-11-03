@@ -1,7 +1,8 @@
 // 임무 완료 보고 한정 (B92) — 배정 뒤에 온 report --done만 그 임무 것이다
 import { expect, test, vi } from "vitest";
 vi.mock("../components/ui", () => ({ notify: () => {} })); // node 테스트에서 JSX 부품을 싣지 않는다
-import { missionDoneReport, openDeps, outputsNotice, unlockedOrphans } from "./missions";
+import { missionDoneReport, openDeps, outputsNotice, setMissionDepends, unlockedOrphans } from "./missions";
+import { backend } from "./mock";
 import type { ConversationMessage, Mission } from "../types";
 
 const rep = (from: string, ts: number): ConversationMessage => ({
@@ -45,6 +46,16 @@ test("선행 임무 — 남은 선행 · 담당 없이 풀린 후행 (P60)", () 
   const all = [mk("a", "done"), mk("b", "in-progress"), mk("c", "todo", ["a", "b", "gone"]), mk("d", "todo", ["a"]), mk("e", "todo", ["a"], ["kai@w"])];
   expect(openDeps(all[2], all).map((x) => x.id)).toEqual(["b"]); // 끝난 것 · 없는 id는 빠진다
   expect(unlockedOrphans("a", all).map((x) => x.id)).toEqual(["d"]); // c는 b가 남았고 e는 담당이 있다
+});
+
+test("목 백엔드의 선행 지정도 방송한다 (B270)", async () => {
+  const m = backend.listMissions()[0];
+  let heard = 0;
+  const off = backend.subscribe(() => heard++);
+  await setMissionDepends(m.workspaceId, m.id, ["x"]);
+  off();
+  expect(backend.listMissions().find((x) => x.id === m.id)?.dependsOn).toEqual(["x"]);
+  expect(heard).toBeGreaterThan(0);
 });
 
 test("영어로 되돌려 보낸 의견도 그 뒤 보고만 센다 (U123)", () => {
