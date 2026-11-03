@@ -37,7 +37,7 @@
 | U164 | 언어를 바꾸면 열린 편집기의 검색 패널 문구도 바로 바뀐다(Compartment) | 실앱 미확인 |
 | P71 | 등록 해제 확인창이 늘 뜨고, 토스트 [되돌리기]가 같은 경로로 재등록해 그 행을 고른다 | 실앱 확인 |
 | P72 | clone을 `--progress`로 돌려 진행률을 보이고(`clone-progress` 이벤트), [취소]가 자식 git을 끝낸다(`ws_clone_cancel`) | 큰 https 저장소 미확인 |
-| P81 | `README.en.md`에 'Using alongside other tools' 절과 앵커 링크 | main 머지 뒤 앵커 확인 남음 |
+| P81 | `README.en.md`에 'Using alongside other tools' 절과 앵커 링크 | main 머지(PR #2) 뒤 앵커 확인 — 영어 `#using-alongside-other-tools` · 한국어 `#다른-도구와-같이-쓰기` |
 | P85 | 남은 것(cmd 셸 · 클립보드 실패)은 3차의 B259 · B262가 고쳤다 | 코드 근거 |
 
 ## 실앱 확인
