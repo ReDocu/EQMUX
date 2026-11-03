@@ -26,6 +26,7 @@ import {
   killPty,
   onPtyExit,
   onPtyOutput,
+  pathIsDir,
   resizePty,
   revealPath,
   noteUserInput,
@@ -37,14 +38,16 @@ import {
 import { spawnAgent } from "../backend/agent";
 import { backend } from "../backend/mock";
 import { settings } from "../backend/settings";
-import { t, tf } from "../i18n";
-import { notePtyShell, selectedSession } from "../state";
-import { ContextMenu } from "./ui";
+import { t, tErr, tf } from "../i18n";
+import { notePtyShell, selectedSession, shellCmdOf } from "../state";
+import { ContextMenu, notify } from "./ui";
 import type { MenuGroup } from "./ui";
-import type { AgentCliId, Permissions } from "../types";
+import type { AgentCliId, Permissions, Session } from "../types";
+import { cliOf, effectivePermissions, sessionName } from "../types";
 import { Icon } from "./icons";
 import { IS_MAC, isImeEnter, keyLabel } from "../platform";
 import { findPathLinks, pathChunkAt } from "./termPaths";
+import { fileManagerName, revealLabel } from "../labels";
 
 /** 터미널 색 — styles.css의 --eq-term-* 토큰이 원본이다 (설정 · 색 팔레트가 이 토큰을 고른다).
  *  여기에 hex를 두면 팔레트와 어긋나므로 두지 않는다. 터미널은 어느 테마에서도 다크로 남는다. */
@@ -201,11 +204,15 @@ if (typeof window !== "undefined") {
  *
  *  세션이 만들어진 직후에 걸어야 한다: 셸이 이미 떠 있는 세션에는 부르는 쪽이 직접 하면 된다. */
 const pendingReady = new Map<string, (id: string) => void>();
+/** 셸이 이미 뜬 세션 — 뜬 뒤에 건 예약은 다시 오지 않을 준비 신호를 기다리지 않고 바로 돈다 */
+const readySessions = new Set<string>();
 export function whenSessionReady(id: string, cb: (id: string) => void): void {
-  pendingReady.set(id, cb);
+  if (readySessions.has(id)) cb(id);
+  else pendingReady.set(id, cb);
 }
 
 function fireSessionReady(id: string): void {
+  readySessions.add(id);
   const cb = pendingReady.get(id);
   if (!cb) return;
   pendingReady.delete(id); // 한 번만 — 재스폰·재부착이 같은 행동을 다시 일으키지 않게
@@ -232,6 +239,7 @@ export function syncSessionTerminal(id: string): void {
 /** 키보드 포커스를 이 세션 터미널로 (Focus) — 선택 전이에 붙은 이펙트로는 모자란 자리가 쓴다.
  *  이미 선택돼 있는 세션을 다시 잡을 때(대기 배지 클릭)는 selectedSession이 안 바뀌어
  *  그 이펙트가 다시 돌지 않는다. 여기서 답을 쳐야 하므로 포커스는 확실해야 한다. */
+
 export function focusSessionTerminal(id: string): void {
   REGISTRY.get(id)?.term.focus();
 }
@@ -269,14 +277,15 @@ async function killAndWait(id: string): Promise<void> {
 
 /** 브랜치 부여 (워크트리 이동) — 기존 셸 PTY를 끝내고 같은 세션 id로 새 cwd에서 다시 연다.
  *  출력·종료 구독은 세션 id 키라 재스폰 후에도 그대로 이어진다. */
+/** shell은 Session.shell 라벨이다 — 실행 파일로는 여기서 바꾼다 (B253, ControlCenter의 shellCmdFor와 같은 길) */
 export async function respawnSessionShell(id: string, cwd: string, wsId?: string, shell?: string): Promise<void> {
   if (!isTauri()) return;
   const e = REGISTRY.get(id); // 페인 미마운트 세션도 이동은 된다 — 크기만 기본값 폴백
   await killAndWait(id);
-  e?.term.writeln(`\x1b[90m─── 브랜치 부여 → ${cwd} ───\x1b[0m`);
+  e?.term.writeln(`\x1b[90m─── ${tf("브랜치 부여 → {cwd}", { cwd })} ───\x1b[0m`);
   const size = sessionTermSize(id); // 재개/재시작과 같은 크기 규약 — 미마운트면 기본값 폴백
   try {
-    notePtyShell(id, await spawnPty(id, cwd, size.cols, size.rows, wsId, shell));
+    notePtyShell(id, await spawnPty(id, cwd, size.cols, size.rows, wsId, shellCmdOf(shell)));
   } finally {
     doneRespawning(id);
   }
@@ -302,6 +311,9 @@ export async function launchAgentInSession(
   cli: AgentCliId = "claude",
 ): Promise<void> {
   if (!isTauri()) return;
+  // 작업 폴더가 없으면 셸을 끝내기 전에 멈춘다 — 셸까지 잃고 'exit ?'만 남던 길 (B207)
+  if (!(await pathIsDir(cwd)))
+    throw tf("작업 폴더가 없습니다: {cwd} — 폴더를 되돌리거나 세션을 다시 만드세요", { cwd });
   const e = REGISTRY.get(id);
   await killAndWait(id); // 셸이 살아 있으면 Rust가 재부착만 한다 — 반드시 먼저 끝낸다
   const size = sessionTermSize(id);
@@ -317,10 +329,45 @@ export async function launchAgentInSession(
   }
 }
 
+/** 관리 에이전트의 기동 인자 — 역할 세션에만 있다 (기본 터미널은 셸로 남는다).
+ *  claude --name은 세션 이름 (0.5) — Claude 재개 목록에서 세션을 가를 수 있게 */
+export function roleAgentOf(s: Session): { name: string; permissions: Permissions } | undefined {
+  if (!s.personaId) return undefined;
+  const p = effectivePermissions(s, backend.listJobs().find((j) => j.id === s.jobId));
+  if (!p) return undefined;
+  return { name: sessionName(s, backend.listPersonas().find((x) => x.id === s.personaId)), permissions: p };
+}
+
+/** 역할 세션들을 관리 에이전트로 띄운다 — 사람이 누른 [빠른 시작] · [모두 기동]의 몫이다.
+ *  셸이 아직 안 떴으면 뜨는 대로, 떠 있으면 바로. 이미 에이전트가 붙은 세션(손으로 띄운 것 포함)은
+ *  건너뛴다 — 기동은 페인을 통째로 끝내므로 돌고 있는 에이전트를 죽인다. 띄우기로 한 수를 돌려준다 */
+const launchQueued = new Set<string>();
+export function launchRoleAgents(list: readonly Session[]): number {
+  let n = 0;
+  for (const s of list) {
+    const a = roleAgentOf(s);
+    // 이미 기동을 예약한 세션은 거른다 (0.6 QA B231) — 아직 'shell'이라 두 번 통과했고,
+    // 두 번째 기동이 막 뜨던 첫 에이전트를 죽였다
+    if (!a || s.status !== "shell" || s.agent || launchQueued.has(s.id)) continue;
+    n++;
+    launchQueued.add(s.id);
+    whenSessionReady(s.id, () =>
+      void launchAgentInSession(s.id, s.workspaceId, s.cwd, a.name, a.permissions, cliOf(s))
+        // 실패 이유를 버리지 않는다 (B207) — 빠른 시작 · [모두 기동]은 관제 밖에서 불려 sessionFail 자리가 없다.
+        // 작업 폴더가 없으면 셸은 살아 있고(launchAgentInSession이 끄기 전에 멈춘다) 이유만 토스트로
+        .catch((err) => notify(tf("에이전트를 띄우지 못했습니다 — {err}", { err: tErr(err) })))
+        .finally(() => launchQueued.delete(s.id)),
+    );
+  }
+  return n;
+}
+
 /** 세션 제거 시 호출 — PTY와 함께 터미널 인스턴스도 폐기한다 */
 export function disposeSessionTerminal(id: string) {
   // 스폰 실패·첫 마운트 전 제거로 한 번도 불리지 않은 예약이 남지 않게 (CPU·RAM L3)
   pendingReady.delete(id);
+  readySessions.delete(id);
+  launchQueued.delete(id);
   const e = REGISTRY.get(id);
   if (e) {
     clearTimeout(e.parkTimer);
@@ -700,21 +747,22 @@ async function initSession(
     const tail = await scrollbackTail(props.wsId ?? "default", props.sessionId, settings().scrollbackReplay);
     const cleaned = cleanScrollback(tail);
     if (cleaned.length > 0) {
-      term.writeln(`\x1b[90m─── 이전 세션 스크롤백 · 마지막 ${cleaned.length}줄 재생 ───\x1b[0m`);
+      term.writeln(`\x1b[90m─── ${tf("이전 세션 스크롤백 · 마지막 {n}줄 재생", { n: cleaned.length })} ───\x1b[0m`);
       // SGR 보존본(FR-C-15)이 있으면 색 그대로, 없으면 흐리게 (FR-C-31)
       for (const line of cleaned) term.writeln(line.styled ?? `\x1b[2m${line.text}\x1b[0m`);
       // FR-C-32 경계 — 복원 대기 중에는 "새 세션 시작"이 아니다 (아직 아무것도 안 떴다)
       term.writeln(
         props.revive
-          ? "\x1b[90m─── 웹뷰 재시작 — 실행 중인 세션에 재부착 ───\x1b[0m"
-          : "\x1b[90m─── 새 세션 시작 ───\x1b[0m",
+          ? `\x1b[90m─── ${t("웹뷰 재시작 — 실행 중인 세션에 재부착")} ───\x1b[0m`
+          : `\x1b[90m─── ${t("새 세션 시작")} ───\x1b[0m`,
       );
     }
     // 웹뷰 재시작 재부착 (FR-C-06) — PTY는 Rust에 살아 있다. 스폰 없이 출력 구독만 잇고,
     // ConPTY가 resize에 전체 리페인트로 응답하는 성질로 현재 화면을 다시 그리게 한다.
     if (props.revive) {
+      readySessions.add(props.sessionId); // PTY는 살아 있다 — 뒤에 건 예약이 기다리지 않게
       if (cleaned.length === 0) {
-        term.writeln("\x1b[90m─── 웹뷰 재시작 — 실행 중인 세션에 재부착 ───\x1b[0m");
+        term.writeln(`\x1b[90m─── ${t("웹뷰 재시작 — 실행 중인 세션에 재부착")} ───\x1b[0m`);
       }
       entry.lastCols = term.cols;
       entry.lastRows = term.rows;
@@ -757,7 +805,8 @@ export function TerminalPane(props: {
   cwd: string;
   wsId?: string;
   shell?: string;
-  agent?: { name: string; permissions: Permissions };
+  /** 본문 우클릭 메뉴 머리 — 페인 머리 메뉴와 같은 세션 이름 (U153). 없으면 '터미널' */
+  title?: string;
   revive?: boolean;
   mockLines?: string[];
   /** 페인 소유 화면(컨트롤 센터)이 얹는 세션 액션 그룹 — 편집 그룹 뒤에 붙는다 (시안 §06) */
@@ -771,7 +820,7 @@ export function TerminalPane(props: {
   const [hint, setHint] = createSignal<string | undefined>(undefined);
   let hintTimer: ReturnType<typeof setTimeout> | undefined;
   const showRevealFail = () => {
-    setHint(t("탐색기에서 열 수 없습니다 — 실재하는 경로가 아닙니다"));
+    setHint(tf("{fm}에서 열 수 없습니다 — 실재하는 경로가 아닙니다", { fm: fileManagerName() }));
     clearTimeout(hintTimer);
     hintTimer = setTimeout(() => setHint(undefined), 2600);
   };
@@ -951,7 +1000,7 @@ export function TerminalPane(props: {
           e.unsubs?.forEach((u) => u());
           e.unsubs = undefined;
           try {
-            e.term.writeln(`\r\n\x1b[31m세션 시작 실패 — ${err}\x1b[0m`);
+            e.term.writeln(`\r\n\x1b[31m${tf("세션 시작 실패 — {err}", { err: tErr(err) })}\x1b[0m`);
           } catch {
             /* 터미널이 이미 폐기됨 */
           }
@@ -1088,7 +1137,7 @@ export function TerminalPane(props: {
         </Show>
         <Show when={isTauri() && atTop() && !history()}>
           <button class="btn term-history-chip" onClick={() => void openHistory()}>
-            {t("▲ 디스크 기록 보기 — 링버퍼 위 기록")}
+            {t("▲ 이전 기록 더 보기 (저장된 기록)")}
           </button>
         </Show>
         <Show when={history()}>
@@ -1125,7 +1174,7 @@ export function TerminalPane(props: {
           <ContextMenu
             x={m().x}
             y={m().y}
-            header={props.agent ? `${props.agent.name} · ${t("터미널")}` : t("기본 터미널")}
+            header={props.title ?? t("터미널")}
             onClose={() => setMenu(undefined)}
             groups={[
               // 주 동작 — 편집
@@ -1134,7 +1183,7 @@ export function TerminalPane(props: {
                 { label: t("붙여넣기"), kbd: keyLabel(IS_MAC ? "Ctrl+V" : "Ctrl+Shift+V"), action: () => menuAction((term) => void pasteFromClipboard(props.sessionId, term)) },
                 { label: t("모두 선택"), action: () => menuAction((term) => term.selectAll()) },
                 {
-                  label: t("탐색기에서 열기"),
+                  label: revealLabel(),
                   kbd: t("더블클릭"),
                   disabled: !m().hasSel,
                   action: () => menuAction(() => void revealSelection(true)),
@@ -1156,7 +1205,7 @@ export function TerminalPane(props: {
               ...(props.extraMenu?.() ?? []),
               [
                 { label: t("이미지 붙여넣기 → 파일 저장 후 경로 삽입"), note: true },
-                { label: t("경로 더블클릭 → 탐색기에서 열기 (실재하는 경로만)"), note: true },
+                { label: tf("경로 더블클릭 → {reveal} (실재하는 경로만)", { reveal: revealLabel() }), note: true },
               ],
             ]}
           />

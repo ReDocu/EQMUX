@@ -5,8 +5,18 @@ import { invoke } from "@tauri-apps/api/core";
 import { backend } from "./mock";
 import { injectLine } from "./conversation";
 import { isTauri } from "./pty";
-import { canInject, effectiveTitle, personaLevel, sessionName } from "../types";
-import type { Session } from "../types";
+import { canInject, effectiveTitle, personaLevel, personaProfile, sessionName } from "../types";
+import type { Persona, Session } from "../types";
+
+/** 캐릭터 기억 파일 (0.6 §15-4) — 워크스페이스 기준 상대 경로. Rust roles::memory_rel과 같은 규칙(safe_name) */
+export const memoryRel = (personaId: string) => `.eqmux/memory/${personaId.replace(/[^\p{L}\p{N}@._-]/gu, "_")}.md`;
+
+/** 팀원 표 정체성 한 줄 (0.6 §15-3) — 고급은 시트 정체성(없으면 시트 이름), 기본·중급은 판단 성향 첫 줄 */
+export function personaIdentity(p: Persona | undefined): string | undefined {
+  if (!p) return undefined;
+  const line = personaLevel(p) === "adv" ? (p.characterIdentity ?? p.characterName) : p.hint.split("\n").find((l) => l.trim());
+  return line?.trim() || undefined;
+}
 
 export interface RolePayload {
   session: string;
@@ -24,8 +34,12 @@ export interface RolePayload {
   characterName?: string;
   characterSource?: string;
   title?: string; // 유효 직함 (0.5) — 없으면 역할 파일이 0.4.2와 같다
+  model?: string; // 모델 (0.6 §3 · C5) — 페르소나 > 직무. 없으면 엔진 기본
+  owns?: string; // 직함별 담당 경로 — 직무의 owns (W5 owns.rs가 읽는다)
+  remind: boolean; // 매 턴 캐릭터 상기 (0.6 §15-3) — Rust가 단계별 문장을 frontmatter remind:에 쓴다 (C6)
   /** name = 세션 이름, personaName은 세션 이름과 다를 때만, title = 유효 직함 (0.5) */
-  teammates: { slot: number; name: string; personaName?: string; title?: string; jobName: string; me: boolean }[];
+  teammates: { slot: number; name: string; personaName?: string; title?: string; identity?: string; jobName: string; me: boolean }[];
+  examples: string; // 대사 예시 (0.6 §15-5 · 중급) — 비면 섹션 없음
 }
 
 /** 목 상태(라이브러리 + 편성)에서 합성 페이로드를 만든다 — 역할 없는 세션이면 undefined */
@@ -48,6 +62,7 @@ export function buildRolePayload(s: Session): RolePayload | undefined {
         name,
         ...(pn !== name ? { personaName: pn } : {}),
         ...(effectiveTitle(x, p) ? { title: effectiveTitle(x, p) } : {}),
+        ...(personaIdentity(p) ? { identity: personaIdentity(p) } : {}),
         jobName: jobs.find((j) => j.id === x.jobId)?.name ?? x.jobId,
         me: x.id === s.id,
       };
@@ -62,6 +77,7 @@ export function buildRolePayload(s: Session): RolePayload | undefined {
     hint: level !== "adv" ? persona.hint : "",
     tone: level === "mid" ? (persona.tone ?? "") : "",
     personality: level === "mid" ? (persona.personality ?? "") : "",
+    examples: level === "mid" ? (personaProfile(persona, "mid").examples ?? "") : "",
     characterPath: level === "adv" ? persona.characterPath : undefined,
     characterName: level === "adv" ? persona.characterName : undefined,
     characterSource: level === "adv" ? persona.characterSource : undefined,
@@ -72,6 +88,9 @@ export function buildRolePayload(s: Session): RolePayload | undefined {
     responsibility: job.responsibility,
     forbidden: job.forbidden,
     teammates,
+    remind: !!persona.remind,
+    ...(persona.model?.trim() || job.model?.trim() ? { model: persona.model?.trim() || job.model?.trim() } : {}),
+    ...(job.owns?.trim() ? { owns: job.owns.trim() } : {}),
   };
 }
 

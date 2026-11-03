@@ -13,10 +13,29 @@ pub fn clip_read_text() -> String {
     cb.get_text().unwrap_or_default()
 }
 
+/// `concealed`면 비밀값이다 (B148 — 환경변수 탭의 값 복사) — 붙여넣기는 되지만 클립보드 기록·
+/// 클라우드 동기화(Windows)·기록(macOS)에는 남기지 않는다
 #[tauri::command]
-pub fn clip_write_text(text: String) -> Result<(), String> {
+pub fn clip_write_text(text: String, concealed: Option<bool>) -> Result<(), String> {
     let mut cb = arboard::Clipboard::new().map_err(|e| e.to_string())?;
-    cb.set_text(text).map_err(|e| e.to_string())
+    let set = cb.set();
+    #[cfg(windows)]
+    let set = if concealed == Some(true) {
+        use arboard::SetExtWindows;
+        set.exclude_from_history().exclude_from_cloud()
+    } else {
+        set
+    };
+    #[cfg(target_os = "macos")]
+    let set = if concealed == Some(true) {
+        use arboard::SetExtApple;
+        set.exclude_from_history()
+    } else {
+        set
+    };
+    #[cfg(not(any(windows, target_os = "macos")))]
+    let _ = concealed;
+    set.text(text).map_err(|e| e.to_string())
 }
 
 /// 클립보드 이미지 → %TEMP%\eqmux-pastes\*.png 저장 후 경로 반환. 이미지가 없으면 None.

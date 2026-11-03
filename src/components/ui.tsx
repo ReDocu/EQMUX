@@ -4,6 +4,7 @@ import type { JSX } from "solid-js";
 import { t, tf } from "../i18n";
 import { pushLayer } from "../state";
 import { segKeyIndex } from "./keynav";
+import { reasonText } from "../labels";
 import { Icon } from "./icons";
 import type { AgentCliId, AgentStatus, Session } from "../types";
 import { AGENT_CLI_LABEL, agentAttached, fmtSince, nameBesideNo, slotBesideNo, slotNo, statusText } from "../types";
@@ -16,7 +17,7 @@ export function statusClass(st: AgentStatus): string {
 export function StatusLabel(props: { session: Session; hideExit?: boolean /* 본문이 exit를 따로 보일 때 (U49) */ }) {
   const s = () => props.session;
   return (
-    <span class={`mono ${statusClass(s().status)}`}>
+    <span class={`mono ${statusClass(s().status)}`} title={s().stateReason ? `${t("판정 근거")} · ${reasonText(s().stateReason!)}` : undefined}>
       {statusText(s().status)}
       <Show when={s().status === "busy" && s().subagents > 0}> · {t("서브")} {s().subagents}</Show>
       <Show when={s().status === "waiting" || s().status === "dead"}> · {fmtSince(s().sinceMs)}</Show>
@@ -161,9 +162,12 @@ export function ContextMenu(props: {
 
 /* ── 0.5 공통 부품 (기획서 §UX 기반 › 공통 부품) ───────────────────── */
 
-/** 화면 아래 한 줄 토스트, 4초 — 사람이 한 동작의 실패·거부만. 벨(세션이 사람을 부름)과 섞지 않는다.
- *  호스트 컴포넌트 없이 어디서든 부를 수 있게 DOM에 직접 붙인다 */
-export function notify(msg: string): void {
+/** 화면 아래 한 줄 토스트, 4초 — 사람이 한 동작의 결과. 기본은 실패·거부(빨강)이고,
+ *  성공은 kind "ok"로 중립 테두리에 띄운다 (B184). 벨(세션이 사람을 부름)과 섞지 않는다.
+ *  호스트 컴포넌트 없이 어디서든 부를 수 있게 DOM에 직접 붙인다.
+ *  action을 주면 버튼 하나를 단다 ([되돌리기] · [실행 로그 열기]) — 8초 머물고, 마우스나 포커스가
+ *  토스트 위에 있는 동안은 닫지 않는다 (0.6 QA P71 · B177) */
+export function notify(msg: string, kind: "error" | "ok" = "error", action?: { label: string; run: () => void }): void {
   let host = document.getElementById("eq-toasts");
   if (!host) {
     host = document.createElement("div");
@@ -173,10 +177,22 @@ export function notify(msg: string): void {
     document.body.appendChild(host);
   }
   const el = document.createElement("div");
-  el.className = "eq-toast";
+  el.className = kind === "ok" ? "eq-toast ok" : "eq-toast";
   el.textContent = msg;
+  if (action) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "eq-toast-act";
+    b.textContent = action.label;
+    b.onclick = () => {
+      el.remove();
+      action.run();
+    };
+    el.appendChild(b);
+  }
   host.appendChild(el);
-  setTimeout(() => el.remove(), 4000);
+  const close = () => (el.matches(":hover, :focus-within") ? setTimeout(close, 1000) : el.remove());
+  setTimeout(close, action ? 8000 : 4000);
 }
 
 /** 되돌릴 수 없는 동작 확인창 — 제목에 대상 이름, 본문에 되돌릴 수 있는지, 위험 버튼은 동사.
@@ -304,13 +320,13 @@ export function Chip(props: {
   short?: string; // 좁은 페인(8슬롯)에서 대신 보일 짧은 글자 — 시안 T1sVdJ
   title?: string;
   action?: { label: string; onClick: () => void; title?: string; disabled?: boolean };
-  onClick?: () => void; // 칩 글자 자체가 동작일 때 (+N 펼치기 등)
+  onClick?: (e: MouseEvent & { currentTarget: HTMLButtonElement }) => void; // 칩 글자 자체가 동작일 때 (+N 펼치기 등) — 메뉴 자리는 e.currentTarget (B233)
 }) {
   const tone = () => props.tone ?? "info";
   return (
     <span class={`eq-chip ${tone()}`} title={props.title}>
       <Show when={props.onClick} fallback={<span class="eq-chip-tx">{chipText(props)}</span>}>
-        <button class="eq-chip-tx" onClick={(e) => (e.stopPropagation(), props.onClick!())}>
+        <button class="eq-chip-tx" onClick={(e) => (e.stopPropagation(), props.onClick!(e))}>
           {chipText(props)}
         </button>
       </Show>
@@ -451,7 +467,7 @@ export function StopConfirm(props: {
       info={[
         `${t("세션")}  ${s().id} · ${t("슬롯")} ${slotNo(s().slot)}`,
         `${t("상태")}  ${statusText(s().status)}${s().status === "waiting" && s().waitingFor ? ` · ${t("승인 대기 중")} (${t(s().waitingFor!)})` : ""}`,
-        ...(props.openHandoff ? [`${t("열린 handoff")}  ${t("있음 — 중지해도 원장에 남는다")}`] : []),
+        ...(props.openHandoff ? [`${t("열린 handoff")}  ${t("있음 — 중지해도 기록에 남습니다")}`] : []),
       ]}
       danger
       confirmLabel={t("중지")}

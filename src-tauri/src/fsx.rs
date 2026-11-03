@@ -113,7 +113,7 @@ pub fn tree(ws_path: &str) -> FsTree {
         count += items.len();
         truncated |= cut;
         for (is_dir, _, p) in &items {
-            if *is_dir && depth + 1 <= MAX_DEPTH && !ignored.contains(p) {
+            if *is_dir && depth < MAX_DEPTH && !ignored.contains(p) {
                 queue.push_back((p.clone(), depth + 1));
             }
         }
@@ -176,7 +176,7 @@ fn resolve_existing(ws_path: &str, rel: &str) -> Result<PathBuf, String> {
 fn guard_git(rel: &str) -> Result<(), String> {
     let norm = rel.replace('\\', "/");
     if norm == ".git" || norm.starts_with(".git/") || norm.contains("/.git/") || norm.ends_with("/.git") {
-        return Err(".git은 탐색기에서 조작할 수 없습니다".into());
+        return Err(".git 폴더는 파일 탭에서 고칠 수 없습니다 — git 명령으로 다루세요".into());
     }
     Ok(())
 }
@@ -437,6 +437,12 @@ fn strip_verbatim(p: &Path) -> String {
         Some(rest) => format!(r"\\{rest}"),
         None => s.strip_prefix(r"\\?\").unwrap_or(&s).to_string(),
     }
+}
+
+/// 폴더 실재 확인 (B207) — 에이전트 기동이 셸을 끝내기 전에 작업 폴더를 본다
+#[tauri::command]
+pub fn path_is_dir(path: String) -> bool {
+    Path::new(&path).is_dir()
 }
 
 /// 탐색기에서 열기 — 파일은 그 파일이 선택된 채로, 폴더는 그 폴더가 열린다.

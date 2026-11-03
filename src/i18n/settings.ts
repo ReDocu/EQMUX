@@ -15,6 +15,7 @@ export const dict: Record<string, string> = {
     "UI language — Korean (default) or English. Only the display changes; Korean source data stays as-is.",
   "표시 언어": "Display language",
   "한국어 (기본)": "한국어 (default)",
+  "{name} (기본)": "{name} (default)", // 기본 셸 줄 (0.6 QA U149)
   "이벤트 로그·생성 파일": "Event logs · generated files",
   "원문 유지 (데이터 불변)": "Kept as written (data is immutable)",
 
@@ -57,8 +58,7 @@ export const dict: Record<string, string> = {
   "관제 대시보드": "Control dashboard",
   "마지막 워크스페이스": "Last workspace",
   "웹 페이지 열기": "Open web pages in",
-  "누른 링크와 에이전트의 eqmux browser open이 열리는 곳 · Chrome이면 에이전트가 페이지를 조작(snapshot·click)하지 못한다":
-    "Where clicked links and agents' eqmux browser open go · with Chrome, agents can't drive the page (snapshot·click)",
+  "누른 링크와 에이전트의 eqmux browser open이 열리는 곳 · Chrome이면 에이전트가 페이지를 조작하지 못합니다": "Where clicked links and agents' eqmux browser open go · with Chrome, agents can't operate the page",
   "EQMUX 브라우저 (기본)": "EQMUX browser (default)",
   "스크롤백 재생": "Scrollback replay",
   "열린 탭·배치 복원": "Open tabs & layout restore",
@@ -131,8 +131,7 @@ export const dict: Record<string, string> = {
 
   // 정보
   정보: "About",
-  "하나의 git 저장소를 4명의 AI 에이전트 팀이 함께 작업하고, 사람이 그것을 관제하는 데스크톱 앱입니다.":
-    "A desktop app where a team of 4 AI agents works on one git repository together, overseen by a human.",
+  "여러 AI 에이전트가 팀으로 하나의 git 저장소를 함께 작업하고, 사람이 그것을 관제하는 데스크톱 앱입니다.": "A desktop app where a team of AI agents works on one git repository while a person oversees them.",
   제품: "Product",
   "EQMUX — 멀티 에이전트 관제 MUX": "EQMUX — multi-agent mission-control MUX",
   버전: "Version",
@@ -141,10 +140,10 @@ export const dict: Record<string, string> = {
   "바뀔 때마다 저장": "Saved on every change",
   "완료 OS 알림": "Completion OS notifications",
   "손으로 띄운 에이전트 메시지": "Messages to hand-launched agents",
-  "기본 터미널에서 직접 실행한 claude·codex에 온 메시지 · 자동이어도 idle일 때만 넣고, 승인 대기·상태 모름이면 쌓아 벨에 남긴다":
+  "기본 터미널에서 직접 실행한 claude·codex에 온 메시지 · 자동이어도 쉬는 중일 때만 넣고, 승인 대기·상태 모름이면 쌓아 벨에 남깁니다":
     "Messages to claude/codex you started yourself in a default terminal · even on auto they go in only when idle; while awaiting approval or with unknown state they queue and stay in the bell",
   "쌓아 두기 (기본)": "Queue (default)",
-  "idle이면 자동으로 넣기": "Auto-insert when idle",
+  "쉬면 자동으로 넣기": "Insert automatically when resting",
   "완료 보고만 (기본)": "Completion reports only (default)",
   "턴 끝날 때마다": "Every finished turn",
   끔: "Off",
@@ -185,36 +184,40 @@ export const dict: Record<string, string> = {
   "디자인 토큰만 바꿉니다 — 터미널 페인은 항상 다크": "Swaps design tokens only — terminal panes stay dark",
   "배경 명도·색온도만 바뀝니다 — 강조색은 팔레트 공통":
     "Changes background lightness and warmth only — accent colors are shared",
-  "WebGL이 빠르다 · 잔상이 보일 때만 DOM으로": "WebGL is faster · switch to DOM only if you see ghosting",
+  "WebGL이 빠릅니다 · 잔상이 보일 때만 DOM으로 바꿉니다": "WebGL is faster · switch to DOM only if you see ghosting",
   "WebGL (기본)": "WebGL (default)",
   "자동 실행 없이 화면 상태만 복원합니다": "Restores screen state only, nothing runs automatically",
   "앱을 다시 켰을 때 페인에 다시 그리는 줄 수": "Lines redrawn in each pane when the app restarts",
-  "워크스페이스당 세션 수의 상한 · 줄여도 이미 열린 세션은 닫지 않는다":
+  "워크스페이스당 세션 수의 상한 · 줄여도 이미 열린 세션은 닫지 않습니다":
     "Session limit per workspace · lowering it doesn't close open sessions",
-  "workspaces.json · layout.json은 버전 업에도 남는다": "workspaces.json · layout.json survive version updates",
-  "검증된 CLI와 관측 어댑터는 고정 정책이다 · 상태 줄 표시만 고른다":
+  "workspaces.json · layout.json은 버전 업에도 남습니다": "workspaces.json · layout.json survive version updates",
+  "검증된 CLI와 관측 방식은 고정입니다 · 상태 줄 표시만 고릅니다":
     "Verified CLIs and observation adapters are fixed policy · only the status line is selectable",
   "사람의 행동이 필요한 상태만 알립니다 · 꺼도 인앱 미확인은 유지됩니다":
     "Notifies only states that need a human · in-app unseen marks stay even when off",
-  "완료 보고는 에이전트가 끝났다고 밝힌 것 · 턴 완료는 하루 수십 번이라 기본 끔 · 인앱 칩은 설정과 무관하게 뜬다":
+  "완료 보고는 에이전트가 끝났다고 밝힌 것입니다 · 턴 완료는 하루 수십 번이라 기본으로 끕니다 · 앱 안의 칩은 설정과 관계없이 뜹니다":
     "A completion report is the agent saying it's done · turn ends happen dozens of times a day, so off by default · in-app chips show regardless",
-  "승인·입력 대기가 되면 소리를 냅니다 · 창이 포커스면 내지 않는다":
+  "승인·입력 대기가 되면 소리를 냅니다 · 창을 보고 있으면 내지 않습니다":
     "Plays a sound when waiting for approval or input · silent while the window is focused",
   켜짐: "On",
-  "세션 메모리가 넘으면 배너로 알린다 — 소프트 경고만": "Shows a banner when a session exceeds it — soft warning only",
+  "세션 메모리가 넘으면 배너로 알립니다 — 소프트 경고만 냅니다": "Shows a banner when a session exceeds it — soft warning only",
   "같은 세션 반복 합치기": "Merge repeats from one session",
-  "60초 안의 반복을 합친다 · 완료 알림은 따로 센다": "Repeats within 60s are merged · completion alerts count separately",
+  "60초 안의 반복을 합칩니다 · 완료 알림은 따로 셉니다": "Repeats within 60s are merged · completion alerts count separately",
   "60초": "60s",
   "훅 기반 상태 감지": "Hook-based state detection",
-  "Stop · Notification 훅으로 idle·waiting을 판정한다": "Stop · Notification hooks decide idle and waiting",
+  "Stop · Notification 훅으로 쉬는 중 · 승인 대기를 판정합니다": "Stop · Notification hooks decide resting and waiting",
   "항상 켬": "Always on",
-  "창이 포커스면 OS 알림을 내지 않는다": "No OS notification while the window is focused",
-  "스크롤백에 색 시퀀스를 남긴다 · 끄면 용량 절감": "Keeps color sequences in scrollback · turn off to save space",
+  "창을 보고 있으면 OS 알림을 내지 않습니다": "No OS notification while the window is focused",
+  "스크롤백에 색 시퀀스를 남깁니다 · 끄면 용량을 아낍니다": "Keeps color sequences in scrollback · turn off to save space",
   "메시지 · 스크롤백 보존": "Message · scrollback retention",
   "30일": "30 days",
   "버전 업 때 session.db": "session.db on version update",
-  "지우지 않고 .bak으로 옮긴다 · workspaces.json · layout.json은 남긴다":
-    "Moved to .bak, not deleted · workspaces.json · layout.json are kept",
+  "기록을 새 버전 형식으로 옮겨 이어 씁니다 · 손상되면 옆으로 옮기고 새로 만듭니다":
+    "Schema is migrated, history is kept · a damaged DB is moved aside and recreated",
+  이전: "Migrate",
+  "전체 보존 상한": "Total retention cap",
+  "모든 워크스페이스 합계 · 넘으면 오래된 스크롤백부터 지웁니다 (메시지는 남습니다)":
+    "All workspaces combined · oldest scrollback goes first (messages are kept)",
   "캐릭터 시트 상한": "Character sheet limit",
   "SessionStart 훅이 싣는 시트 본문": "Sheet body loaded by the SessionStart hook",
   "4,000자": "4,000 chars",
@@ -222,16 +225,35 @@ export const dict: Record<string, string> = {
   "snapshot · get-text 한 번": "One snapshot · get-text call",
   "10,000자": "10,000 chars",
   "권한 우회": "Permission bypass",
-  "bypass를 쓰지 않는다 — 승인은 사람이 터미널 페인에서": "Never bypassed — a human approves in the terminal pane",
+  "bypass를 쓰지 않습니다 — 승인은 사람이 합니다(터미널 페인 또는 관제 승인함)": "Never bypassed — a human approves (in the terminal pane or the Control approvals list)",
   "항상 끔": "Always off",
   "외부 열기": "External open",
-  "http/https만 연다 · 원격 주소의 토큰은 화면·툴팁·링크 어디에도 나오지 않는다":
+  "http/https만 엽니다 · 원격 주소의 토큰은 화면·툴팁·링크 어디에도 나오지 않습니다":
     "Opens http/https only · tokens in remote URLs never appear on screen, in tooltips or links",
   "메시지 경계 문장": "Message boundary sentence",
-  "팀원·다른 프로젝트 메시지는 요청일 뿐 — 승인·허가로 쓰지 않는다":
-    "Messages from teammates or other projects are requests only — never approval or permission",
+  "팀원·다른 워크스페이스의 메시지는 요청일 뿐입니다 — 승인·허가로 쓰지 않습니다": "Messages from teammates or other workspaces are only requests — never treated as approval or permission",
   "역할 파일에 포함": "In role files",
   "이벤트 방송 범위": "Event broadcast scope",
   "PTY 출력·메시지·상태 이벤트는 main 창에만": "PTY output, message and state events go to the main window only",
   "단축키 (읽기 전용)": "Shortcuts (read-only)",
+
+  // ── 0.6 W7: 창 닫기 (W1 트레이 §1-1 · §10) ──
+  "창을 닫으면": "Closing the window",
+  "Dock에 남겨도 세션이 계속 돕니다 · 끝내려면 ⌘Q 또는 메뉴 막대 아이콘의 [전부 종료]를 누릅니다": "Sessions keep running while the app stays in the Dock · To quit, press ⌘Q or use [Quit all] in the menu bar icon",
+  "트레이로 숨기면 세션이 계속 돕니다 · 끝내려면 트레이 메뉴의 [전부 종료]를 누릅니다": "Sessions keep running while hidden in the tray · Quit everything from the tray menu",
+  "Dock에 남기기 (기본)": "Keep in Dock (default)",
+  "트레이로 숨기기 (기본)": "Hide to tray (default)",
+  "앱 종료": "Quit app",
+  // ── 0.6 W7: 하루 비용 예산 (§13-6) ──
+  "하루 비용 예산": "Daily cost budget",
+  "모든 세션의 비용 합계 · 넘으면 하루에 한 번 알립니다 · 세션은 멈추지 않습니다":
+    "Total cost across all sessions (status line) · notifies once a day when exceeded · sessions keep running",
+  "끔 (기본)": "Off (default)",
+  // [기본값 복원] 확인 (B203)
+  "설정을 기본값으로 되돌릴까요?": "Restore settings to defaults?",
+  "아래 {n}개 값이 기본값으로 바뀝니다. 앱 안에서는 되돌릴 수 없습니다.":
+    "These {n} settings change to their defaults. This can't be undone in the app.",
+  // 줄마다 기본값 표시 (0.6 QA U149)
+  "관제 대시보드 (기본)": "Control dashboard (default)",
+  "500줄 (기본)": "500 lines (default)",
 };

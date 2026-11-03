@@ -1,0 +1,14 @@
+name: Idea / 제안
+description: Something EQMUX should do / EQMUX에 있었으면 하는 것
+labels: [idea]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / 문제
+      description: What are you trying to do, and where does EQMUX get in the way?
+    validations: { required: true }
+  - type: textarea
+    id: idea
+    attributes:
+      label: Idea / 제안

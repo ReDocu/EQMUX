@@ -4,12 +4,12 @@ import { For, Show } from "solid-js";
 import { backend } from "../backend/mock";
 import { respawnSessionShell } from "../components/TerminalPane";
 import { Icon } from "../components/icons";
-import { Segmented } from "../components/ui";
 import { maxSlots } from "../backend/settings";
 import { t, tf } from "../i18n";
 import { defaultShell, setView, tick } from "../state";
 import { sessionName, slotNo } from "../types";
 import { defaultTerminalPlan } from "./launchRules";
+import { WizardSteps } from "./LaunchMode";
 
 export function DefaultTerminalSetup(props: { wsId: string }) {
   const ws = () => backend.listWorkspaces().find((w) => w.id === props.wsId);
@@ -44,7 +44,8 @@ export function DefaultTerminalSetup(props: { wsId: string }) {
     backend.openWorkspace(props.wsId);
     // 역할 없는 셸 세션 → 실제 PTY 부착. 죽어 있던 세션을 되살렸다면 PTY도 다시 띄운다 (B58) —
     // 페인의 initialized 래치는 세션이 제거될 때만 풀리므로 재마운트가 대신 스폰해 주지 않는다
-    const revived = backend.startDefaultTerminal(props.wsId);
+    // 카드에 보인 셸 그대로 연다 (B202) — 셸 인자가 없으면 늘 pwsh로 떴다
+    const revived = backend.startDefaultTerminal(props.wsId, defaultShell().label);
     if (revived) void respawnSessionShell(revived.id, revived.cwd, revived.workspaceId, revived.shell);
     setView({ kind: "workspace", id: props.wsId });
   };
@@ -58,25 +59,26 @@ export function DefaultTerminalSetup(props: { wsId: string }) {
           </h1>
           <div class="sub mono">{t("실제 기본 셸과 브랜치를 보입니다 · 열기 전에는 아무것도 실행하지 않습니다")}</div>
         </div>
-        <button class="btn primary" disabled={full()} title={blocked()} onClick={openTerminal}>
-          <Icon name="terminal" size={12} />
-          {"blocked" in plan() && !full() ? t("탭으로 가기") : t("열기")}
-        </button>
+        <div class="dts-head-actions">
+          <button class="btn" onClick={() => setView({ kind: "launch", wsId: props.wsId })}>
+            {t("← 실행 방식")}
+          </button>
+          {/* 마지막 버튼은 도착지를 말한다 (P50) */}
+          <button class="btn primary" disabled={full()} title={blocked()} onClick={openTerminal}>
+            <Icon name="terminal" size={12} />
+            {"blocked" in plan() && !full() ? t("탭으로 가기") : t("셸 열기 → 워크스페이스")}
+          </button>
+        </div>
       </div>
 
       <div class="screen-body dts-body">
+        <WizardSteps path="terminal" at={2} />
         <div class="dts-mode-row">
-          {/* 역할 세션 쪽은 실행 방식 선택(팀 캐스팅 입구)으로 간다 — 0.4.2의 "역할 팀 구성" 버튼과 같은 동작 */}
-          <Segmented
-            label={t("실행 방식")}
-            items={[
-              { value: "terminal", label: t("기본 터미널") },
-              { value: "role", label: t("역할 세션") },
-            ]}
-            value="terminal"
-            onChange={() => setView({ kind: "launch", wsId: props.wsId })}
-          />
-          <span class="muted">{t("역할 세션은 팀 캐스팅에서")}</span>
+          {/* 토글처럼 보이던 [기본 터미널 | 역할 세션]은 실제로는 '뒤로'였다 (P49) — 이동임을 드러내는 링크로 */}
+          {/* 실행 방식으로 돌아가면 빠른 시작이 골라져 있었다 (0.6 QA U151) — 역할 팀 갈래(팀 캐스팅)로 바로 */}
+          <button class="wizard-link" onClick={() => setView({ kind: "casting", wsId: props.wsId, wizard: true })}>
+            {t("역할 팀으로 바꾸기 →")}
+          </button>
         </div>
 
         <Show when={blocked()}>
@@ -91,9 +93,9 @@ export function DefaultTerminalSetup(props: { wsId: string }) {
                 when={target() === n}
                 fallback={
                   <div class="card dts-card">
+                    {/* 누를 수 없는 체크 상자 아이콘은 토글처럼 보였다 (U172) — 슬롯 번호만 */}
                     <div class="dts-card-head">
                       <span class="mono dts-card-slot">SLOT {slotNo(n)}</span>
-                      <Icon name={occupant(n) ? "square-check" : "square"} size={14} class="muted" />
                     </div>
                     <div class="dts-card-empty muted">
                       <Show when={occupant(n)} fallback={<Icon name="plus" size={18} />}>
@@ -109,7 +111,6 @@ export function DefaultTerminalSetup(props: { wsId: string }) {
                 <div class="card dts-card on">
                   <div class="dts-card-head">
                     <span class="mono dts-card-slot">SLOT {slotNo(n)}</span>
-                    <Icon name="square-check" size={14} />
                   </div>
                   <div class="kv">
                     <span class="k">{t("셸")}</span>
@@ -121,8 +122,9 @@ export function DefaultTerminalSetup(props: { wsId: string }) {
                   </div>
                   <div class="kv">
                     <span class="k">{t("작업 폴더")}</span>
-                    <span class="v mono" title={ws()?.path}>
-                      {ws()?.path ?? "—"}
+                    {/* 앞을 줄인다 (U172) — 끝이 잘려 정작 폴더 이름이 안 보였다. 바깥 rtl은 말줄임 쪽만, 글자 순서는 bdi가 지킨다 */}
+                    <span class="v mono dts-path" title={ws()?.path}>
+                      <bdi dir="ltr">{ws()?.path ?? "—"}</bdi>
                     </span>
                   </div>
                 </div>
@@ -133,7 +135,7 @@ export function DefaultTerminalSetup(props: { wsId: string }) {
 
         <div class="dts-footer">
           <Icon name="info" size={13} />
-          <span class="muted">{t("기본 셸은 설정의 '기본 셸' 값입니다. 열기 전에는 아무것도 실행하지 않습니다.")}</span>
+          <span class="muted">{t("기본 셸은 설정의 '기본 셸' 값이고, 이름은 자동으로 붙습니다 — 연 뒤 세션 상세에서 바꿀 수 있습니다. 열기 전에는 아무것도 실행하지 않습니다.")}</span>
         </div>
       </div>
     </div>

@@ -22,24 +22,27 @@ import {
   setTerminalFull,
   setView,
   SHELLS,
+  shellCmdOf,
   ptyShells,
   terminalFull,
   tick,
   toggleExplorer,
   railOpen,
   setRailOpen,
+  modalOpen,
 } from "../state";
 import { Chip, ConfirmDialog, ContextMenu, Eyebrow, FieldHint, Identity, notify, PaneNoText, Segmented, StatusLabel, StopConfirm } from "../components/ui";
 import { jobMeta } from "../jobs";
 import type { ChipTone, MenuGroup } from "../components/ui";
+import { SessionPortrait } from "../components/PersonaAvatar";
 import { discardPending, injectPending, pendingCount, pendingFor, sendConversation, senderLabel, unmanagedAgent } from "../backend/conversation";
-import { attentionOrder, inboxWaiting, pickNext } from "../backend/attention";
+import { attentionOrder, inboxWaiting, pickNext, urgentSenders } from "../backend/attention";
 import { canStartFresh, resumeAgent, startFresh } from "../backend/agent";
 import { queryEvents } from "../backend/events";
 import type { FeedEvent } from "../backend/events";
-import { gitOverview, worktreeList } from "../backend/git";
+import { gitOverview, pathKeys, worktreeList } from "../backend/git";
 import type { GitOverview, WorktreeInfo } from "../backend/git";
-import { agentClis, agentClisReady, refreshAgentClis } from "../backend/agentprobe";
+import { agentClis, agentClisReady, INSTALL_CMD, refreshAgentClis } from "../backend/agentprobe";
 import { autoAssignDefault, refreshMissions } from "../backend/missions";
 import { clipWriteText, isTauri, killPty, onPtyOutput, revealPath, storePurgeScrollback, storeUsageReal, writePty } from "../backend/pty";
 import type { StoreUsageReal } from "../backend/pty";
@@ -47,24 +50,29 @@ import { removeRoleFile } from "../backend/roles";
 import { maxSlots, settings, toggleMuted } from "../backend/settings";
 import { ensureWorktree } from "../backend/team";
 import { gridTemplateStyle, PaneDividers } from "../components/PaneDividers";
+import { slotCells } from "./gridSlots";
 import { SidePanel } from "../components/SidePanel";
 import {
   disposeSessionTerminal,
   focusSessionTerminal,
   isRespawning,
   launchAgentInSession,
+  roleAgentOf,
   sessionTermSize,
   syncSessionTerminal,
   TerminalPane,
   whenSessionReady,
 } from "../components/TerminalPane";
-import { t, tf } from "../i18n";
+import { t, tErr, tf } from "../i18n";
 import { SessionDetailPanel } from "./SessionDetailPanel";
 import { TranscriptPane } from "./TranscriptPane";
 import type { AgentCliId, Session, Workspace } from "../types";
-import { AGENT_CLI_LABEL, agentAttached, cliOf, statusText, effectivePermissions, effectiveTitle, nameBesideNo, paneNo, SESSION_NAME_MAX, sessionDisplayName, sessionName, slotNo } from "../types";
+import { PaneConflictChip } from "../components/EditConflicts";
+import { AGENT_CLI_LABEL, agentAttached, cliOf, statusText, effectiveTitle, limitHit, nameBesideNo, paneNo, SESSION_NAME_MAX, sessionDisplayName, sessionName, slotNo } from "../types";
+import { CTX_WARN, limitText, resetAt } from "../backend/usage";
 import { Icon } from "../components/icons";
 import { IS_MAC, keyLabel } from "../platform";
+import { jobName as jobLabel } from "../labels";
 
 /** 셸에 에이전트 명령을 쳐 넣는다 — claude 말고는 EQMUX가 관리하는 스폰 경로가 없다
  *  (역할 주입·훅·재개는 agent.rs의 ClaudeCodeAdapter 전용). 사람이 터미널에 직접 치는 것과
@@ -100,13 +108,6 @@ function mockLines(s: Session, personaName: string): string[] {
   return [...base, `● ${s.lastOutput || "대기 중"}`];
 }
 
-/** 엔진 공식 설치 명령 (P1 D6) — 복사만 한다. 실행은 사람이 터미널에서.
- *  macOS zsh에 PowerShell 문법(irm … | iex)을 붙이면 'command not found: irm'으로 끝났다 (B128) */
-const INSTALL_CMD: Record<AgentCliId, string> = {
-  claude: IS_MAC ? "curl -fsSL https://claude.ai/install.sh | bash" : "irm https://claude.ai/install.ps1 | iex",
-  codex: "npm install -g @openai/codex",
-};
-
 export function ControlCenter(props: { workspace: Workspace }) {
   // 상태바·레일·메뉴 등 수십 곳이 읽는다 — 메모로 브로드캐스트(tick)당 1회만 필터·정렬한다
   const sessions = createMemo(() => {
@@ -123,6 +124,9 @@ export function ControlCenter(props: { workspace: Workspace }) {
 
   const [centerTab, setCenterTab] = createSignal<"terminal" | "transcript">("terminal");
   const [zoomed, setZoomed] = createSignal<string | undefined>(undefined); // B1 — 줌 토글
+  // 전체 화면은 전역 신호지만 줌은 이 탭의 것이다 — 다른 탭으로 오면서 전체 화면이 따라오지 않게 끈다.
+  // Focus 요청(focusSession)으로 온 것만 켜 둔다 (B234). 컴포넌트 본문이라 이펙트보다 먼저 돈다
+  if (!focusRequest()?.full) setTerminalFull(false);
   // 줌 전환 — 이산 크기 변화이므로 RO 디바운스(100ms)를 기다리지 않고 레이아웃 확정 직후
   // 바로 fit→PTY resize 한다. ConPTY 리페인트 스왑이 전환 동작 안에 흡수돼 늦은 깜빡임이 안 된다.
   const applyZoom = (next: string | undefined) => {
@@ -134,11 +138,12 @@ export function ControlCenter(props: { workspace: Workspace }) {
   // 선택 프롬프트(질문·계획 승인)와 승인 대기는 대화로 답할 수 없다: waiting에는 본문을
   // 주입하지 않고 인박스에 쌓아 두므로(M3 — TUI 다이얼로그의 오답이 되기 때문), 진행하는
   // 길은 그 페인에 직접 치는 것뿐이다. 그래서 선택·줌·전체 화면·키보드를 한 동작으로 묶는다.
-  const focusPane = (id: string) => {
+  const focusPane = (id: string, zoom = false) => {
     setCenterTab("terminal");
     setSelectedSession(id);
-    // 줌은 Focus(전체 화면 요청)일 때만 — 다음 미확인으로·Ctrl+Alt+N은 키보드 포커스만 옮긴다
-    if (terminalFull()) applyZoom(id);
+    // 줌은 Focus(전체 화면 요청)일 때만 — 벨 · 다음 미확인으로 · 멈춤 칩은 키보드 포커스만 옮긴다.
+    // 전체 화면이 켜져 있다는 것만으로 줌을 걸지 않는다 (B234)
+    if (zoom) applyZoom(id);
     requestAnimationFrame(() => focusSessionTerminal(id));
   };
   // 진입은 하나 — 여기서 눌러도 대화 패널에서 눌러도 같은 요청을 거친다 (state.focusSession).
@@ -148,7 +153,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
     on(focusRequest, (r) => {
       // 남의 워크스페이스 요청이면 그냥 둔다 — 그 탭이 마운트되면서 자기 것으로 받아간다
       if (!r || !sessions().some((s) => s.id === r.session)) return;
-      focusPane(r.session);
+      focusPane(r.session, !!r.full);
       setFocusRequest(undefined); // 한 번 쓰고 비운다 — 이 탭에 다시 왔다고 또 잡지 않게
     }),
   );
@@ -163,7 +168,10 @@ export function ControlCenter(props: { workspace: Workspace }) {
   const engineCount = () => new Set(sessions().filter((s) => s.personaId).map((s) => cliOf(s))).size;
   // 상단 칩은 이 워크스페이스 안에서만 돈다 (B88) — 숫자는 이 탭 것인데 누르면 다른 탭의 종료 세션으로
   // 가던 것. 세는 집합과 도는 집합이 같다. 모든 워크스페이스를 도는 것은 Ctrl+Shift+U(nextUnseen)다
-  const localAttention = () => attentionOrder(sessions(), inboxWaiting);
+  const localAttention = () => {
+    const u = urgentSenders(backend.listMessages()); // 긴급 에스컬레이션이 맨 위 (W3 §4)
+    return attentionOrder(sessions(), inboxWaiting, (s) => u.has(s.id));
+  };
   let lastLocalJump: string | undefined;
   const nextLocal = () => {
     const next = pickNext(localAttention(), lastLocalJump);
@@ -209,6 +217,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
     >
       {/* 점 하나 — 주의 신호가 있으면 그 단계 색, 없으면 상태 색 (§페인 헤더 문법) */}
       <span class={attnChips(s)[0] ? `rail-attn ${attnChips(s)[0]!.tone}` : `sdot ${s.status}`} />
+      <SessionPortrait sessionId={s.id} />
       {/* 번호는 헤더와 같은 두 자리 슬롯 번호 — 헤더와 레일을 번호로 맞춰 본다 */}
       <span class="rail-no mono">
         <PaneNoText slot={s.slot} no={paneNo(s)} />
@@ -247,9 +256,8 @@ export function ControlCenter(props: { workspace: Workspace }) {
       </Show>
     </div>
   );
-  // 레일 항목 — 세션과 빈 슬롯 번호를 슬롯 순으로 (QA: 04 카이가 01~03 빈 슬롯보다 먼저 보였다)
-  const railItems = (): (Session | number)[] =>
-    [...sessions(), ...emptySlots()].sort((x, y) => (typeof x === "number" ? x : x.slot) - (typeof y === "number" ? y : y.slot));
+  // 레일 항목 — 세션과 빈 슬롯 번호를 슬롯 순으로 (QA: 04 카이가 01~03 빈 슬롯보다 먼저 보였다). 그리드도 같은 순서 (B208)
+  const railItems = (): (Session | number)[] => slotCells(sessions(), maxSlots());
   /** 지금 사람을 기다리는 세션 — 오래 기다린 것이 먼저다 (ATTENTION_ORDER와 같은 취지) */
   const waitingSessions = createMemo(() =>
     sessions()
@@ -258,6 +266,13 @@ export function ControlCenter(props: { workspace: Workspace }) {
   );
   // 세션 상세 팝업 — 우측 고정 인스펙터의 후신. 아바타 레일·페인 메뉴 "세션 상세"가 연다
   const [detailOpen, setDetailOpen] = createSignal(false);
+  // 드로어도 모달 레이어다 (B205) — ESC는 입력칸부터 풀고, Tab은 안에서 돌고, 이동 단축키는 막힌다.
+  // 그리는 세션은 연 순간의 것으로 고정한다 — 선택이 바뀌어도 사람이 보던 상세가 남의 것으로 바뀌지 않게
+  let detailBox: HTMLDivElement | undefined;
+  createEffect(() => detailOpen() && onCleanup(pushLayer(() => setDetailOpen(false), () => detailBox)));
+  const [detailId, setDetailId] = createSignal<string>();
+  createEffect(on(detailOpen, (o) => setDetailId(o ? selected()?.id : undefined)));
+  const detailSession = () => sessions().find((s) => s.id === detailId());
   // 밖에서 온 상세 열기 요청 (U63 — 복구 창) — 남의 워크스페이스 것이면 그 탭이 받아간다
   createEffect(
     on(detailRequest, (r) => {
@@ -300,9 +315,24 @@ export function ControlCenter(props: { workspace: Workspace }) {
     onCleanup(() => clearInterval(t));
   });
   const gitBranch = () => gitInfo()?.branch ?? props.workspace.branch;
-  const normPath = (p: string) => p.replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase();
+  // 경로 비교 키 (B132 · B151) — Rust가 준 실경로 키(wt.key · path_keys)를 쓴다. 없으면 구분자 · 끝 `/`만 맞추고
+  // 소문자화는 Windows에서만 (macOS는 대소문자를 가르는 볼륨이 있다)
+  const normPath = (p: string) => {
+    const n = p.replace(/\\/g, "/").replace(/\/+$/, "");
+    return IS_MAC ? n : n.toLowerCase();
+  };
+  // 세션 cwd → 키. cwd는 세션마다 바뀌지 않으니 한 번 받아 둔다
+  const [cwdKeys, setCwdKeys] = createSignal<Record<string, string>>({});
+  createEffect(() => {
+    const miss = [...new Set(sessions().map((s) => s.cwd))].filter((c) => c && !(c in cwdKeys()));
+    if (miss.length)
+      void pathKeys(miss).then((k) => setCwdKeys((m) => ({ ...m, ...Object.fromEntries(miss.map((c, i) => [c, k[i]])) })));
+  });
   /** 이 워크트리에서 도는 세션들 — cwd 실측 일치 */
-  const wtMembers = (wt: WorktreeInfo) => sessions().filter((s) => normPath(s.cwd) === normPath(wt.path));
+  const wtMembers = (wt: WorktreeInfo) => {
+    const key = wt.key ?? normPath(wt.path);
+    return sessions().filter((s) => (cwdKeys()[s.cwd] ?? normPath(s.cwd)) === key);
+  };
   const wtTail = (p: string) => p.replace(/\\/g, "/").split("/").slice(-2).join("/");
 
   // 저장 기록 초기화 (FR-C-52 — 사용자 조작) — 상태바의 WAL·lines를 직접 0으로 되돌린다.
@@ -346,29 +376,36 @@ export function ControlCenter(props: { workspace: Workspace }) {
       ? wsFeed().map((e) => ({ time: e.time, message: e.message }))
       : backend.listEvents().slice(0, 4).map((e) => ({ time: e.time, message: e.message }));
 
-  // ESC = 상세 드로어 → 줌 → 전체 화면 순으로 한 겹씩 닫는다
+  /** 이 ESC가 세션 터미널 안에서 눌렸나 — 그러면 앱은 손대지 않고 PTY로 보낸다.
+   *  에이전트 TUI(B199)만이 아니다: 맨 셸의 vim · less · fzf(--height처럼 대체 화면을 안 쓰는 것까지)도
+   *  ESC를 받아야 한다 (B254). 나가는 길은 Shift+ESC와 머리의 [전체 화면 종료] */
+  const escToTui = (target: EventTarget | null) => {
+    const el = target as HTMLElement | null;
+    if (!el?.closest?.(".xterm")) return false;
+    const id = (el.closest("[data-session-id]") as HTMLElement | null)?.dataset.sessionId;
+    return sessions().some((x) => x.id === id);
+  };
+
+  // ESC = 상세 드로어 → 줌 → 전체 화면 순으로 한 겹씩 닫는다. 터미널 안에서는 Shift+ESC (B254)
   onMount(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
-      if (detailOpen()) {
-        e.preventDefault();
-        setDetailOpen(false);
-        return;
-      }
+      if (!e.shiftKey && escToTui(e.target)) return;
+      // 상세 드로어 · 대화상자는 레이어가 닫는다(state.ts) — 그 안 입력칸의 ESC로 전체 화면까지 풀지 않는다
+      if (modalOpen()) return;
       if (terminalFull()) {
-        // 대기 중인 페인의 터미널에 커서가 있으면 ESC는 그 TUI의 것이다 — 선택 프롬프트가
-        // 스스로 "Esc to cancel"이라 안내하는 자리다. 여기서 겹쳐 받으면 답을 취소하는
-        // 김에 보고 있던 화면(줌·전체 화면)까지 잃는다. Focus로 잡아 온 직후가 정확히
-        // 이 상황이다. 대기 중이 아니면 종전대로 — 나가는 길은 ESC 하나로 남는다.
-        const inTerm = (e.target as HTMLElement | null)?.closest?.(".xterm");
-        if (inTerm && selected()?.status === "waiting") return;
+        // 터미널에 커서가 있으면 ESC는 그 안 프로그램의 것이다 — 에이전트면 턴 중단 · "Esc to cancel"(B199),
+        // 맨 셸이면 vim · less · fzf (B254). 앱이 가져가면 답을 취소하거나 일을 끊는다.
+        // 여기 오는 것은 터미널 밖의 ESC이거나 Shift+ESC — 한 겹 닫는다
         e.preventDefault();
+        e.stopPropagation();
         if (zoomed()) applyZoom(undefined);
         else setTerminalFull(false);
       }
     };
-    window.addEventListener("keydown", onKey);
-    onCleanup(() => window.removeEventListener("keydown", onKey));
+    // 캡처 단계 — xterm은 처리한 키를 stopPropagation하므로 버블 단계에서는 터미널의 ESC를 못 받는다 (B199)
+    window.addEventListener("keydown", onKey, true);
+    onCleanup(() => window.removeEventListener("keydown", onKey, true));
   });
 
   // Ctrl+Alt+1~8(macOS ⌘1~8) — 이 워크스페이스의 N번 슬롯 페인에 키보드 포커스만 (줌·Focus 아님).
@@ -383,7 +420,8 @@ export function ControlCenter(props: { workspace: Workspace }) {
       else if (!e.ctrlKey || !e.altKey || e.shiftKey || e.metaKey || e.getModifierState("AltGraph")) return;
       const m = /^Digit([1-8])$/.exec(e.code);
       const s = m && sessions().find((x) => x.slot === Number(m[1]));
-      if (!s) return;
+      // 대화상자가 떠 있으면 뒤의 터미널로 키보드를 옮기지 않는다 (B204 · B72와 같은 규칙)
+      if (!s || modalOpen()) return;
       e.preventDefault();
       e.stopPropagation();
       setCenterTab("terminal");
@@ -403,7 +441,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
       const now = Date.now();
       const visible =
         document.hasFocus() && centerTab() === "terminal"
-          ? gridSessions().filter((s) => s.unseenDone === "turn")
+          ? gridItems().filter((s): s is Session => typeof s !== "number" && s.unseenDone === "turn")
           : [];
       const ids = new Set(visible.map((s) => s.id));
       for (const id of seenSince.keys()) if (!ids.has(id)) seenSince.delete(id);
@@ -421,7 +459,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
 
   // 역할 없는 셸 세션(기본 터미널)은 페르소나·직무 대신 고정 라벨을 쓴다
   const personaName = (id: string) => persona(id)?.name ?? t("기본 터미널");
-  const jobName = (id: string) => job(id)?.name ?? t("셸");
+  const jobName = (id: string) => jobLabel(job(id), t("셸"));
 
   // 슬롯 단위 세션 추가 — 기본 터미널 / 역할 세션 2택 (C). 캐스팅은 팀 전체 프리셋 도구로 남는다.
   const [addOpen, setAddOpen] = createSignal(false);
@@ -444,7 +482,11 @@ export function ControlCenter(props: { workspace: Workspace }) {
     const saved = persona(pid)?.job;
     return jobs.find((j) => j.id === saved)?.id ?? jobs.find((j) => j.id === "dev")?.id ?? jobs[0]?.id ?? "";
   };
-  const openAdd = () => {
+  // 누른 빈 슬롯 번호 (B208) — 없으면 첫 빈 슬롯. 만들기 창 제목과 실제 자리가 같다
+  const [addSlot, setAddSlot] = createSignal<number>();
+  const targetSlot = () => addSlot() ?? emptySlots()[0];
+  const openAdd = (slot?: number) => {
+    setAddSlot(slot !== undefined && emptySlots().includes(slot) ? slot : undefined);
     setAddPersona(availablePersonas()[0]?.id ?? "");
     setAddJob(personaJobId(addPersona()));
     setAddWorktree(false);
@@ -456,7 +498,12 @@ export function ControlCenter(props: { workspace: Workspace }) {
   };
   const addTerminal = () => {
     if (addNameErr()) return;
-    backend.addTerminal(props.workspace.id, addShell() || defaultShell().label, undefined, addName());
+    const created = backend.addTerminal(props.workspace.id, addShell() || defaultShell().label, undefined, addName(), targetSlot());
+    // 새 페인에 키보드를 준다 (U108) — 이전 페인에 남아 친 키가 엉뚱한 셸로 갔다
+    if (created) {
+      setSelectedSession(created.id);
+      whenSessionReady(created.id, focusSessionTerminal);
+    }
     setAddOpen(false);
   };
   // 셸 실행 에이전트 열기 (codex 등) — 설치 확인은 카드를 내놓을 때 이미 끝났다.
@@ -464,7 +511,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
   // 화면 에코까지만 간다 (P-2). 관리 에이전트는 이 경로가 아니라 addRoleSession이다.
   const addCliSession = (cmd: string) => {
     if (addNameErr()) return;
-    const created = backend.addTerminal(props.workspace.id, addShell() || defaultShell().label, undefined, addName());
+    const created = backend.addTerminal(props.workspace.id, addShell() || defaultShell().label, undefined, addName(), targetSlot());
     if (created) whenSessionReady(created.id, (id) => runCliIn(id, cmd));
     setAddOpen(false);
   };
@@ -478,11 +525,11 @@ export function ControlCenter(props: { workspace: Workspace }) {
   const addNoSlot = () => !emptySlots()[0];
   const addCliMissing = () => agentClisReady() && !agentClis().some((a) => a.cmd === addCli() && a.installed);
   const [shellMenuOpen, setShellMenuOpen] = createSignal(false);
-  const shellCmdFor = (s: Session) => SHELLS.find((x) => x.label === s.shell)?.cmd;
+  const shellCmdFor = (s: Session) => shellCmdOf(s.shell);
   const addRoleSession = async () => {
     if (!addPersona() || !addJob() || addNameErr()) return;
     setAddErr(undefined);
-    const opts: { cwd?: string; worktree?: boolean; cli: AgentCliId; name?: string } = { cli: addCli(), name: addName() };
+    const opts: { cwd?: string; worktree?: boolean; cli: AgentCliId; name?: string; slot?: number } = { cli: addCli(), name: addName(), slot: targetSlot() };
     // 워크트리 격리 (FR-E-62) — 기본은 repo 공유 (FR-E-60). 실패는 정직하게 표시하고 만들지 않는다
     if (addWorktree() && isTauri()) {
       try {
@@ -499,7 +546,11 @@ export function ControlCenter(props: { workspace: Workspace }) {
     // "열기"가 곧 기동이다 — 셸이 뜨는 대로 역할·권한·훅이 붙은 에이전트로 다시 연다.
     // 예전에는 여기서 맨 셸만 뜨고, 사람이 페인의 [▶ 에이전트 기동]을 따로 찾아 눌러야 했다.
     // 그 버튼은 그대로 남는다 — 중지한 세션을 다시 띄우는 자리는 여전히 거기다.
-    if (created) whenSessionReady(created.id, () => void launchAgent(created));
+    // 기동이 끝나면 launchAgentInSession이 그 터미널에 키보드를 준다 (U108) — 선택도 새 세션으로
+    if (created) {
+      setSelectedSession(created.id);
+      whenSessionReady(created.id, () => void launchAgent(created));
+    }
     setAddOpen(false);
   };
   const [removeTarget, setRemoveTarget] = createSignal<Session | undefined>(undefined);
@@ -518,6 +569,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
   createEffect(() => inboxPop() && onCleanup(pushLayer(() => setInboxPop(undefined), () => inboxBox)));
   createEffect(() => purgeOpen() && onCleanup(pushLayer(() => setPurgeOpen(false), () => purgeBox)));
   const [reportAsk, setReportAsk] = createSignal<Session | undefined>(undefined); // 보고 요청 확인
+  const runningText = (n: number) => (n === 1 ? t("터미널 1개 실행 중") : tf("터미널 {n}개 실행 중", { n }));
   const nameOfId = (id: string) => {
     const s = sessions().find((x) => x.id === id);
     return s ? sessionName(s, persona(s.personaId)) : id;
@@ -535,8 +587,9 @@ export function ControlCenter(props: { workspace: Workspace }) {
     if (s.status === "waiting" && s.waitingFor)
       out.push({
         tone: "amber",
-        text: `${t("승인 대기")} · ${t(s.waitingFor)}`,
-        short: t("승인 대기"),
+        // 이름은 셀 상태 글자와 같은 '응답 대기' (U157 · 질문·계획도 waiting이다)
+        text: `${statusText("waiting")} · ${t(s.waitingFor)}`,
+        short: statusText("waiting"),
         title: t("클릭하면 이 페인을 Focus로 잡습니다 — 답은 여기에 직접 입력합니다"),
         onClick: () => focusSession(s),
       });
@@ -548,16 +601,35 @@ export function ControlCenter(props: { workspace: Workspace }) {
         short: t("종료됨"),
         title: `exit ${s.exitCode ?? "?"}`,
       });
+    // 멈춘 세션 (0.6 A5 · C2) — busy인데 훅이 10분째 없다. 판정은 훅만 본다: 출력은 TUI 스피너가
+    // 늘 그려서 생존 신호가 못 된다. 그래서 출력이 흐르는 긴 명령도 뜬다 — 문구가 그것을 말한다 (B174).
+    // 누르면 Focus(전체 화면)가 아니라 선택·키보드만 — 답할 것이 아니라 판단할 것이다 (P82)
+    if (s.status === "busy" && s.stalled)
+      out.push({
+        tone: "amber",
+        text: t("멈춤? · 10분째 훅 없음"),
+        short: t("멈춤?"),
+        title: t("훅이 10분째 없습니다 — 출력이 흐르는 긴 명령이면 그대로 두세요. 멈췄으면 터미널에서 Ctrl+C나 [중지]"),
+        onClick: () => focusPane(s.id),
+      });
+    // 사용 한도 소진 (0.6 F1) — 메시지는 쌓아 두고 재설정 뒤 흘린다
+    if (limitHit(s) && s.rateLimit)
+      out.push({
+        tone: "red",
+        text: resetAt(s.rateLimit) ? tf("한도 소진 · {at} 재설정", { at: resetAt(s.rateLimit)! }) : t("한도 소진"),
+        short: t("한도 소진"),
+        title: `${limitText(s.rateLimit)} — ${t("메시지는 쌓아 두었다가 한도가 풀리면 넣습니다")}`,
+      });
     const n = unmanagedAgent(s) ? pendingCount(s.id) : 0;
     if (n > 0)
       out.push({
         tone: "blue",
-        text: tf("메시지 {n}건", { n }),
+        text: n === 1 ? t("메시지 1건") : tf("메시지 {n}건", { n }),
         short: tf("메시지 {n}", { n }),
         // 설정에 맞춘 문구 (U52) — auto여도 승인 대기·상태 모름이면 쌓인다
         title: t(
           settings().manualDelivery === "auto"
-            ? "승인 대기이거나 상태를 몰라 쌓아 두었습니다 — idle이 되면 넣습니다"
+            ? "승인 대기이거나 상태를 몰라 쌓아 두었습니다 — 쉬게 되면 넣습니다"
             : "손으로 띄운 에이전트라 자동으로 넣지 않습니다",
         ),
         action: { label: t("넣기"), onClick: () => setInboxPop(s.id) },
@@ -589,20 +661,22 @@ export function ControlCenter(props: { workspace: Workspace }) {
   // "페인의 restore 카드가 보여준다"는 전제가 성립하지 않고, 그대로 두면 눌러도 아무 일도
   // 일어나지 않는 버튼이 된다. Rust는 정확한 이유를 돌려주고 있다.
   const [resumeErr, setResumeErr] = createSignal<{ id: string; msg: string } | undefined>(undefined);
+  // 실패를 남기는 자리는 하나 — 종료된 슬롯이면 그 카드, 아니면(복원된 셸 · 기동 중 셸) 토스트 (B206 · B207).
+  // 복원 세션은 status가 shell이라 종료 카드가 없어 이유가 어디에도 안 보였다
+  const sessionFail = (s: Session, msg: string) => {
+    setResumeErr({ id: s.id, msg });
+    if (sessions().find((x) => x.id === s.id)?.status !== "dead") notify(msg);
+  };
   const resumeInline = async (s: Session) => {
     setResumeErr(undefined);
     if (isTauri() && s.personaId) {
       const p = s.permOverride ?? job(s.jobId)?.permissions;
-      if (!p) {
-        setResumeErr({ id: s.id, msg: t("직무 권한을 찾을 수 없습니다 — 역할을 다시 지정하세요") });
-        return;
-      }
+      if (!p) return sessionFail(s, t("직무 권한을 찾을 수 없습니다 — 역할을 다시 지정하세요"));
       const size = sessionTermSize(s.id);
       try {
         await resumeAgent(s.id, s.workspaceId, s.cwd, sessionName(s, persona(s.personaId)), p, size.cols, size.rows, cliOf(s));
       } catch (err) {
-        setResumeErr({ id: s.id, msg: String(err) });
-        return;
+        return sessionFail(s, tf("재개하지 못했습니다 — {err}", { err: tErr(err) }));
       }
     }
     backend.resumeSession(s.id);
@@ -678,7 +752,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
               label: t("새로 시작 (요약만 넘김 · 이전 대화는 잇지 않음)"),
               action: () => {
                 const size = sessionTermSize(s.id);
-                void startFresh(s, size.cols, size.rows).then((err) => err && notify(t(err)));
+                void startFresh(s, size.cols, size.rows).then((err) => err && notify(tErr(err)));
               },
             },
           ]
@@ -701,7 +775,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
     if (s.personaId && !props.workspace.pathMissing) removeRoleFile(s.cwd || props.workspace.path, s.id);
     backend.removeTerminal(s.id);
     setRemoveTarget(undefined);
-    if (removeThenAdd()) openAdd();
+    if (removeThenAdd()) openAdd(s.slot); // 비운 그 번호에 만든다 (B208)
     setRemoveThenAdd(false);
   };
   // ✕ — 기본 터미널도 셸 프로세스가 죽으므로 확인을 거친다 (U-3). 문구만 다르다
@@ -710,14 +784,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
     setRemoveTarget(s);
   };
 
-  /** 관리되는 에이전트의 기동 인자 — 역할 세션에만 있다 (기본 터미널은 셸로 남는다) */
-  const roleAgent = (s: Session) => {
-    if (!s.personaId) return undefined;
-    const p = effectivePermissions(s, job(s.jobId));
-    if (!p) return undefined;
-    // claude --name은 세션 이름 (0.5) — Claude 재개 목록에서 세션을 가를 수 있게
-    return { name: sessionName(s, persona(s.personaId)), permissions: p };
-  };
+  const roleAgent = roleAgentOf;
   /** 아직 EQMUX가 관리하는 에이전트가 아니다 — 맨 셸이 떠 있는 역할 세션.
    *  손으로 `claude`를 쳐도 환경변수·훅·역할이 안 붙으므로, 기동은 이 액션으로만 한다.
    *
@@ -738,16 +805,18 @@ export function ControlCenter(props: { workspace: Workspace }) {
     if (s.agent) return { text: tf("{agent} 실행 중 — 손으로 띄워 역할·훅이 붙지 않았습니다", { agent: s.agent }), launch: false };
     if (!roleAgent(s)) return { text: t("에이전트 없음 — 직무 권한을 찾을 수 없어 기동할 수 없습니다. 역할을 다시 지정하세요"), launch: false };
     if (agentClisReady() && !agentClis().some((a) => a.cmd === cliOf(s) && a.installed))
-      return { text: tf("에이전트 없음 — PATH에 {cmd}가 없어 기동할 수 없습니다", { cmd: cliOf(s) }), launch: false };
+      return { text: tf("에이전트 없음 — PATH에 {cmd}이(가) 없어 기동할 수 없습니다", { cmd: cliOf(s) }), launch: false };
     return { text: t("에이전트 없음"), launch: true };
   };
   const launchAgent = async (s: Session) => {
     const a = roleAgent(s);
     if (!a) return;
+    setResumeErr(undefined);
     try {
       await launchAgentInSession(s.id, s.workspaceId, s.cwd, a.name, a.permissions, cliOf(s));
-    } catch {
-      /* 실패는 페인 출력과 이벤트 피드가 보여준다 (FR-D-08) */
+    } catch (err) {
+      // 기동은 셸을 먼저 끝낸다 — 실패하면 'exit ?'만 남았다. Rust가 준 이유를 남긴다 (B207)
+      sessionFail(s, tf("에이전트를 띄우지 못했습니다 — {err}", { err: tErr(err) }));
     }
   };
 
@@ -785,7 +854,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
             onClick={(e) => {
               e.stopPropagation();
               const size = sessionTermSize(s.id);
-              void startFresh(s, size.cols, size.rows).then((err) => err && notify(t(err)));
+              void startFresh(s, size.cols, size.rows).then((err) => err && notify(tErr(err)));
             }}
           >
             {t("새로 시작")}
@@ -824,13 +893,15 @@ export function ControlCenter(props: { workspace: Workspace }) {
     </div>
   );
 
-  const gridSessions = () => {
+  // 그리드 칸 — 슬롯 순서로 세션이나 빈 칸을 그 자리에 (B208). 세션을 앞에 몰면 01·03만 있을 때
+  // 03이 두 번째 칸에 그려져 Ctrl+Alt+2 · '+' 칸과 어긋났다. 줌 중에는 그 페인 하나만
+  const gridItems = (): (Session | number)[] => {
     const z = zoomed();
     if (z) {
       const s = sessions().find((x) => x.id === z);
       if (s) return [s];
     }
-    return sessions();
+    return railItems();
   };
 
   // 터미널 그리드 + 상태 바 — 일반 배치와 전체 화면 오버레이 양쪽에서 사용.
@@ -841,8 +912,12 @@ export function ControlCenter(props: { workspace: Workspace }) {
       classList={{ zoomed: !!zoomed() }}
       style={zoomed() ? undefined : gridTemplateStyle(paneLayout())}
     >
-      <For each={gridSessions()}>
-        {(s) => (
+      <For each={gridItems()}>
+        {(it) => typeof it === "number" ? (
+          <button class="terminal-pane pane-empty pane-add mono" title={t("빈 슬롯에 세션 추가")} onClick={() => openAdd(it)}>
+            {t("+ 세션 추가")}
+          </button>
+        ) : ((s: Session) => (
           <div
             class="terminal-pane"
             classList={{ "pane-waiting": s.status === "waiting", "pane-dead": s.status === "dead", "pane-selected": selected()?.id === s.id }}
@@ -875,6 +950,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
                   applyZoom(zoomed() === s.id ? undefined : s.id);
                 }}
               >
+                <SessionPortrait sessionId={s.id} />
                 <Identity
                   slot={s.slot}
                   no={paneNo(s)}
@@ -902,11 +978,24 @@ export function ControlCenter(props: { workspace: Workspace }) {
                 <Chip
                   text={`+${attnChips(s).length - 1}`}
                   title={t("나머지 신호 보기")}
-                  onClick={() => {
-                    const r = document.activeElement?.getBoundingClientRect();
-                    setChipMenu({ x: r?.left ?? 0, y: (r?.bottom ?? 0) + 4, s });
+                  onClick={(e) => {
+                    // 누른 칩의 자리 — activeElement는 WKWebView(macOS)에서 클릭으로 포커스를 받지 않아 엉뚱했다 (B233)
+                    const r = e.currentTarget.getBoundingClientRect();
+                    setChipMenu({ x: r.left, y: r.bottom + 4, s });
                   }}
                 />
+              </Show>
+              {/* 같은 파일 동시 편집 (0.6 §13-1) — 주의 칩과 따로 둔다. 막지 않고 알리기 초안만 연다 */}
+              <PaneConflictChip sessionId={s.id} />
+              {/* 컨텍스트 사용률 (0.6 토큰 #5) — 첫 응답 뒤부터. 높으면 amber: /compact나 넘김을 생각할 때 */}
+              <Show when={s.contextPct !== undefined && agentAttached(s)}>
+                <span
+                  class="ctx-chip mono"
+                  classList={{ warn: s.contextPct! >= CTX_WARN }}
+                  title={tf("컨텍스트 {pct}% 사용 — 높으면 /compact나 다른 세션으로 넘김을 생각하세요", { pct: Math.round(s.contextPct!) })}
+                >
+                  ctx {Math.round(s.contextPct!)}%
+                </span>
               </Show>
               <StatusLabel session={s} hideExit />
               {/* macOS — 맨 셸이면 실제로 뜬 셸 이름을 붙인다. 고른 셸과 뜬 셸이 다르면 여기서 보인다 (B114) */}
@@ -945,6 +1034,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
                 cwd={s.cwd}
                 wsId={props.workspace.id}
                 shell={shellCmdFor(s)}
+                title={`${sessionDisplayName(s, personaName(s.personaId))} · ${t("터미널")}`}
                 // 셸 우선 모델 — 역할 세션도 agent 프로퍼티 없이 셸로 시작한다. 에이전트는
                 // 사용자가 터미널에서 직접 띄우고, 관제가 Job 트리 감지로 표시한다.
                 // 재개(FR-C-33)는 제안 게이트 대신 세션 상세·페인 메뉴의 명시 액션으로 남는다.
@@ -962,7 +1052,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
                       })),
                     },
                     { label: t(zoomed() === s.id ? "줌 해제" : "줌"), action: () => applyZoom(zoomed() === s.id ? undefined : s.id) },
-                    { label: t("전체 화면"), kbd: t("ESC 종료"), action: () => setTerminalFull(true) },
+                    { label: t("전체 화면"), kbd: t("Shift+ESC 종료"), action: () => setTerminalFull(true) },
                   ],
                   // 이동 — 상세 팝업·트랜스크립트 (레일 메뉴와 공유)
                   [detailItem(s), transcriptItem(s)],
@@ -972,14 +1062,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
               />
             </Show>
           </div>
-        )}
-      </For>
-      <For each={Array.from({ length: zoomed() ? 0 : Math.max(0, maxSlots() - sessions().length) })}>
-        {() => (
-          <button class="terminal-pane pane-empty pane-add mono" title={t("빈 슬롯에 세션 추가")} onClick={openAdd}>
-            {t("+ 세션 추가")}
-          </button>
-        )}
+        ))(it)}
       </For>
       {/* 분할선 드래그 (M30) — gap 위 핸들. 줌 중에는 트랙이 하나라 의미가 없다 */}
       <Show when={!zoomed()}>
@@ -996,7 +1079,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
   const statusBar = () => (
     <div class="terminal-statusbar mono">
       <span>
-        <span style={{ color: "var(--eq-green)" }}>◉</span> {tf("PTY {n} 실행 중", { n: sessions().filter((x) => x.status !== "dead").length })}
+        <span style={{ color: "var(--eq-green)" }}>◉</span> {runningText(sessions().filter((x) => x.status !== "dead").length)}
       </span>
       <span>▦ {t(PANE_LAYOUTS.find((l) => l.key === paneLayout())?.name ?? "")}</span>
       <Show when={attachedByEngine()}>{(txt) => <span>{txt()}</span>}</Show>
@@ -1014,12 +1097,12 @@ export function ControlCenter(props: { workspace: Workspace }) {
               kb: (realUsage()!.db_size_bytes / 1024).toFixed(0),
               n: realUsage()!.total_lines.toLocaleString(),
             })
-          : t("저장 —")}
+          : t("저장 기록 없음")}
       </span>
       {/* 활성 세션 메모리 (FR-C-09 · C11) — Job Object 트리 실측, 10초 주기. dead는 마지막 샘플이 남으므로 숨긴다 */}
       <Show when={memSession()}>
         {(s) => (
-          <span title={`${t("활성 세션 프로세스 트리 메모리")} · peak ${s().memoryPeakMb ?? "—"} MB`}>
+          <span title={`${t("세션이 쓰는 메모리")} · peak ${s().memoryPeakMb ?? "—"} MB`}>
             {tf("메모리 {mb} MB", { mb: s().memoryMb! })}
           </span>
         )}
@@ -1041,18 +1124,18 @@ export function ControlCenter(props: { workspace: Workspace }) {
       </Show>
       <button
         class="sb-ev"
-        title={t("SessionService 이벤트 · 저장 상태")}
+        title={t("이벤트 · 저장 상태")}
         onMouseDown={(e) => e.stopPropagation()}
         onClick={() => setEvOpen(!evOpen())}
       >
-        {t("이벤트")} {evOpen() ? "▾" : "▸"}
+        {t("이벤트")} {evOpen() ? <Icon name="chevron-down" size={12} /> : <Icon name="chevron-right" size={12} />}
       </button>
-      <span class="muted" style={{ "margin-left": "auto" }}>
+      <span class="muted sb-cwd" title={selected()?.cwd ?? props.workspace.path}>
         {selected()?.cwd ?? props.workspace.path}
       </span>
       <Show when={evOpen()}>
         <div class="card sb-pop" onMouseDown={(e) => e.stopPropagation()}>
-          <Eyebrow>SessionService {t("이벤트")} {t(isTauri() ? "(실측)" : "(목)")}</Eyebrow>
+          <Eyebrow>{t("이벤트")} {t(isTauri() ? "(실측)" : "(목)")}</Eyebrow>
           <For each={stripEvents()}>
             {(e) => (
               <div class="mono muted" style={{ "font-size": "11px", "line-height": 1.7 }}>
@@ -1063,7 +1146,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
           <div class="sb-pop-store mono muted">
             {t(realUsage() ? "저장 (실측)" : "저장 (목)")} ·{" "}
             {realUsage()
-              ? `workspaces/${props.workspace.id}/session.db · ${t("100ms 배치 · 30일/1,000줄 보존")}`
+              ? `workspaces/${props.workspace.id}/session.db · ${t("30일 · 세션당 1,000줄 보존")}`
               : `${usage().dbFile} · ${usage().dbSizeMb} MB · ${usage().dbPercent}%`}
           </div>
         </div>
@@ -1119,7 +1202,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
         {/* 셸 선택 — 새로 추가하는 터미널부터 적용된다 */}
         <div class="shell-picker">
           <button class="btn ghost mono" title={t("새 터미널 셸 선택")} onClick={() => setShellMenuOpen(!shellMenuOpen())}>
-            &gt;_ <span class="cc-btn-label">{t(defaultShell().name)}</span> ▾
+            &gt;_ <span class="cc-btn-label">{t(defaultShell().name)}</span> <Icon name="chevron-down" size={12} />
           </button>
           <Show when={shellMenuOpen()}>
             <div class="card shell-menu">
@@ -1154,7 +1237,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
             ▦ <span class="cc-btn-label">{t(PANE_LAYOUTS.find((l) => l.key === paneLayout())?.name ?? "")}</span>
           </button>
         </Show>
-        <button class="btn ghost" title={t("터미널 전체 화면 — ESC로 종료")} onClick={() => setTerminalFull(true)}>
+        <button class="btn ghost" title={t("터미널 전체 화면 — Shift+ESC로 종료")} onClick={() => setTerminalFull(true)}>
           ⛶
         </button>
         <button
@@ -1166,7 +1249,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
             setTeamMenu(teamMenu() ? undefined : { x: r.right - 232, y: r.bottom + 4 });
           }}
         >
-          {t("팀")} ▾
+          {t("팀")} <Icon name="chevron-down" size={12} />
         </button>
       </div>
       <Show when={teamMenu()}>
@@ -1192,7 +1275,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
           <ContextMenu
             x={m().x}
             y={m().y}
-            header={`${sessionDisplayName(m().s, personaName(m().s.personaId))} · ${jobName(m().s.jobId)} — ${m().s.status}`}
+            header={`${sessionDisplayName(m().s, personaName(m().s.personaId))} · ${jobName(m().s.jobId)} — ${statusText(m().s.status)}`}
             onClose={() => setSessMenu(undefined)}
             groups={sessMenuGroups(m().s)}
           />
@@ -1241,7 +1324,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
                 )}
               </For>
               <Show when={emptySlots().length > 0}>
-                <button class="rail-mini mono" title={t("세션 추가")} aria-label={t("세션 추가")} onClick={openAdd}>
+                <button class="rail-mini mono" title={t("세션 추가")} aria-label={t("세션 추가")} onClick={() => openAdd()}>
                   +
                 </button>
               </Show>
@@ -1259,7 +1342,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
             {(it) =>
               typeof it === "number" ? (
                 /* 빈 슬롯 — 번호를 그대로 보여 슬롯이 곧 번호임을 드러낸다. 누르면 세션 추가 */
-                <button class="rail-av rail-empty" title={t("빈 슬롯에 세션 추가 — 클로드코드 · 코덱스 · 기본 터미널")} onClick={openAdd}>
+                <button class="rail-av rail-empty" title={t("빈 슬롯에 세션 추가 — Claude Code · Codex · 기본 터미널")} onClick={() => openAdd(it)}>
                   <span class="rail-dot-empty" />
                   <span class="rail-no mono">{slotNo(it)}</span>
                   <span class="rail-nm">{t("빈 슬롯")}</span>
@@ -1271,7 +1354,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
           </For>
           <div class="rail-sep" />
           {/* 로컬 폴더 — 이 워크스페이스의 작업 폴더. 클릭은 앱 안의 파일 탐색기로 간다
-              (M25 전체 화면 팝업, 스코프는 현재 워크스페이스). 임무는 "팀 ▾"에 있다.
+              (사이드 패널 files — 결정 21, 스코프는 현재 워크스페이스). 임무는 "팀 ▾"에 있다.
               탐색기가 곧 파일 원본이므로 Windows 탐색기로 나가지 않는다 — 편집·미리보기가
               앱 안에서 끝나야 세션 문맥(선택·대화)을 잃지 않는다. */}
           <button
@@ -1284,7 +1367,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
               <span class="rail-folder-path mono">{shortPath(props.workspace.path)}</span>
             </span>
             <span class="rail-folder-go mono" aria-hidden="true">
-              ▸
+              <Icon name="chevron-right" size={12} />
             </span>
           </button>
           {/* 브랜치 현황 — 클릭은 git 패널. 비저장소면 행을 숨긴다 */}
@@ -1302,7 +1385,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
                 </Show>
               </span>
               <span class="rail-folder-go mono" aria-hidden="true">
-                ▸
+                <Icon name="chevron-right" size={12} />
               </span>
             </button>
           </Show>
@@ -1370,10 +1453,10 @@ export function ControlCenter(props: { workspace: Workspace }) {
 
       {/* 세션 상세 — 우측 드로어 (U1). 관제 대상(터미널)을 가리지 않고 옆에 선다.
           레일 ⓘ·페인 메뉴 "세션 상세"가 연다 */}
-      <Show when={detailOpen() && selected()}>
+      <Show when={detailOpen() && detailSession()}>
         {(s) => (
           <div class="overlay detail-overlay" onClick={() => setDetailOpen(false)}>
-            <div class="dialog detail-dialog" onClick={(e) => e.stopPropagation()}>
+            <div class="dialog detail-dialog" ref={detailBox} onClick={(e) => e.stopPropagation()}>
               <button class="detail-dialog-x" title={t("닫기 (ESC)")} onClick={() => setDetailOpen(false)}>
                 <Icon name="x" size={11} />
               </button>
@@ -1403,7 +1486,8 @@ export function ControlCenter(props: { workspace: Workspace }) {
                 </button>
               </Show>
               <span class="mono muted" style={{ "font-size": "10px" }}>
-                {t("ESC 종료")}
+                {/* 터미널의 ESC는 그 안 프로그램 몫이라 앱이 받지 않는다 (B199 · B254 · U15) — 안내도 그에 맞춘다 */}
+                {t("ESC는 터미널로 · 나가기는 Shift+ESC")}
               </span>
               <button class="btn" onClick={() => setTerminalFull(false)}>
                 <Icon name="x" size={11} /> {t("전체 화면 종료")}
@@ -1429,7 +1513,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
         <div class="overlay" onClick={() => setAddOpen(false)}>
           <div ref={addBox} class="dialog create-dlg" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
             <div class="create-t">
-              {tf("슬롯 {no}에 세션 만들기", { no: emptySlots()[0] ? slotNo(emptySlots()[0]) : "—" })}
+              {tf("슬롯 {no}에 세션 만들기", { no: targetSlot() ? slotNo(targetSlot()!) : "—" })}
             </div>
             <Segmented
               items={[
@@ -1480,7 +1564,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
                 </label>
                 <Show when={addCliMissing()}>
                   <div class="engine-missing mono">
-                    <div class="st-dead">{tf("PATH에 {cmd}가 없습니다 — 아래 명령으로 설치한 뒤 다시 감지하세요", { cmd: addCli() })}</div>
+                    <div class="st-dead">{tf("PATH에 {cmd}이(가) 없습니다 — 아래 명령으로 설치한 뒤 다시 감지하세요", { cmd: addCli() })}</div>
                     <div class="engine-install">
                       <code>{INSTALL_CMD[addCli()]}</code>
                       <button class="btn ghost" onClick={() => clipWriteText(INSTALL_CMD[addCli()])}>
@@ -1580,7 +1664,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
                 </div>
               </Show>
               <Show when={addErr()}>
-                <div class="mono st-dead create-note">{addErr()}</div>
+                <div class="mono st-dead create-note">{tErr(addErr())}</div>
               </Show>
             </Show>
 
@@ -1630,7 +1714,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
             })}
             body={
               rt().personaId
-                ? t("제거하면 팀 편성의 이 슬롯이 비워지고 임무 배정이 해제되며 PTY 프로세스가 종료됩니다. 변경은 다음 캐스팅 저장 때 .eqmux/team.json에 반영됩니다.")
+                ? t("제거하면 프로세스가 끝나고 임무 배정이 풀립니다. 슬롯은 .eqmux/team.json(팀이 같이 쓰는 파일)에서 바로 빠집니다. 이 세션의 대화는 다시 재개할 수 없습니다 — 같은 사람으로 다시 만들면 새 대화로 시작합니다.")
                 : tf("셸 프로세스를 끝내고 이 슬롯({no})을 비웁니다. 되돌릴 수 없습니다. 스크롤백은 30일 보존 규칙대로 남습니다.", { no: slotNo(rt().slot) })
             }
             info={
@@ -1643,7 +1727,9 @@ export function ControlCenter(props: { workspace: Workspace }) {
                   ]
             }
             danger
-            confirmLabel={removeThenAdd() ? t("비우고 새로 만들기") : t("제거")}
+            confirmLabel={
+              removeThenAdd() ? t("비우고 새로 만들기") : rt().personaId && rt().resumable ? t("제거 — 대화 기록 잃음") : t("제거")
+            }
             onConfirm={() => doRemove(rt())}
             onCancel={() => (setRemoveTarget(undefined), setRemoveThenAdd(false))}
           />
@@ -1678,7 +1764,9 @@ export function ControlCenter(props: { workspace: Workspace }) {
           <div class="overlay" onClick={() => setInboxPop(undefined)}>
             <div ref={inboxBox} class="dialog eq-confirm" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
               <div class="eq-confirm-t">
-                {tf("{name}에 쌓인 메시지 {n}건", { name: nameOfId(id()), n: pendingFor(id()).length })}
+                {pendingFor(id()).length === 1
+                  ? tf("{name}에 쌓인 메시지 1건", { name: nameOfId(id()) })
+                  : tf("{name}에 쌓인 메시지 {n}건", { name: nameOfId(id()), n: pendingFor(id()).length })}
               </div>
               <div class="inbox-pop-list">
                 <For each={pendingFor(id())}>
@@ -1695,7 +1783,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
                         }}
                       />{" "}
                       <span class="mono muted">
-                        {m.time} · {m.type} · {senderLabel(m.from, backend.listSessions().find((x) => x.id === id())?.workspaceId)}
+                        {m.time} · {m.type.toUpperCase()} · {senderLabel(m.from, backend.listSessions().find((x) => x.id === id())?.workspaceId)}
                       </span>{" "}
                       {m.body}
                     </label>
@@ -1789,7 +1877,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
             </div>
             <Show when={purgeErr()}>
               <div class="mono" style={{ color: "var(--eq-red)", "font-size": "11px", "margin-top": "8px" }}>
-                {t("초기화 실패")} — {purgeErr()}
+                {t("초기화 실패")} — {tErr(purgeErr())}
               </div>
             </Show>
             <div style={{ display: "flex", gap: "8px", "justify-content": "flex-end", "margin-top": "14px" }}>

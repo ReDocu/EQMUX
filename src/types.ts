@@ -11,6 +11,9 @@ export type AgentStatus = "starting" | "busy" | "waiting" | "shell" | "idle" | "
 export type AgentCliId = "claude" | "codex";
 export const AGENT_CLI_LABEL: Record<AgentCliId, string> = { claude: "Claude Code", codex: "Codex" };
 export const cliOf = (s: { cli?: AgentCliId } | undefined): AgentCliId => s?.cli ?? "claude";
+/** 돌고 있는 프로세스의 엔진 — 슬롯 엔진(cli)을 바꿔도 이미 뜬 프로세스는 spawnCli다 (B82 · B267) */
+export const runCliOf = (s: { cli?: AgentCliId; spawnCli?: AgentCliId } | undefined): AgentCliId =>
+  s?.spawnCli ?? cliOf(s);
 
 /** 감지된 에이전트 표시 이름(Job 트리 실측 `Claude`·`Codex`) → 엔진 id (U42). 모르는 CLI면 undefined */
 export const detectedCli = (agent: string | undefined): AgentCliId | undefined =>
@@ -40,6 +43,8 @@ export interface Job {
   permissions: Permissions;
   responsibility: string;
   forbidden: string;
+  model?: string; // 직무별 모델 (0.6 §3 · W4) — frontmatter model:, 빈 값 = 엔진 기본
+  owns?: string; // 직함별 담당 경로 (0.6 · W4 · W5) — frontmatter owns: glob 공백 구분, 빈 값 = 키 없음
   mtimeMs?: number; // 읽은 시점의 파일 mtime (P-7) — 저장 시 외부 변경 충돌 감지
 }
 
@@ -48,6 +53,7 @@ export interface PersonaProfile {
   hint: string;
   tone?: string;
   personality?: string;
+  examples?: string; // 대사 예시 (0.6 §15-5 · W4) — 중급 전용
 }
 
 export interface Persona {
@@ -66,7 +72,11 @@ export interface Persona {
   characterPath?: string; // 고급 캐릭터 시트 절대 경로 — personas/<id>.character.md, 존재가 곧 고급
   characterName?: string; // 시트 frontmatter name — 역할 파일 정체성 줄에 쓴다
   characterSource?: string; // 시트 frontmatter source (원전 — 게임·역사·창작)
+  characterIdentity?: string; // 시트 `## 정체성` 첫 줄 (0.6 §15-3 · W4) — 팀원 표 정체성 열
   title?: string; // 직함 (0.5) — 직무 안에서 맡는 영역 이름. 있을 때만 frontmatter에 쓴다
+  remind?: boolean; // 매 턴 캐릭터 상기 (0.6 §15-3 · W4) — frontmatter remind: on
+  model?: string; // 모델 (0.6 §3 · W4) — 직무 모델보다 우선
+  portraitMtimeMs?: number; // 초상 personas/<id>.png mtime (0.6 §15-4 · W4) — 없으면 이니셜
   mtimeMs?: number; // 읽은 시점의 파일 mtime (P-7) — 저장 시 외부 변경 충돌 감지
 }
 
@@ -110,11 +120,16 @@ export interface Session {
   cwd: string;
   status: AgentStatus;
   waitingFor?: string; // status=waiting 일 때만 (FR-D-14)
+  pendingTool?: PendingTool; // 기다리는 도구와 원문 (0.6 §13-4 · C2) — waiting일 때만
+  stalled?: boolean; // busy인데 오래 훅·출력이 없다 (0.6 A5 · C2)
+  contextPct?: number; // 컨텍스트 사용률 0–100 (0.6 토큰 #5) — 첫 응답 전에는 없다
+  rateLimit?: RateLimit; // 요금제 한도 (0.6 F1) — API 키 사용자는 없다
+  stateReason?: StateReason; // 상태를 정한 근거 (0.6 §4 · W2) — 기동 직후·전이 전에는 없다
   activity?: string; // 훅 2차 소스 (FR-D-15)
   costUsd?: number; // statusLine 누적 비용 USD (FR-D-19) — 미보고면 undefined
   subagents: number;
   resumable: boolean;
-  resumeReason?: string; // "transcript + cwd 일치" | "transcript 없음" 등
+  resumeReason?: string; // "대화 기록과 작업 폴더가 맞습니다" | "대화 기록 없음" 등 (i18n 키)
   degraded: boolean;
   exitCode?: number;
   missionId?: string;
@@ -167,12 +182,43 @@ export interface Session {
   reportProgress?: boolean;
 }
 
+/** 기다리는 도구 (0.6 §13-4 · C2) — tool은 도구명, input은 원문 한 줄(Bash 명령 · 편집 경로).
+ *  question(AskUserQuestion) · plan(ExitPlanMode)은 답을 고르는 일이라 승인함에서 [페인으로 가기]만 둔다 */
+/** 상태 판정 근거 (0.6 §4 · W2) — event는 훅 이름(UserPromptSubmit·Stop…) 또는 registry · pty-exit · process-gone.
+ *  stalled면 event/ts는 마지막으로 받은 훅이고 note가 "stalled"다 */
+export interface StateReason {
+  event: string;
+  ts: number; // epoch ms
+  note?: string; // adopted · exit N · stalled
+}
+
+/** 요금제 한도 (0.6 F1 · W2 statusLine) — 플랜 한도 중 사용률이 가장 높은 창 하나 */
+export interface RateLimit {
+  window: string; // "five_hour" | "seven_day" | …
+  usedPct: number; // 0–100
+  resetsAt?: number; // epoch 초
+}
+
+/** 한도를 다 썼다 — 넣어도 거절당하므로 메시지를 쌓아 둔다 (F1 전달 보류). 재설정 뒤 상태 이벤트(idle)에 흘러간다 */
+export const limitHit = (s: { rateLimit?: RateLimit } | undefined): boolean => (s?.rateLimit?.usedPct ?? 0) >= 100;
+
+export interface PendingTool {
+  tool: string;
+  input: string;
+  kind: "tool" | "question" | "plan";
+}
+
 /** agent-state 이벤트·스냅숏의 반영 페이로드 (PRD D §7.1) — 인터페이스·구현·수신부가 공유한다 */
 export interface AgentStateApply {
   session: string;
   agentSession: string;
   status?: AgentStatus;
   waitingFor?: string;
+  pendingTool?: PendingTool; // 0.6 §13-4 · C2
+  stalled?: boolean; // 0.6 A5 · C2
+  contextPct?: number; // 0.6 토큰 #5
+  rateLimit?: RateLimit; // 0.6 F1
+  stateReason?: StateReason; // 0.6 §4
   activity?: string; // 훅 2차 소스 (FR-D-15)
   subagents?: number; // FR-D-18
   costUsd?: number; // statusLine 누적 비용 (FR-D-19)
@@ -225,7 +271,7 @@ export const agentAttached = (s: Session): boolean => s.status !== "shell" && s.
  *  둘을 합쳐 제출한다 — 쓰던 프롬프트는 사라지고 의도하지 않은 문장이 그 세션의 턴을 시작시킨다.
  *  기본 터미널에는 같은 위험 때문에 화면 에코만 하는 가드가 이미 있다 (P-2). */
 export const canInject = (s: Session | undefined): boolean =>
-  s?.status === "idle" && !humanTyping(s.id);
+  s?.status === "idle" && !humanTyping(s.id) && !limitHit(s);
 
 /** 세션 표시 이름 (P5 · FR-E-36) — 분리된 이름이 있으면 그것, 없으면 페르소나 이름 */
 export const sessionDisplayName = (s: Session, personaName: string): string =>
@@ -362,6 +408,9 @@ export interface Mission {
   branch?: string; // 선택 연결 (E12)
   assigned: string[]; // session ids
   isDefault?: boolean; // 워크스페이스 기본 임무 (FR-E-56, M33) — frontmatter default: true
+  baseCommit?: string; // 임무 시작점 (0.6 §13-2 · W4) — frontmatter base_commit
+  commitsSince?: number; // base_commit 뒤 커밋 수 (W4)
+  dependsOn?: string[]; // 선행 임무 id (0.6 §4 · W4) — frontmatter depends_on
 }
 
 export interface Workspace {
@@ -373,6 +422,7 @@ export interface Workspace {
   branchNote: string; // "main · 2분 전" | "경로를 찾을 수 없음"
   open: boolean;
   pathMissing: boolean; // 흐름 07 · 재지정 대상
+  notRepo?: boolean; // 폴더는 있고 .git만 없다 — git init을 권한다 (0.6 QA P80)
   teamFile: string; // .eqmux/team.json (원본) — result_prd Δ1
   lastUsed?: string;
 }
@@ -423,6 +473,8 @@ export interface ConversationMessage {
   done?: boolean; // report --done (작업 완료 신호) — 대화 탭 ✓ 배지
   file?: { path: string; size: number }; // send --file 첨부 — 저장소 상대 경로
   rowId?: number; // 원장 행 id — 이전 페이지(beforeId) 커서
+  re?: number; // 무엇에 대한 회신인지 — 원장 행 id (W3 §4 `eqmux send --re`)
+  severity?: "high"; // escalate --severity high (W3 §4) — 긴급 칩 · 주의 맨 위. normal이면 없다
 }
 
 /** 워크스페이스당 메모리에 두는 메시지 수 (CPU·RAM M3) — 원장 첫 페이지(200)보다 넉넉히.

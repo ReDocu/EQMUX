@@ -3,9 +3,8 @@
 // overlay 신호가 하나라서 동시에 하나만 열린다 — 열림/닫힘 관리는 state.overlay가 소유한다.
 import { onCleanup, Show } from "solid-js";
 import type { JSX } from "solid-js";
-import { guardOverlay, pushLayer, setOverlay } from "../state";
+import { pushLayer, setOverlay } from "../state";
 import { t } from "../i18n";
-import { notify } from "./ui";
 import { Icon } from "./icons";
 import type { IconName } from "./icons";
 
@@ -13,23 +12,13 @@ export function ScreenOverlay(props: {
   title: string;
   /** 앱 바 버튼과 같은 아이콘 — 글자 기호(⌂·◇·⚙)는 mac에서 폴백 글꼴로 작게 그려졌다 (UC-B03) */
   icon?: IconName;
-  /** true를 돌려주면 닫기(ESC·✕·화면 이동)를 막는다 — 임무 탐색기의 미저장 편집 보호가 쓴다 */
-  guard?: () => boolean;
+  // 닫기 거부(미저장 편집)는 여기서 받지 않는다 — 안의 화면이 guardOverlay를 직접 걸고 확인창도 띄운다 (B225 · RoleLibrary)
   /** 헤더 아래 전환 줄 (0.3.7) — 팝업이 화면을 둘 이상 품을 때만 준다 (임무 탐색기) */
   nav?: JSX.Element;
   children: JSX.Element;
 }) {
   // ESC는 레이어 스택이 맨 위 하나에만 준다 (P30) — 이 팝업 위에 뜬 확인창·메뉴가 먼저 닫힌다
   onCleanup(pushLayer(() => setOverlay(undefined)));
-  const guard = props.guard;
-  if (guard)
-    onCleanup(
-      guardOverlay(() => {
-        if (!guard()) return false;
-        notify(t("저장하지 않은 편집이 있어 팝업을 닫지 않았습니다 — 저장하거나 편집을 취소하세요"));
-        return true;
-      }),
-    );
 
   return (
     <div class="explorer-fullscreen">

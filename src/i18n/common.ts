@@ -6,7 +6,6 @@ export const dict: Record<string, string> = {
   세션: "Session",
   슬롯: "Slot",
   임무: "Missions",
-  탐색기: "Explorer", // 임무 탐색기 팝업의 안쪽 전환 (0.3.7)
   "워크스페이스를 먼저 여세요": "Open a workspace first",
   직무: "Job",
   페르소나: "Persona",
@@ -99,4 +98,20 @@ export const dict: Record<string, string> = {
   "재개 대기": "awaiting resume",
   "재개 가능": "resumable",
   "재개 불가": "not resumable",
+  // ── 플랫폼 표기 (U76 · labels.ts) — 앱 안 '파일 탐색기'와 다르다 ──
+  "탐색기": "File Explorer",
+  "Finder에서 보기": "Reveal in Finder",
+  "{fm}에서 열 수 없습니다 — 실재하는 경로가 아닙니다": "Can't open {fm} — no such path",
+  "경로 더블클릭 → {reveal} (실재하는 경로만)": "Double-click a path → {reveal} (existing paths only)",
+  // P65 첫 트레이 숨김 확인 · 앱 알림 큐 (Rust 원문은 tErr가 틀로 맞춘다)
+  "창을 닫아도 세션 {n}개가 트레이에서 계속 돕니다": "Closing the window keeps {n} session(s) running in the tray",
+  "창을 닫아도 세션 {n}개가 Dock에서 계속 돕니다": "Closing the window keeps {n} session(s) running in the Dock",
+  "다시 묻지 않기": "Don't ask again",
+  "모두 종료…": "Quit all…",
+  "트레이로 숨기기": "Hide to tray",
+  "Dock으로 숨기기": "Keep in the Dock",
+  "데이터 복구": "Data recovered",
+  "{ws}의 세션 기록 DB가 손상되어 새로 만들었습니다. 옛 파일은 {file}로 남겼습니다.":
+    "The session history DB for {ws} was damaged and has been recreated. The old file was kept as {file}.",
+  "사라진 워크스페이스 등록 {restored}개를 백업에서 되살렸습니다": "Restored {restored} missing workspace registration(s) from backup",
 };

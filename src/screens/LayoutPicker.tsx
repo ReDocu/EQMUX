@@ -1,21 +1,24 @@
-// 페인 배치 (srpYm) — 6종 배치 선택 모달. 선택 즉시 미리보기, 적용 시 터미널 그리드에 반영.
+// 페인 배치 (srpYm) — 6종 배치 선택 모달. 고른 배치는 [적용] 때 터미널 그리드에 반영 (0.6 QA U151).
 import { createSignal, For, onCleanup, Show } from "solid-js";
 import { backend } from "../backend/mock";
 import { t, tf } from "../i18n";
-import { PANE_LAYOUTS, paneLayout, pushLayer, setLayoutPickerOpen, setPaneLayout, view } from "../state";
+import { maxSlots } from "../backend/settings";
+import { PANE_LAYOUTS, paneLayout, previewTracks, pushLayer, setLayoutPickerOpen, setPaneLayout, view } from "../state";
 import type { PaneLayout as PaneLayoutKey } from "../state";
 import { Icon } from "../components/icons";
 import { keyLabel } from "../platform";
 
-function Preview(props: { mode: PaneLayoutKey }) {
+// 축소 그림은 실제 그리드처럼 슬롯 상한만큼 칸을 두고, 지금 세션 수만큼 채운다 (0.6 QA U151) — 칸 3개(그리드 4개) 고정이었다
+function Preview(props: { mode: PaneLayoutKey; sessions: number }) {
+  const tracks = () => previewTracks(props.mode, maxSlots());
   return (
-    <div class={`lp-prev lp-${props.mode}`}>
-      <div class="lp-cell main" />
-      <div class="lp-cell" />
-      <div class="lp-cell" />
-      <Show when={props.mode === "grid-col" || props.mode === "grid-row"}>
-        <div class="lp-cell" />
-      </Show>
+    <div
+      class={`lp-prev lp-${props.mode}`}
+      style={{ "grid-template-columns": tracks().cols, "grid-template-rows": tracks().rows }}
+    >
+      <For each={Array.from({ length: maxSlots() }, (_, i) => i)}>
+        {(i) => <div class="lp-cell" classList={{ main: i === 0, empty: i >= props.sessions }} />}
+      </For>
     </div>
   );
 }
@@ -45,7 +48,7 @@ export function LayoutPicker() {
           <div>
             <div class="lp-title">{t("페인 배치")}</div>
             <div class="mono muted lp-sub">
-              {tf("현재 워크스페이스 · {n}개 세션 · 선택 즉시 미리보기", { n: sessionCount() })} · {keyLabel("Ctrl+Shift+L")}
+              {tf("현재 워크스페이스 · {n}개 세션 · 고른 배치는 [적용] 뒤 바뀝니다", { n: sessionCount() })} · {keyLabel("Ctrl+Shift+L")}
             </div>
           </div>
           <button class="btn ghost" aria-label={t("닫기")} onClick={() => setLayoutPickerOpen(false)}>
@@ -57,7 +60,7 @@ export function LayoutPicker() {
           <For each={PANE_LAYOUTS}>
             {(o) => (
               <button class="card lp-option" classList={{ selected: pending() === o.key }} onClick={() => setPending(o.key)}>
-                <Preview mode={o.key} />
+                <Preview mode={o.key} sessions={sessionCount()} />
                 <div class="lp-option-title">
                   <span>{t(o.name)}</span>
                   {/* 지금 이 워크스페이스에 적용된 배치 — 고른 것(테두리)과 구별한다 */}

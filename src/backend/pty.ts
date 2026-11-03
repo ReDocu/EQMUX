@@ -168,13 +168,6 @@ export function writePty(id: string, data: string): void {
   void invoke("pty_write", { id, data }).catch(() => {});
 }
 
-/** 표시 전용 에코 (P-2) — PTY 입력을 거치지 않고 페인 화면·로컬 버퍼에만 쓴다.
- *  일반 셸에 키 입력으로 주입하면 뒤따르는 \r이 사용자가 치던 미제출 명령을 그대로
- *  실행하므로, 기본 터미널로 가는 메시지는 이 경로로만 표시한다. */
-export function echoPty(id: string, data: string): void {
-  outputSubs.get(id)?.forEach((cb) => cb(data));
-}
-
 /** 터미널 인스턴스 폐기 훅 — TerminalPane이 등록한다 (pty ← TerminalPane 순환 import 회피).
  *  화면 레이어를 모르는 mock이 제거 경로에서 이걸 부를 수 있게 하는 유일한 목적이다 (B44) */
 let disposeTerm: ((id: string) => void) | undefined;
@@ -218,12 +211,14 @@ export async function clipReadText(): Promise<string> {
   return invoke<string>("clip_read_text").catch(() => "");
 }
 
-export function clipWriteText(text: string): void {
-  if (!isTauri()) {
-    void navigator.clipboard.writeText(text).catch(() => {});
-    return;
-  }
-  void invoke("clip_write_text", { text }).catch(() => {});
+/** concealed — 클립보드 기록 · 클라우드 동기화에 남기지 않는다 (B148, 시크릿 복사). 없으면 예전 그대로.
+ *  성공 여부를 돌려준다 — 실패를 삼키고 '복사했습니다'를 띄우지 않게 (B197) */
+export function clipWriteText(text: string, concealed?: boolean): Promise<boolean> {
+  const w = isTauri() ? invoke("clip_write_text", { text, concealed }) : (navigator.clipboard?.writeText(text) ?? Promise.reject());
+  return w.then(
+    () => true,
+    () => false,
+  );
 }
 
 /** 클립보드에 이미지가 있으면 %TEMP%\eqmux-pastes\*.png로 저장하고 경로를 준다. 없으면 null. */
@@ -246,6 +241,13 @@ export function openExternal(url: string, chrome = false): void {
     return;
   }
   void invoke("open_external", { url, chrome }).catch(() => {});
+}
+
+/** 폴더가 실재하는지 (B207) — 에이전트 기동은 셸을 먼저 끝내므로, 작업 폴더가 없으면 그 전에 멈춘다.
+ *  확인 자체가 실패하면 true — 판단은 agent_spawn의 같은 검사에 맡긴다 */
+export async function pathIsDir(path: string): Promise<boolean> {
+  if (!isTauri()) return true;
+  return invoke<boolean>("path_is_dir", { path }).catch(() => true);
 }
 
 /** 터미널 경로 더블클릭 → 탐색기에서 열기. 파일이면 그 파일이 선택된 채로, 폴더면 그 폴더가 열린다.

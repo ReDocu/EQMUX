@@ -3,8 +3,17 @@
 // 5초 주기 — 사용자가 터미널에 방금 띄운 에이전트가 관제에 이내 보여야 한다 (메모리 10초와 별개).
 import { invoke } from "@tauri-apps/api/core";
 import { createSignal } from "solid-js";
+import { IS_MAC } from "../platform";
+import type { AgentCliId } from "../types";
 import { backend } from "./mock";
 import { isTauri } from "./pty";
+
+/** 엔진 공식 설치 명령 (P1 D6) — 복사만 한다. 실행은 사람이 터미널에서. 세션 추가 · 실행 방식 빠른 시작(P64)이 같이 쓴다.
+ *  macOS zsh에 PowerShell 문법(irm … | iex)을 붙이면 'command not found: irm'으로 끝났다 (B128) */
+export const INSTALL_CMD: Record<AgentCliId, string> = {
+  claude: IS_MAC ? "curl -fsSL https://claude.ai/install.sh | bash" : "irm https://claude.ai/install.ps1 | iex",
+  codex: "npm install -g @openai/codex",
+};
 
 interface AgentSample {
   id: string;
@@ -56,6 +65,7 @@ export function agentClis(): AgentCli[] {
 
 /** 실측이 한 번이라도 끝났는가 — "아직 모른다"와 "설치 안 됨"을 화면이 구분하게 한다 */
 export function agentClisReady(): boolean {
+  agentClis(); // 실측을 여기서도 시작한다 (0.6 QA B226) — ready만 읽는 화면이 '확인 중…'에 갇혔다
   return clisReady();
 }
 

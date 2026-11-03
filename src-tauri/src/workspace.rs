@@ -6,6 +6,7 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -160,9 +161,119 @@ pub fn git(args: &[&str], cwd: &str) -> Result<String, String> {
     git_within(args, cwd, GIT_TIMEOUT)
 }
 
-/// 오래 걸리는 것이 정상인 git (clone 등) — 짧은 상한을 씌우면 정상 작업이 잘린다
-pub fn git_long(args: &[&str], cwd: &str) -> Result<String, String> {
-    git_within(args, cwd, GIT_TIMEOUT_LONG)
+/// 진행 중 clone 취소 깃발 (P72) — 프런트가 한 번에 하나만 돌리므로 전역 하나로 족하다
+pub static CLONE_CANCEL: AtomicBool = AtomicBool::new(false);
+
+/// clone 대상 폴더 이름 — git이 고르는 이름과 같게 주소 끝 조각에서 `.git`을 뗀다.
+/// `host:repo.git`(scp 꼴) · 로컬 경로(`\`)도 끝 조각만 (P72 — 이름을 git에 직접 넘기므로 맞아야 한다)
+pub fn clone_name(url: &str) -> String {
+    let tail = url.trim_end_matches(['/', '\\']).rsplit(['/', '\\', ':']).next().unwrap_or("");
+    let name = tail.strip_suffix(".git").unwrap_or(tail);
+    if name.is_empty() { "repo".into() } else { name.to_string() }
+}
+
+/// stderr 조각을 `\r` · `\n`에서 자른다 — git 진행률은 `\r`로 같은 줄을 덮어쓴다 (P72)
+fn cut_lines(pending: &mut Vec<u8>, chunk: &[u8], out: &mut Vec<String>) {
+    for &b in chunk {
+        if b != b'\r' && b != b'\n' {
+            pending.push(b);
+        } else if !pending.is_empty() {
+            out.push(String::from_utf8_lossy(pending).into_owned());
+            pending.clear();
+        }
+    }
+}
+
+/// 진행 줄(`Receiving objects:  42% …` · `…, done.`) — 실패 문구에서 뺀다. 원래 오류에는 없던 줄이다
+fn is_progress(line: &str) -> bool {
+    line.contains('%') || line.ends_with(", done.")
+}
+
+/// 원격 clone (FR-E-02 · P72) — `--progress`의 stderr를 줄마다 on_progress로 넘기고, CLONE_CANCEL이
+/// 서면 자식 트리째 끝낸다. 취소 · 상한 초과면 이 clone이 만든 폴더를 지우고
+/// `CLONE_CANCELLED|<남은 경로>` · `CLONE_TIMEOUT|<남은 경로>`로 끝난다(지웠으면 경로가 빈다). 원래 있던 폴더는 두 경우 모두 남긴다
+pub fn clone_repo(url: &str, parent: &str, mut on_progress: impl FnMut(&str)) -> Result<String, String> {
+    let name = clone_name(url);
+    let dest = Path::new(parent).join(&name);
+    let existed = dest.exists();
+    let mut cmd = Command::new("git");
+    // `--` — '-'로 시작하는 주소가 옵션으로 읽히지 않게. stdin은 run_git과 같은 이유로 막는다
+    cmd.args(["-c", "core.quotepath=off", "clone", "--progress", "--", url, &name])
+        .current_dir(parent)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0); // kill_tree가 그룹째 끝낼 수 있게
+    }
+    CLONE_CANCEL.store(false, Ordering::SeqCst);
+    let mut child = cmd.spawn().map_err(|e| format!("git 실행 실패: {e}"))?;
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let pipe = child.stderr.take();
+    let reader = std::thread::spawn(move || {
+        let (mut pending, mut buf, mut out) = (Vec::new(), [0u8; 4096], Vec::new());
+        if let Some(mut p) = pipe {
+            while let Ok(n @ 1..) = p.read(&mut buf) {
+                cut_lines(&mut pending, &buf[..n], &mut out);
+                for l in out.drain(..) {
+                    let _ = tx.send(l);
+                }
+            }
+        }
+        cut_lines(&mut pending, b"\n", &mut out);
+        for l in out {
+            let _ = tx.send(l);
+        }
+    });
+    let mut kept = Vec::new();
+    let mut take = |rx: &std::sync::mpsc::Receiver<String>, kept: &mut Vec<String>| {
+        let lines: Vec<String> = rx.try_iter().collect();
+        if let Some(last) = lines.last() {
+            on_progress(last); // 한 주기에 마지막 줄만 — 이벤트가 초당 수백 번 날지 않게
+        }
+        kept.extend(lines.into_iter().filter(|l| !is_progress(l)));
+    };
+    let deadline = Instant::now() + GIT_TIMEOUT_LONG;
+    let status = loop {
+        take(&rx, &mut kept);
+        match child.try_wait() {
+            Ok(Some(st)) => break Some(st),
+            Ok(None) if !CLONE_CANCEL.load(Ordering::SeqCst) && Instant::now() < deadline => std::thread::sleep(POLL),
+            // 취소 · 상한 · 대기 실패 — 끊어야 파이프가 EOF를 내고 읽기 스레드가 풀린다. git clone은
+            // git-remote-https · index-pack을 띄우므로 자식만 죽이면 손자가 폴더를 쥔 채 남는다
+            _ => {
+                crate::extensions::kill_tree(&mut child);
+                let _ = child.wait();
+                break None;
+            }
+        }
+    };
+    let _ = reader.join();
+    take(&rx, &mut kept);
+    match status {
+        Some(st) if st.success() => Ok(dest.to_string_lossy().into_owned()),
+        Some(_) => Err(kept.join("\n").trim().to_string()),
+        None => {
+            let code = if CLONE_CANCEL.load(Ordering::SeqCst) { "CLONE_CANCELLED" } else { "CLONE_TIMEOUT" };
+            let left = if existed || !remove_retry(&dest) { dest.to_string_lossy().into_owned() } else { String::new() };
+            Err(format!("{code}|{left}"))
+        }
+    }
+}
+
+/// 받다 만 폴더 지우기 — 죽은 git의 손자가 파일 핸들을 늦게 놓으면(Windows) 첫 시도가 실패한다. 2초까지 다시 해 본다
+fn remove_retry(dir: &Path) -> bool {
+    for _ in 0..10 {
+        if !dir.exists() || fs::remove_dir_all(dir).is_ok() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    !dir.exists()
 }
 
 /// 자식 파이프 하나를 끝까지 읽는 스레드 — 반환은 join으로 회수한다
@@ -180,10 +291,31 @@ fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> std::thread::JoinHandle<V
 const POLL: Duration = Duration::from_millis(20);
 
 fn git_within(args: &[&str], cwd: &str, timeout: Duration) -> Result<String, String> {
+    let o = run_git(args, cwd, timeout, &[])?;
+    if o.ok {
+        Ok(o.stdout.trim().to_string())
+    } else {
+        Err(o.stderr.trim().to_string())
+    }
+}
+
+/// git 한 번의 원래 결과 — 앞 공백을 지우면 안 되는 출력(`status --porcelain`의 ` M`)과
+/// 성공해도 stderr에 남는 훅 출력을 그대로 받는다 (§17 git 화면)
+pub struct GitOut {
+    pub ok: bool,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+/// 실행 실패(띄우기 실패 · 상한 초과)만 Err — git이 0이 아닌 코드로 끝난 것은 `ok: false`
+pub fn run_git(args: &[&str], cwd: &str, timeout: Duration, env: &[(&str, &str)]) -> Result<GitOut, String> {
     let mut cmd = Command::new("git");
-    cmd.args(["-c", "core.quotepath=off"])
+    // --no-optional-locks — status · diff의 색인 새로 고침이 index.lock을 잡지 않게 한다. 10초 폴링이
+    // 터미널의 git commit과 부딪혀 "index.lock exists"로 실패시키던 길이다. 쓰기는 필요한 잠금을 그대로 잡는다
+    cmd.args(["--no-optional-locks", "-c", "core.quotepath=off"])
         .args(args)
         .current_dir(cwd)
+        .envs(env.iter().copied())
         // output()의 기본값과 같게 stdin을 막는다 — 상속하면 자격증명 프롬프트가 즉시
         // 실패하지 않고 입력을 기다리며 멈춘다 (상한이 있어도 그 시간을 통째로 쓴다)
         .stdin(Stdio::null())
@@ -218,11 +350,11 @@ fn git_within(args: &[&str], cwd: &str, timeout: Duration) -> Result<String, Str
     };
     let stdout = out_t.join().unwrap_or_default();
     let stderr = err_t.join().unwrap_or_default();
-    if status.success() {
-        Ok(String::from_utf8_lossy(&stdout).trim().to_string())
-    } else {
-        Err(String::from_utf8_lossy(&stderr).trim().to_string())
-    }
+    Ok(GitOut {
+        ok: status.success(),
+        stdout: String::from_utf8_lossy(&stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&stderr).into_owned(),
+    })
 }
 
 pub fn is_repo(path: &str) -> bool {
@@ -279,6 +411,29 @@ pub struct WorktreeInfo {
     pub head: String,           // 짧은 해시
     pub is_main: bool,          // 저장소 본체 (porcelain 첫 항목)
     pub is_session: bool,       // .eqmux/worktrees/ 아래 — 앱이 만든 것
+    pub key: String,            // 비교 키 (canon_key) — 세션 cwd는 path_keys로 같은 키를 받아 비교한다 (B132 · B151)
+}
+
+/// 경로 비교 키 (B132 · B151) — 실경로(심링크 · mac `/tmp` → `/private/tmp`), Windows `\\?\` 접두를 벗기고,
+/// 구분자는 `/`, 끝 `/` 없음, Windows만 소문자. 없는 경로는 정규화만 한다.
+/// ponytail: mac 대소문자 무시 볼륨은 철자가 다르면 갈린다 — 실기에서 보이면 그때 접는다
+pub fn canon_key(p: &str) -> String {
+    let real = fs::canonicalize(p).map(|r| r.to_string_lossy().into_owned()).unwrap_or_else(|_| p.to_string());
+    let real = match real.strip_prefix(r"\\?\UNC\") {
+        Some(rest) => format!(r"\\{rest}"),
+        None => real.strip_prefix(r"\\?\").unwrap_or(&real).to_string(),
+    };
+    let k = real.replace('\\', "/");
+    let k = if k.len() > 1 { k.trim_end_matches('/').to_string() } else { k };
+    if cfg!(windows) { k.to_lowercase() } else { k }
+}
+
+/// 세션 cwd 등 여러 경로의 비교 키 — 순서대로 (관제 레일 워크트리 소속 판정)
+#[tauri::command]
+pub async fn path_keys(paths: Vec<String>) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || paths.iter().map(|p| canon_key(p)).collect())
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// `git worktree list --porcelain` 파싱 — 항목은 빈 줄로 구분되고
@@ -294,6 +449,7 @@ pub fn worktree_list(ws_path: &str) -> Result<Vec<WorktreeInfo>, String> {
                 head: String::new(),
                 is_main: items.is_empty(),
                 is_session: p.replace('\\', "/").contains("/.eqmux/worktrees/"),
+                key: canon_key(p),
             });
         } else if let (Some(h), Some(w)) = (line.strip_prefix("HEAD "), items.last_mut()) {
             w.head = h.chars().take(8).collect();
@@ -318,7 +474,7 @@ pub fn inspect(entry: &WsEntry) -> WsInfo {
     WsInfo { entry: e, exists, is_repo: repo }
 }
 
-// ── git 패널 실데이터 (PRD H) — 읽기 전용 관측. 쓰기 작업(pull·push·commit)은 제공하지 않는다 ──
+// ── git 패널 실데이터 (PRD H) — 읽기 전용 관측. 쓰기는 gitx.rs (§17 G7′ — git 화면에서 사람이 누를 때만) ──
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -326,7 +482,8 @@ pub struct GitCommitInfo {
     pub hash: String,
     pub message: String,
     pub author: String,
-    pub when: String,
+    /// 커밋 시각 epoch ms — 상대 시각은 프런트가 화면 언어로 만든다 (U173 · git %cr은 늘 영어였다)
+    pub when: i64,
     pub refs: String,
 }
 
@@ -384,7 +541,7 @@ pub fn overview(path: &str) -> Result<GitOverview, String> {
             }
         }
     }
-    let commits = git(&["log", "-n", "8", "--pretty=format:%h\t%s\t%an\t%cr\t%D"], path)
+    let commits = git(&["log", "-n", "8", "--pretty=format:%h\t%s\t%an\t%ct\t%D"], path)
         .map(|out| {
             out.lines()
                 .map(|l| {
@@ -393,7 +550,7 @@ pub fn overview(path: &str) -> Result<GitOverview, String> {
                         hash: p.next().unwrap_or_default().into(),
                         message: p.next().unwrap_or_default().into(),
                         author: p.next().unwrap_or_default().into(),
-                        when: p.next().unwrap_or_default().into(),
+                        when: p.next().and_then(|t| t.parse::<i64>().ok()).unwrap_or(0) * 1000,
                         refs: p.next().unwrap_or_default().into(),
                     }
                 })
@@ -431,6 +588,29 @@ pub fn entry_name(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// B132 · B151 — 워크트리 경로와 세션 cwd가 철자 · 구분자 · 끝 `/` · 심링크가 달라도 같은 키
+    #[test]
+    fn canon_key_matches_spellings() {
+        let dir = std::env::temp_dir().join(format!("eqmux-canon-{}", std::process::id()));
+        fs::create_dir_all(dir.join("wt")).unwrap();
+        let a = dir.join("wt").to_string_lossy().into_owned();
+        let k = canon_key(&a);
+        assert!(!k.contains('\\') && !k.starts_with("//?/") && !k.ends_with('/'), "{k}");
+        assert_eq!(canon_key(&format!("{a}/")), k, "끝 /");
+        assert_eq!(canon_key(&a.replace('\\', "/")), k, "구분자");
+        assert_eq!(canon_key(&dir.join("wt").join("..").join("wt").to_string_lossy()), k, "..");
+        if cfg!(windows) {
+            assert_eq!(canon_key(&a.to_uppercase()), k, "Windows 대소문자");
+        }
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(dir.join("wt"), dir.join("ln")).unwrap();
+            assert_eq!(canon_key(&dir.join("ln").to_string_lossy()), k, "심링크 (mac /tmp → /private/tmp)");
+        }
+        assert_eq!(canon_key(r"Z:\없는\곳\"), if cfg!(windows) { "z:/없는/곳" } else { "Z:/없는/곳" });
+        fs::remove_dir_all(&dir).ok();
+    }
 
     /// git() 재작성의 유일한 위험 지점 — 파이프를 계속 비우지 않으면 출력이 64KB를 넘는
     /// 순간 git이 write에서 멈춰 이 테스트가 타임아웃까지 걸린다 (교착 회귀 감지).
@@ -529,6 +709,7 @@ mod tests {
         assert_eq!((o.changed, o.added), (1, 1));
         assert_eq!(o.commits.len(), 1);
         assert_eq!(o.commits[0].message, "first");
+        assert!((now_ms() - o.commits[0].when).abs() < 120_000, "커밋 시각은 epoch ms (U173)");
         assert_eq!((o.ahead, o.behind), (0, 0)); // 업스트림 없음 = 0/0
         fs::remove_dir_all(&dir).ok();
     }
@@ -566,6 +747,59 @@ mod tests {
         assert!(!listed[1].is_main && listed[1].is_session);
         assert_eq!(listed[1].branch.as_deref(), Some("eqmux/kai-ws1"));
         assert!(!listed[1].head.is_empty());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// clone 이름 · 진행 줄 자르기 (P72)
+    #[test]
+    fn clone_name_and_cut_lines() {
+        assert_eq!(clone_name("https://github.com/u/repo.git"), "repo");
+        assert_eq!(clone_name("https://github.com/u/repo/"), "repo");
+        assert_eq!(clone_name("git@github.com:repo.git"), "repo");
+        assert_eq!(clone_name(r"C:\src\proj"), "proj");
+        assert_eq!(clone_name(".git"), "repo");
+        let (mut pending, mut out) = (Vec::new(), Vec::new());
+        cut_lines(&mut pending, b"Cloning into 'x'...\nReceiving objects:  42% (4", &mut out);
+        cut_lines(&mut pending, b"2/100)\rReceiving objects: 100% (100/100), done.\r\nfatal: x\n", &mut out);
+        assert_eq!(out, ["Cloning into 'x'...", "Receiving objects:  42% (42/100)", "Receiving objects: 100% (100/100), done.", "fatal: x"]);
+        assert!(pending.is_empty());
+        assert_eq!(out.iter().filter(|l| !is_progress(l)).count(), 2);
+    }
+
+    /// clone 성공 · 실패 · 취소 (P72) — 깃발이 전역이라 한 테스트에서 차례로 돈다.
+    /// 취소는 응답하지 않는 git:// 서버에 걸어 둔 clone을 끊고, 이 clone이 만든 폴더가 지워졌는지 본다
+    #[test]
+    fn clone_repo_succeeds_fails_and_cancels() {
+        let dir = std::env::temp_dir().join(format!("eqmux-clone-{}", now_ms()));
+        let src = dir.join("src");
+        fs::create_dir_all(&src).unwrap();
+        let sp = src.to_string_lossy().into_owned();
+        git(&["init"], &sp).unwrap();
+        git(&["-c", "user.email=t@t", "-c", "user.name=t", "commit", "--allow-empty", "-m", "first"], &sp).unwrap();
+        let out = dir.join("out");
+        fs::create_dir_all(&out).unwrap();
+        let op = out.to_string_lossy().into_owned();
+
+        let got = clone_repo(&sp, &op, |_| {}).unwrap();
+        assert!(Path::new(&got).join(".git").exists(), "{got}");
+        let err = clone_repo(&dir.join("nope").to_string_lossy(), &op, |_| {}).unwrap_err();
+        assert!(!err.starts_with("CLONE_") && !err.contains('%'), "{err}");
+
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("git://127.0.0.1:{}/r.git", l.local_addr().unwrap().port());
+        std::thread::spawn(move || {
+            let _held: Vec<_> = l.incoming().take(1).collect(); // 받기만 하고 답하지 않는다
+            std::thread::sleep(Duration::from_secs(30));
+        });
+        std::thread::spawn(|| {
+            std::thread::sleep(Duration::from_millis(800));
+            CLONE_CANCEL.store(true, Ordering::SeqCst);
+        });
+        let t0 = Instant::now();
+        let err = clone_repo(&url, &op, |_| {}).unwrap_err();
+        assert!(t0.elapsed() < Duration::from_secs(20), "취소가 먹어야 한다");
+        assert_eq!(err, "CLONE_CANCELLED|", "이 clone이 만든 폴더는 지운다");
+        assert!(!out.join("r").exists());
         fs::remove_dir_all(&dir).ok();
     }
 }

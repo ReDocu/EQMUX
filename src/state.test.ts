@@ -1,5 +1,6 @@
-import { describe, expect, test } from "vitest";
-import { escapeTopLayer, guardOverlay, jumpToSession, modalOpen, overlay, pushLayer, setOverlay, view } from "./state";
+import { describe, expect, test, vi } from "vitest";
+import { backend } from "./backend/mock";
+import { escapeTopLayer, guardOverlay, jumpToSession, modalOpen, overlay, previewTracks, pushLayer, setOverlay, view } from "./state";
 
 describe("레이어 스택 (P30 · B73)", () => {
   test("ESC는 맨 위 하나만 닫고, 빠진 레이어는 건너뛴다", () => {
@@ -49,5 +50,42 @@ describe("팝업 닫기 거부 (B72)", () => {
     expect(setOverlay(undefined)).toBe(false);
     offNew();
     expect(setOverlay(undefined)).toBe(true);
+  });
+
+  test("조건은 가려던 팝업을 받는다 — 확인 뒤 그리로 다시 간다 (B225)", () => {
+    setOverlay("roles");
+    const asked: (string | undefined)[] = [];
+    const off = guardOverlay((next) => (asked.push(next), true));
+    setOverlay("settings");
+    setOverlay(undefined);
+    expect(asked).toEqual(["settings", undefined]);
+    off();
+    setOverlay(undefined);
+  });
+});
+
+describe("점프 — 열 수 없는 워크스페이스 (B238)", () => {
+  test("동시 열기 상한으로 못 열면 데려가지 않는다 · 경로 소실은 지금처럼 둔다", () => {
+    const ws = { id: "ws-cap", name: "cap", path: "x", open: false } as ReturnType<typeof backend.listWorkspaces>[number];
+    const list = vi.spyOn(backend, "listWorkspaces").mockReturnValue([ws]);
+    const open = vi.spyOn(backend, "openWorkspace").mockImplementation(() => {});
+    const before = view();
+    expect(jumpToSession("ws-cap", "s-cap")).toBe(false);
+    expect(view()).toEqual(before);
+    open.mockImplementation(() => void (ws.open = true));
+    expect(jumpToSession("ws-cap", "s-cap")).toBe(true);
+    expect(view()).toEqual({ kind: "workspace", id: "ws-cap" });
+    list.mockRestore();
+    open.mockRestore();
+  });
+});
+
+describe("배치 창 축소 그림 (0.6 QA U151)", () => {
+  test("트랙은 실제 그리드처럼 슬롯 상한을 따른다 — 그리드 2행, 메인 + 스택은 나머지 수만큼", () => {
+    expect(previewTracks("grid-row", 6)).toEqual({ cols: "repeat(3, 1fr)", rows: "repeat(2, 1fr)" });
+    expect(previewTracks("stack-v", 4)).toEqual({ cols: "repeat(1, 1fr)", rows: "repeat(4, 1fr)" });
+    expect(previewTracks("row-h", 8)).toEqual({ cols: "repeat(8, 1fr)", rows: "repeat(1, 1fr)" });
+    expect(previewTracks("main-right", 6)).toEqual({ cols: "2fr 1fr", rows: "repeat(5, 1fr)" });
+    expect(previewTracks("main-bottom", 4)).toEqual({ cols: "repeat(3, 1fr)", rows: "2fr 1fr" });
   });
 });

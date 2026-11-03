@@ -89,7 +89,8 @@ export interface ScrollbackHit {
   text: string;
 }
 
-/** 전문 검색 (FTS5, 없으면 LIKE 폴백) — 워크스페이스 DB 하나 스코프 */
+/** 전문 검색 (FTS5, 없으면 LIKE 폴백) — 워크스페이스 DB 하나 스코프.
+ *  실패는 던진다 (B244) — 빈 결과로 삼키면 '찾지 못했습니다'와 읽기 실패가 같아 보인다 */
 export async function searchScrollback(
   wsId: string,
   query: string,
@@ -102,7 +103,7 @@ export async function searchScrollback(
     query,
     session: session ?? null,
     limit,
-  }).catch(() => []);
+  });
 }
 
 /** 디스크 페이징 — before_seq 이전 limit줄, 시간 오름차순 */

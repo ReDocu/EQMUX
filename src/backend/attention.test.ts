@@ -6,8 +6,12 @@ vi.mock("./conversation", () => ({
 }));
 vi.mock("../state", () => ({ jumpToSession: () => true, modalOpen: () => false, setFocusRequest: () => {} }));
 import {
+  CONFLICT_WINDOW_MS,
+  mergeConflict,
+  mergeOutside,
   attentionOrder,
   attentionRank,
+  urgentSenders,
   fmtAgo,
   inboxWaiting,
   NOTIFY_MAX,
@@ -18,7 +22,7 @@ import {
   unlistedAttention,
 } from "./attention";
 import type { NotifyItem } from "./attention";
-import type { Session } from "../types";
+import type { ConversationMessage, Session } from "../types";
 
 const s = (id: string, over: Partial<Session>): Session =>
   ({ id, status: "idle", sinceMs: 0, ...over }) as Session;
@@ -101,4 +105,30 @@ describe("attention", () => {
     expect(fmtAgo(3 * 3_600_000)).toBe("3시간 전");
     expect(fmtAgo(2 * 86_400_000)).toBe("2일 전");
   });
+});
+
+describe("같은 파일 동시 편집 (§13-1 · C1)", () => {
+  const c = (path: string, sessions: string[], ts: number) => ({ workspace: "w", path, sessions, ts });
+  test("같은 파일은 세션을 합치고 맨 앞으로, 창(10분)이 지난 것은 걷는다", () => {
+    const old = c("a.ts", ["kai", "rin"], 0);
+    const other = c("b.ts", ["kai", "sol"], 1000);
+    const l = mergeConflict([other, old], c("a.ts", ["noel", "rin"], 2000));
+    expect(l[0]).toEqual(c("a.ts", ["kai", "noel", "rin"], 2000));
+    expect(l).toHaveLength(2);
+    expect(mergeConflict(l, c("z.ts", ["x", "y"], 2000 + CONFLICT_WINDOW_MS + 1))).toHaveLength(1);
+  });
+});
+
+test("담당 밖 편집 칩 — 세션마다 최신 하나, 10분 지난 것은 뺀다 (U120)", () => {
+  const o = (session: string, path: string, ts: number) => ({ workspace: "w", session, path, owns: ["docs/**"], ts });
+  const l = mergeOutside([o("kai", "a.ts", 0), o("rin", "b.ts", 500)], o("kai", "c.ts", 1000));
+  expect(l.map((x) => `${x.session}:${x.path}`)).toEqual(["kai:c.ts", "rin:b.ts"]);
+  expect(mergeOutside(l, o("noel", "d.ts", 600 + CONFLICT_WINDOW_MS))).toHaveLength(2);
+});
+
+test("긴급 에스컬레이션은 주의 맨 위 (W3 §4)", () => {
+  const m = (from: string, severity?: "high", unread = true) => ({ id: from, time: "", from, to: "나", type: "escalate", body: "", unread, severity }) as ConversationMessage;
+  const u = urgentSenders([m("a", "high"), m("b"), m("c", "high", false)]);
+  expect([...u]).toEqual(["a"]);
+  expect(attentionRank(s("a", { status: "waiting" }), 0, true)).toBe(0.5);
 });

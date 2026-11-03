@@ -76,21 +76,48 @@ fn numstat_path(raw: &str) -> String {
     }
 }
 
-/// 변경 파일 목록 — status --porcelain(상태) + diff --numstat(±집계). 이름변경은 새 경로 기준.
-pub fn changed_files(ws_path: &str) -> Result<Vec<ChangedFile>, String> {
-    // -uall — 기본값(normal)은 새 폴더를 `?? src/newfeature/` 한 줄로 접는다. 그러면 목록에
-    // 디렉터리 경로가 파일인 척 올라와 줄 수 집계도 diff 열람도 실패한다 (B60)
-    let porcelain = git(&["status", "--porcelain", "-uall"], ws_path)?;
-    // 경로 → (+, −) — untracked는 numstat에 없으므로 파일 줄 수로 대체한다
-    let mut stats: std::collections::HashMap<String, (String, String)> = std::collections::HashMap::new();
+/// 추적 안 되는 파일의 ± — numstat에 없으므로 파일 줄 수로 대신한다
+fn untracked_stat(ws_path: &str, path: &str) -> String {
+    let file = Path::new(ws_path).join(path);
+    if std::fs::metadata(&file).map(|m| m.len() > MAX_READ_BYTES).unwrap_or(false) {
+        "+?".to_string() // 큰 파일은 줄 수를 세지 않는다 (O2)
+    } else {
+        let lines = std::fs::read_to_string(&file).map(|s| s.lines().count()).unwrap_or(0);
+        format!("+{lines}")
+    }
+}
+
+type NumStats = std::collections::HashMap<String, (String, String)>;
+
+fn tracked_stat(stats: &NumStats, path: &str) -> String {
+    match stats.get(path) {
+        Some((a, _)) if a == "-" => "바이너리".into(),
+        Some((a, d)) => format!("+{a} −{d}"),
+        None => String::new(),
+    }
+}
+
+/// `git diff --numstat <base>` → 경로 → (+, −)
+fn numstats(ws_path: &str, base: &str) -> NumStats {
+    let mut stats = NumStats::new();
     // --find-renames — porcelain(status)의 rename 판정과 numstat의 짝짓기를 일치시킨다 (P-9)
-    if let Ok(numstat) = git(&["diff", "--numstat", "--find-renames", "HEAD"], ws_path) {
+    if let Ok(numstat) = git(&["diff", "--numstat", "--find-renames", base], ws_path) {
         for line in numstat.lines() {
             let mut p = line.splitn(3, '\t');
             let (Some(a), Some(d), Some(path)) = (p.next(), p.next(), p.next()) else { continue };
             stats.insert(numstat_path(path), (a.to_string(), d.to_string()));
         }
     }
+    stats
+}
+
+/// 변경 파일 목록 — status --porcelain(상태) + diff --numstat(±집계). 이름변경은 새 경로 기준.
+pub fn changed_files(ws_path: &str) -> Result<Vec<ChangedFile>, String> {
+    // -uall — 기본값(normal)은 새 폴더를 `?? src/newfeature/` 한 줄로 접는다. 그러면 목록에
+    // 디렉터리 경로가 파일인 척 올라와 줄 수 집계도 diff 열람도 실패한다 (B60)
+    let porcelain = git(&["status", "--porcelain", "-uall"], ws_path)?;
+    // 경로 → (+, −) — untracked는 numstat에 없으므로 파일 줄 수로 대체한다
+    let stats = numstats(ws_path, "HEAD");
     let mut out = Vec::new();
     for line in porcelain.lines() {
         // git() 헬퍼가 출력 전체를 trim해 첫 줄의 선행 공백(" M …")이 소실될 수 있다 —
@@ -119,21 +146,7 @@ pub fn changed_files(ws_path: &str) -> Result<Vec<ChangedFile>, String> {
         } else {
             "M"
         };
-        let stat = if code.contains('?') {
-            let file = Path::new(ws_path).join(&path);
-            if std::fs::metadata(&file).map(|m| m.len() > MAX_READ_BYTES).unwrap_or(false) {
-                "+?".to_string() // 큰 파일은 줄 수를 세지 않는다 (O2)
-            } else {
-                let lines = std::fs::read_to_string(&file).map(|s| s.lines().count()).unwrap_or(0);
-                format!("+{lines}")
-            }
-        } else {
-            match stats.get(&path) {
-                Some((a, d)) if a == "-" => "바이너리".into(),
-                Some((a, d)) => format!("+{a} −{d}"),
-                None => String::new(),
-            }
-        };
+        let stat = if code.contains('?') { untracked_stat(ws_path, &path) } else { tracked_stat(&stats, &path) };
         out.push(ChangedFile { status: status.into(), path, stat, renamed_from });
     }
     Ok(out)
@@ -237,8 +250,44 @@ fn is_binary_diff(out: &str) -> bool {
 }
 
 /// HEAD ↔ 워크트리 양측 라인 재구성. untracked = 전부 add, 삭제 = 전부 del, 바이너리 = Err.
+/// 기준 커밋 ↔ 작업 트리 변경 목록 (§13-3 임무 검토 — W4). 그 뒤 커밋된 것 + 아직 커밋 안 된 것 + 추적 안 되는 파일
+pub fn changed_files_since(ws_path: &str, base: &str) -> Result<Vec<ChangedFile>, String> {
+    if !valid_hash(base) {
+        return Err("잘못된 커밋 해시".into());
+    }
+    let stats = numstats(ws_path, base);
+    let mut out = Vec::new();
+    // `M\tp` · `A\tp` · `D\tp` · `R100\told\tnew` — -z 없이도 core.quotepath=off라 한글 경로가 그대로 온다
+    for line in git(&["diff", "--name-status", "--find-renames", base], ws_path)?.lines() {
+        let f: Vec<&str> = line.split('\t').collect();
+        let (code, path, from) = match f[..] {
+            [c, old, new] if c.starts_with('R') => ("R", new, Some(old.to_string())),
+            [c, p] => (if c.starts_with('A') { "A" } else if c.starts_with('D') { "D" } else { "M" }, p, None),
+            _ => continue,
+        };
+        out.push(ChangedFile { status: code.into(), path: path.into(), stat: tracked_stat(&stats, path), renamed_from: from });
+    }
+    for path in git(&["ls-files", "--others", "--exclude-standard"], ws_path)?.lines().filter(|l| !l.is_empty()) {
+        out.push(ChangedFile { status: "A".into(), path: path.into(), stat: untracked_stat(ws_path, path), renamed_from: None });
+    }
+    Ok(out)
+}
+
+/// 기준 커밋 ↔ 작업 트리 한 파일 — file_diff와 같고 HEAD 자리에 base가 온다. base_label = base 짧은 해시
+pub fn file_diff_vs(ws_path: &str, base: &str, path: &str, known_from: Option<&str>) -> Result<FileDiff, String> {
+    if !valid_hash(base) {
+        return Err("잘못된 커밋 해시".into());
+    }
+    file_diff_at(ws_path, base, path, known_from)
+}
+
 pub fn file_diff(ws_path: &str, path: &str, known_from: Option<&str>) -> Result<FileDiff, String> {
-    let base_label = git(&["rev-parse", "--short", "HEAD"], ws_path).unwrap_or_else(|_| "HEAD".into());
+    file_diff_at(ws_path, "HEAD", path, known_from)
+}
+
+/// base(HEAD 또는 검증된 해시) ↔ 작업 트리
+fn file_diff_at(ws_path: &str, base_rev: &str, path: &str, known_from: Option<&str>) -> Result<FileDiff, String> {
+    let base_label = git(&["rev-parse", "--short", base_rev], ws_path).unwrap_or_else(|_| base_rev.into());
     // 이름변경 해석 (P-9) — 스테이징된 rename은 새 경로가 HEAD에 없어 전체 add로 보였다.
     // porcelain에서 원래 경로를 찾아 HEAD:<old> ↔ 워크트리 <new>를 비교한다.
     // 최적화 B8 — 변경 목록(changed_files)이 이미 아는 원래 경로를 받으면 status를 다시 돌리지 않는다.
@@ -258,7 +307,7 @@ pub fn file_diff(ws_path: &str, path: &str, known_from: Option<&str>) -> Result<
         }),
     };
     let head_path = renamed_from.as_deref().unwrap_or(path);
-    let in_head = git(&["cat-file", "-e", &format!("HEAD:{head_path}")], ws_path).is_ok();
+    let in_head = git(&["cat-file", "-e", &format!("{base_rev}:{head_path}")], ws_path).is_ok();
 
     if !in_head {
         // untracked/새 파일 — BASE 없음, 현재 전체가 add.
@@ -276,16 +325,16 @@ pub fn file_diff(ws_path: &str, path: &str, known_from: Option<&str>) -> Result<
 
     let out = if let Some(old) = renamed_from.as_deref() {
         // rename은 양쪽 경로를 pathspec에 넣어야 rename 감지가 살아 old↔new 비교가 된다
-        git(&["diff", "--no-color", "--find-renames", "-U999999", "HEAD", "--", old, path], ws_path)?
+        git(&["diff", "--no-color", "--find-renames", "-U999999", base_rev, "--", old, path], ws_path)?
     } else {
-        git(&["diff", "--no-color", "-U999999", "HEAD", "--", path], ws_path)?
+        git(&["diff", "--no-color", "-U999999", base_rev, "--", path], ws_path)?
     };
     if is_binary_diff(&out) {
         return Err("바이너리 파일 — 텍스트 비교 불가".into());
     }
     if out.trim().is_empty() || !out.lines().any(|l| l.starts_with("@@")) {
         // 변경 없음(또는 내용 동일 rename — 헤더만 있고 헝크 없음) — 양측 동일 내용 (ctx)
-        let text = git(&["show", &format!("HEAD:{head_path}")], ws_path)?;
+        let text = git(&["show", &format!("{base_rev}:{head_path}")], ws_path)?;
         let truncated = text.lines().count() > MAX_LINES_PER_SIDE;
         return Ok(FileDiff { base_label, base: ctx_lines(&text), current: ctx_lines(&text), truncated });
     }
@@ -396,6 +445,24 @@ pub fn commit_file_diff(ws_path: &str, hash: &str, path: &str) -> Result<FileDif
     }
     let (base, current, truncated) = parse_sides(&out);
     Ok(FileDiff { base_label, base, current, truncated })
+}
+
+// ── §13-3 임무 검토 화면용 커맨드 (W4 → W5 부탁) — git CLI라 blocking 스레드에서 돈다 ──
+
+#[tauri::command]
+pub async fn diff_changed_files_since(ws_path: String, base: String) -> Result<Vec<ChangedFile>, String> {
+    tauri::async_runtime::spawn_blocking(move || changed_files_since(&ws_path, &base))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// renamedFrom — 목록이 아는 원래 경로 ("" = 이름변경 아님). file_diff와 같은 계약
+#[tauri::command]
+pub async fn file_diff_since(ws_path: String, base: String, path: String, renamed_from: Option<String>) -> Result<FileDiff, String> {
+    // 목록이 원래 경로를 늘 준다 — None이면 ""(이름변경 아님)로 본다. status는 HEAD 기준이라 여기서 못 쓴다
+    tauri::async_runtime::spawn_blocking(move || file_diff_vs(&ws_path, &base, &path, Some(renamed_from.as_deref().unwrap_or_default())))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[cfg(test)]
@@ -559,6 +626,34 @@ mod tests {
     }
 
     /// numstat rename 표기 정규화 (P-9)
+    /// §13-3 — 기준 커밋 뒤 커밋된 것 + 커밋 안 된 것 + 새 파일, 이름 변경, base 쪽 내용
+    #[test]
+    fn since_base_lists_committed_and_uncommitted() {
+        let (dir, ws) = temp_repo("since");
+        fs::write(dir.join("a.txt"), "하나\n").unwrap();
+        fs::write(dir.join("old.txt"), "일\n이\n삼\n사\n오\n").unwrap();
+        git(&["add", "."], &ws).unwrap();
+        git(&["commit", "-m", "base"], &ws).unwrap();
+        let base = git(&["rev-parse", "HEAD"], &ws).unwrap();
+        fs::write(dir.join("a.txt"), "하나\n둘\n").unwrap();
+        git(&["mv", "old.txt", "new.txt"], &ws).unwrap();
+        git(&["commit", "-am", "after"], &ws).unwrap();
+        fs::write(dir.join("a.txt"), "하나\n둘\n셋\n").unwrap(); // 커밋 안 됨
+        fs::write(dir.join("새.txt"), "x\n").unwrap(); // 추적 안 됨
+        let files = changed_files_since(&ws, &base).unwrap();
+        let get = |p: &str| files.iter().find(|f| f.path == p).unwrap_or_else(|| panic!("{p} 없음: {:?}", files.iter().map(|f| &f.path).collect::<Vec<_>>()));
+        assert_eq!(get("a.txt").status, "M");
+        assert_eq!(get("a.txt").stat, "+2 −0");
+        assert_eq!((get("new.txt").status.as_str(), get("new.txt").renamed_from.as_deref()), ("R", Some("old.txt")));
+        assert_eq!(get("새.txt").status, "A");
+        let d = file_diff_vs(&ws, &base, "a.txt", Some("")).unwrap();
+        assert_eq!(d.base_label, &base[..d.base_label.len()]);
+        assert_eq!(d.base.iter().filter(|l| l.kind.is_none()).count(), 1, "base에는 '하나'만");
+        assert!(changed_files_since(&ws, "--all").is_err());
+        assert!(file_diff_vs(&ws, "HEAD", "a.txt", None).is_err(), "기준은 해시만");
+        fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn numstat_path_normalizes_renames() {
         assert_eq!(numstat_path("a.txt"), "a.txt");

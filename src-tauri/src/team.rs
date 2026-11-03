@@ -90,7 +90,7 @@ fn render_md(slots: &[TeamSlot], persona_title: &dyn Fn(&str) -> Option<String>)
         "# 팀 편성\n\n| 슬롯 | 페르소나 | 직무 |\n|---|---|---|\n"
     });
     // 표 행 수 — 기본 4행, 슬롯 상한 옵션(6·8)으로 그 위 슬롯이 있으면 거기까지 (절대 상한 8)
-    let max_slot = slots.iter().map(|s| s.slot).max().unwrap_or(0).min(8).max(4);
+    let max_slot = slots.iter().map(|s| s.slot).max().unwrap_or(0).clamp(4, 8);
     for n in 1u8..=max_slot {
         match slots.iter().find(|s| s.slot == n) {
             Some(s) => {

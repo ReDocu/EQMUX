@@ -27,6 +27,7 @@ import {
   overlay,
   panelOpen,
   pushLayer,
+  scopeWorkspace,
   setExitOpen,
   setFocusRequest,
   setOverlay,
@@ -45,6 +46,8 @@ import { Icon } from "./icons";
 import { ContextMenu, notify } from "./ui";
 import { crashReport, setCrashOpen } from "../backend/recovery";
 import type { MenuGroup } from "./ui";
+import { SessionPortrait } from "./PersonaAvatar";
+import { revealLabel } from "../labels";
 
 export function AppBar() {
   const workspaces = () => {
@@ -94,14 +97,14 @@ export function AppBar() {
     };
     return [
       [
-        { label: t("탐색기에서 열기"), disabled: ws.pathMissing, action: () => void reveal() },
+        { label: revealLabel(), disabled: ws.pathMissing, action: () => void reveal() },
         // 웹 주소로 바꿀 수 없는 원격(로컬 경로·없음)은 숨긴다 — 조건이 영영 맞지 않는 동작이다
         ...(web ? [{ label: t("원격 저장소 열기"), action: () => openLink(web) }] : []),
         { label: t("워크스페이스 관리…"), action: () => toggleOverlay("connect") },
       ],
       [
         { label: t("알림 음소거"), checked: settings().muted.includes(ws.id), action: () => toggleMuted(ws.id) },
-        { label: t("다른 프로젝트 메시지 받기"), checked: crossProjectOn(ws.id), action: toggleCross },
+        { label: t("다른 워크스페이스 메시지 받기"), checked: crossProjectOn(ws.id), action: toggleCross },
       ],
       [{ label: t("닫기 (세션은 유지)"), action: () => closeWs(ws.id) }],
     ];
@@ -118,6 +121,8 @@ export function AppBar() {
     return backend.listSessions().find((s) => s.id === it.session);
   };
   const itemRead = (it: NotifyItem) => {
+    // 앱 알림 · 동시 편집 · 엔진 버전 — 세션 신호가 아니라 늘 눈에 띄게 둔다 (목록 50건 상한이 걷는다)
+    if (it.open || it.kind === "cli-version" || it.kind === "escalate") return false;
     const s = itemSession(it);
     return !s || !sessionNeedsLook(s);
   };
@@ -125,7 +130,7 @@ export function AppBar() {
     `${paneNo(s)} ${nameBesideNo(paneNo(s), sessionName(s, backend.listPersonas().find((p) => p.id === s.personaId)))}`;
   const itemName = (it: NotifyItem) => {
     const s = itemSession(it);
-    return s ? sessName(s) : it.session;
+    return s ? sessName(s) : it.kind === "app" ? "EQMUX" : it.kind === "cli-version" ? t("엔진 CLI 버전") : it.session;
   };
   // 지금 보고 있는 워크스페이스가 아니면 어디 것인지 붙인다
   const wsLabel = (wsId: string) => {
@@ -389,17 +394,31 @@ export function AppBar() {
           </Show>
         </button>
         {/* 도구는 전부 전체 화면 팝업이다 — overlay 신호 하나라서 동시에 하나만 열린다 */}
-        {/* 이름대로 임무 자리에서 연다 (0.3.7) — 파일 탐색기는 같은 팝업의 옆 세그먼트다.
-            컨트롤 센터의 "로컬 폴더"는 같은 팝업을 탐색기 자리에서 연다 */}
+        {/* 임무 팝업 (0.3.7) — 파일 탐색기는 사이드 패널 files로 갔다 (결정 21 · 컨트롤 센터 "로컬 폴더") */}
         <button
           class="tool"
           aria-label={t("임무")}
           classList={{ active: overlay() === "explorer" }}
-          title={t("임무 배정 — 전체 화면 팝업 (헤더에서 파일 탐색기로 전환)")}
+          title={t("임무 배정 — 전체 화면 팝업")}
           onClick={() => toggleExplorer("missions")}
         >
           <Icon name="briefcase-business" size={13} />
           <span class="tool-label">{t("임무")}</span>
+        </button>
+        {/* 과거 세션 검색 (§4 W3) — 화면(View)이라 팝업과 달리 back으로 돌아간다. 다시 누르면 닫는다 */}
+        <button
+          class="tool"
+          aria-label={t("과거 세션 검색")}
+          classList={{ active: view().kind === "history" }}
+          title={t("과거 세션 검색")}
+          onClick={() => {
+            const v = view();
+            if (v.kind === "history") setView(v.back ?? { kind: "control" });
+            else if (setOverlay(undefined)) setView({ kind: "history", wsId: scopeWorkspace()?.id, back: v });
+          }}
+        >
+          <Icon name="messages-square" size={13} />
+          <span class="tool-label">{t("기록")}</span>
         </button>
         <button
           class="tool"
@@ -492,6 +511,7 @@ export function AppBar() {
                         <span class="bell-dot" />
                         <span class="bell-body">
                           <span class="bell-line">
+                            <SessionPortrait sessionId={s.id} />
                             <b class="mono">{sessName(s)}</b>
                             <Show when={wsLabel(s.workspaceId)}>{(n) => <span class="badge">{n()}</span>}</Show>
                           </span>
@@ -512,11 +532,12 @@ export function AppBar() {
                     <button
                       class="bell-item"
                       classList={{ read: itemRead(it) }}
-                      onClick={() => openSession(it.workspace, it.session)}
+                      onClick={() => (it.open ? it.open() : openSession(it.workspace, it.session))}
                     >
                       <span class={`bell-dot ${itemRead(it) ? "" : it.kind}`} />
                       <span class="bell-body">
                         <span class="bell-line">
+                          <SessionPortrait sessionId={it.session} />
                           <b class="mono">{itemName(it)}</b>
                           <Show when={wsLabel(it.workspace)}>{(n) => <span class="badge">{n()}</span>}</Show>
                           <Show when={it.count > 1}>

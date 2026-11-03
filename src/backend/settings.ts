@@ -43,7 +43,23 @@ export interface AppSettings {
   /** 웹 페이지를 여는 곳 — eqmux=앱 안 브라우저 패널(기본) · chrome=Chrome(없으면 기본 브라우저).
    *  사람이 누르는 링크와 에이전트의 `eqmux browser open`이 함께 따른다. Rust browser.rs도 이 키를 읽는다 */
   webOpen: "eqmux" | "chrome";
+  /** 창 닫기 (§1-1 · §10) — tray=돌고 있는 세션이 있으면 창만 숨긴다(macOS는 Dock에 남는다, 기본) ·
+   *  quit=앱 종료 경로. Rust window_close_to_tray가 이 키를 읽는다(없으면 tray) */
+  closeAction: "tray" | "quit";
+  /** 첫 실행 고지를 봤는가 (§10) — 앱이 쓰는 곳 · 쓰지 않는 곳. [확인]을 누르면 true. 다시 보기는 설정 › 정보 */
+  firstRunSeen: boolean;
+  /** 창을 닫을 때 트레이 숨김을 다시 묻지 않는다 (P65) — 확인창의 [다시 묻지 않기]. 기본 꺼짐(실행마다 첫 숨김에 묻는다) */
+  trayAskOff: boolean;
+  /** 하루 비용 예산 USD (0.6 §13-6) — 0 = 꺼짐(기본). 모든 세션의 statusLine 비용 증분 합계가 넘으면 한 번 알린다.
+   *  세션을 멈추지 않는다 */
+  dailyBudgetUsd: number;
+  /** 스크롤백 · 세션 로그를 디스크에 쓴다 (0.6 E4 · W6) — 토큰·비밀번호가 평문으로 남을 수 있어 끌 수 있게 한다.
+   *  끄면 Rust(W1 store.rs · lib.rs)가 쓰지 않는다. 기본 켬 */
+  scrollbackPersist: boolean;
 }
+
+/** 하루 예산 옵션 — 설정 화면 · 검증이 공유한다. 0 = 꺼짐 */
+export const BUDGET_OPTIONS = [0, 5, 10, 20, 50] as const;
 
 /** 상태 줄 옵션 — 설정 화면·검증·Rust 주입이 공유한다 */
 export const STATUSLINE_MODES = ["full", "nocost", "off"] as const;
@@ -73,6 +89,11 @@ export const DEFAULT_SETTINGS: AppSettings = {
   statusLine: "full", // 현행 유지 — 모델·비용 한 줄
   manualDelivery: "park", // 승인 창을 모르는 페인에는 사람이 넣는다 (BR-02)
   webOpen: "eqmux", // 에이전트의 eqmux browser 조작(snapshot·click)이 되는 쪽
+  closeAction: "tray", // 창을 닫아도 세션은 백그라운드로 산다 — 끝내기는 트레이 [전부 종료]
+  firstRunSeen: false,
+  trayAskOff: false,
+  dailyBudgetUsd: 0, // 기본 꺼짐 — 구독 요금제에는 금액보다 한도(F1)가 뜻이 있다
+  scrollbackPersist: true, // 재시작 뒤 이전 출력을 다시 그린다 (FR-C-31)
 };
 
 const [settings, setSettings] = createSignal<AppSettings>(DEFAULT_SETTINGS);
@@ -107,6 +128,11 @@ export function sanitize(raw: unknown): AppSettings {
     language: v.language === "en" ? "en" : "ko",
     manualDelivery: v.manualDelivery === "auto" ? "auto" : "park",
     webOpen: v.webOpen === "chrome" ? "chrome" : "eqmux",
+    closeAction: v.closeAction === "quit" ? "quit" : "tray",
+    firstRunSeen: v.firstRunSeen === true,
+    trayAskOff: v.trayAskOff === true,
+    scrollbackPersist: v.scrollbackPersist !== false,
+    dailyBudgetUsd: (BUDGET_OPTIONS as readonly number[]).includes(v.dailyBudgetUsd as number) ? (v.dailyBudgetUsd as number) : 0,
     statusLine: (STATUSLINE_MODES as readonly string[]).includes(v.statusLine as string)
       ? (v.statusLine as AppSettings["statusLine"])
       : "full",

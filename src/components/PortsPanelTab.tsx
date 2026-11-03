@@ -21,7 +21,7 @@ import {
 import type { PortEntry } from "../backend/ports";
 import { clipWriteText, isTauri } from "../backend/pty";
 import { openLink } from "../backend/browser";
-import { openInBrowserPanel, setPanelNote } from "../state";
+import { openInBrowserPanel, scopeWorkspace, setPanelNote } from "../state";
 import { Icon } from "./icons";
 import { ContextMenu } from "./ui";
 import { t, tf } from "../i18n";
@@ -64,8 +64,11 @@ export function PortsPanelTab() {
   const [query, setQuery] = createSignal("");
   const [sysOpen, setSysOpen] = createSignal(false);
 
+  const wsNameOf = (sessionId: string) =>
+    backend.listWorkspaces().find((w) => w.id === sessionId.slice(sessionId.indexOf("@") + 1))?.name;
   const personaName = (sessionId: string) => {
-    if (isServerTermId(sessionId)) return t("서버");
+    // 서버 셸은 어느 워크스페이스 것인지 붙인다 (B219) — 두 곳의 dev 서버가 '서버 · node' 두 줄로 같아 보였다
+    if (isServerTermId(sessionId)) return `${t("서버")} · ${wsNameOf(sessionId) ?? "?"}`;
     const s = backend.listSessions().find((x) => x.id === sessionId);
     if (!s) return sessionId.split("@")[0];
     // 시안 qFwsr — `01 EQMUX01`처럼 번호와 세션 이름
@@ -86,17 +89,28 @@ export function PortsPanelTab() {
     url: portUrl(e),
   });
 
-  const rows = createMemo<{ session: Row[]; system: Row[] }>(() => {
+  // 세션 포트는 지금 워크스페이스 것만 위에 보인다 (B219) — 나머지는 접힌 '다른 워크스페이스' 묶음.
+  // 세션 id 관례 `이름@wsId` (ServerPanelTab과 같은 대조). 워크스페이스 문맥이 없으면(관제) 모두 위에 둔다
+  const rows = createMemo<{ session: Row[]; other: Row[]; system: Row[] }>(() => {
     if (isTauri()) {
       // 첫 실측 전에는 빈 상태다 — 목 행을 보이면 실제 앱에 가짜 포트가 뜬다 (BR-13)
-      if (!portsLive()) return { session: [], system: [] };
-      return { session: sessionPorts().map(toRow), system: systemPorts().map(toRow) };
+      if (!portsLive()) return { session: [], other: [], system: [] };
+      const wsId = scopeWorkspace()?.id;
+      const mine = (e: PortEntry) => !wsId || e.session!.endsWith(`@${wsId}`);
+      const all = sessionPorts();
+      return {
+        session: all.filter(mine).map(toRow),
+        other: all.filter((e) => !mine(e)).map(toRow),
+        system: systemPorts().map(toRow),
+      };
     }
     return {
       session: SESSION_PORTS.map((p) => mockRow(p.port, p.host, p.proc, p.session)),
+      other: [],
       system: MOCK_SYSTEM,
     };
   });
+  const [otherOpen, setOtherOpen] = createSignal(false);
 
   // 패널을 보고 있다 = 확인했다 — 목록이 바뀔 때마다 탭 뱃지를 끈다.
   // untrack — markPortsSeen이 읽는 확인 표시까지 의존성에 걸면 자기 쓰기로 한 번 더 돈다
@@ -107,8 +121,8 @@ export function PortsPanelTab() {
 
   const filtered = createMemo(() =>
     rows().session.filter((p) => {
-      const q = query().trim();
-      return !q || `${p.port} ${p.proc} ${p.session ?? ""}`.includes(q);
+      const q = query().trim().toLowerCase(); // 대소문자 무시 (P84)
+      return !q || `${p.port} ${p.proc} ${p.session ?? ""}`.toLowerCase().includes(q);
     }),
   );
 
@@ -117,7 +131,7 @@ export function PortsPanelTab() {
   // (NetBIOS 139 등)만으로도 항상 ⚠가 켜져, 보안 성격의 경고가 상시 오탐이 된다 (B61)
   const summary = createMemo(() => {
     if (!isTauri()) return { ...PORT_SUMMARY, exposedAll: 0, exposedLan: 0 };
-    const all = [...rows().session, ...rows().system];
+    const all = [...rows().session, ...rows().other, ...rows().system];
     const counts = new Map<number, number>();
     for (const p of all) counts.set(p.port, (counts.get(p.port) ?? 0) + 1);
     return {
@@ -169,7 +183,15 @@ export function PortsPanelTab() {
         fallback={
           <div class="portsp-empty">
             <div class="portsp-empty-title">
-              {t(isTauri() && !portsLive() ? "포트를 처음 읽는 중…" : "세션이 연 LISTENING 포트가 없습니다")}
+              <Show
+                when={query().trim() && rows().session.length > 0}
+                fallback={t(isTauri() && !portsLive() ? "포트를 처음 읽는 중…" : "세션이 연 LISTENING 포트가 없습니다")}
+              >
+                {tf("“{q}”에 맞는 항목이 없습니다", { q: query().trim() })}{" "}
+                <button class="btn ghost" style={{ padding: "1px 6px" }} onClick={() => setQuery("")}>
+                  {t("검색 지우기")}
+                </button>
+              </Show>
             </div>
           </div>
         }
@@ -241,12 +263,37 @@ export function PortsPanelTab() {
         )}
       </Show>
 
+      <Show when={rows().other.length > 0}>
+        <button class="portsp-section-head sys" onClick={() => setOtherOpen(!otherOpen())}>
+          <span class="eyebrow">
+            <span class="mono">{otherOpen() ? "▾" : "›"}</span> {t("다른 워크스페이스")}
+          </span>
+          <span class="mono muted" style={{ "font-size": "10px" }}>
+            {tf("{n}개 리슨", { n: rows().other.length })}
+          </span>
+        </button>
+        <Show when={otherOpen()}>
+          <div class="card inset" style={{ padding: "4px 10px", "max-height": "180px", "overflow-y": "auto" }}>
+            <For each={rows().other}>
+              {(p) => (
+                <div class="kv">
+                  <span class="k mono">:{p.port}</span>
+                  <span class="v muted">
+                    {p.session} · {p.proc}
+                  </span>
+                </div>
+              )}
+            </For>
+          </div>
+        </Show>
+      </Show>
+
       <button class="portsp-section-head sys" onClick={() => setSysOpen(!sysOpen())}>
         <span class="eyebrow">
-          <span class="mono">{sysOpen() ? "▾" : "›"}</span> SYSTEM PORTS
+          <span class="mono">{sysOpen() ? "▾" : "›"}</span> {t("시스템 포트")}
         </span>
         <span class="mono muted" style={{ "font-size": "10px" }}>
-          {rows().system.length} LISTENING
+          {tf("{n}개 리슨", { n: rows().system.length })}
         </span>
       </button>
       <Show when={sysOpen()}>

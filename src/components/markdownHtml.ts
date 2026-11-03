@@ -30,6 +30,28 @@ const TAG: Record<string, string> = {
 
 const text = (n: SyntaxNode, src: string) => src.slice(n.from, n.to);
 
+/** 제목 → 앵커 id (GitHub 방식에 가깝게) — 글자·숫자·공백·하이픈만 남기고 공백은 하이픈 (B242) */
+export const slugOf = (s: string) =>
+  s.trim().toLowerCase().replace(/[^\p{L}\p{N}\s_-]/gu, "").replace(/\s/g, "-");
+let slugSeen = new Map<string, number>(); // 한 문서 안 같은 제목은 -1, -2 (markdownHtml이 문서마다 비운다)
+/** 보이는 글자만 — 구문 기호 · 링크 주소 · HTML 태그를 뺀다. 제목 앵커를 원문이 아니라 이것으로 만든다 (B263) */
+function plain(n: SyntaxNode, src: string): string {
+  if (MARKS.has(n.name) || n.name === "URL" || n.name === "HTMLTag") return "";
+  let out = "";
+  let pos = n.from;
+  for (let c = n.firstChild; c; c = c.nextSibling) {
+    out += src.slice(pos, c.from) + plain(c, src);
+    pos = c.to;
+  }
+  return out + src.slice(pos, n.to);
+}
+function headingId(n: SyntaxNode, src: string): string {
+  const base = slugOf(plain(n, src));
+  const k = slugSeen.get(base) ?? 0;
+  slugSeen.set(base, k + 1);
+  return k ? `${base}-${k}` : base;
+}
+
 function children(n: SyntaxNode, src: string, skip?: string): string {
   const gaps = !BLOCKS.has(n.name);
   let out = "";
@@ -78,7 +100,10 @@ function walk(n: SyntaxNode, src: string): string {
       const u = n.getChild("URL");
       const m = n.getChildren("LinkMark");
       const alt = m.length > 1 ? src.slice(m[0].to, m[1].from) : "";
-      return `<img alt="${esc(alt)}" src="${esc(safeHref(u ? text(u, src) : ""))}">`;
+      const href = safeHref(u ? text(u, src) : "");
+      // 상대 경로 그림은 앱 출처 기준으로 풀려 깨진다 (B242) — 파일로 여는 링크로 남긴다
+      if (!/^https?:/i.test(href)) return `<a href="${esc(href)}" class="md-img">🖼 ${esc(alt || href)}</a>`;
+      return `<img alt="${esc(alt)}" src="${esc(href)}">`;
     }
     case "TableHeader":
       return `<thead><tr>${children(n, src)}</tr></thead>`;
@@ -95,11 +120,13 @@ function walk(n: SyntaxNode, src: string): string {
     }
     default: {
       const tag = TAG[name];
+      if (tag && /^h\d$/.test(tag)) return `<${tag} id="${esc(headingId(n, src))}">${children(n, src)}</${tag}>`;
       return tag ? `<${tag}>${children(n, src)}</${tag}>` : children(n, src);
     }
   }
 }
 
 export function markdownHtml(src: string): string {
+  slugSeen = new Map();
   return walk(md.parse(src).topNode, src);
 }

@@ -15,6 +15,9 @@ import { dict as missions } from "./i18n/missions";
 import { dict as session } from "./i18n/session";
 import { dict as shell } from "./i18n/shell";
 import { dict as panels } from "./i18n/panels";
+import { dict as history } from "./i18n/history"; // §4 과거 세션 검색 (W3)
+import { dict as jump } from "./i18n/jump"; // §4 건너뛰기 팔레트 · 단축키 표 (W3)
+import { dict as extensions } from "./i18n/extensions"; // §12 확장 그룹 (W1)
 
 const EN: Record<string, string> = Object.assign(
   {},
@@ -27,6 +30,9 @@ const EN: Record<string, string> = Object.assign(
   session,
   shell,
   panels,
+  history,
+  jump,
+  extensions,
 );
 
 /** macOS에서만 문장째 바꾸는 원문 (U67) — 표기 치환(keyLabel)으로는 뜻이 맞지 않는 Windows 전제 설명.
@@ -51,6 +57,50 @@ export function t(ko: string): string {
  *  어순이 언어마다 다른 문장에만 쓴다. 단순 병기는 JSX에서 t() 조각으로 충분하다 */
 export function tf(ko: string, vars: Record<string, string | number>): string {
   let s = t(ko);
-  for (const [k, v] of Object.entries(vars)) s = s.replaceAll(`{${k}}`, String(v));
+  // 자리표시자 뒤 '을(를)'·'이(가)'는 넣은 낱말의 받침으로 고른다 (U176) — 영어 문장에는 없어 그대로다
+  for (const [k, v] of Object.entries(vars))
+    s = s.replace(new RegExp(`\\{${k}\\}(${JOSA.source})?`, "g"), (_, p?: string) => String(v) + (p ? josa(String(v), p) : ""));
   return s;
+}
+
+/** Rust 오류 원문 → 현재 언어 (U125). format!으로 만든 오류는 값이 끼어 있어 t()의 통째 대조에 안 걸린다.
+ *  사전의 {자리표시} 키(한글 낱말이 있는 것)를 틀로 맞춰 보고, 끼인 값도 같은 방식으로 한 번 더 푼다
+ *  ('기동 실패 — 작업 폴더가 없습니다: …'). 못 맞추면 원문 그대로다.
+ *  ponytail: 부를 때마다 틀을 정규식으로 만든다 — 오류 표시에만 쓰여 드물다. 잦아지면 사전별로 캐시 */
+export function tErr(e: unknown, dict: Record<string, string> | undefined = settings().language === "en" ? EN : undefined): string {
+  const raw = String(e);
+  if (!dict) return raw;
+  if (Object.hasOwn(dict, raw)) return dict[raw];
+  const lit = (k: string) => k.replace(/\{\w+\}/g, "").length;
+  const keys = Object.keys(dict).filter((k) => /\{\w+\}/.test(k) && /[가-힣]/.test(k.replace(/\{\w+\}/g, "")));
+  for (const k of keys.sort((a, b) => lit(b) - lit(a))) {
+    const names: string[] = [];
+    const body = k
+      .split(/\{(\w+)\}/)
+      .map((p, i) => (i % 2 ? (names.push(p), "(.+?)") : p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))
+      .join("");
+    const m = new RegExp(`^${body}$`, "s").exec(raw);
+    if (m) return dict[k].replace(/\{(\w+)\}/g, (w, n: string) => (names.includes(n) ? tErr(m[names.indexOf(n) + 1], dict) : w));
+  }
+  return raw;
+}
+
+const JOSA = /을\(를\)|이\(가\)|은\(는\)|와\(과\)/;
+
+/** 받침이 있으면 앞 조사, 없으면 뒤 조사 — '을(를)' → '을' | '를'. 판정이 안 서면 원문 그대로 (U176).
+ *  끝의 기호는 건너뛴다(`stash@{0}` → 0). 숫자는 읽는 소리로(일·삼·육·칠·팔·십·영 → 받침).
+ *  ponytail: 영어 낱말은 끝 글자로 어림한다 — l·m·n·ng로 끝나거나 L·M·N·R 한 글자면 받침.
+ *  file(파일)처럼 묵음 e는 틀린다. 정확히 하려면 발음 사전이 필요하다 */
+export function josa(word: string, pair: string): string {
+  const w = word.replace(/[^\p{L}\p{N}]+$/u, "");
+  const c = w.slice(-1);
+  const code = c.charCodeAt(0);
+  let batchim: boolean | undefined;
+  if (code >= 0xac00 && code <= 0xd7a3) batchim = (code - 0xac00) % 28 !== 0;
+  else if (/\d/.test(c)) batchim = "013678".includes(c); // 10 · 100 · 1000 · 10000(십 · 백 · 천 · 만)도 0으로 끝나 받침
+  else if (/[a-z]/i.test(c)) batchim = /^r$/i.test(w) || /(?:[lmn]|ng)$/i.test(w);
+  if (batchim === undefined) return pair;
+  // '와(과)'만 받침 쪽이 뒤다 — 책과 · 나무와 (을(를) · 이(가) · 은(는)은 받침 쪽이 앞)
+  const [withB, without] = pair === "와(과)" ? [pair[2], pair[0]] : [pair[0], pair[2]];
+  return batchim ? withB : without;
 }

@@ -2,15 +2,41 @@
 // 계약: 저장 배관(1MB 상한 · mtime 충돌 · .git 불가침)은 호출부(fsx)가 소유하고,
 // 여기는 텍스트 표면만 맡는다 — 구문 강조·줄 번호·검색·되돌리기.
 // 테마는 전부 CSS 토큰(var(--eq-*))으로 그려 라이트/다크 전환(M29)을 그대로 따라간다.
-import { onCleanup, onMount } from "solid-js";
+import { createEffect, on, onCleanup, onMount } from "solid-js";
 import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
+import { indentWithTab } from "@codemirror/commands";
 import { json } from "@codemirror/lang-json";
 import { markdown } from "@codemirror/lang-markdown";
 import { yaml } from "@codemirror/lang-yaml";
 import { HighlightStyle, LanguageDescription, syntaxHighlighting } from "@codemirror/language";
 import { tags as t } from "@lezer/highlight";
 import { basicSetup } from "codemirror";
+import { settings } from "../backend/settings";
+
+/** 산문 파일만 줄바꿈한다 (P86) — 코드는 긴 줄이 접히면 줄 번호와 실제 줄이 어긋나 보인다 */
+const isProse = (name: string) => /\.(md|markdown|mdx|txt)$/i.test(name);
+
+/** 검색 패널(Ctrl+F) 한국어 문구 (U164) — CodeMirror 기본은 영어다. 영어 화면은 기본 문구를 그대로 쓴다 */
+const PHRASES_KO: Record<string, string> = {
+  Find: "찾기",
+  Replace: "바꾸기",
+  next: "다음",
+  previous: "이전",
+  all: "모두",
+  "match case": "대소문자 구분",
+  regexp: "정규식",
+  "by word": "단어 단위",
+  replace: "바꾸기",
+  "replace all": "모두 바꾸기",
+  close: "닫기",
+  "Go to line": "줄로 이동",
+  go: "이동",
+  "current match": "현재 일치",
+  "on line": "줄",
+  "replaced match on line $": "$번 줄의 일치를 바꿨습니다",
+  "replaced $ matches": "일치 $개를 바꿨습니다",
+};
 
 /** 확장자 → 언어. 임무·역할·팀 파일(md/json/yaml)은 정적 번들 — 편집기와 함께 즉시 뜬다.
  *  그 외 확장자는 language-data 목록에서 찾아 지연 로드한다 (아래 loadExtraLang) */
@@ -124,6 +150,8 @@ export function CodeEditor(props: {
   let host!: HTMLDivElement;
   let view: EditorView | undefined;
   const langSlot = new Compartment(); // 지연 로드 언어를 나중에 끼워 넣는 자리
+  const phraseSlot = new Compartment(); // 검색 패널 문구 — 설정 언어를 바꾸면 갈아 끼운다 (U164)
+  const phrases = (lang: string) => (lang === "en" ? [] : EditorState.phrases.of(PHRASES_KO));
 
   onMount(() => {
     const staticLang = langOf(props.fileName);
@@ -141,12 +169,18 @@ export function CodeEditor(props: {
                 return true;
               },
             },
+            // 앱 단축키(Mod-Shift-K·L·B·D·U, App.tsx)는 앱 것이다 (B222) — basicSetup의 줄 삭제·같은 단어 모두
+            // 고르기가 같은 키에 함께 돌지 않게 여기서 삼킨다. stopPropagation은 달지 않아 window의 앱 단축키는 그대로 받는다
+            ...["k", "l", "b", "d", "u"].map((k) => ({ key: `Mod-Shift-${k}`, run: () => true })),
+            // Tab은 들여쓰기 (P86) — YAML에서 포커스가 밖으로 나갔다. Esc 다음 Tab은 CodeMirror 관례대로 포커스 이동
+            indentWithTab,
           ]),
           basicSetup,
           langSlot.of(staticLang),
           eqTheme,
           syntaxHighlighting(eqHighlight),
-          EditorView.lineWrapping, // 임무·역할 문서는 산문이다 — 가로 스크롤보다 줄바꿈
+          isProse(props.fileName) ? EditorView.lineWrapping : [], // 임무·역할 문서는 산문이다 — 가로 스크롤보다 줄바꿈
+          phraseSlot.of(phrases(settings().language)),
           EditorView.updateListener.of((u) => {
             if (u.docChanged) props.onChange(u.state.doc.toString());
           }),
@@ -166,6 +200,14 @@ export function CodeEditor(props: {
         .catch(() => undefined); // 파서 로드 실패 = 평문 유지 — 편집을 막을 이유가 없다
     }
   });
+  // 편집기를 연 채 언어를 바꿔도 따라간다 (U164) — 이미 열려 있던 검색 패널은 닫았다 다시 열면 바뀐다
+  createEffect(
+    on(
+      () => settings().language,
+      (lang) => view?.dispatch({ effects: phraseSlot.reconfigure(phrases(lang)) }),
+      { defer: true },
+    ),
+  );
   onCleanup(() => {
     view?.destroy();
     view = undefined; // 언어 로드 완료 콜백이 파괴된 뷰에 dispatch하지 않게

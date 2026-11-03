@@ -1,9 +1,13 @@
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { createEffect, createSignal, lazy, Match, onCleanup, onMount, Show, Switch } from "solid-js";
 import { AppBar } from "./components/AppBar";
 import { SidePanel } from "./components/SidePanel";
 import { ensureAgentListeners } from "./backend/agent";
-import { nextUnseen, startNotifyFeed } from "./backend/attention";
-import { startDirectorySync, startMessageBus } from "./backend/conversation";
+import { nextUnseen, startConflictFeed, startNotifyFeed } from "./backend/attention";
+import { startAwayWatch } from "./backend/away";
+import { setShellToast, startDirectorySync, startMessageBus } from "./backend/conversation";
 import { backend } from "./backend/mock";
 import { startAgentProbe } from "./backend/agentprobe";
 import { startMemorySampling } from "./backend/memory";
@@ -13,20 +17,20 @@ import { isServerTermId, startPortWatch } from "./backend/ports";
 import { startRecapUpdates } from "./backend/recap";
 import { ensurePtyListeners, isTauri, listAlivePty, setPtyExitHook } from "./backend/pty";
 import { crashOpen, crashReport, loadCrashRecovery, setCrashOpen } from "./backend/recovery";
+import { loadSettings, settings, updateSettings } from "./backend/settings";
+import { FirstRunNotice, firstRunPending, startForeignCheck } from "./components/FirstRunNotice";
 import { performShutdown } from "./backend/shutdown";
 import { startTeamSync } from "./backend/team";
 import { startFileWatch } from "./backend/watch";
 import { refreshWorkspaces } from "./backend/workspaces";
 import {
   exitOpen,
-  explorerTab,
   layoutPickerOpen,
   modalOpen,
   overlay,
   panelOpen,
   scopeWorkspace,
   setExitOpen,
-  setExplorerTab,
   setLayoutPickerOpen,
   setPanelOpen,
   setView,
@@ -34,23 +38,27 @@ import {
   view,
 } from "./state";
 import type { View } from "./state";
-import { t } from "./i18n";
+import { t, tf } from "./i18n";
+import { IS_MAC } from "./platform";
 import { ScreenOverlay } from "./components/ScreenOverlay";
 import { blocksNavKey, isNavChord } from "./components/keynav";
-import { notify } from "./components/ui";
-import { editorGuard, MissionExplorerTab } from "./components/MissionExplorerTab";
+import { JumpPalette, jumpOpen, toggleJump } from "./components/JumpPalette"; // §4 W3
+import { ConfirmDialog, notify } from "./components/ui";
 import { ControlCenter } from "./screens/ControlCenter";
 import { CrashRecovery } from "./screens/CrashRecovery";
 import { Dashboard } from "./screens/Dashboard";
-import { DefaultTerminalSetup } from "./screens/DefaultTerminalSetup";
 import { ExitDialog } from "./screens/ExitDialog";
-import { LaunchMode } from "./screens/LaunchMode";
 import { LayoutPicker } from "./screens/LayoutPicker";
-import { Missions } from "./screens/Missions";
 
 // 첫 화면 밖 화면은 나눠 싣는다 (최적화 D6) — 설정·역할 라이브러리·diff 편집기·캐스팅 등은
 // 열 때 처음 받는다. 관제·워크스페이스·대화는 첫 화면이라 그대로 둔다
+const DefaultTerminalSetup = lazy(() => import("./screens/DefaultTerminalSetup").then((m) => ({ default: m.DefaultTerminalSetup })));
+const LaunchMode = lazy(() => import("./screens/LaunchMode").then((m) => ({ default: m.LaunchMode })));
+const Missions = lazy(() => import("./screens/Missions").then((m) => ({ default: m.Missions })));
 const GitDiffEditor = lazy(() => import("./screens/GitDiffEditor").then((m) => ({ default: m.GitDiffEditor })));
+const GitScreen = lazy(() => import("./screens/GitScreen").then((m) => ({ default: m.GitScreen }))); // §17 W5
+const MissionReview = lazy(() => import("./screens/MissionReview").then((m) => ({ default: m.MissionReview }))); // §13-3 W4
+const HistorySearch = lazy(() => import("./screens/HistorySearch").then((m) => ({ default: m.HistorySearch }))); // §4 W3
 const RoleLibrary = lazy(() => import("./screens/RoleLibrary").then((m) => ({ default: m.RoleLibrary })));
 const Settings = lazy(() => import("./screens/Settings").then((m) => ({ default: m.Settings })));
 const TeamCasting = lazy(() => import("./screens/TeamCasting").then((m) => ({ default: m.TeamCasting })));
@@ -60,27 +68,10 @@ const WorkspaceConnection = lazy(() => import("./screens/WorkspaceConnection").t
 export function App() {
   const v = view;
 
-  // 임무 탐색기 팝업의 안쪽 전환 (0.3.7) — 임무는 화면 View, 탐색기는 팝업이라 서로 오갈
-  // 길이 단방향이었다. 팝업이 둘을 다 품고 이 세그먼트가 고른다. 임무는 워크스페이스
-  // 문맥이 있어야 성립하므로, 없으면 눌리지 않는다 (첫 실행 관제 화면)
-  const explorerNav = () => (
-    <div class="cc-seg">
-      <button classList={{ on: explorerTab() === "explorer" }} onClick={() => setExplorerTab("explorer")}>
-        {t("탐색기")}
-      </button>
-      <button
-        classList={{ on: explorerTab() === "missions" }}
-        disabled={!scopeWorkspace()}
-        title={scopeWorkspace() ? undefined : t("워크스페이스를 먼저 여세요")}
-        onClick={() => setExplorerTab("missions")}
-      >
-        {t("임무")}
-      </button>
-    </div>
-  );
   // 전역 pty-output/exit 수신 — spawnPty 경로에만 맡기면 에이전트 전용 실행·재부착 세션이
   // 출력을 못 받는다. 셸 exit은 여기서 상태에 반영한다 (에이전트는 agent-state가 관장)
   onMount(() => {
+    setShellToast(notify); // 맨 셸 슬롯 메시지의 토스트 (B157)
     void ensurePtyListeners();
     setPtyExitHook((id, code) => backend.sessionExited(id, code));
   });
@@ -109,6 +100,8 @@ export function App() {
   onMount(() => startPortWatch());
   // 알림 센터 (0.5 C2) — Rust notify-item을 벨 목록에 쌓는다. 창이 포커스여서 OS 알림이 안 뜬 건도 온다
   onMount(() => startNotifyFeed());
+  onMount(() => startConflictFeed()); // 같은 파일 동시 편집 (0.6 §13-1 · C1)
+  onMount(() => startAwayWatch()); // 자리 비운 사이 요약 (0.6 §13-5)
 
   // 화면 손상 진단 (임시 계측, backend/diag) — 배율·모니터 변화와 자식 웹뷰 좌표 어긋남을 남긴다.
   // 자동 보정은 하지 않는다: 원인을 확정하기 전에 가리면 원인을 못 찾는다
@@ -124,7 +117,7 @@ export function App() {
       e.preventDefault();
       setDiagMark("진단 기록 중…");
       void diagSnapshot("USER-MARK 화면 손상 신고").then(() => {
-        setDiagMark("진단에 기록했습니다 — .eqmux/logs/diagnostics.log");
+        setDiagMark("진단에 기록했습니다 — ~/.eqmux/logs/diagnostics.log"); // 저장소의 .eqmux/가 아니다 (U127)
         setTimeout(() => setDiagMark(undefined), 2600);
       });
     };
@@ -135,29 +128,50 @@ export function App() {
   // 비정상 종료 복구 (FR-C-35) — 직전 실행이 크래시였으면 직전 세션 목록을 1회 보여준다
   // 보고는 recovery.ts가 들고 있다 — 닫아도 알림 센터에서 다시 연다 (U63)
   onMount(() => void loadCrashRecovery());
+  // 첫 실행 고지 (§10) — 저장본을 읽은 뒤에만 판정한다(로드 전 기본값은 '안 봤음'이라 매번 번쩍인다).
+  // 다른 도구 전역 지시 점검(§14)은 기동 때 한 번 — 찾으면 알림 센터에 한 건
+  const [settingsReady, setSettingsReady] = createSignal(false);
+  onMount(() => void loadSettings().then(() => setSettingsReady(true)));
+  onMount(() => startForeignCheck());
 
   // 창 닫기 = 앱 완전 종료 (FR-C-60) — 실행 중 세션이 있으면 확인 다이얼로그 (FR-C-61),
   // 없으면 flush 시퀀스만 돌고 조용히 종료된다.
   // macOS ⌘Q·Dock '종료'도 같은 길로 온다 (B112) — 창 닫기를 거치지 않으므로 Rust(quit.rs)가
   // terminate를 취소하고 'app-quit-requested'를 보낸다. 로그아웃은 Rust가 직접 정리한다
+  const requestQuit = async () => {
+    // 서버 탭 PTY는 세션 목록 밖이다 — 그것만 돌 때도 dev 서버가 말없이 죽지 않게 묻는다 (BR-05)
+    const running =
+      backend.listSessions().some((s) => s.status !== "dead") ||
+      (await listAlivePty()).some(isServerTermId);
+    if (running) setExitOpen(true);
+    else void performShutdown();
+  };
+  // 첫 트레이 숨김 확인 (P65) — 창을 숨기기 전에 앱 안에서 묻는다. OS 알림은 꺼져 있거나 포터블
+  // 빌드에서 안 뜰 수 있어, 사람은 앱이 꺼졌다고 믿고 에이전트는 계속 돈다(§1-1). 값은 숨길 PTY 수
+  const [trayAsk, setTrayAsk] = createSignal(0);
+  const [trayNoAsk, setTrayNoAsk] = createSignal(false);
+  let trayAsked = false; // 이번 실행에서 물었다 — [다시 묻지 않기]를 안 골랐으면 다음 실행에 다시 묻는다
+  const hideToTray = () => {
+    trayAsked = true;
+    if (trayNoAsk()) updateSettings({ trayAskOff: true });
+    setTrayAsk(0);
+    void invoke<boolean>("window_close_to_tray").then((hid) => void (hid || requestQuit()), () => requestQuit());
+  };
   onMount(() => {
     if (!isTauri()) return;
-    const requestQuit = async () => {
-      // 서버 탭 PTY는 세션 목록 밖이다 — 그것만 돌 때도 dev 서버가 말없이 죽지 않게 묻는다 (BR-05)
-      const running =
-        backend.listSessions().some((s) => s.status !== "dead") ||
-        (await listAlivePty()).some(isServerTermId);
-      if (running) setExitOpen(true);
-      else void performShutdown();
-    };
-    void import("@tauri-apps/api/window").then(({ getCurrentWindow }) =>
-      getCurrentWindow().onCloseRequested(async (e) => {
-        e.preventDefault();
-        await requestQuit();
-      }),
-    );
+    // 정적 import — 다른 모듈이 이미 같은 패키지를 정적으로 실어서 동적 import는 청크를 나누지 못했다
+    void getCurrentWindow().onCloseRequested(async (e) => {
+      e.preventDefault();
+      if (!trayAsked && !settings().trayAskOff) {
+        const n = await invoke<number>("window_would_hide").catch(() => 0);
+        if (n > 0) return void setTrayAsk(n);
+      }
+      // 트레이로 숨겼으면 끝 (W1 §1-1) — Rust는 closeAction이 quit가 아니고 PTY가 돌 때만 true다
+      if (await invoke<boolean>("window_close_to_tray").catch(() => false)) return;
+      await requestQuit();
+    });
     // 앱 수명 동안 듣는다 — 위 onCloseRequested와 같다
-    void import("@tauri-apps/api/event").then(({ listen }) => listen("app-quit-requested", () => void requestQuit()));
+    void listen("app-quit-requested", () => void requestQuit());
   });
 
   // 모달(종료·배치·복구·확인창)이 떠 있는 동안은 화면을 옮기는 단축키를 막는다 (B72) — 캡처 단계라
@@ -165,6 +179,7 @@ export function App() {
   onMount(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!blocksNavKey(e, modalOpen(), layoutPickerOpen())) return;
+      if (jumpOpen() && e.key.toLowerCase() === "k") return; // 팔레트 위의 Ctrl+Shift+K는 그 팔레트를 닫는 토글 (W3)
       e.preventDefault();
       e.stopImmediatePropagation();
       notify(t("열린 창을 먼저 닫으세요"));
@@ -186,7 +201,10 @@ export function App() {
         setLayoutPickerOpen((o) => !o);
       } else if (k === "b") {
         e.preventDefault();
-        setPanelOpen((o) => !o);
+        setPanelOpen(!panelOpen());
+      } else if (k === "k") {
+        e.preventDefault();
+        toggleJump(); // §4 건너뛰기 팔레트 (W3)
       }
     };
     window.addEventListener("keydown", onKey);
@@ -260,6 +278,22 @@ export function App() {
             <Match when={v().kind === "missions"}>
               <Missions wsId={(v() as { kind: "missions"; wsId: string }).wsId} />
             </Match>
+            <Match when={v().kind === "git"}>
+              <GitScreen
+                wsId={(v() as Extract<View, { kind: "git" }>).wsId}
+                file={(v() as Extract<View, { kind: "git" }>).file}
+              />
+            </Match>
+            <Match when={v().kind === "history"}>
+              <HistorySearch wsId={(v() as Extract<View, { kind: "history" }>).wsId} />
+            </Match>
+            <Match when={v().kind === "review"}>
+              <MissionReview
+                wsId={(v() as Extract<View, { kind: "review" }>).wsId}
+                missionId={(v() as Extract<View, { kind: "review" }>).missionId}
+                back={(v() as Extract<View, { kind: "review" }>).back}
+              />
+            </Match>
             <Match when={v().kind === "gitdiff"}>
               <GitDiffEditor
                 wsId={(v() as Extract<View, { kind: "gitdiff" }>).wsId}
@@ -296,15 +330,15 @@ export function App() {
       </Show>
       {/* 전체 화면 팝업 4종 — overlay 신호 하나라서 동시에 하나만 열린다 (M25 확장) */}
       <Show when={overlay() === "explorer"}>
-        <ScreenOverlay title={t("임무 · 파일 탐색기")} icon="briefcase-business" guard={editorGuard} nav={explorerNav()}>
-          {/* 임무는 워크스페이스 문맥이 있어야 성립한다 — 없으면(첫 실행 관제) 탐색기로 남는다 */}
-          <Show when={explorerTab() === "missions" && scopeWorkspace()} fallback={<MissionExplorerTab />}>
+        <ScreenOverlay title={t("임무")} icon="briefcase-business">
+          {/* 임무는 워크스페이스 문맥이 있어야 성립한다 — 파일 탐색기는 사이드 패널 files로 갔다 (결정 21) */}
+          <Show when={scopeWorkspace()} fallback={<div class="muted">{t("워크스페이스를 먼저 여세요")}</div>}>
             {(w) => <Missions wsId={w().id} />}
           </Show>
         </ScreenOverlay>
       </Show>
       <Show when={overlay() === "connect"}>
-        <ScreenOverlay title={t("워크스페이스 열기 · 관리")} icon="folder-open">
+        <ScreenOverlay title={t("워크스페이스 연결 · 관리")} icon="folder-open">
           <WorkspaceConnection />
         </ScreenOverlay>
       </Show>
@@ -321,11 +355,42 @@ export function App() {
       <Show when={exitOpen()}>
         <ExitDialog />
       </Show>
+      <Show when={trayAsk() > 0}>
+        <ConfirmDialog
+          title={tf(IS_MAC ? "창을 닫아도 세션 {n}개가 Dock에서 계속 돕니다" : "창을 닫아도 세션 {n}개가 트레이에서 계속 돕니다", { n: trayAsk() })}
+          body={
+            <>
+              <div>
+                {t(
+                  IS_MAC
+                    ? "Dock에 남겨도 세션이 계속 돕니다 · 끝내려면 ⌘Q 또는 메뉴 막대 아이콘의 [전부 종료]를 누릅니다"
+                    : "트레이로 숨기면 세션이 계속 돕니다 · 끝내려면 트레이 메뉴의 [전부 종료]를 누릅니다",
+                )}
+              </div>
+              <label style={{ display: "flex", gap: "6px", "align-items": "center", "margin-top": "10px" }}>
+                <input type="checkbox" checked={trayNoAsk()} onChange={(e) => setTrayNoAsk(e.currentTarget.checked)} />
+                {t("다시 묻지 않기")}
+              </label>
+              <button class="btn" style={{ "margin-top": "10px" }} onClick={() => (setTrayAsk(0), void requestQuit())}>
+                {t("모두 종료…")}
+              </button>
+            </>
+          }
+          confirmLabel={t(IS_MAC ? "Dock으로 숨기기" : "트레이로 숨기기")}
+          onConfirm={hideToTray}
+          onCancel={() => setTrayAsk(0)}
+        />
+      </Show>
       <Show when={crashOpen() && crashReport()}>
         {(r) => <CrashRecovery report={r()} onClose={() => setCrashOpen(false)} />}
       </Show>
       <Show when={layoutPickerOpen()}>
         <LayoutPicker />
+      </Show>
+      <JumpPalette /> {/* §4 건너뛰기 팔레트 (W3) — Ctrl+Shift+K */}
+      {/* 복구 창이 먼저다 — 두 모달이 겹치지 않게 그것이 닫힌 뒤에 뜬다 */}
+      <Show when={settingsReady() && firstRunPending() && !crashOpen()}>
+        <FirstRunNotice />
       </Show>
     </div>
   );

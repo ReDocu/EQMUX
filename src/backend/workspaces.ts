@@ -14,6 +14,7 @@ import { refreshMissions } from "./missions";
 import { isTauri } from "./pty";
 import { flushTeamNow, restoreTeams } from "./team";
 import { setView, view } from "../state";
+import { t, tf } from "../i18n";
 import type { Workspace } from "../types";
 
 export interface WsEntry {
@@ -48,7 +49,7 @@ export async function setCrossProject(id: string, on: boolean): Promise<void> {
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
-function toWorkspace(w: WsInfo): Workspace {
+export function toWorkspace(w: WsInfo): Workspace {
   const t = w.entry.last_used ? new Date(w.entry.last_used) : undefined;
   return {
     id: w.entry.id,
@@ -63,6 +64,7 @@ function toWorkspace(w: WsInfo): Workspace {
         : `${w.entry.branch ?? "(브랜치 없음)"} · 실측`,
     open: false,
     pathMissing: !w.exists || !w.is_repo,
+    notRepo: w.exists && !w.is_repo, // 폴더는 있다 — 재지정만이 아니라 git init도 권한다 (0.6 QA P80)
     teamFile: ".eqmux/team.json",
     lastUsed: t
       ? `${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())} ${pad(t.getHours())}:${pad(t.getMinutes())}`
@@ -127,6 +129,37 @@ export function gitInit(path: string): Promise<void> {
 
 export function cloneRepo(url: string, parent: string): Promise<string> {
   return invoke<string>("ws_clone", { url, parent });
+}
+
+/** 진행 중 clone 취소 (P72) — cloneRepo가 CLONE_CANCELLED|<남은 경로>로 끝난다 */
+export function cancelClone(): void {
+  void invoke("ws_clone_cancel").catch(() => {});
+}
+
+// git clone --progress 단계 이름 → 화면 문구 (P72). 모르는 단계 · 진행률 없는 줄은 원문 그대로
+const CLONE_STAGE: Record<string, string> = {
+  "Enumerating objects": "원격 객체 세는 중",
+  "Counting objects": "원격 객체 세는 중",
+  "Compressing objects": "원격 압축 중",
+  "Receiving objects": "객체 받는 중",
+  "Resolving deltas": "델타 정리 중",
+  "Updating files": "파일 풀어놓는 중",
+};
+
+/** clone-progress 이벤트 한 줄 → '객체 받는 중 42%' (P72) */
+export function cloneProgressText(line: string): string {
+  const m = /^(?:remote: )?([A-Za-z ]+):\s+(\d+)%/.exec(line.trim());
+  const stage = m && CLONE_STAGE[m[1]];
+  return stage ? `${t(stage)} ${m[2]}%` : line.trim();
+}
+
+/** 취소 · 상한으로 끝난 clone의 오류 → 사람 문구 (P72). 받다 만 폴더를 지웠는지 함께 말한다. 그 밖의 실패는 undefined */
+export function cloneStopText(err: string): { text: string; clean: boolean } | undefined {
+  const m = /^CLONE_(CANCELLED|TIMEOUT)\|(.*)$/s.exec(err);
+  if (!m) return undefined;
+  const head = m[1] === "CANCELLED" ? t("clone을 취소했습니다") : t("clone이 60분 안에 끝나지 않아 멈췄습니다");
+  const tail = m[2] ? tf("받다 만 폴더가 남았습니다 — {path}", { path: m[2] }) : t("받다 만 폴더를 지웠습니다");
+  return { text: `${head} — ${tail}`, clean: !m[2] };
 }
 
 export function unregisterWorkspace(id: string): Promise<void> {

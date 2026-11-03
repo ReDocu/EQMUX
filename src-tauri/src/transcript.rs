@@ -94,15 +94,15 @@ fn tool_summary(input: &serde_json::Value) -> Option<String> {
         ("skill", false),
         ("prompt", false),
     ];
-    for (key, is_path) in KEYS {
-        let Some(v) = input.get(key).and_then(|v| v.as_str()) else { continue };
-        let v = v.trim();
-        if v.is_empty() {
-            continue;
-        }
-        return Some(if is_path { short_path(v) } else { short_text(v) });
+    let base = KEYS.iter().find_map(|(key, is_path)| {
+        let v = input.get(*key)?.as_str()?.trim();
+        (!v.is_empty()).then(|| if *is_path { short_path(v) } else { short_text(v) })
+    });
+    // 서브에이전트(Agent·Task)는 종류를 앞에 — detail은 2000자에서 잘려 긴 prompt 뒤의 종류가 사라진다
+    match input.get("subagent_type").and_then(|v| v.as_str()).map(str::trim).filter(|k| !k.is_empty()) {
+        Some(kind) => Some(base.map_or_else(|| kind.to_string(), |d| format!("{kind} · {d}"))),
+        None => base,
     }
-    None
 }
 
 /// content 블록 배열에서 턴을 뽑는다. tool_result는 직전의 결과 없는 도구 턴에 붙인다.
@@ -581,5 +581,14 @@ mod tests {
         std::fs::write(&path, "전부\n깨진\n줄\n").unwrap();
         assert!(read(&path, 200).is_err()); // → 스크롤백 폴백 (FR-G-86)
         std::fs::remove_dir_all(&dir).ok();
+    }
+    /// 서브에이전트 종류가 요약 앞에 온다 — detail이 잘려도 접힌 줄·서브에이전트 목록에서 보인다
+    #[test]
+    fn subagent_kind_leads_the_summary() {
+        let agent = serde_json::json!({ "subagent_type": "Explore", "description": "find the parser", "prompt": "long…" });
+        assert_eq!(tool_summary(&agent).as_deref(), Some("Explore · find the parser"));
+        assert_eq!(tool_summary(&serde_json::json!({ "subagent_type": "Plan" })).as_deref(), Some("Plan"));
+        assert_eq!(tool_summary(&serde_json::json!({ "description": "x" })).as_deref(), Some("x"), "종류 없으면 종전대로");
+        assert_eq!(tool_summary(&serde_json::json!({ "file_path": "a.ts" })).as_deref(), Some("a.ts"));
     }
 }

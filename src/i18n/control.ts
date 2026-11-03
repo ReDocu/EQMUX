@@ -21,20 +21,21 @@ export const dict: Record<string, string> = {
   "Focus — 가장 오래 기다린 페인을 전체 화면으로 잡습니다. 답은 터미널에 직접 입력합니다":
     "Focus — grabs the longest-waiting pane fullscreen. The answer is typed in the terminal",
   "응답 대기": "Awaiting answer",
-  "ESC 종료": "ESC to exit",
+  "Shift+ESC 종료": "Shift+ESC to exit",
+  "ESC는 터미널로 · 나가기는 Shift+ESC": "ESC goes to the terminal · leave with Shift+ESC",
   "이 자리에서 재개 — --resume · 대화 복원":
     "Resume in place — --resume · restores the conversation",
   "재개 — 대화 복원": "Resume — restore conversation",
 
   // ── 상태바 ──
-  "활성 세션 프로세스 트리 메모리": "Active session process-tree memory",
-  "SessionService 이벤트 · 저장 상태": "SessionService events · storage status",
+  "세션이 쓰는 메모리": "Memory used by sessions",
+  "이벤트 · 저장 상태": "Events · storage status",
   이벤트: "Events",
   "(실측)": "(live)",
   "(목)": "(mock)",
   "저장 (실측)": "Storage (live)",
   "저장 (목)": "Storage (mock)",
-  "100ms 배치 · 30일/1,000줄 보존": "100ms batches · 30-day/1,000-line retention",
+  "30일 · 세션당 1,000줄 보존": "Kept 30 days · 1,000 lines per session",
 
   // ── 저장 기록 초기화 (FR-C-52) ──
   "기록 비우기": "Clear history",
@@ -52,7 +53,7 @@ export const dict: Record<string, string> = {
   "새로 추가하는 터미널부터 적용됩니다": "Applies to newly added terminals",
   "그리드로 복귀": "Back to grid",
   "페인 배치": "Pane layout",
-  "터미널 전체 화면 — ESC로 종료": "Terminal fullscreen — ESC to exit",
+  "터미널 전체 화면 — Shift+ESC로 종료": "Terminal fullscreen — Shift+ESC to exit",
   "임무 · 캐스팅 · 팀 편성": "Missions · casting · team composition",
   팀: "Team",
   "임무 배정…": "Assign missions…",
@@ -63,7 +64,7 @@ export const dict: Record<string, string> = {
   // ── 워크스페이스·슬롯 한도 ──
   "동시에 열 수 있는 워크스페이스는 {n}개입니다 — 하나를 닫고 다시 시도하세요":
     "You can keep {n} workspaces open at once — close one and try again",
-  "빈 슬롯에 세션 추가 — 클로드코드 · 코덱스 · 기본 터미널":
+  "빈 슬롯에 세션 추가 — Claude Code · Codex · 기본 터미널":
     "Add a session to an empty slot — Claude Code · Codex · default terminal",
   // ── 에이전트 기동 ──
   "에이전트 기동": "Start agent",
@@ -96,7 +97,7 @@ export const dict: Record<string, string> = {
     "Pick a persona and job and launch right away · the only path that carries the role, permission flags and hooks",
   "페르소나·직무를 정해 바로 기동 · 역할·권한 플래그·훅이 붙은 유일한 경로 (Claude Code · Codex)":
     "Pick a persona and job and launch right away · the only path that carries the role, permission flags and hooks (Claude Code · Codex)",
-  "PATH에 {cmd}가 없습니다 — 설치 후 설정 > CLI 에이전트에서 다시 확인하세요":
+  "PATH에 {cmd}이(가) 없습니다 — 설치 후 설정 > CLI 에이전트에서 다시 확인하세요":
     "{cmd} is not on PATH — install it, then re-check under Settings > CLI agents",
   "{name} 열기": "Open {name}",
   "셸에서 {cmd} 실행 · 역할·훅·재개는 붙지 않고 관제에는 실행 중으로만 보입니다":
@@ -110,8 +111,6 @@ export const dict: Record<string, string> = {
   "의존성(node_modules 등)은 워크트리마다 별도입니다. 제거 시 워크트리는 남습니다 — 머지·정리는 사람이 합니다":
     "Dependencies (node_modules etc.) are separate per worktree. The worktree remains on removal — merging and cleanup are up to you",
   "역할 세션 제거": "Remove role session",
-  "제거하면 팀 편성의 이 슬롯이 비워지고 임무 배정이 해제되며 PTY 프로세스가 종료됩니다. 변경은 다음 캐스팅 저장 때 .eqmux/team.json에 반영됩니다.":
-    "Removing empties this slot in the team composition, unassigns its missions, and terminates the PTY process. The change is written to .eqmux/team.json on the next casting save.",
   "세션 제거": "Remove session",
 
   // ── 설정 > CLI 에이전트 ──
@@ -139,7 +138,7 @@ export const dict: Record<string, string> = {
   실측: "live",
   "끝 2MB 창": "last-2MB window",
   "건너뜀 {n}줄": "{n} lines skipped",
-  "스크롤백 폴백": "Scrollback fallback",
+  "터미널 기록에서 읽음": "Read from terminal history",
   출처: "Source",
   "출처 {path} — 클릭하면 경로를 복사합니다": "Source {path} — click to copy the path",
   "▸ 사람": "▸ Human",
@@ -147,8 +146,7 @@ export const dict: Record<string, string> = {
   에이전트: "Agent",
   "참조만 저장 (V2)": "Reference only (V2)",
   "검색": "Search",
-  "세션 저장 — 스크롤백 전체(디스크 포함, VT 제거 평문)를 .txt로 내보낸다":
-    "Save session — exports the full scrollback (incl. disk, VT-stripped plain text) to .txt",
+  "세션 저장 — 스크롤백 전체(디스크 포함)를 평문 .txt로 내보냅니다": "Save session — export the full scrollback (including disk) as plain .txt",
   "저장 중…": "Saving…",
   "세션 저장": "Save session",
   "트랜스크립트 없음 — 에이전트 로그도 스크롤백도 아직 없습니다": "No transcript — no agent log or scrollback yet",
@@ -159,8 +157,24 @@ export const dict: Record<string, string> = {
   "사람 → {name}": "Human → {name}",
   "턴 검색…": "Search turns…",
   "턴 개요": "Turn outline",
-  "1급 소스 · JSONL": "Primary source · JSONL",
-  "{name}의 PTY로 입력 전달 (V3)": "Send input to {name}'s PTY (V3)",
+  "대화 로그": "Conversation log",
+  "{name}에게 입력 보내기": "Send input to {name}",
+  // 터미널에 앱이 찍는 경계 줄 (U154)
+  "브랜치 부여 → {cwd}": "Branch assigned → {cwd}",
+  "이전 세션 스크롤백 · 마지막 {n}줄 재생": "Previous session scrollback · replaying last {n} lines",
+  "웹뷰 재시작 — 실행 중인 세션에 재부착": "Webview restarted — reattached to the running session",
+  "새 세션 시작": "New session started",
+  "제거하면 프로세스가 끝나고 임무 배정이 풀립니다. 슬롯은 .eqmux/team.json(팀이 같이 쓰는 파일)에서 바로 빠집니다. 이 세션의 대화는 다시 재개할 수 없습니다 — 같은 사람으로 다시 만들면 새 대화로 시작합니다.":
+    "Removing ends the process and unassigns its missions. The slot leaves .eqmux/team.json (a file the team shares) right away. This session's conversation can't be resumed again; recreating the same person starts a new conversation.",
+  "제거 — 대화 기록 잃음": "Remove — lose the conversation",
+  "재개하지 못했습니다 — {err}": "Couldn't resume — {err}",
+  "에이전트를 띄우지 못했습니다 — {err}": "Couldn't start the agent — {err}",
+  // Rust(lib.rs) format! 오류 — tErr가 틀로 맞춘다 (U125 · B207)
+  "작업 폴더가 없습니다: {cwd} — 재개는 같은 폴더에서만 됩니다": "Working folder not found: {cwd} — resume works only in the same folder",
+  "작업 폴더가 없습니다: {cwd} — 폴더를 되돌리거나 세션을 다시 만드세요": "Working folder not found: {cwd} — restore the folder or recreate the session",
+  "실행 실패 — {err}": "Failed to start — {err}",
+  "세션 시작 실패 — {err}": "Session failed to start — {err}",
+  "승인 · 질문을 기다리는 중입니다 — 터미널에서 읽고 답하세요": "Waiting on an approval or question — read and answer it in the terminal",
   전송: "Send",
 
   // ── 0.5 W3 · 확인창·페인 헤더·주의 칩·세션 이름 ──
@@ -170,6 +184,7 @@ export const dict: Record<string, string> = {
   "{name} 제거": "Remove {name}",
   "셸 프로세스가 종료되고 이 페인의 화면이 닫힙니다. 되돌릴 수 없습니다.": "The shell process ends and this pane closes. This can't be undone.",
   "메시지 {n}건": "{n} messages",
+  "메시지 1건": "1 message",
   "손으로 띄운 에이전트라 자동으로 넣지 않습니다": "Started by hand, so messages aren't typed in automatically",
   "넣기": "Insert",
   "✓ 턴 끝남 · 보고 전": "✓ Turn ended · no report yet",
@@ -186,7 +201,7 @@ export const dict: Record<string, string> = {
   "다음 미확인으로 (Ctrl+Shift+U) — 누를 때마다 기다리는 페인을 차례로 잡습니다. 답은 터미널에 직접 입력합니다": "Next unseen (Ctrl+Shift+U) — each press moves to the next waiting pane. Answer directly in the terminal",
   "비우면 {auto} · 역할 세션은 페르소나 이름": "Leave empty for {auto} · role sessions use the persona name",
   "{name} 쓰기": "Use {name}",
-  "PATH에 {cmd}가 없습니다 — 아래 명령으로 설치한 뒤 다시 감지하세요": "{cmd} isn't on PATH — install it with the command below, then detect again",
+  "PATH에 {cmd}이(가) 없습니다 — 아래 명령으로 설치한 뒤 다시 감지하세요": "{cmd} isn't on PATH — install it with the command below, then detect again",
   "다시 감지": "Detect again",
   "쌓인 메시지 {n}건": "{n} queued messages",
   "승인 창이 떠 있으면 먼저 답하세요. 넣으면 본문과 Enter가 그 페인에 들어갑니다.": "If an approval prompt is open, answer it first. Inserting types the text and Enter into that pane.",
@@ -200,7 +215,7 @@ export const dict: Record<string, string> = {
   "새로 시작 (요약만 넘김 · 이전 대화는 잇지 않음)": "Start fresh (carry summary only · doesn't continue the old conversation)",
   "{agent} 실행 중 — 손으로 띄워 역할·훅이 붙지 않았습니다": "{agent} running — started by hand, so no role or hooks are attached",
   "에이전트 없음 — 직무 권한을 찾을 수 없어 기동할 수 없습니다. 역할을 다시 지정하세요": "No agent — can't start because the job's permissions weren't found. Reassign the role",
-  "에이전트 없음 — PATH에 {cmd}가 없어 기동할 수 없습니다": "No agent — can't start because {cmd} isn't on PATH",
+  "에이전트 없음 — PATH에 {cmd}이(가) 없어 기동할 수 없습니다": "No agent — can't start because {cmd} isn't on PATH",
   "에이전트 없음": "No agent",
 
   // ── 0.5 W3 · 시안 적용 — 관제·확인창·세션 만들기 ──
@@ -212,7 +227,7 @@ export const dict: Record<string, string> = {
   "셸 프로세스를 끝내고 이 슬롯({no})을 비웁니다. 되돌릴 수 없습니다. 스크롤백은 30일 보존 규칙대로 남습니다.": "Ends the shell process and frees slot {no}. This can't be undone. Scrollback is kept under the 30-day retention rule.",
   "승인 대기 중": "waiting for approval",
   "열린 handoff": "Open handoff",
-  "있음 — 중지해도 원장에 남는다": "yes — it stays in the ledger after stopping",
+  "있음 — 중지해도 기록에 남습니다": "yes — it stays in the ledger after stopping",
   "종료됨": "Exited",
   "메시지 {n}": "{n} msgs",
   "✓ 보고 전": "✓ No report",
@@ -224,6 +239,7 @@ export const dict: Record<string, string> = {
   "비워 두면 {name}": "Empty = {name}",
   "24자 이내 · 공백·@·줄바꿈 불가 · 만들 때 한 번 정해져 폴더 이름이 바뀌어도 그대로": "Up to 24 characters · no spaces, @ or line breaks · set once at creation, kept even if the folder is renamed",
   "{name}에 쌓인 메시지 {n}건": "{n} messages queued for {name}",
+  "{name}에 쌓인 메시지 1건": "1 message queued for {name}",
   "승인 창이 떠 있으면 먼저 답하세요. 넣기는 본문과 Enter를 그대로 보냅니다.": "If an approval prompt is open, answer it first. Insert types the text and Enter as-is.",
   "{n}건 넣기": "Insert {n}",
   "{name}에게 보고 요청": "Ask {name} for a report",
@@ -263,10 +279,87 @@ export const dict: Record<string, string> = {
   "세션 {n}개": "{n} SESSIONS",
   "엔진 1종": "1 ENGINE",
   "엔진 {n}종": "{n} ENGINES",
-  "PTY {n} 실행 중": "PTY {n} ONLINE",
+  "터미널 {n}개 실행 중": "{n} terminals running",
+  "터미널 1개 실행 중": "1 terminal running",
   "출력 {k}K": "OUTPUT {k}K",
   "저장 {kb} KB · {n}줄": "WAL {kb} KB · {n} lines",
-  "저장 —": "WAL —",
+  "저장 기록 없음": "No saved history",
   "메모리 {mb} MB": "MEM {mb} MB",
   "세션 {n}/{max} · 터미널 집중": "{n}/{max} SESSIONS · TERMINAL FOCUS",
+
+  // ── 0.6 W7: 같은 파일 동시 편집 (§13-1) ──
+  "편집 도구로 고친 것만 잡습니다 (Bash · Codex 제외)": "Only catches edits made with edit tools (not Bash or Codex)",
+  "{names}이(가) 동시에 편집 중": "{names} are editing the same file",
+  "{names}이(가) {path}을(를) 동시에 편집 중": "{names} are editing {path} at the same time",
+  "{name}에게 알리기": "Tell {name}",
+  "같은 파일에 새 편집이 오면 다시 뜹니다": "Comes back if the same file is edited again",
+  "동시 편집 · {path}": "Concurrent edit · {path}",
+  "동시 편집": "Concurrent edit",
+  "{path}을(를) {others}도 방금 편집했습니다. 서로 덮어쓰지 않게 {others}와(과) 나눠 맡아 주세요.":
+    "{others} also just edited {path}. Split the work with {others} so you don't overwrite each other.",
+  // ── 0.6 W7: 상한으로 버려진 메시지 (§2 M3) ──
+  버려짐: "Dropped",
+  "받는 세션의 대기가 50건을 넘어 오래된 것부터 버렸습니다 — 원문은 대화 기록에 남아 있습니다":
+    "The recipient's queue passed 50, so the oldest were dropped. The original stays in the conversation history",
+  // ── 0.6 W7: 승인함 (§13-4) ──
+  허용: "Allow",
+  거부: "Deny",
+  "페인으로 가기": "Go to pane",
+  "이미 페인에서 답했습니다 — 아무것도 넣지 않았습니다": "Already answered in the pane. Nothing was sent",
+  "지금은 다른 것을 기다립니다 — 페인에서 답하세요": "It's waiting on something else now. Answer in the pane",
+  "이 세션은 앱에서 답할 수 없습니다 — 페인에서 답하세요": "This session can't be answered from the app. Answer in the pane",
+  "질문에 답 대기 — 페인에서 고릅니다": "Waiting for an answer to a question. Choose in the pane",
+  "계획 승인 대기 — 페인에서 고릅니다": "Waiting for plan approval. Choose in the pane",
+  // ── 0.6 W7: 멈춤 배지 · 자리 비운 사이 요약 (A5 · §13-5) ──
+  "멈춤? · 10분째 훅 없음": "Stalled? · no hooks for 10 min",
+  "멈춤?": "Stalled?",
+  "훅이 10분째 없습니다 — 출력이 흐르는 긴 명령이면 그대로 두세요. 멈췄으면 터미널에서 Ctrl+C나 [중지]":
+    "No hooks for 10 minutes. If a long command is still printing, leave it. If it's stuck, press Ctrl+C in the terminal or [Stop]",
+  "자리 비운 사이 · {ago}부터 · 세션 {n}개가 바뀌었습니다": "While you were away · since {ago} · {n} sessions changed",
+  "받은 메시지 {n}": "{n} received",
+  "보낸 메시지 {n}": "{n} sent",
+  // ── 0.6 W7: 하루 비용 예산 (§13-6) ──
+  "오늘 비용": "Today's cost",
+  "모든 워크스페이스의 오늘 비용 합계 · 예산은 설정 › 알림": "Today's cost across all workspaces · set a budget in Settings › Notifications",
+  "오늘 비용이 예산 ${budget}을(를) 넘었습니다": "Today's cost passed the ${budget} budget",
+  "지금 ${usd} · 세션은 멈추지 않습니다": "Now ${usd} · sessions keep running",
+  "{name} · 메시지": "{name} · message",
+  "검토 →": "Review →",
+  "보내는 중": "Sending",
+  "입력란에 넣었습니다 — 에이전트가 이 메시지로 턴을 시작하면 전달됨으로 바뀝니다": "Put in the input box — turns to Delivered when the agent starts a turn with it",
+  "모든 임무": "All missions",
+  "그 임무 담당 세션이 보냈거나 받은 메시지만": "Only messages sent or received by that mission's sessions",
+  "{window} 한도 {pct}%": "{window} limit {pct}%",
+  "5시간": "5-hour",
+  "7일": "7-day",
+  "한도 소진": "Limit reached",
+  "한도 소진 · {at} 재설정": "Limit reached · resets {at}",
+  "메시지는 쌓아 두었다가 한도가 풀리면 넣습니다": "Messages are held and sent once the limit resets",
+  "컨텍스트 {pct}% 사용 — 높으면 /compact나 다른 세션으로 넘김을 생각하세요": "Context {pct}% used — when high, consider /compact or handing off to another session",
+  "한도 재설정 {at}": "Limit resets {at}",
+  "판정 근거": "Why this status",
+  "{event} 뒤로 훅 없음 · {ago}": "No hooks since {event} · {ago}",
+  "직접 띄운 claude를 붙임": "Adopted a hand-started claude",
+  "세션 레지스트리 재확인": "Session registry rescan",
+  "프로세스 종료 · {note}": "Process ended · {note}",
+  "붙였던 claude가 사라짐": "Adopted claude went away",
+  "엔진 CLI 버전": "Engine CLI version",
+  "열린 워크스페이스": "Open workspaces",
+  긴급: "Urgent",
+  "{name}이(가) 담당 밖 {path}을(를) 편집": "{name} edited {path} outside its ownership",
+  "담당: {owns}": "Owns: {owns}",
+  // 0.6 QA eqmux-17: 승인함 · 상태 이름 (U122 · U157 · U158 · B212 · B237)
+  "열린 워크스페이스 {m} · 주의 정렬: {order}": "{m} open workspaces · attention order: {order}",
+  "도구 승인": "tool approval",
+  "질문 — 페인에서 고릅니다": "question. Choose in the pane",
+  "계획 승인 — 페인에서 고릅니다": "plan approval. Choose in the pane",
+  "승인함 · 모든 워크스페이스": "Approvals · all workspaces",
+  "응답을 기다리는 세션": "Sessions waiting for you",
+  "열린 워크스페이스의 종료된 세션": "Ended sessions in open workspaces",
+  "앱이 기다리는 시간이 지났습니다 — 페인에서 답하세요": "The app stopped waiting for this one. Answer in the pane",
+  "승인을 전하지 못했습니다 — 페인에서 답하세요": "Couldn't deliver the answer. Answer in the pane",
+  "도구 승인은 승인함에서 · 질문 · 계획은 페인에서": "Tool approvals in the approvals list · questions and plans in the pane",
+  // 0.6 QA eqmux-17: 빠진 원문 (B195) · 진단 복사 실패 (B197)
+  "열린 창을 먼저 닫으세요": "Close the open window first",
+  "진단 정보를 클립보드에 넣지 못했습니다 — 다시 눌러 주세요": "Couldn't put the diagnostic info on the clipboard. Try again",
 };

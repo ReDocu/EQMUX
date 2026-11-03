@@ -1,7 +1,7 @@
 // 주입 본문 단위 테스트 — 전달 경로(PTY·인박스)는 통합의 몫이고, 여기서는 "여러 건을 어떻게
 // 한 줄로 접는가"만 본다: 단건/묶음 접두 · 개행 평탄화 · 상한에서 덩어리 갈리기.
 import { describe, expect, test } from "vitest";
-import { batches, cancelBrief, capQueue, deliveredIds, flushInboxOnState, fmt, fmtEcho, goneName, orphanedInbox, pendingBrief, queueBrief, pendingReason, prependOlder, splitPending, unmanagedAgent } from "./conversation";
+import { batches, cancelBrief, crossCopy, titlePrefix, consumeTaken, droppedIds, noteTaken, capQueue, deliveredIds, flushInboxOnState, fmt, fmtNotice, goneName, injectedMsgIds, sentState, touchesMission, orphanedInbox, pendingBrief, queueBrief, pendingReason, prependOlder, splitPending, unmanagedAgent } from "./conversation";
 import { typedText } from "./pty";
 import type { ConversationMessage } from "../types";
 
@@ -16,6 +16,11 @@ const msg = (from: string, body: string, type: ConversationMessage["type"] = "as
 });
 
 describe("fmt", () => {
+  test("원장 id와 회신 대상을 머리에 싣는다 — eqmux send --re <id> (W3 §4)", () => {
+    expect(fmt([{ ...msg("린", "봐줘"), rowId: 42 }])).toBe("[EQ·ask #42] 린: 봐줘");
+    expect(fmt([{ ...msg("린", "끝"), rowId: 43, re: 41 }])).toBe("[EQ·ask #43 (#41에 회신)] 린: 끝");
+    expect(fmt([{ ...msg("린", "a"), rowId: 1 }, msg("카이", "b")])).toBe("[EQ 2건] 1) 린·ask #1: a 2) 카이·ask: b");
+  });
   test("단건은 짧은 접두 하나", () => {
     expect(fmt([msg("나", "빌드 봐줘")])).toBe("[EQ·ask] 나: 빌드 봐줘");
   });
@@ -53,10 +58,9 @@ describe("fmt 발신자 이름", () => {
     expect(fmt([m])).toBe("[EQ·ask] 나: 요약 (파일: .eqmux/notes/a.md)");
   });
 
-  test("기본 터미널 에코도 같은 머리 — 내부 id가 나오지 않는다", () => {
-    const line = fmtEcho(msg("kai@eqmux-1e3b93", "hi"), "카이");
-    expect(line).toContain("[EQ·ask] 카이: hi");
-    expect(line).not.toContain("@eqmux");
+  test("맨 셸 알림도 같은 머리 · 한 줄 — 내부 id가 나오지 않는다 (B157)", () => {
+    expect(fmtNotice(msg("kai@eqmux-1e3b93", "hi\n  there"), "카이")).toBe("[EQ·ask] 카이: hi there");
+    expect(fmtNotice(msg("카이", "x".repeat(300)))).toHaveLength(160);
   });
 });
 
@@ -200,5 +204,60 @@ describe("capQueue (CPU·RAM M6)", () => {
     const q = [1, 2, 3];
     expect(capQueue(q, 5)).toBe(q);
     expect(capQueue([1, 2, 3, 4, 5, 6], 4)).toEqual([3, 4, 5, 6]);
+  });
+});
+
+describe("--wait로 받아 간 회신 (W3 §4)", () => {
+  test("message-new보다 먼저 온 표시는 그 세션에 한 번만 쓰이고, 10초가 지나면 걷힌다", () => {
+    noteTaken("kai@ws", 7, 1000);
+    expect(consumeTaken("rin@ws", 7, 1001)).toBe(false);
+    expect(consumeTaken("kai@ws", 7, 1002)).toBe(true);
+    expect(consumeTaken("kai@ws", 7, 1003)).toBe(false);
+    noteTaken("kai@ws", 8, 1000);
+    expect(consumeTaken("kai@ws", 8, 20_000)).toBe(false);
+  });
+});
+
+describe("상한으로 밀려난 메시지 (§2 M3)", () => {
+  test("사람이 보낸 것만 버려짐이 된다", () => {
+    const mine = { ...msg("나", "a"), id: "m1" };
+    expect(droppedIds([mine, msg("카이", "b")])).toEqual(["m1"]);
+  });
+});
+
+describe("전달됨 시점 (B168)", () => {
+  test("rowId가 있으면 보내는 중 — 도착 이벤트와 짝지을 수 없으면 바로 전달됨", () => {
+    expect(sentState({ rowId: 7 })).toBe("sending");
+    expect(sentState({})).toBe("delivered");
+  });
+  test("message-injected의 rowId → 그 워크스페이스 메시지 id", () => {
+    const a = { ...msg("나", "a"), id: "a", rowId: 7, workspaceId: "w1" };
+    const b = { ...msg("나", "b"), id: "b", rowId: 7, workspaceId: "w2" };
+    const c = { ...msg("나", "c"), id: "c" };
+    expect(injectedMsgIds([a, b, c], "w1", [7, 8])).toEqual(["a"]);
+  });
+  test("임무 필터 — 담당 세션이 보냈거나 받은 것 (§4)", () => {
+    expect(touchesMission({ from: "kai", to: "@all" }, ["kai"])).toBe(true);
+    expect(touchesMission({ from: "나", to: "kai" }, ["kai"])).toBe(true);
+    expect(touchesMission({ from: "나", to: "rin" }, ["kai"])).toBe(false);
+  });
+});
+
+describe("받는 사람 · 사본 (U121 · B210)", () => {
+  test("직함 접두 — 띄어쓰기를 빼고 비교, 뒤는 공백이나 끝", () => {
+    expect(titlePrefix("클라이언트 개발자 확인 부탁", "클라이언트 개발자")).toBe(9);
+    expect(titlePrefix("클라이언트개발자 확인", "클라이언트 개발자")).toBe(8);
+    expect(titlePrefix("클라이언트 개발자", "클라이언트개발자")).toBe(9);
+    expect(titlePrefix("클라이언트 개발자들 확인", "클라이언트 개발자")).toBe(0);
+    expect(titlePrefix("서버 개발자 확인", "클라이언트 개발자")).toBe(0);
+    expect(titlePrefix("아무거나", undefined)).toBe(0);
+  });
+  test("보낸 쪽 사본은 다른 워크스페이스로 보낼 때만", () => {
+    expect(crossCopy("B", "lin@B", "A")).toBe("lin@B");
+    expect(crossCopy("A", "kai@A", "A")).toBeUndefined();
+    expect(crossCopy("B", "lin@B")).toBeUndefined();
+    // @all 전달도 사본을 남긴다 (B266) — 그대로 @all이면 보낸 쪽 팀 전체에게 가므로 받는 프로젝트를 붙인다
+    expect(crossCopy("B", "@all", "A", "app-b")).toBe("@all@app-b");
+    expect(crossCopy("B", "@all", "A")).toBe("@all@B");
   });
 });
