@@ -8,7 +8,7 @@
 |---|---|---|
 | Windows 10·11 (x64) | `EQMUX_0.6.2_x64_portable.zip` | 압축을 풀어 `EQMUX\eqmux.exe` 실행 |
 
-macOS 판은 나중에 따로 올립니다. 1.0 전에는 설치 파일을 내지 않습니다. 아직 코드 서명이 없습니다. Windows는 SmartScreen에서 [추가 정보] → [실행]을 누릅니다.
+macOS 판은 나중에 따로 올립니다. 1.0 전에는 설치 파일을 내지 않습니다. 아직 코드 서명이 없습니다. Windows는 SmartScreen에서 [추가 정보] → [실행]을 누릅니다. 받은 파일은 릴리스에 붙은 `SHA256SUMS.txt`와 `Get-FileHash`로 대조할 수 있습니다.
 
 ## 고친 것
 
@@ -23,9 +23,3 @@ EQMUX가 아니라 Claude Code가 스스로 바꾼 동작이었습니다. Claude
 - 이미 `CLAUDE_CODE_NO_FLICKER`를 정해 두었으면 EQMUX는 덮어쓰지 않습니다. EQMUX 안에서 클래식 화면을 쓰려면 `CLAUDE_CODE_NO_FLICKER=0`으로 두세요.
 - Claude Code 설정의 `"tui": "default"`는 EQMUX 안에서는 이 값에 덮입니다.
 - 0.6.1 이하를 쓰는 동안 이 문제가 생겼다면, Claude Code에서 `/tui fullscreen`을 실행해도 바로 돌아옵니다.
-
-## 파일 해시 (SHA-256)
-
-```
-(빌드 후 채움)
-```
