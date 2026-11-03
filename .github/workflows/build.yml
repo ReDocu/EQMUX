@@ -65,6 +65,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with: { workspaces: src-tauri }
       - run: npm ci
+      # tauri universal 빌드는 주 바이너리만 lipo로 합친다 — 같이 번들되는 콘솔 대리인(B248, mac에선 빈 main)을 미리 합쳐 둔다
+      - name: universal eqmux-console
+        working-directory: src-tauri
+        run: |
+          for t in aarch64-apple-darwin x86_64-apple-darwin; do cargo build --release --bin eqmux-console --target $t; done
+          mkdir -p target/universal-apple-darwin/release
+          lipo -create -output target/universal-apple-darwin/release/eqmux-console target/aarch64-apple-darwin/release/eqmux-console target/x86_64-apple-darwin/release/eqmux-console
       # ad-hoc 서명(tauri.macos.conf.json signingIdentity "-"). 서명 자리: Developer ID + notarytool(결정 P1).
       - run: npm run tauri build -- --target universal-apple-darwin
       - uses: actions/upload-artifact@v4
