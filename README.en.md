@@ -20,7 +20,7 @@ step in when needed.
 ## Quick start
 
 1. **Download** — get the file for your OS from [Releases](https://github.com/ReDocu/EQMUX/releases).
-   - Windows 10/11: portable `EQMUX_<version>_x64_portable.zip` (unzip and run `EQMUX\eqmux.exe`, no admin rights needed) or the installer `EQMUX_<version>_x64-setup.exe`
+   - Windows 10/11: portable `EQMUX_<version>_x64_portable.zip` (unzip and run `EQMUX\eqmux.exe`, no admin rights needed). There is no installer before 1.0
    - macOS 11+: `EQMUX_<version>_universal.dmg`
    - For the warning on first launch, see **Getting past install warnings** above.
 2. **Set up the agent CLI** — install [Claude Code](https://claude.com/claude-code) and log in once from a terminal (Codex CLI is optional). EQMUX holds no API key; it only launches this CLI. You don't need Node.js or Rust (those are only for building from source).
@@ -123,7 +123,7 @@ product / quality). Each slot carries a preview of its execution permissions (wr
 | Frontend | [SolidJS](https://solidjs.com) + TypeScript + Vite |
 | Terminal | ConPTY ([portable-pty](https://crates.io/crates/portable-pty)) + [xterm.js](https://xtermjs.org) |
 | Storage | SQLite (rusqlite, WAL) for sessions · scrollback · events / JSON for settings · layout / files for teams · roles · missions |
-| Platform | Windows (WebView2 · Job Objects · NSIS installer) · macOS 11+ (universal dmg) |
+| Platform | Windows (WebView2 · Job Objects · portable zip) · macOS 11+ (universal dmg) |
 
 ## Building from source
 
@@ -146,7 +146,7 @@ npm run tauri dev     # Tauri dev mode (Vite + Rust)
 ### Build
 
 ```powershell
-npm run tauri build   # produces the NSIS installer (EQMUX_x64-setup.exe)
+npm run tauri build -- --no-bundle   # src-tauri/target/release/eqmux.exe (no installer before 1.0)
 ```
 
 To check only the frontend, run `npm run build` (tsc --noEmit + vite build).

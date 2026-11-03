@@ -70,8 +70,7 @@ EQMUX 자체는 API 키를 요구하지 않습니다. 에이전트 인증은 CLI
 ```powershell
 npm install
 npm run tauri dev      # 개발 모드
-npm run tauri build -- --no-bundle    # eqmux.exe만 (배포용)
-npm run tauri build                  # NSIS 설치본까지 생성
+npm run tauri build -- --no-bundle    # eqmux.exe만 (배포용 — 1.0 전에는 설치 파일을 만들지 않는다)
 ```
 
 Node.js 18+ 와 Rust(stable)가 필요합니다.

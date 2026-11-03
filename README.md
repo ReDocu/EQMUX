@@ -19,7 +19,7 @@ EQMUX는 터미널 멀티플렉서(MUX)에 에이전트 팀 관제를 얹은 Win
 ## 빠른 시작
 
 1. **받기** — [Releases](https://github.com/ReDocu/EQMUX/releases)에서 OS에 맞는 파일을 받습니다.
-   - Windows 10/11: 포터블 `EQMUX_<버전>_x64_portable.zip`(압축을 풀고 `EQMUX\eqmux.exe` 실행, 관리자 권한 필요 없음) 또는 설치본 `EQMUX_<버전>_x64-setup.exe`
+   - Windows 10/11: 포터블 `EQMUX_<버전>_x64_portable.zip`(압축을 풀고 `EQMUX\eqmux.exe` 실행, 관리자 권한 필요 없음). 1.0 전에는 설치 파일을 내지 않습니다
    - macOS 11+: `EQMUX_<버전>_universal.dmg`
    - 처음 열 때 뜨는 경고는 위 **설치 경고 넘기기**를 따릅니다.
 2. **에이전트 CLI 준비** — [Claude Code](https://claude.com/claude-code)를 설치하고 터미널에서 한 번 로그인해 둡니다(Codex CLI는 선택). EQMUX는 API 키를 갖지 않고 이 CLI를 띄울 뿐입니다. Node.js · Rust는 필요 없습니다(소스에서 빌드할 때만 씁니다).
@@ -120,7 +120,7 @@ git 화면에서 스테이지 · 커밋 · push까지 하고, 위험한 작업�
 | 프런트엔드 | [SolidJS](https://solidjs.com) + TypeScript + Vite |
 | 터미널 | ConPTY ([portable-pty](https://crates.io/crates/portable-pty)) + [xterm.js](https://xtermjs.org) |
 | 저장소 | SQLite (rusqlite, WAL) — 세션·스크롤백·이벤트 / JSON — 설정·레이아웃 / 파일 — 팀·역할·임무 |
-| 플랫폼 | Windows (WebView2 · Job Object · NSIS 인스톨러) · macOS 11+ (universal dmg) |
+| 플랫폼 | Windows (WebView2 · Job Object · 포터블 zip) · macOS 11+ (universal dmg) |
 
 ## 소스에서 빌드
 
@@ -143,7 +143,7 @@ npm run tauri dev     # Tauri 개발 모드 (Vite + Rust)
 ### 빌드
 
 ```powershell
-npm run tauri build   # NSIS 인스톨러 산출 (EQMUX_x64-setup.exe)
+npm run tauri build -- --no-bundle   # src-tauri/target/release/eqmux.exe (설치 파일은 1.0 전에는 만들지 않는다)
 ```
 
 프런트엔드만 검사하려면 `npm run build`(tsc --noEmit + vite build).

@@ -17,11 +17,11 @@
 | 할 일 | 내용 |
 |---|---|
 | ~~버전 · 변경 기록 커밋~~ | 끝 — `34c65d0`(태그 `v0.6.0`) |
-| ~~Windows 릴리스~~ | 끝 — 2026-11-03 [EQMUX 0.6.0](https://github.com/ReDocu/EQMUX/releases/tag/v0.6.0) 공개(설치 파일 · 포터블 zip · `SHA256SUMS.txt`, CI 산출물). 첫 CI는 mac 번들에서 실패했다(`eqmux-console` universal 없음) → `75377cd`에서 CI 수정 |
+| ~~Windows 릴리스~~ | 끝 — 2026-11-03 [EQMUX 0.6.0](https://github.com/ReDocu/EQMUX/releases/tag/v0.6.0) 공개(포터블 zip · `SHA256SUMS.txt`, CI 산출물). CI가 규칙(1.0 전 설치 파일 없음)을 어기고 `setup.exe`까지 올렸다 → CI에서 NSIS를 뺐다(`--no-bundle`). 첫 CI는 mac 번들에서 실패했다(`eqmux-console` universal 없음) → `75377cd`에서 CI 수정 |
 | macOS 릴리스 | 남음 — 고친 CI로 dmg를 만들어 v0.6.0 릴리스에 더하거나 0.6.1에 같이 낸다. `v0.6.0` 태그는 수정 전 커밋이라 태그 빌드를 다시 하려면 태그를 옮겨야 한다(사람 승인 필요) |
 | ~~CI 테스트 확인~~ | 끝 — CI(windows-latest)에서 `cargo test --lib` 통과. 이 PC의 `ports` 실패는 환경(리스너가 TCP 표에 LISTENING으로 안 나옴) |
 | ~~릴리스 본문~~ | 끝 — `release-0.6.0-notes.md`(B271을 아는 한계에 적음) |
-| 설치 실기 | 0.5.1 위에 0.6.0을 덮어 설치 · 포터블 실행. 등록 · 배치 · 설정 · 라이브러리가 남는지, `session.db`가 제자리 이전되는지, 메시지 버스 이름이 바뀌어 다시 켜야 하는 점 |
+| 업데이트 실기 | 0.5.1 포터블을 쓰던 PC에서 0.6.0 포터블 실행. 등록 · 배치 · 설정 · 라이브러리가 남는지, `session.db`가 제자리 이전되는지, 메시지 버스 이름이 바뀌어 다시 켜야 하는 점 |
 
 ## 2. mac 실기 (mac이 있어야 함)
 

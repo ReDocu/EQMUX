@@ -6,7 +6,6 @@
 
 | 운영체제 | 파일 | 비고 |
 |---|---|---|
-| Windows 10·11 (x64) | `EQMUX_0.6.0_x64-setup.exe` | 설치 파일(현재 사용자) |
 | Windows 10·11 (x64) | `EQMUX_0.6.0_x64_portable.zip` | 압축을 풀어 `eqmux.exe` 실행 |
 
 macOS 판은 나중에 따로 올립니다. 아직 코드 서명이 없습니다. Windows는 SmartScreen에서 [추가 정보] → [실행]을 누릅니다.
@@ -48,7 +47,6 @@ macOS 판은 나중에 따로 올립니다. 아직 코드 서명이 없습니다
 ## 파일 해시 (SHA-256)
 
 ```
-2c3e010e25c7191bf5922b78f0ffd76b3ec5701f22ba1b68ccf95bc0f61312e0  EQMUX_0.6.0_x64-setup.exe
 bf36b1737cbdd2c04576f473612e83e219964cee2cfa1a57dd1b4a32c4271877  EQMUX_0.6.0_x64_portable.zip
 ```
 

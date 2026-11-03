@@ -1,4 +1,5 @@
-# 0.6 §9-1 — Windows(포터블 zip · NSIS) + macOS(universal dmg)를 GitHub 호스팅 러너에서 빌드한다.
+# 0.6 §9-1 — Windows(포터블 zip) + macOS(universal dmg)를 GitHub 호스팅 러너에서 빌드한다.
+# Windows 배포물은 포터블 zip 하나다 — 1.0 전에는 NSIS 설치본을 만들지 않는다(명령어 정리.md §4).
 # v* 태그를 밀면 두 플랫폼 산출물과 SHA256SUMS.txt를 붙인 **초안** 릴리스를 만든다. 공개는 사람이 누른다.
 # 서명: SignPath(Windows) · Developer ID(macOS)는 계정이 준비되면 아래 "서명 자리"에 붙인다.
 name: build
@@ -38,7 +39,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with: { workspaces: src-tauri }
       - run: npm ci
-      - run: npm run tauri build
+      - run: npm run tauri build -- --no-bundle
       # 서명 자리: SignPath 서명 단계(signpath/github-action-submit-signing-request)를 여기에 둔다.
       - name: portable zip
         shell: pwsh
@@ -46,10 +47,9 @@ jobs:
           $v = (Get-Content package.json | ConvertFrom-Json).version
           New-Item -ItemType Directory -Force out, stage\EQMUX | Out-Null
           Copy-Item src-tauri\target\release\eqmux.exe stage\EQMUX\
-          # 셸 페인의 `eqmux`가 잡는 콘솔 대리인 (B248) — 설치본은 hooks.nsh가 같은 이름으로 바꾼다
+          # 셸 페인의 `eqmux`가 잡는 콘솔 대리인 (B248)
           Copy-Item src-tauri\target\release\eqmux-console.exe stage\EQMUX\eqmux.com
           Compress-Archive -Path stage\EQMUX -DestinationPath "out\EQMUX_${v}_x64_portable.zip" -Force
-          Copy-Item src-tauri\target\release\bundle\nsis\*.exe out\
       - uses: actions/upload-artifact@v4
         with: { name: windows, path: out/* }
 
