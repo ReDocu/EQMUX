@@ -106,6 +106,18 @@ struct PtySession {
     /// 마지막 resize 시각 (epoch ms) — ConPTY는 리사이즈에 전체 리페인트로 응답하므로,
     /// 코얼레서가 이 직후의 리페인트 버스트를 한 덩어리로 묶는 힌트로 쓴다 (줌/분할 깜빡임 방지)
     resize_hint: Arc<std::sync::atomic::AtomicU64>,
+    /// 현재 PTY 크기 (rows << 16 | cols) — 리더 스레드의 가상 화면(LineAssembler)이 따라간다
+    size: Arc<std::sync::atomic::AtomicU32>,
+}
+
+fn pack_size(rows: u16, cols: u16) -> u32 {
+    (rows as u32) << 16 | cols as u32
+}
+
+/// 원시 로그의 PTY 크기 표식 — 터미널이 무시하는 OSC라 로그를 cat해도 보이지 않는다.
+/// 로그를 가상 화면에 다시 먹여 스크롤백 조립을 검증할 때 크기를 맞추는 데 쓴다
+fn size_marker(packed: u32) -> String {
+    format!("\u{1b}]eqmux;size={}x{}\u{7}", packed >> 16, packed & 0xffff)
 }
 
 static NEXT_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -536,6 +548,8 @@ fn spawn_pty_session(
     let gen = NEXT_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
     let resize_hint = Arc::new(std::sync::atomic::AtomicU64::new(epoch_ms())); // 스폰 직후 첫 프레임도 크게 묶는다
+    let size = Arc::new(std::sync::atomic::AtomicU32::new(pack_size(rows, cols)));
+    let reader_size = size.clone();
     let mut sessions = state.0.lock().map_err(|e| e.to_string())?;
     sessions.insert(
         id.clone(),
@@ -547,6 +561,7 @@ fn spawn_pty_session(
             gen,
             job,
             resize_hint: resize_hint.clone(),
+            size,
         },
     );
     drop(sessions);
@@ -636,7 +651,9 @@ fn spawn_pty_session(
         // 스폰 때 한 번만 읽는다 (최적화 A7) — 8KB마다 읽으면 모든 세션이 설정 잠금을 다툰다.
         // 바꾼 설정은 다음에 뜨는 세션부터 먹는다. 꺼져 있으면 조립기가 색 사본 자체를 만들지 않는다 (C9)
         let sgr_on = setting_bool(&app, "sgrStore", true);
-        let mut assembler = LineAssembler::with_sgr(sgr_on);
+        let mut assembler = LineAssembler::new(rows, cols, sgr_on);
+        let mut assembler_size = pack_size(rows, cols);
+        let mut mark_size = true; // 로그에 크기 표식을 남길 차례 — 시작·리사이즈·로그를 새로 열 때
         let mut last_spilled = String::new();
         let mut buf = [0u8; 8192];
         let mut pending: Vec<u8> = Vec::new(); // 읽기 경계에서 잘린 UTF-8 꼬리 이월 (≤3바이트)
@@ -644,14 +661,25 @@ fn spawn_pty_session(
             match reader.read(&mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
+                    // 리사이즈를 이 읽기보다 먼저 반영한다 — 이번 바이트는 새 크기로 그려진 것이다
+                    let now_size = reader_size.load(std::sync::atomic::Ordering::Relaxed);
+                    if now_size != assembler_size {
+                        assembler_size = now_size;
+                        assembler.resize((now_size >> 16) as u16, now_size as u16);
+                        mark_size = true;
+                    }
                     // 저장 설정이 바뀌었으면 여기서 따른다 — 끄면 로그를 닫고(drop이 비운다), 켜면 다시 연다
                     let now = scrollback_persist();
                     if now != persist {
                         persist = now;
                         log_file = if persist { open_session_log(&log_path, SESSION_LOG_CAP) } else { None };
+                        mark_size = true;
                     }
                     let mut over_cap = false;
                     if let Some((f, len)) = log_file.as_mut() {
+                        if std::mem::take(&mut mark_size) {
+                            let _ = f.write_all(size_marker(assembler_size).as_bytes());
+                        }
                         let _ = f.write_all(&buf[..n]);
                         if n < buf.len() {
                             let _ = f.flush();
@@ -663,6 +691,7 @@ fn spawn_pty_session(
                         // 오래 도는 세션도 상한을 지킨다 — 닫아서(drop이 비운다) 돌리고 새로 연다
                         drop(log_file.take());
                         log_file = open_session_log(&log_path, SESSION_LOG_CAP);
+                        mark_size = true;
                     }
                     pending.extend_from_slice(&buf[..n]);
                     let data = take_complete_utf8(&mut pending);
@@ -713,9 +742,11 @@ fn spawn_pty_session(
             let _ = writeln!(f, "\n=== session exit · {} · code {:?} · epoch {} ===", id, code, epoch_secs());
         }
         assembler.finish(|line, styled| {
-            if !scrollback_persist() {
+            // push와 같은 거름 — 끝 화면 한 장에는 입력 상자 틀·상태줄이 그대로 있다
+            if !scrollback_persist() || store::is_tui_noise(&line) || line == last_spilled {
                 return;
             }
+            last_spilled = line.clone();
             let _ = store_tx.send(StoreMsg::Line {
                 ws: ws.clone(),
                 id: id.clone(),
@@ -837,14 +868,14 @@ fn resize_is_current(seq_cell: &std::sync::atomic::AtomicU64, seq: u64) -> bool 
 /// 페인 하나가 사라지면(세션 제거) 남은 페인이 일제히 리사이즈되므로 그 창이 가장 넓다.
 #[tauri::command]
 async fn pty_resize(app: AppHandle, id: String, cols: u16, rows: u16) -> Result<(), String> {
-    let (master, seq_cell, seq) = {
+    let (master, seq_cell, seq, size) = {
         let state: State<PtyState> = app.state();
         let sessions = state.0.lock().map_err(|e| e.to_string())?;
         let s = sessions.get(&id).ok_or("세션 없음")?;
         // resize 호출 전에 힌트를 찍는다 — ConPTY 리페인트가 힌트보다 먼저 도착하는 경합 방지
         s.resize_hint.store(epoch_ms(), std::sync::atomic::Ordering::Relaxed);
         let seq = s.resize_seq.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-        (s.master.clone(), s.resize_seq.clone(), seq)
+        (s.master.clone(), s.resize_seq.clone(), seq, s.size.clone())
     };
     // ponytail: 정말 막힌 ConPTY는 이 블로킹 스레드 하나를 붙든 채 남는다 (앱은 산다).
     // 새는 것이 실측으로 보이면 그때 세션별 리사이즈 워커 하나로 직렬화한다.
@@ -854,13 +885,20 @@ async fn pty_resize(app: AppHandle, id: String, cols: u16, rows: u16) -> Result<
         if !resize_is_current(&seq_cell, seq) {
             return Ok(());
         }
-        m.resize(PtySize {
+        // 크기를 resize *앞에* 알린다 — ConPTY는 ResizePseudoConsole 안에서 새 크기의 리페인트를
+        // 파이프로 밀어 넣으므로, 뒤에 알리면 리더가 그 리페인트를 옛 크기 화면에 먼저 그린다.
+        // ponytail: 리더가 이미 집어 든 한 덩어리는 여전히 옛 크기로 그려질 수 있다 (덩어리 경계 경합)
+        let prev = size.swap(pack_size(rows, cols), std::sync::atomic::Ordering::Relaxed);
+        let r = m.resize(PtySize {
             rows,
             cols,
             pixel_width: 0,
             pixel_height: 0,
-        })
-        .map_err(|e| e.to_string())
+        });
+        if r.is_err() {
+            size.store(prev, std::sync::atomic::Ordering::Relaxed); // 크기가 그대로다 — 되돌린다
+        }
+        r.map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?

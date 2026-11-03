@@ -981,7 +981,7 @@ mod tests {
     fn attribute_by_touches() {
         use crate::store::Touch;
         let ws = if cfg!(windows) { r"D:\w\repo" } else { "/w/repo" };
-        let abs = |rel: &str| format!("{ws}{}{}", std::path::MAIN_SEPARATOR, rel.replace('/', &std::path::MAIN_SEPARATOR.to_string()));
+        let abs = |rel: &str| format!("{ws}{}{}", std::path::MAIN_SEPARATOR, rel.replace('/', std::path::MAIN_SEPARATOR_STR));
         let t = |session: &str, path: String, ts: i64| Touch { session: session.into(), path, tool: "Edit".into(), ts };
         let hour = 3_600_000;
         let touches = vec![

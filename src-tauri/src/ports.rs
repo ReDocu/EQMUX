@@ -1,14 +1,12 @@
-// 포트 패널 실측 (PRD H) — netstat 파싱으로 LISTENING TCP 소켓을 열거하고 (Windows -ano · macOS -anv),
+// 포트 패널 실측 (PRD H) — LISTENING TCP 소켓을 열거하고 (Windows 리스너 표 · macOS netstat -anv),
 // 소유 pid를 세션의 Job Object pid 목록과 대조해 세션 포트를 가려낸다.
 // 관측 전용 — 프로세스 종료는 제공하지 않는다 (git 패널과 같은 원칙).
 
 use std::collections::HashMap;
+#[cfg(not(windows))]
 use std::process::Command;
 
 use serde::Serialize;
-
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -58,23 +56,58 @@ pub(crate) fn process_name(_pid: u32) -> String {
     "?".into()
 }
 
-/// `netstat -ano -p TCP`의 LISTENING 줄 파싱 —
-/// "  TCP    127.0.0.1:5173    0.0.0.0:0    LISTENING    12345"
-#[cfg_attr(not(windows), allow(dead_code))]
-fn parse_netstat(out: &str) -> Vec<(String, u16, u32)> {
-    let mut rows = Vec::new();
-    for line in out.lines() {
-        let cols: Vec<&str> = line.split_whitespace().collect();
-        if cols.len() < 5 || cols[0] != "TCP" || cols[3] != "LISTENING" {
-            continue;
-        }
-        let Some((host, port)) = cols[1].rsplit_once(':') else { continue };
-        let (Ok(port), Ok(pid)) = (port.parse::<u16>(), cols[4].parse::<u32>()) else {
-            continue;
-        };
-        rows.push((host.to_string(), port, pid));
+/// Windows 리스너 표 — iphlpapi `GetExtendedTcpTable(TCP_TABLE_OWNER_PID_LISTENER)`.
+/// netstat을 쓰지 않는다: 어떤 Windows 빌드(11 26300에서 실측)는 TCP 표의 상태 칸에 엉뚱한 값을
+/// 넣어서, netstat이 리스너를 CLOSED·FIN_WAIT_1로 찍거나 아예 빼 버린다. 리스너 표는 커널이
+/// 상태 칸과 상관없이 리스너만 골라 주므로 상태 칸은 읽지 않는다. 표는 u32 칸으로 받는다.
+#[cfg(windows)]
+fn tcp_listener_table(af: u32) -> Vec<u32> {
+    #[link(name = "iphlpapi")]
+    extern "system" {
+        fn GetExtendedTcpTable(table: *mut u32, size: *mut u32, order: i32, af: u32, class: i32, reserved: u32) -> u32;
     }
-    rows
+    const TCP_TABLE_OWNER_PID_LISTENER: i32 = 3;
+    const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
+    let mut size = 0u32;
+    for _ in 0..4 {
+        // 크기를 물은 뒤 다시 부르는 사이에 표가 자랄 수 있다 — 그러면 새 크기로 한 번 더
+        let mut buf = vec![0u32; size as usize / 4 + 1];
+        size = (buf.len() * 4) as u32;
+        match unsafe { GetExtendedTcpTable(buf.as_mut_ptr(), &mut size, 1, af, TCP_TABLE_OWNER_PID_LISTENER, 0) } {
+            0 => return buf,
+            ERROR_INSUFFICIENT_BUFFER => continue,
+            _ => break,
+        }
+    }
+    Vec::new()
+}
+
+/// 리스너 표 파싱 (순수 함수) — 머리 1칸(행 수) 뒤에 행이 이어진다. 주소·포트는 네트워크 바이트 순서다.
+/// IPv4 행(6칸): state, addr, port, raddr, rport, pid
+/// IPv6 행(14칸): addr×4, scope, port, raddr×4, rscope, rport, state, pid
+/// 표기는 netstat과 같다 — 0.0.0.0 · 127.0.0.1 · [::] · [::1].
+/// ponytail: IPv6 scope id(`%12`)는 붙이지 않는다 — 링크 로컬 리스너를 [열기]로 열 일이 생기면 붙이기
+#[cfg_attr(not(windows), allow(dead_code))]
+fn parse_tcp_table(buf: &[u32], v6: bool) -> Vec<(String, u16, u32)> {
+    let Some((&n, rows)) = buf.split_first() else { return Vec::new() };
+    let port = |w: u32| {
+        let b = w.to_ne_bytes();
+        u16::from_be_bytes([b[0], b[1]])
+    };
+    rows.chunks_exact(if v6 { 14 } else { 6 })
+        .take(n as usize)
+        .map(|r| {
+            if v6 {
+                let mut ip = [0u8; 16];
+                for (i, w) in r[..4].iter().enumerate() {
+                    ip[i * 4..i * 4 + 4].copy_from_slice(&w.to_ne_bytes());
+                }
+                (format!("[{}]", std::net::Ipv6Addr::from(ip)), port(r[5]), r[13])
+            } else {
+                (std::net::Ipv4Addr::from(r[1].to_ne_bytes()).to_string(), port(r[2]), r[5])
+            }
+        })
+        .collect()
 }
 
 /// macOS `netstat -anv -p tcp`의 LISTEN 줄 파싱 —
@@ -142,15 +175,15 @@ fn parse_lsof(out: &str) -> Vec<(String, u16, u32)> {
     rows
 }
 
-/// LISTENING TCP 소켓 (host, port, pid) — Windows는 netstat -ano, macOS는 netstat -anv (없으면 lsof)
+/// LISTENING TCP 소켓 (host, port, pid) — Windows는 리스너 표(IPv4·IPv6), macOS는 netstat -anv (없으면 lsof)
 fn listening() -> Vec<(String, u16, u32)> {
     #[cfg(windows)]
     {
-        let mut cmd = Command::new("netstat");
-        cmd.args(["-ano", "-p", "TCP"]);
-        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW — GUI 앱에서 콘솔 창 억제
-        let Ok(out) = cmd.output() else { return Vec::new() };
-        parse_netstat(&String::from_utf8_lossy(&out.stdout))
+        const AF_INET: u32 = 2;
+        const AF_INET6: u32 = 23;
+        let mut rows = parse_tcp_table(&tcp_listener_table(AF_INET), false);
+        rows.extend(parse_tcp_table(&tcp_listener_table(AF_INET6), true));
+        rows
     }
     #[cfg(not(windows))]
     {
@@ -221,7 +254,7 @@ fn ps_names(pids: &[u32]) -> HashMap<u32, String> {
 /// 현재 LISTENING TCP 포트 스냅숏 + 세션 귀속.
 /// session_pids: 세션 id → 그 세션 Job에 속한 pid들.
 pub fn snapshot(session_pids: &HashMap<String, Vec<u32>>) -> Vec<PortRow> {
-    // Windows netstat은 소켓을 연 pid 하나만 낸다 — 접을 것이 없으니 그대로 둔다
+    // Windows 리스너 표는 소켓을 연 pid 하나만 낸다 — 접을 것이 없으니 그대로 둔다
     #[cfg(windows)]
     let rows: Vec<_> = listening().into_iter().map(|(h, p, pid)| (h, p, pid, vec![pid])).collect();
     #[cfg(target_os = "macos")]
@@ -325,11 +358,12 @@ mod tests {
 
     /// 귀속 사슬 통합 테스트 (M31) — 세션이 연 포트가 정말 그 세션으로 잡히는가.
     /// GUI 없이 실제 사슬을 그대로 탄다: Job 생성 → assign_pid → 진짜 리슨 프로세스 →
-    /// Job::pids() → netstat → 귀속 조인. "포트 패널에 뜬다"의 백엔드 절반이 이것이다.
+    /// Job::pids() → 리스너 표 → 귀속 조인. "포트 패널에 뜬다"의 백엔드 절반이 이것이다.
     /// node가 없으면 조용히 건너뛴다 — 이 테스트의 주제는 node가 아니다.
     #[cfg(windows)]
     #[test]
     fn attributes_a_port_opened_inside_a_session_job() {
+        use std::os::windows::process::CommandExt;
         use std::process::{Command, Stdio};
 
         const PORT: u16 = 47823; // 등록된 서비스가 없는 대역
@@ -365,7 +399,7 @@ mod tests {
             }
         }
 
-        let row = attributed.expect("47823 LISTENING을 netstat에서 찾지 못했다");
+        let row = attributed.expect("47823 LISTENING을 리스너 표에서 찾지 못했다");
         assert_eq!(row.session.as_deref(), Some("sess-1"), "세션에 귀속되지 않았다");
         assert_eq!(row.pid, child.id());
         assert_eq!(row.process, "node");
@@ -397,13 +431,33 @@ mod tests {
         release_range("t-range-c");
     }
 
+    /// 리스너 표 — 메모리 그대로의 바이트(네트워크 순서)를 netstat 표기로 읽고, 상태 칸은 보지 않으며,
+    /// 행 수를 넘는 꼬리(버퍼 여유분)는 버린다
     #[test]
-    fn parses_listening_lines_only() {
-        let out = "\n  프로토콜  로컬 주소  외부 주소  상태  PID\n  TCP    127.0.0.1:5173         0.0.0.0:0              LISTENING       4321\n  TCP    [::1]:1420             [::]:0                 LISTENING       99\n  TCP    10.0.0.5:52000         142.250.0.1:443        ESTABLISHED     7\n  UDP    0.0.0.0:5353           *:*                                    8\n";
-        let rows = parse_netstat(out);
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0], ("127.0.0.1".into(), 5173, 4321));
-        assert_eq!(rows[1], ("[::1]".into(), 1420, 99));
+    fn parses_tcp_listener_table() {
+        let w = u32::from_ne_bytes;
+        let port = |p: u16| w([(p >> 8) as u8, p as u8, 0, 0]);
+        let v4 = [
+            2,
+            99, w([127, 0, 0, 1]), port(5173), 0, 0, 4321, // 상태 칸이 엉뚱해도(99) 그대로 리스너다
+            0, w([0, 0, 0, 0]), port(445), 0, 0, 4,
+            0, 0, 0, 0, 0, 0, // 행 수 밖
+        ];
+        assert_eq!(
+            parse_tcp_table(&v4, false),
+            vec![("127.0.0.1".into(), 5173, 4321), ("0.0.0.0".into(), 445, 4)]
+        );
+        let lo = [0, 0, 0, w([0, 0, 0, 1])];
+        let v6 = [
+            2,
+            lo[0], lo[1], lo[2], lo[3], 0, port(1420), 0, 0, 0, 0, 0, 0, 0, 99,
+            0, 0, 0, 0, 0, port(47902), 0, 0, 0, 0, 0, 0, 0, 7,
+        ];
+        assert_eq!(
+            parse_tcp_table(&v6, true),
+            vec![("[::1]".into(), 1420, 99), ("[::]".into(), 47902, 7)]
+        );
+        assert!(parse_tcp_table(&[], false).is_empty());
     }
 
     /// lsof 필드 출력 — pid 줄 아래의 소켓 줄들이 그 pid로 귀속되고, 표기는 netstat과 같다

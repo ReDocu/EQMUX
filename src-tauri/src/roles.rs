@@ -461,6 +461,43 @@ pub fn remove(ws_path: &str, session: &str) -> Result<(), String> {
     }
 }
 
+fn scan_roles_dir(dir: &Path, out: &mut Vec<(String, String)>) {
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if p.extension().map(|e| e == "md").unwrap_or(false) {
+            if let Ok(text) = fs::read_to_string(&p) {
+                let (fm, _) = split_frontmatter(&text);
+                if let (Some(session), Some(mission)) = (fm_value(&fm, "session"), fm_value(&fm, "mission")) {
+                    out.push((session, mission));
+                }
+            }
+        }
+    }
+}
+
+/// roles/*.md frontmatter 실측 스캔 (FR-E-59) — (세션, 임무 id) 목록. 배정의 원본이다.
+/// 워크트리 세션의 역할 파일은 그 사본 안에 있으므로(FR-E-63) 함께 읽는다 (B59) — repo 루트만
+/// 보면 화면의 ✓와 에이전트가 실제로 읽는 파일이 서로 다른 사실을 가리킨다.
+/// 같은 세션이 양쪽에 있으면 워크트리가 이긴다 — 예전 루트 스텁이 남아 있을 수 있다.
+pub fn scan_assignments(ws_path: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    scan_roles_dir(&roles_dir(ws_path), &mut out);
+    if let Ok(wts) = fs::read_dir(Path::new(ws_path).join(".eqmux").join("worktrees")) {
+        for wt in wts.flatten() {
+            let p = wt.path();
+            if p.is_dir() {
+                scan_roles_dir(&roles_dir(&p.to_string_lossy()), &mut out);
+            }
+        }
+    }
+    let mut by_session: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for (session, mission) in out {
+        by_session.insert(session, mission); // 나중(워크트리)이 이긴다
+    }
+    by_session.into_iter().collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -661,41 +698,4 @@ mod tests {
         assert!(text.contains("## 말투\n존댓말\n\n## 대사 예시\n- 빌드 실패 → \"어디가 막혔는지 봅시다.\"\n"));
         fs::remove_dir_all(&dir).ok();
     }
-}
-
-fn scan_roles_dir(dir: &Path, out: &mut Vec<(String, String)>) {
-    let Ok(entries) = fs::read_dir(dir) else { return };
-    for entry in entries.flatten() {
-        let p = entry.path();
-        if p.extension().map(|e| e == "md").unwrap_or(false) {
-            if let Ok(text) = fs::read_to_string(&p) {
-                let (fm, _) = split_frontmatter(&text);
-                if let (Some(session), Some(mission)) = (fm_value(&fm, "session"), fm_value(&fm, "mission")) {
-                    out.push((session, mission));
-                }
-            }
-        }
-    }
-}
-
-/// roles/*.md frontmatter 실측 스캔 (FR-E-59) — (세션, 임무 id) 목록. 배정의 원본이다.
-/// 워크트리 세션의 역할 파일은 그 사본 안에 있으므로(FR-E-63) 함께 읽는다 (B59) — repo 루트만
-/// 보면 화면의 ✓와 에이전트가 실제로 읽는 파일이 서로 다른 사실을 가리킨다.
-/// 같은 세션이 양쪽에 있으면 워크트리가 이긴다 — 예전 루트 스텁이 남아 있을 수 있다.
-pub fn scan_assignments(ws_path: &str) -> Vec<(String, String)> {
-    let mut out = Vec::new();
-    scan_roles_dir(&roles_dir(ws_path), &mut out);
-    if let Ok(wts) = fs::read_dir(Path::new(ws_path).join(".eqmux").join("worktrees")) {
-        for wt in wts.flatten() {
-            let p = wt.path();
-            if p.is_dir() {
-                scan_roles_dir(&roles_dir(&p.to_string_lossy()), &mut out);
-            }
-        }
-    }
-    let mut by_session: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-    for (session, mission) in out {
-        by_session.insert(session, mission); // 나중(워크트리)이 이긴다
-    }
-    by_session.into_iter().collect()
 }
