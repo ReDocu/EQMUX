@@ -169,6 +169,17 @@ struct PtyExit {
 }
 
 /// 세션 로그 (1차 — 파일 append). PRD 12의 rusqlite WAL 스토어가 오면 그 뒤로 들어간다.
+/// Claude Code를 늘 전체 화면(대체 화면)으로 띄운다 — 셸 화면이 비워지고, 스크롤백 조립기는 대체 화면을
+/// 저장하지 않는다. Claude Code는 전체 화면으로 뜬 직후 10초 안에 죽은 일이 두 번 생기면 그 버전에서
+/// 전체 화면을 스스로 끈다(~/.claude.json fullscreenAutoDisabled). 에이전트를 띄웠다 곧 닫는 EQMUX에서는
+/// 쉽게 생기는 일이라, 끈 기록을 무시하게 하는 공식 스위치를 심는다. 사용자가 값을 정해 두었으면 따른다.
+/// ponytail: settings.json의 "tui": "default"(클래식 고정)도 이 값에 덮인다 — 원하면 CLAUDE_CODE_NO_FLICKER=0
+pub(crate) fn claude_fullscreen_env(b: &mut CommandBuilder) {
+    if std::env::var_os("CLAUDE_CODE_NO_FLICKER").is_none() {
+        b.env("CLAUDE_CODE_NO_FLICKER", "1");
+    }
+}
+
 pub(crate) fn log_dir() -> PathBuf {
     home_dir().join(".eqmux").join("logs")
 }
@@ -818,6 +829,7 @@ async fn pty_spawn(
                 b.env("EQMUX_SESSION", &id);
                 b.env("EQMUX_TOKEN", &token);
                 b.env("EQMUX_TERMINAL", "eqmux");
+                claude_fullscreen_env(&mut b);
                 // 세션별 포트 범위 (§4, W6) — 사람이 쓰는 서버 셸(#server@)은 받지 않는다
                 if !id.starts_with("#server@") {
                     for (k, v) in ports::assign_range(&id).iter().flat_map(ports::range_env) {

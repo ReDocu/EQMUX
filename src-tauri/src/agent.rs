@@ -598,6 +598,7 @@ pub fn agent_builders(
         // 추측 가능하므로, 스폰마다 새로 발급한 논스가 실제 신원이다
         b.env("EQMUX_TOKEN", token);
         b.env("EQMUX_TERMINAL", "eqmux");
+        crate::claude_fullscreen_env(b);
         // 세션별 포트 범위 (§4, W6 ports.rs) — dev 서버가 다른 세션과 부딪히지 않게. PORT는 심지 않는다
         if let Some(r) = crate::ports::assign_range(app_session) {
             for (k, v) in crate::ports::range_env(&r) {
