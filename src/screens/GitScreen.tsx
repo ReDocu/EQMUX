@@ -944,7 +944,7 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
               title={t("원격과 갈라졌습니다 — merge 또는 rebase")}
               aria-label={t("원격과 갈라졌습니다 — merge 또는 rebase")}
               onClick={(e) =>
-                openMenu(e, tf("{u}와 갈라짐", { u: up() }), [
+                openMenu(e, tf("{u}와(과) 갈라짐", { u: up() }), [
                   [
                     { label: t("업스트림을 merge"), action: () => mergeIn(up()) },
                     { label: t("업스트림 위로 rebase"), action: () => rebaseOnto(up()) },

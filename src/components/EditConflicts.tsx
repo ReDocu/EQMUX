@@ -12,7 +12,7 @@ const LIMIT_NOTE = "편집 도구로 고친 것만 잡습니다 (Bash · Codex �
 /** 이 세션에게 보낼 초안 — 나머지 세션 이름을 넣는다 */
 export function conflictDraft(c: EditConflict, to: string, name: (id: string) => string = conflictName): string {
   const others = c.sessions.filter((x) => x !== to).map(name).join(" · ");
-  return tf("{path}를 {others}도 방금 편집했습니다. 서로 덮어쓰지 않게 {others}와 나눠 맡아 주세요.", { path: c.path, others });
+  return tf("{path}을(를) {others}도 방금 편집했습니다. 서로 덮어쓰지 않게 {others}와(과) 나눠 맡아 주세요.", { path: c.path, others });
 }
 
 /** 대시보드 주의 카드 — 살아 있는 동시 편집 하나에 카드 하나 */
@@ -59,7 +59,7 @@ export function PaneConflictChip(props: { sessionId: string }) {
           tone="amber"
           text={tf("동시 편집 · {path}", { path: c()!.path.split("/").pop() ?? c()!.path })}
           short={t("동시 편집")}
-          title={`${tf("{names}이(가) {path}를 동시에 편집 중", {
+          title={`${tf("{names}이(가) {path}을(를) 동시에 편집 중", {
             names: c()!.sessions.map(conflictName).join(" · "),
             path: c()!.path,
           })} — ${t(LIMIT_NOTE)}`}

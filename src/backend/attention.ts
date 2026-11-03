@@ -227,7 +227,7 @@ export function receiveConflict(c: EditConflict, open?: () => void): void {
     session: `app:conflict:${c.workspace}:${c.path}`,
     workspace: c.workspace,
     kind: "conflict",
-    title: tf("{names}이(가) {path}를 동시에 편집 중", { names, path: c.path }),
+    title: tf("{names}이(가) {path}을(를) 동시에 편집 중", { names, path: c.path }),
     body: t("편집 도구로 고친 것만 잡습니다 (Bash · Codex 제외)"),
     open,
   });
@@ -277,7 +277,7 @@ export function receiveOutsideOwns(o: OutsideOwns): void {
     session: `app:owns:${o.session}:${o.path}`,
     workspace: o.workspace,
     kind: "conflict",
-    title: tf("{name}이(가) 담당 밖 {path}를 편집", { name: conflictName(o.session), path: o.path }),
+    title: tf("{name}이(가) 담당 밖 {path}을(를) 편집", { name: conflictName(o.session), path: o.path }),
     body: tf("담당: {owns}", { owns: o.owns.join(" ") }),
     open: () => {
       if (!modalOpen() && jumpToSession(o.workspace, o.session)) setFocusRequest({ session: o.session });

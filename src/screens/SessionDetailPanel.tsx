@@ -16,7 +16,7 @@ import { jumpToSession } from "../state";
 import { Eyebrow, FieldHint, Identity, KV, StatusLabel, StopConfirm } from "../components/ui";
 import { SubagentList } from "../components/SubagentList"; // §4 서브에이전트 목록 (W3)
 import type { AgentCliId, Permissions, Session } from "../types";
-import { AGENT_CLI_LABEL, agentAttached, agentFlagsToString, cleanTitle, cliOf, effectiveTitle, engineSwitched, paneNo, SESSION_NAME_MAX, sessionName, statusText, TITLE_MAX, translatePermissions } from "../types";
+import { AGENT_CLI_LABEL, agentAttached, agentFlagsToString, cleanTitle, cliOf, effectiveTitle, engineSwitched, paneNo, runCliOf, SESSION_NAME_MAX, sessionName, statusText, TITLE_MAX, translatePermissions } from "../types";
 import { jobName, reasonText } from "../labels";
 import { isSubmitEnter } from "../platform"; // 한글 조합 중 Enter는 제출이 아니다 (B130)
 
@@ -411,7 +411,7 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
         <Show when={s().personaId}>
           <div class="muted mono" style={{ "font-size": "10px", margin: "2px 0 4px" }}>
             {/* 플래그를 낸 엔진 (B82) — 슬롯 엔진을 바꿔도 재시작 전까지 도는 것은 이쪽이다 */}
-            {t("엔진")} · {AGENT_CLI_LABEL[s().spawnCli ?? cliOf(s())]}
+            {t("엔진")} · {AGENT_CLI_LABEL[runCliOf(s())]}
             <Show when={engineSwitched(s())}>
               {" "}· {tf("슬롯 엔진 {cli} — 재시작 때 적용", { cli: AGENT_CLI_LABEL[cliOf(s())] })}
             </Show>

@@ -346,7 +346,7 @@ export const dict: Record<string, string> = {
   "업스트림 설정": "Set upstream",
   // P62 갈라진 Pull
   "원격과 갈라졌습니다 — merge 또는 rebase": "Diverged from the remote — merge or rebase",
-  "{u}와 갈라짐": "Diverged from {u}",
+  "{u}와(과) 갈라짐": "Diverged from {u}",
   "업스트림을 merge": "Merge upstream",
   "업스트림 위로 rebase": "Rebase onto upstream",
   // 사이드 패널 git 탭 (U140 · B241 · U165)

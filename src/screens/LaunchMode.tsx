@@ -283,7 +283,7 @@ export function LaunchMode(props: { wsId: string }) {
           {/* 빠른 시작인데 claude가 없다 (P64) — 세션 추가의 설치 블록과 같은 모양. 설치 뒤 [다시 감지]로 풀린다 */}
           <Show when={mode() === "quick" && claudeMissing()}>
             <div class="engine-missing mono">
-              <div class="st-dead">{tf("PATH에 {cmd}가 없습니다 — 아래 명령으로 설치한 뒤 다시 감지하세요", { cmd: "claude" })}</div>
+              <div class="st-dead">{tf("PATH에 {cmd}이(가) 없습니다 — 아래 명령으로 설치한 뒤 다시 감지하세요", { cmd: "claude" })}</div>
               <div class="engine-install">
                 <code>{INSTALL_CMD.claude}</code>
                 <button class="btn ghost" onClick={() => clipWriteText(INSTALL_CMD.claude)}>

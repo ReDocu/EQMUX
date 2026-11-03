@@ -238,8 +238,6 @@ export function syncSessionTerminal(id: string): void {
 /** 키보드 포커스를 이 세션 터미널로 (Focus) — 선택 전이에 붙은 이펙트로는 모자란 자리가 쓴다.
  *  이미 선택돼 있는 세션을 다시 잡을 때(대기 배지 클릭)는 selectedSession이 안 바뀌어
  *  그 이펙트가 다시 돌지 않는다. 여기서 답을 쳐야 하므로 포커스는 확실해야 한다. */
-/** 이 세션 터미널이 대체 화면(vim · less · fzf 같은 TUI)인가 (B254) — 전체 화면의 ESC를 그 TUI에 넘길지 가른다 */
-export const sessionInAltBuffer = (id: string): boolean => REGISTRY.get(id)?.term.buffer.active.type === "alternate";
 
 export function focusSessionTerminal(id: string): void {
   REGISTRY.get(id)?.term.focus();

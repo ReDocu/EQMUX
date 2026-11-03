@@ -21,9 +21,8 @@ export const dict: Record<string, string> = {
   "Focus — 가장 오래 기다린 페인을 전체 화면으로 잡습니다. 답은 터미널에 직접 입력합니다":
     "Focus — grabs the longest-waiting pane fullscreen. The answer is typed in the terminal",
   "응답 대기": "Awaiting answer",
-  "ESC 종료": "ESC to exit",
-  "ESC는 에이전트로 · 나가기는 [전체 화면 종료]": "ESC goes to the agent · leave with [Exit fullscreen]",
-  "ESC 종료 · vim 같은 TUI 안에서는 TUI로": "ESC to exit · inside a TUI like vim, ESC goes to the TUI",
+  "Shift+ESC 종료": "Shift+ESC to exit",
+  "ESC는 터미널로 · 나가기는 Shift+ESC": "ESC goes to the terminal · leave with Shift+ESC",
   "이 자리에서 재개 — --resume · 대화 복원":
     "Resume in place — --resume · restores the conversation",
   "재개 — 대화 복원": "Resume — restore conversation",
@@ -54,7 +53,7 @@ export const dict: Record<string, string> = {
   "새로 추가하는 터미널부터 적용됩니다": "Applies to newly added terminals",
   "그리드로 복귀": "Back to grid",
   "페인 배치": "Pane layout",
-  "터미널 전체 화면 — ESC로 종료": "Terminal fullscreen — ESC to exit",
+  "터미널 전체 화면 — Shift+ESC로 종료": "Terminal fullscreen — Shift+ESC to exit",
   "임무 · 캐스팅 · 팀 편성": "Missions · casting · team composition",
   팀: "Team",
   "임무 배정…": "Assign missions…",
@@ -98,7 +97,7 @@ export const dict: Record<string, string> = {
     "Pick a persona and job and launch right away · the only path that carries the role, permission flags and hooks",
   "페르소나·직무를 정해 바로 기동 · 역할·권한 플래그·훅이 붙은 유일한 경로 (Claude Code · Codex)":
     "Pick a persona and job and launch right away · the only path that carries the role, permission flags and hooks (Claude Code · Codex)",
-  "PATH에 {cmd}가 없습니다 — 설치 후 설정 > CLI 에이전트에서 다시 확인하세요":
+  "PATH에 {cmd}이(가) 없습니다 — 설치 후 설정 > CLI 에이전트에서 다시 확인하세요":
     "{cmd} is not on PATH — install it, then re-check under Settings > CLI agents",
   "{name} 열기": "Open {name}",
   "셸에서 {cmd} 실행 · 역할·훅·재개는 붙지 않고 관제에는 실행 중으로만 보입니다":
@@ -198,7 +197,7 @@ export const dict: Record<string, string> = {
   "다음 미확인으로 (Ctrl+Shift+U) — 누를 때마다 기다리는 페인을 차례로 잡습니다. 답은 터미널에 직접 입력합니다": "Next unseen (Ctrl+Shift+U) — each press moves to the next waiting pane. Answer directly in the terminal",
   "비우면 {auto} · 역할 세션은 페르소나 이름": "Leave empty for {auto} · role sessions use the persona name",
   "{name} 쓰기": "Use {name}",
-  "PATH에 {cmd}가 없습니다 — 아래 명령으로 설치한 뒤 다시 감지하세요": "{cmd} isn't on PATH — install it with the command below, then detect again",
+  "PATH에 {cmd}이(가) 없습니다 — 아래 명령으로 설치한 뒤 다시 감지하세요": "{cmd} isn't on PATH — install it with the command below, then detect again",
   "다시 감지": "Detect again",
   "쌓인 메시지 {n}건": "{n} queued messages",
   "승인 창이 떠 있으면 먼저 답하세요. 넣으면 본문과 Enter가 그 페인에 들어갑니다.": "If an approval prompt is open, answer it first. Inserting types the text and Enter into that pane.",
@@ -212,7 +211,7 @@ export const dict: Record<string, string> = {
   "새로 시작 (요약만 넘김 · 이전 대화는 잇지 않음)": "Start fresh (carry summary only · doesn't continue the old conversation)",
   "{agent} 실행 중 — 손으로 띄워 역할·훅이 붙지 않았습니다": "{agent} running — started by hand, so no role or hooks are attached",
   "에이전트 없음 — 직무 권한을 찾을 수 없어 기동할 수 없습니다. 역할을 다시 지정하세요": "No agent — can't start because the job's permissions weren't found. Reassign the role",
-  "에이전트 없음 — PATH에 {cmd}가 없어 기동할 수 없습니다": "No agent — can't start because {cmd} isn't on PATH",
+  "에이전트 없음 — PATH에 {cmd}이(가) 없어 기동할 수 없습니다": "No agent — can't start because {cmd} isn't on PATH",
   "에이전트 없음": "No agent",
 
   // ── 0.5 W3 · 시안 적용 — 관제·확인창·세션 만들기 ──
@@ -287,12 +286,12 @@ export const dict: Record<string, string> = {
   // ── 0.6 W7: 같은 파일 동시 편집 (§13-1) ──
   "편집 도구로 고친 것만 잡습니다 (Bash · Codex 제외)": "Only catches edits made with edit tools (not Bash or Codex)",
   "{names}이(가) 동시에 편집 중": "{names} are editing the same file",
-  "{names}이(가) {path}를 동시에 편집 중": "{names} are editing {path} at the same time",
+  "{names}이(가) {path}을(를) 동시에 편집 중": "{names} are editing {path} at the same time",
   "{name}에게 알리기": "Tell {name}",
   "같은 파일에 새 편집이 오면 다시 뜹니다": "Comes back if the same file is edited again",
   "동시 편집 · {path}": "Concurrent edit · {path}",
   "동시 편집": "Concurrent edit",
-  "{path}를 {others}도 방금 편집했습니다. 서로 덮어쓰지 않게 {others}와 나눠 맡아 주세요.":
+  "{path}을(를) {others}도 방금 편집했습니다. 서로 덮어쓰지 않게 {others}와(과) 나눠 맡아 주세요.":
     "{others} also just edited {path}. Split the work with {others} so you don't overwrite each other.",
   // ── 0.6 W7: 상한으로 버려진 메시지 (§2 M3) ──
   버려짐: "Dropped",
@@ -318,7 +317,7 @@ export const dict: Record<string, string> = {
   // ── 0.6 W7: 하루 비용 예산 (§13-6) ──
   "오늘 비용": "Today's cost",
   "모든 워크스페이스의 오늘 비용 합계 · 예산은 설정 › 알림": "Today's cost across all workspaces · set a budget in Settings › Notifications",
-  "오늘 비용이 예산 ${budget}을 넘었습니다": "Today's cost passed the ${budget} budget",
+  "오늘 비용이 예산 ${budget}을(를) 넘었습니다": "Today's cost passed the ${budget} budget",
   "지금 ${usd} · 세션은 멈추지 않습니다": "Now ${usd} · sessions keep running",
   "{name} · 메시지": "{name} · message",
   "검토 →": "Review →",
@@ -343,7 +342,7 @@ export const dict: Record<string, string> = {
   "엔진 CLI 버전": "Engine CLI version",
   "열린 워크스페이스": "Open workspaces",
   긴급: "Urgent",
-  "{name}이(가) 담당 밖 {path}를 편집": "{name} edited {path} outside its ownership",
+  "{name}이(가) 담당 밖 {path}을(를) 편집": "{name} edited {path} outside its ownership",
   "담당: {owns}": "Owns: {owns}",
   // 0.6 QA eqmux-17: 승인함 · 상태 이름 (U122 · U157 · U158 · B212 · B237)
   "열린 워크스페이스 {m} · 주의 정렬: {order}": "{m} open workspaces · attention order: {order}",

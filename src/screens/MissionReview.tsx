@@ -147,7 +147,7 @@ export function MissionReview(props: { wsId: string; missionId: string; back?: V
                 </h1>
                 <div class="sub mono">
                   {baseLost()
-                    ? tf("시작점 {sha}을 git에서 찾을 수 없습니다(rebase 등) — 지금 작업 트리의 변경을 보입니다", { sha: mm().baseCommit!.slice(0, 7) })
+                    ? tf("시작점 {sha}을(를) git에서 찾을 수 없습니다(rebase 등) — 지금 작업 트리의 변경을 보입니다", { sha: mm().baseCommit!.slice(0, 7) })
                     : mm().baseCommit
                       ? tf("시작 {sha} · 그 뒤 커밋 {n}개", { sha: mm().baseCommit!.slice(0, 7), n: mm().commitsSince ?? 0 })
                       : t("시작점 기록 없음 — 지금 작업 트리의 변경을 보입니다")}

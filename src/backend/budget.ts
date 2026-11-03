@@ -85,7 +85,7 @@ function commit(usd: number, now: number, unchanged: boolean): void {
   const budget = settings().dailyBudgetUsd;
   if (budget > 0 && next.usd >= budget && !next.alerted) {
     next.alerted = true;
-    const title = tf("오늘 비용이 예산 ${budget}을 넘었습니다", { budget });
+    const title = tf("오늘 비용이 예산 ${budget}을(를) 넘었습니다", { budget });
     const body = tf("지금 ${usd} · 세션은 멈추지 않습니다", { usd: next.usd.toFixed(2) });
     notifyLocal({ session: "app:budget", workspace: "", kind: "app", title, body });
     // OS 알림 — notification 플러그인 커맨드를 바로 부른다(JS 패키지 없이). 실패해도 인앱 알림은 남는다

@@ -716,7 +716,7 @@ export function RoleLibrary() {
                   <span class="launch-info">↻</span>
                   <span>
                     {tf(
-                      "저장하면 {name}가 들어간 세션 {n}개의 역할 파일과 팀원 {m}명의 팀 관계 표를 다시 만들고 '[EQ] 역할 갱신 — .eqmux/roles/<세션>.md 다시 읽기' 한 줄을 보냅니다. 재시작 배지는 뜨지 않습니다.",
+                      "저장하면 {name}이(가) 들어간 세션 {n}개의 역할 파일과 팀원 {m}명의 팀 관계 표를 다시 만들고 '[EQ] 역할 갱신 — .eqmux/roles/<세션>.md 다시 읽기' 한 줄을 보냅니다. 재시작 배지는 뜨지 않습니다.",
                       { name: im().name, n: im().n, m: im().m },
                     )}
                   </span>

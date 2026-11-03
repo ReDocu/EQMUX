@@ -43,11 +43,17 @@ describe("josa (U176)", () => {
     expect(josa("v2", "을(를)")).toBe("를");
     expect(josa("日本", "을(를)")).toBe("을(를)");
     expect(josa("", "은(는)")).toBe("은(는)");
+    expect(josa("책", "와(과)")).toBe("과"); // 와(과)는 받침 쪽이 뒤
+    expect(josa("나무", "와(과)")).toBe("와");
   });
 
   test("tf가 자리표시자 뒤 조사를 고른다", () => {
     expect(tf("{k}을(를) 저장했습니다", { k: "A" })).toBe("A를 저장했습니다");
     expect(tf("{b}을(를) 현재 브랜치로 merge", { b: "main" })).toBe("main을 현재 브랜치로 merge");
-    expect(tf("{names}이(가) {path}를 동시에 편집 중", { names: "셸1 · 셸2", path: "a.ts" })).toBe("셸1 · 셸2가 a.ts를 동시에 편집 중");
+    expect(tf("{names}이(가) {path}을(를) 동시에 편집 중", { names: "셸1 · 셸2", path: "a.ts" })).toBe("셸1 · 셸2가 a.ts를 동시에 편집 중");
+    // 조사를 박아 두던 문장들 (U176 남은 것)
+    expect(tf("에이전트 없음 — PATH에 {cmd}이(가) 없어 기동할 수 없습니다", { cmd: "codex" })).toBe("에이전트 없음 — PATH에 codex가 없어 기동할 수 없습니다");
+    expect(tf("{u}와(과) 갈라짐", { u: "origin/main" })).toBe("origin/main과 갈라짐");
+    expect(tf("오늘 비용이 예산 ${budget}을(를) 넘었습니다", { budget: 10 })).toBe("오늘 비용이 예산 $10을 넘었습니다");
   });
 });

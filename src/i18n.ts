@@ -77,5 +77,8 @@ export function josa(word: string, pair: string): string {
   if (code >= 0xac00 && code <= 0xd7a3) batchim = (code - 0xac00) % 28 !== 0;
   else if (/\d/.test(c)) batchim = "013678".includes(c); // 10 · 100 · 1000 · 10000(십 · 백 · 천 · 만)도 0으로 끝나 받침
   else if (/[a-z]/i.test(c)) batchim = /^r$/i.test(w) || /(?:[lmn]|ng)$/i.test(w);
-  return batchim === undefined ? pair : batchim ? pair[0] : pair[2];
+  if (batchim === undefined) return pair;
+  // '와(과)'만 받침 쪽이 뒤다 — 책과 · 나무와 (을(를) · 이(가) · 은(는)은 받침 쪽이 앞)
+  const [withB, without] = pair === "와(과)" ? [pair[2], pair[0]] : [pair[0], pair[2]];
+  return batchim ? withB : without;
 }

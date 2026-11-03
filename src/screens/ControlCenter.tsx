@@ -57,7 +57,6 @@ import {
   isRespawning,
   launchAgentInSession,
   roleAgentOf,
-  sessionInAltBuffer,
   sessionTermSize,
   syncSessionTerminal,
   TerminalPane,
@@ -377,29 +376,27 @@ export function ControlCenter(props: { workspace: Workspace }) {
       ? wsFeed().map((e) => ({ time: e.time, message: e.message }))
       : backend.listEvents().slice(0, 4).map((e) => ({ time: e.time, message: e.message }));
 
-  /** 에이전트(Claude Code · Codex)가 붙어 도는 세션인가 — 그 터미널의 ESC는 TUI 몫이다 (B199) */
-  /** 이 ESC가 에이전트 터미널 안에서 눌렸나 — 그러면 앱은 손대지 않고 PTY로 보낸다 */
+  /** 이 ESC가 세션 터미널 안에서 눌렸나 — 그러면 앱은 손대지 않고 PTY로 보낸다.
+   *  에이전트 TUI(B199)만이 아니다: 맨 셸의 vim · less · fzf(--height처럼 대체 화면을 안 쓰는 것까지)도
+   *  ESC를 받아야 한다 (B254). 나가는 길은 Shift+ESC와 머리의 [전체 화면 종료] */
   const escToTui = (target: EventTarget | null) => {
     const el = target as HTMLElement | null;
     if (!el?.closest?.(".xterm")) return false;
     const id = (el.closest("[data-session-id]") as HTMLElement | null)?.dataset.sessionId;
-    const s = sessions().find((x) => x.id === id);
-    // 맨 셸이라도 vim · less · fzf처럼 대체 화면(TUI)에 있으면 ESC는 그 TUI 몫이다 (B254)
-    return !!s && (agentAttached(s) || sessionInAltBuffer(s.id));
+    return sessions().some((x) => x.id === id);
   };
 
-  // ESC = 상세 드로어 → 줌 → 전체 화면 순으로 한 겹씩 닫는다
+  // ESC = 상세 드로어 → 줌 → 전체 화면 순으로 한 겹씩 닫는다. 터미널 안에서는 Shift+ESC (B254)
   onMount(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
-      if (escToTui(e.target)) return;
+      if (!e.shiftKey && escToTui(e.target)) return;
       // 상세 드로어 · 대화상자는 레이어가 닫는다(state.ts) — 그 안 입력칸의 ESC로 전체 화면까지 풀지 않는다
       if (modalOpen()) return;
       if (terminalFull()) {
-        // 에이전트가 붙은 터미널에 커서가 있으면 ESC는 그 TUI의 것이다 — 작업 중이면 턴 중단,
-        // 선택 프롬프트면 "Esc to cancel"이다. 앱이 가져가면 답을 취소하거나 일을 끊는다.
-        // 나가는 길은 머리의 [전체 화면 종료]이고, 머리 안내(escToTui)도 그렇게 바뀐다 (B199).
-        // 맨 셸 프롬프트이거나 터미널 밖이면 ESC로 한 겹 닫는다. 맨 셸의 TUI(대체 화면)는 escToTui가 넘긴다 (B254)
+        // 터미널에 커서가 있으면 ESC는 그 안 프로그램의 것이다 — 에이전트면 턴 중단 · "Esc to cancel"(B199),
+        // 맨 셸이면 vim · less · fzf (B254). 앱이 가져가면 답을 취소하거나 일을 끊는다.
+        // 여기 오는 것은 터미널 밖의 ESC이거나 Shift+ESC — 한 겹 닫는다
         e.preventDefault();
         e.stopPropagation();
         if (zoomed()) applyZoom(undefined);
@@ -808,7 +805,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
     if (s.agent) return { text: tf("{agent} 실행 중 — 손으로 띄워 역할·훅이 붙지 않았습니다", { agent: s.agent }), launch: false };
     if (!roleAgent(s)) return { text: t("에이전트 없음 — 직무 권한을 찾을 수 없어 기동할 수 없습니다. 역할을 다시 지정하세요"), launch: false };
     if (agentClisReady() && !agentClis().some((a) => a.cmd === cliOf(s) && a.installed))
-      return { text: tf("에이전트 없음 — PATH에 {cmd}가 없어 기동할 수 없습니다", { cmd: cliOf(s) }), launch: false };
+      return { text: tf("에이전트 없음 — PATH에 {cmd}이(가) 없어 기동할 수 없습니다", { cmd: cliOf(s) }), launch: false };
     return { text: t("에이전트 없음"), launch: true };
   };
   const launchAgent = async (s: Session) => {
@@ -1049,7 +1046,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
                       })),
                     },
                     { label: t(zoomed() === s.id ? "줌 해제" : "줌"), action: () => applyZoom(zoomed() === s.id ? undefined : s.id) },
-                    { label: t("전체 화면"), kbd: t("ESC 종료"), action: () => setTerminalFull(true) },
+                    { label: t("전체 화면"), kbd: t("Shift+ESC 종료"), action: () => setTerminalFull(true) },
                   ],
                   // 이동 — 상세 팝업·트랜스크립트 (레일 메뉴와 공유)
                   [detailItem(s), transcriptItem(s)],
@@ -1241,7 +1238,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
             ▦ <span class="cc-btn-label">{t(PANE_LAYOUTS.find((l) => l.key === paneLayout())?.name ?? "")}</span>
           </button>
         </Show>
-        <button class="btn ghost" title={t("터미널 전체 화면 — ESC로 종료")} onClick={() => setTerminalFull(true)}>
+        <button class="btn ghost" title={t("터미널 전체 화면 — Shift+ESC로 종료")} onClick={() => setTerminalFull(true)}>
           ⛶
         </button>
         <button
@@ -1490,8 +1487,8 @@ export function ControlCenter(props: { workspace: Workspace }) {
                 </button>
               </Show>
               <span class="mono muted" style={{ "font-size": "10px" }}>
-                {/* 에이전트 터미널의 ESC는 TUI 몫이라 앱이 받지 않는다 (B199 · U15) — 안내도 그에 맞춘다 */}
-                {selected() && agentAttached(selected()!) ? t("ESC는 에이전트로 · 나가기는 [전체 화면 종료]") : t("ESC 종료 · vim 같은 TUI 안에서는 TUI로")}
+                {/* 터미널의 ESC는 그 안 프로그램 몫이라 앱이 받지 않는다 (B199 · B254 · U15) — 안내도 그에 맞춘다 */}
+                {t("ESC는 터미널로 · 나가기는 Shift+ESC")}
               </span>
               <button class="btn" onClick={() => setTerminalFull(false)}>
                 <Icon name="x" size={11} /> {t("전체 화면 종료")}
@@ -1568,7 +1565,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
                 </label>
                 <Show when={addCliMissing()}>
                   <div class="engine-missing mono">
-                    <div class="st-dead">{tf("PATH에 {cmd}가 없습니다 — 아래 명령으로 설치한 뒤 다시 감지하세요", { cmd: addCli() })}</div>
+                    <div class="st-dead">{tf("PATH에 {cmd}이(가) 없습니다 — 아래 명령으로 설치한 뒤 다시 감지하세요", { cmd: addCli() })}</div>
                     <div class="engine-install">
                       <code>{INSTALL_CMD[addCli()]}</code>
                       <button class="btn ghost" onClick={() => clipWriteText(INSTALL_CMD[addCli()])}>

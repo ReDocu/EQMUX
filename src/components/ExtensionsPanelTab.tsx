@@ -28,7 +28,7 @@ import { fsDelete, fsRead, fsWrite } from "../backend/panels";
 import { serverExited, serverTermId } from "../backend/ports";
 import { isTauri, listAlivePty, onPtyOutput, revealPath, writePty } from "../backend/pty";
 import { scopeWorkspace, setPanelTab } from "../state";
-import { agentAttached, cliOf, sessionName } from "../types";
+import { agentAttached, runCliOf, sessionName } from "../types";
 import type { Session } from "../types";
 import { t, tf } from "../i18n";
 import { markdownHtml } from "./markdownHtml";
@@ -104,11 +104,10 @@ function useConfirm() {
 const ALL_SCOPE_NOTE = "모든 워크스페이스의 새 세션에 적용됩니다";
 const RESTART_NOTE = "새로 띄우는 세션부터 적용됩니다 — 이미 떠 있는 세션은 재시작해야 반영됩니다";
 
-const engineOf = (s: Session) => s.spawnCli ?? cliOf(s);
 /** 플러그인이 실리는 세션 — 살아 있는 Claude 세션만 (B193). Codex는 세션별 범위를 실측 전까지 뺀다(결정 X5),
  *  꺼진 세션은 아무것도 싣지 않는다 */
 const wsSessions = (wsId: string | undefined): Session[] =>
-  wsId ? backend.listSessions().filter((s) => s.workspaceId === wsId && agentAttached(s) && engineOf(s) === "claude") : [];
+  wsId ? backend.listSessions().filter((s) => s.workspaceId === wsId && agentAttached(s) && runCliOf(s) === "claude") : [];
 
 /** claude CLI가 PATH에 없다 (B182) — 실측이 끝났을 때만 참. CLI를 불러 보기 전에 원인을 먼저 말한다 */
 const claudeMissing = () => isTauri() && agentClisReady() && !agentClis().some((a) => a.cmd === "claude" && a.installed);
@@ -116,7 +115,7 @@ const claudeMissing = () => isTauri() && agentClisReady() && !agentClis().some((
 function EngineMissing() {
   return (
     <div class="engine-missing mono">
-      <div class="st-dead">{tf("PATH에 {cmd}가 없습니다 — 설치 후 설정 > CLI 에이전트에서 다시 확인하세요", { cmd: "claude" })}</div>
+      <div class="st-dead">{tf("PATH에 {cmd}이(가) 없습니다 — 설치 후 설정 > CLI 에이전트에서 다시 확인하세요", { cmd: "claude" })}</div>
       <button class="btn ghost" onClick={() => void refreshAgentClis()}>
         {t("다시 감지")}
       </button>
@@ -265,7 +264,6 @@ const costCache = new Map<string, number | undefined>();
 function SessionTable(props: { plugins: PluginRow[]; skills: SkillRow[] }) {
   const ws = () => scopeWorkspace();
   const sessions = createMemo(() => wsSessions(ws()?.id));
-  const engine = (s: Session) => s.spawnCli ?? cliOf(s);
   const [costs] = createResource(
     () => props.plugins.filter((p) => p.enabled),
     async (on) => {
@@ -284,10 +282,10 @@ function SessionTable(props: { plugins: PluginRow[]; skills: SkillRow[] }) {
   );
   const sum = (s: Session) =>
     props.plugins
-      .filter((p) => sessionCell(p, engine(s)) === "on")
+      .filter((p) => sessionCell(p, runCliOf(s)) === "on")
       .reduce((n, p) => n + (costs()?.get(`${p.id}@${p.version}`) ?? 0), 0);
   const mark = (c: Cell) => (c === "on" ? "✓" : c === "off" ? "⊘" : "–");
-  const skillCell = (s: Session): Cell => (engine(s) === "claude" ? "on" : "none");
+  const skillCell = (s: Session): Cell => (runCliOf(s) === "claude" ? "on" : "none");
 
   return (
     <Show when={sessions().length > 0} fallback={<div class="muted">{t("이 워크스페이스에 에이전트 세션이 없습니다")}</div>}>
@@ -301,7 +299,7 @@ function SessionTable(props: { plugins: PluginRow[]; skills: SkillRow[] }) {
                 {(s) => (
                   <th title={s.id}>
                     <div>{sessionLabel(s)}</div>
-                    <div class="muted mono">{engine(s) === "claude" ? `~${sum(s).toLocaleString()} tok` : "Codex"}</div>
+                    <div class="muted mono">{runCliOf(s) === "claude" ? `~${sum(s).toLocaleString()} tok` : "Codex"}</div>
                   </th>
                 )}
               </For>
@@ -312,7 +310,7 @@ function SessionTable(props: { plugins: PluginRow[]; skills: SkillRow[] }) {
               {(p) => (
                 <tr>
                   <td class="mono">{p.id}</td>
-                  <For each={sessions()}>{(s) => <td class="extp-cell">{mark(sessionCell(p, engine(s)))}</td>}</For>
+                  <For each={sessions()}>{(s) => <td class="extp-cell">{mark(sessionCell(p, runCliOf(s)))}</td>}</For>
                 </tr>
               )}
             </For>

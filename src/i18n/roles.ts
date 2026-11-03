@@ -250,7 +250,7 @@ export const dict: Record<string, string> = {
   "한 줄 · 24자까지. 직무 '{job}'의 책임 · 금지 · 권한은 그대로 두고 맡는 영역만 정합니다. 모든 워크스페이스의 이 페르소나에 쓰입니다":
     "One line · up to 24 chars · job '{job}' duties, prohibitions and permissions stay; this only names the area. Used for this persona in every workspace",
   "추천 직함 — 직무 '{job}' · 누른 말이 그대로 직함이 됩니다": "Suggested titles — job '{job}' · the chip text becomes the title as is",
-  "저장하면 {name}가 들어간 세션 {n}개의 역할 파일과 팀원 {m}명의 팀 관계 표를 다시 만들고 '[EQ] 역할 갱신 — .eqmux/roles/<세션>.md 다시 읽기' 한 줄을 보냅니다. 재시작 배지는 뜨지 않습니다.":
+  "저장하면 {name}이(가) 들어간 세션 {n}개의 역할 파일과 팀원 {m}명의 팀 관계 표를 다시 만들고 '[EQ] 역할 갱신 — .eqmux/roles/<세션>.md 다시 읽기' 한 줄을 보냅니다. 재시작 배지는 뜨지 않습니다.":
     "Saving rebuilds the role files of {n} session(s) with {name} and the team tables of {m} teammate(s), and sends one line '[EQ] 역할 갱신 — .eqmux/roles/<session>.md 다시 읽기'. No restart badge.",
   // ── 0.5.x QA eqmux-66: 캐스팅 확인창 · 자리 없음 · 리드 1명 (B69 · B70 · B101 · P35) ──
   "{name} 종료 — 세션과 PTY가 끝납니다": "{name} stops — the session and its PTY end",

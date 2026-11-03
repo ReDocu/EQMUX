@@ -106,7 +106,7 @@ export const dict: Record<string, string> = {
   "편집 도구로 고친 것만": "edit-tool changes only",
   "편집 기록이 없습니다 — 전체 변경을 보세요": "No edit records — review all changes",
   "비용 {usd}": "Cost {usd}",
-  "시작점 {sha}을 git에서 찾을 수 없습니다(rebase 등) — 지금 작업 트리의 변경을 보입니다":
+  "시작점 {sha}을(를) git에서 찾을 수 없습니다(rebase 등) — 지금 작업 트리의 변경을 보입니다":
     "Start point {sha} is no longer in git (rebase etc.) — showing current working tree changes",
   "전체 변경 보기 — 한 폴더를 같이 쓰므로 다른 세션의 변경도 섞입니다": "Show all changes — the folder is shared, so other sessions' changes mix in",
   "테스트 실행 — 서버 탭 셸에서 돕니다": "Run tests — runs in the server tab shell",
