@@ -27,6 +27,8 @@ import {
   LOG_PAGE,
   NOTIFY_KEY,
   runLog,
+  runLogOpen as logOpen,
+  setRunLogOpen as setLogOpen,
   withHeadNotice,
 } from "../backend/git";
 import type { BlameLine, BranchRef, ChangedFile, CommitDetail, GitRefs, LogCommit, RunResult, StatusFile, WorkStatus } from "../backend/git";
@@ -37,7 +39,7 @@ import { sendConversation } from "../backend/conversation";
 import { activeConflicts, conflictName } from "../backend/attention";
 import { fsRead, fsWrite } from "../backend/panels";
 import { maskDotenvLine } from "../backend/secrets";
-import { t, tf } from "../i18n";
+import { t, tErr, tf } from "../i18n";
 import { openPanel, pushLayer, scopeWorkspace, setView, tick, view } from "../state";
 import type { View } from "../state";
 import { sessionDisplayName } from "../types";
@@ -339,10 +341,11 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
   const [prompt, setPrompt] = createSignal<Prompt | undefined>();
   const [running, setRunning] = createSignal<string | undefined>(); // 실행 중인 명령 — 버튼을 잠근다
   const [authHelp, setAuthHelp] = createSignal<string | undefined>(); // 인증 실패한 명령
-  const [logOpen, setLogOpen] = createSignal(false);
+  onCleanup(() => setLogOpen(false)); // 실행 로그는 모듈 신호다 (B177) — 다시 열면 예전처럼 접힌 채로
   const [notifyAgents, setNotifyAgents] = createSignal(localStorage.getItem(NOTIFY_KEY) === "1");
   createEffect(() => localStorage.setItem(NOTIFY_KEY, notifyAgents() ? "1" : "0"));
 
+  const openLogAction = () => ({ label: t("실행 로그 열기"), run: () => setLogOpen(true) });
   const run = async (args: string[], opts: { quiet?: boolean } = {}): Promise<RunResult | undefined> => {
     const w = ws();
     if (!w || running()) return undefined;
@@ -350,7 +353,7 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
     const r = await gitRun(w.id, w.path, args);
     setRunning(undefined);
     if (r.auth) setAuthHelp(r.command);
-    else if (!r.ok) notify(`${r.command} — ${failText(r.output)}`);
+    else if (!r.ok) notify(`${r.command} — ${failText(r.output)}`, "error", openLogAction()); // 전문은 실행 로그에 (B177)
     else if (!opts.quiet) notify(tf("{cmd} 완료", { cmd: r.command }), "ok");
     reloadAll();
     return r;
@@ -774,7 +777,7 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
     setRunning("git apply --cached");
     const r = await gitApplyPatch(w.id, w.path, hunkPatch(p, i), h.staged);
     setRunning(undefined);
-    if (!r.ok) notify(`${t("덩어리 적용 실패")} — ${failText(r.output)}`);
+    if (!r.ok) notify(`${t("덩어리 적용 실패")} — ${failText(r.output)}`, "error", openLogAction());
     void loadSide();
   };
 
@@ -1221,7 +1224,7 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
             )}
           </Show>
           <Show when={logErr()}>
-            <div class="card conn-error mono">{t(logErr()!)}</div>
+            <div class="card conn-error mono">{tErr(logErr())}</div>
           </Show>
           <Show
             when={blameOn() && file()}

@@ -49,8 +49,8 @@
 
 | 행 | 확인할 것 |
 |---|---|
-| B250 | 배포판 첫 로드(`http://tauri.localhost`)와 `tauri dev` 첫 로드가 막히지 않는지 · 스킬 미리보기의 그림 링크 클릭 |
-| B254 | 기본 터미널 전체 화면 → vim 입력 모드 → ESC · fzf `--height` → ESC · Shift+ESC로 나가기 |
+| B250 | ~~배포판 첫 로드 · 스킬 미리보기 그림 링크~~ 실앱 확인함(아래). 남은 것: `tauri dev` 첫 로드 · mac `tauri://` 첫 로드 |
+| B254 | ~~ESC가 터미널로 · Shift+ESC로 나가기~~ 실앱 확인함(아래, PowerShell). 남은 것: vim · fzf `--height` 안에서 |
 | B258 | clone 중 창과 팝업을 닫은 뒤 실패 토스트 |
 | B269 | mac에서 PATH 밖 `~/.local/bin/claude` |
 | U172 | 구성 화면의 작업 폴더 앞 줄임(`direction: rtl`) 모양 |
@@ -64,6 +64,17 @@
 - **U176 남은 것:** 조사를 박아 둔 사전 문장 8개(`{cmd}가` · `{path}를` · `{u}와` · `{sha}을` · `{name}가` · `${budget}을` 등)를 '을(를)' 꼴로 바꿨습니다. 사전 키와 호출부를 함께 바꿨고, 14개 파일입니다. 테스트를 보태다가 **`와(과)` 판정이 거꾸로였던 버그**를 찾아 고쳤습니다. '와(과)'만 받침 쪽 조사가 뒤에 옵니다(책과 · 나무와). 그래서 원래 사전에 있던 '와(과)' 문장도 이제 맞게 나옵니다.
 - **B254 남은 것:** 전체 화면에서 터미널 안의 ESC는 늘 터미널로 갑니다. 그러면 키보드로 나갈 길이 없어지므로 **Shift+ESC**로 줌 해제 → 전체 화면 해제를 합니다. 머리 안내('ESC는 터미널로 · 나가기는 Shift+ESC'), 메뉴 단축키 표시, 버튼 title, `docs/site/docs.md` 단축키 표를 맞췄습니다. 쓸 곳이 없어진 `sessionInAltBuffer`는 지웠습니다.
 - **B267 정리:** `ExtensionsPanelTab.tsx` 두 곳과 `SessionDetailPanel.tsx`의 `spawnCli ?? cliOf` 식을 `runCliOf`로 바꿨습니다. 동작은 같습니다.
+
+## 실앱 확인 (B250 · B254)
+
+2026-11-03 · `cd10091` 릴리스 빌드(`tauri build --no-bundle`)를 WebView2 원격 디버깅으로 띄워 CDP로 눌렀습니다. 시험 저장소는 스크래치패드에 새로 만들었고, `%APPDATA%\com.eqment.eqmux`는 실행 전 백업 → 끝나고 되돌린 뒤 `diff -rq`로 같음을 확인했습니다.
+
+| 행 | 결과 |
+|---|---|
+| B250 | 통과. 첫 로드 `http://tauri.localhost/` 정상 · 같은 출처 새로고침 정상. `location.href`를 `https://example.com/` · `file:///C:/Windows/win.ini`로 바꿔도 메인 웹뷰는 `http://tauri.localhost/`에 남는다. 스킬 미리보기의 상대 그림 링크(`🖼 flow`)를 눌러도 앱 화면이 그대로이고, 외부 링크는 브라우저 패널(자식 웹뷰)에서 열린다 |
+| B254 | 통과. PowerShell 7 기본 터미널 → 전체 화면 → 머리 안내 'ESC는 터미널로 · 나가기는 Shift+ESC'. 터미널에 `abc`를 치고 ESC → 전체 화면은 그대로이고 PSReadLine이 줄을 지웠다(ESC가 셸에 닿음). Shift+ESC → 전체 화면이 풀렸다 |
+
+덤으로 본 것: 관제 이벤트 칸에서 닫힌 셸이 '세션 종료 · 종료 코드 없음' 한 줄씩만 남는다(U175). 좁은 페인에서 PSReadLine이 줄바꿈된 프롬프트를 다시 그리면 글자 자리가 어긋나 보였다 — 셸 쪽 다시 그리기 문제로, 이번 수정과는 상관없다.
 
 ## 다음 차례로 넘긴 것
 

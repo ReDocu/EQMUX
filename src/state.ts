@@ -287,6 +287,24 @@ export function defaultRatios(layout: PaneLayout): PaneRatio {
       return { rows: [2 / 3, 1 / 3] };
   }
 }
+/** 배치 창 축소 그림의 트랙 (0.6 QA U151) — 실제 그리드(screens.css .terminal-grid.layout-*)처럼 슬롯 상한만큼
+ *  칸을 둔다. 앞 칸부터 지금 세션 수만큼 채우고 나머지는 빈 슬롯('+ 세션 추가' 자리)으로 그린다 */
+export function previewTracks(layout: PaneLayout, max: number): { cols: string; rows: string } {
+  const rep = (n: number) => `repeat(${n}, 1fr)`;
+  switch (layout) {
+    case "grid-col":
+    case "grid-row":
+      return { cols: rep(max / 2), rows: rep(2) };
+    case "stack-v":
+      return { cols: rep(1), rows: rep(max) };
+    case "row-h":
+      return { cols: rep(max), rows: rep(1) };
+    case "main-right":
+      return { cols: "2fr 1fr", rows: rep(max - 1) };
+    case "main-bottom":
+      return { cols: rep(max - 1), rows: "2fr 1fr" };
+  }
+}
 /** 비율은 배치별이면서 워크스페이스별이다 (B21) — '어떤 배치를 쓰는가'가 워크스페이스별인데
  *  (U7) 비율만 배치 키 하나로 두면, 한 팀에서 분할선을 끌 때 같은 배치를 쓰는 다른 팀의
  *  비율까지 함께 바뀐다. 워크스페이스마다 세션 수·용도가 다르다는 U7의 근거가 비율에도 같다. */

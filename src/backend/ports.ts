@@ -376,12 +376,37 @@ export function parseCommands(text: string): { commands: SavedCommand[]; skipped
   for (const c of list as Record<string, unknown>[]) {
     const name = typeof c?.name === "string" ? c.name.trim() : "";
     const run = typeof c?.run === "string" ? c.run.trim() : "";
-    // 줄바꿈뿐 아니라 C0 제어문자 · DEL도 버린다 (B251) — \x0f(Ctrl+O) 같은 키가 셸을 움직여, 버튼 한 번에 실행될 수 있다
-    if (!name || name.length > 40 || !run || /[\x00-\x1f\x7f]/.test(run)) continue;
+    if (!usableCommand(name, run)) continue;
     const kind = c.kind === "server" || c.kind === "test" ? c.kind : "other";
     commands.push({ name, run, kind });
   }
   return { commands, skipped: list.length - commands.length };
+}
+
+// 줄바꿈뿐 아니라 C0 제어문자 · DEL도 버린다 (B251) — \x0f(Ctrl+O) 같은 키가 셸을 움직여, 버튼 한 번에 실행될 수 있다
+const usableCommand = (name: string, run: string) =>
+  !!name && name.length <= 40 && !!run && !/[\x00-\x1f\x7f]/.test(run);
+
+/** 사람이 쓴 commands.json에 한 항목을 더한 새 원문 (P63) — BOM · 줄끝(CRLF) · 들여쓰기 · 끝 줄바꿈은 원래대로.
+ *  JSON으로 못 읽거나 commands 배열이 없으면 고치지 않고 error. 같은 run이 이미 있으면 더하지 않는다 */
+export function appendCommand(text: string, entry: SavedCommand): { text: string } | { error: string } {
+  const name = entry.name.trim();
+  const run = entry.run.trim();
+  if (!usableCommand(name, run)) return { error: "이름은 1~40자, 명령은 한 줄이어야 합니다" };
+  const bom = text.startsWith("﻿") ? "﻿" : "";
+  let doc: { commands?: unknown };
+  try {
+    doc = JSON.parse(text.slice(bom.length));
+  } catch {
+    return { error: "JSON으로 읽을 수 없어 고치지 않았습니다 — 파일 탭에서 먼저 고치세요" };
+  }
+  if (!Array.isArray(doc?.commands)) return { error: "commands 배열이 없습니다" };
+  if (doc.commands.some((c) => c?.run?.trim?.() === run)) return { error: "이미 저장된 명령입니다" };
+  doc.commands.push({ name, run, kind: entry.kind });
+  const indent = /\n([ \t]+)\S/.exec(text)?.[1] ?? "  ";
+  const eol = text.includes("\r\n") ? "\r\n" : "\n";
+  const tail = /\r?\n\s*$/.test(text) ? eol : "";
+  return { text: bom + JSON.stringify(doc, null, indent).replace(/\n/g, eol) + tail };
 }
 
 // ── 세션별 포트 범위 (§4) — Rust ports.rs가 스폰 때 나눠 주고 EQMUX_PORT_BASE·END로 심는다 ──

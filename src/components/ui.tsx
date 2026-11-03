@@ -164,8 +164,10 @@ export function ContextMenu(props: {
 
 /** 화면 아래 한 줄 토스트, 4초 — 사람이 한 동작의 결과. 기본은 실패·거부(빨강)이고,
  *  성공은 kind "ok"로 중립 테두리에 띄운다 (B184). 벨(세션이 사람을 부름)과 섞지 않는다.
- *  호스트 컴포넌트 없이 어디서든 부를 수 있게 DOM에 직접 붙인다 */
-export function notify(msg: string, kind: "error" | "ok" = "error"): void {
+ *  호스트 컴포넌트 없이 어디서든 부를 수 있게 DOM에 직접 붙인다.
+ *  action을 주면 버튼 하나를 단다 ([되돌리기] · [실행 로그 열기]) — 8초 머물고, 마우스나 포커스가
+ *  토스트 위에 있는 동안은 닫지 않는다 (0.6 QA P71 · B177) */
+export function notify(msg: string, kind: "error" | "ok" = "error", action?: { label: string; run: () => void }): void {
   let host = document.getElementById("eq-toasts");
   if (!host) {
     host = document.createElement("div");
@@ -177,8 +179,20 @@ export function notify(msg: string, kind: "error" | "ok" = "error"): void {
   const el = document.createElement("div");
   el.className = kind === "ok" ? "eq-toast ok" : "eq-toast";
   el.textContent = msg;
+  if (action) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "eq-toast-act";
+    b.textContent = action.label;
+    b.onclick = () => {
+      el.remove();
+      action.run();
+    };
+    el.appendChild(b);
+  }
   host.appendChild(el);
-  setTimeout(() => el.remove(), 4000);
+  const close = () => (el.matches(":hover, :focus-within") ? setTimeout(close, 1000) : el.remove());
+  setTimeout(close, action ? 8000 : 4000);
 }
 
 /** 되돌릴 수 없는 동작 확인창 — 제목에 대상 이름, 본문에 되돌릴 수 있는지, 위험 버튼은 동사.

@@ -148,7 +148,7 @@ export function TeamComposition(props: { wsId: string }) {
             when={idle().length > 0}
             fallback={
               <button class="btn primary" onClick={() => openWorkspace(false)}>
-                {/* '워크스페이스 열기'는 단계 01(연결 화면)의 이름이다 — 이 버튼은 워크스페이스 탭으로 들어간다 (U129) */}
+                {/* '워크스페이스 열기'는 연결 화면을 떠올리게 한다(단계 01은 '워크스페이스 연결') — 이 버튼은 워크스페이스 탭으로 들어간다 (U129) */}
                 {t("워크스페이스로 →")}
               </button>
             }

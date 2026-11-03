@@ -63,6 +63,28 @@ export function tf(ko: string, vars: Record<string, string | number>): string {
   return s;
 }
 
+/** Rust 오류 원문 → 현재 언어 (U125). format!으로 만든 오류는 값이 끼어 있어 t()의 통째 대조에 안 걸린다.
+ *  사전의 {자리표시} 키(한글 낱말이 있는 것)를 틀로 맞춰 보고, 끼인 값도 같은 방식으로 한 번 더 푼다
+ *  ('기동 실패 — 작업 폴더가 없습니다: …'). 못 맞추면 원문 그대로다.
+ *  ponytail: 부를 때마다 틀을 정규식으로 만든다 — 오류 표시에만 쓰여 드물다. 잦아지면 사전별로 캐시 */
+export function tErr(e: unknown, dict: Record<string, string> | undefined = settings().language === "en" ? EN : undefined): string {
+  const raw = String(e);
+  if (!dict) return raw;
+  if (Object.hasOwn(dict, raw)) return dict[raw];
+  const lit = (k: string) => k.replace(/\{\w+\}/g, "").length;
+  const keys = Object.keys(dict).filter((k) => /\{\w+\}/.test(k) && /[가-힣]/.test(k.replace(/\{\w+\}/g, "")));
+  for (const k of keys.sort((a, b) => lit(b) - lit(a))) {
+    const names: string[] = [];
+    const body = k
+      .split(/\{(\w+)\}/)
+      .map((p, i) => (i % 2 ? (names.push(p), "(.+?)") : p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))
+      .join("");
+    const m = new RegExp(`^${body}$`, "s").exec(raw);
+    if (m) return dict[k].replace(/\{(\w+)\}/g, (w, n: string) => (names.includes(n) ? tErr(m[names.indexOf(n) + 1], dict) : w));
+  }
+  return raw;
+}
+
 const JOSA = /을\(를\)|이\(가\)|은\(는\)|와\(과\)/;
 
 /** 받침이 있으면 앞 조사, 없으면 뒤 조사 — '을(를)' → '을' | '를'. 판정이 안 서면 원문 그대로 (U176).

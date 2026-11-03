@@ -10,7 +10,7 @@ import { clipWriteText, isTauri } from "../backend/pty";
 import { Icon } from "../components/icons";
 import { sessionTermSize } from "../components/TerminalPane";
 import { notify } from "../components/ui";
-import { t, tf } from "../i18n";
+import { t, tErr, tf } from "../i18n";
 import { defaultShell, jumpToSession, scopeWorkspace, setView, tick, view } from "../state";
 import type { View } from "../state";
 import type { Session } from "../types";
@@ -69,7 +69,7 @@ export function HistorySearch(props: { wsId?: string }) {
       try {
         await resumeAgent(s.id, s.workspaceId, s.cwd, sessionName(s, persona), p, size.cols, size.rows, cliOf(s));
       } catch (err) {
-        return notify(`${t("재개 실패")} — ${String(err)}`);
+        return notify(`${t("재개 실패")} — ${tErr(err)}`);
       }
     }
     backend.resumeSession(s.id);

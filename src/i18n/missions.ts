@@ -166,6 +166,7 @@ export const dict: Record<string, string> = {
   "{n}줄": "{n} lines",
   "{shown} / {total}줄": "{shown} / {total} lines",
   "최근 서브에이전트 호출 (기록)": "Recent subagent calls (history)",
+  "결과가 아직 기록되지 않았습니다 — 진행 중이거나 중단됐습니다": "No result recorded yet — still running or stopped", // (U159)
   "지금 도는 서브에이전트": "Subagents running now",
   // U116 · U127 · U128 첫 실행 고지 · 설정 › 보안
   "세션 터미널 출력 로그 · 진단 로그 — 토큰이 평문으로 남을 수 있습니다(설정 › 저장소에서 끔)":

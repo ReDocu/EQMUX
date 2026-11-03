@@ -439,6 +439,12 @@ fn strip_verbatim(p: &Path) -> String {
     }
 }
 
+/// 폴더 실재 확인 (B207) — 에이전트 기동이 셸을 끝내기 전에 작업 폴더를 본다
+#[tauri::command]
+pub fn path_is_dir(path: String) -> bool {
+    Path::new(&path).is_dir()
+}
+
 /// 탐색기에서 열기 — 파일은 그 파일이 선택된 채로, 폴더는 그 폴더가 열린다.
 /// 없는 경로는 사유를 돌려준다 (조용히 넘길지 알릴지는 부르는 화면이 정한다).
 #[tauri::command]

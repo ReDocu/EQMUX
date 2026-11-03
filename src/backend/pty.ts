@@ -243,6 +243,13 @@ export function openExternal(url: string, chrome = false): void {
   void invoke("open_external", { url, chrome }).catch(() => {});
 }
 
+/** 폴더가 실재하는지 (B207) — 에이전트 기동은 셸을 먼저 끝내므로, 작업 폴더가 없으면 그 전에 멈춘다.
+ *  확인 자체가 실패하면 true — 판단은 agent_spawn의 같은 검사에 맡긴다 */
+export async function pathIsDir(path: string): Promise<boolean> {
+  if (!isTauri()) return true;
+  return invoke<boolean>("path_is_dir", { path }).catch(() => true);
+}
+
 /** 터미널 경로 더블클릭 → 탐색기에서 열기. 파일이면 그 파일이 선택된 채로, 폴더면 그 폴더가 열린다.
  *  상대 경로는 세션 cwd 기준으로 푼다. 실재하지 않으면 false — 더블클릭은 선택 제스처이기도 해서
  *  화면에 따라 조용히 넘길 자리가 있다. */

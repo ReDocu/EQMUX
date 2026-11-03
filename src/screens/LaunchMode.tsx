@@ -12,7 +12,7 @@ import { t, tf } from "../i18n";
 import { setFocusRequest, setOverlay, setSelectedSession, setView } from "../state";
 import { projectStem } from "../types";
 import type { Session } from "../types";
-import { quickStartSlots, wizardSteps } from "./launchRules";
+import { quickEngine, quickStartSlots, wizardSteps } from "./launchRules";
 import type { WizardPath } from "./launchRules";
 import { Icon } from "../components/icons";
 import { segKeyIndex } from "../components/keynav";
@@ -65,6 +65,8 @@ export function LaunchMode(props: { wsId: string }) {
   // 빠른 시작은 claude를 바로 띄운다 (P64) — PATH 실측에 없으면 시작을 막고 설치 명령을 보인다(세션 추가와 같은 블록).
   // 브라우저 dev는 실측이 없어 막지 않는다
   const claudeMissing = () => isTauri() && agentClisReady() && !agentClis().some((a) => a.cmd === "claude" && a.installed);
+  // claude가 없고 codex만 있으면 같은 빠른 시작을 Codex로 (0.6 QA P64). undefined면 둘 다 없어 막는다
+  const engine = () => (claudeMissing() ? quickEngine(agentClis()) : "claude");
 
   // 빠른 시작 — 사람이 누른 버튼이 편성 · 기동까지 한 번에 한다. 임무는 배정하지 않는다
   // 이미 세션이 있으면 편성 교체가 그것을 끝내므로 먼저 묻는다 (B198 · 팀 캐스팅과 같은 확인)
@@ -75,6 +77,7 @@ export function LaunchMode(props: { wsId: string }) {
     const lines = confirmed ? [] : castingConfirmLines(props.wsId, slots);
     if (lines.length > 0) return setConfirmQuick(lines);
     backend.applyCasting(props.wsId, slots);
+    if (engine() === "codex") for (const sl of slots) backend.setSessionCli(`${sl.personaId}@${props.wsId}`, "codex"); // P64
     backend.openWorkspace(props.wsId);
     arrive(backend.listSessions().filter((s) => s.workspaceId === props.wsId && s.personaId));
   };
@@ -113,7 +116,7 @@ export function LaunchMode(props: { wsId: string }) {
     mode() === "saved"
       ? t("이 팀으로 시작 → 워크스페이스")
       : mode() === "quick"
-        ? t("2세션으로 시작 → 워크스페이스")
+        ? engine() === "codex" ? t("Codex 2세션으로 시작 → 워크스페이스") : t("2세션으로 시작 → 워크스페이스")
         : mode() === "terminal" ? t("다음: 기본 터미널 구성 →") : t("다음: 팀 캐스팅 →");
 
   const choices = () =>
@@ -152,8 +155,8 @@ export function LaunchMode(props: { wsId: string }) {
           t("세션이 많을수록 사용 한도를 빨리 씁니다 — 2개로 시작합니다"),
           tf("더 필요하면 팀 캐스팅에서 {n}개까지 늘릴 수 있습니다", { n: maxSlots() }),
         ],
-        route: t("다음 → 워크스페이스 (Claude Code 2개 기동)"),
-        example: () => <Identity slot={1} name={personaName(quickSlots()[0]?.personaId ?? "")} title={t("리드")} cli="claude" />,
+        route: engine() === "codex" ? t("다음 → 워크스페이스 (Codex 2개 기동)") : t("다음 → 워크스페이스 (Claude Code 2개 기동)"),
+        example: () => <Identity slot={1} name={personaName(quickSlots()[0]?.personaId ?? "")} title={t("리드")} cli={engine() ?? "claude"} />,
       },
       {
         id: "terminal" as Mode,
@@ -217,7 +220,13 @@ export function LaunchMode(props: { wsId: string }) {
             })}
           </div>
         </div>
-        {/* [계속]은 아래 막대 하나 — 머리와 바닥에 같은 버튼이 둘 있었다 (U30) */}
+        {/* [계속]은 아래 막대 하나 — 머리와 바닥에 같은 버튼이 둘 있었다 (U30).
+            [뒤로]는 다른 마법사 화면(기본 터미널 구성 · 팀 캐스팅 · 팀 편성)처럼 머리 오른쪽 (0.6 QA U129) */}
+        <div class="wizard-actions">
+          <button class="btn" onClick={() => setOverlay("connect")}>
+            {t("← 워크스페이스 연결")}
+          </button>
+        </div>
       </div>
 
       <div class="screen-body launch-body">
@@ -284,6 +293,9 @@ export function LaunchMode(props: { wsId: string }) {
           <Show when={mode() === "quick" && claudeMissing()}>
             <div class="engine-missing mono">
               <div class="st-dead">{tf("PATH에 {cmd}이(가) 없습니다 — 아래 명령으로 설치한 뒤 다시 감지하세요", { cmd: "claude" })}</div>
+              <Show when={engine() === "codex"}>
+                <div>{t("Codex는 설치돼 있어 같은 편성을 Codex 2세션으로 시작할 수 있습니다")}</div>
+              </Show>
               <div class="engine-install">
                 <code>{INSTALL_CMD.claude}</code>
                 <button class="btn ghost" onClick={() => clipWriteText(INSTALL_CMD.claude)}>
@@ -301,6 +313,8 @@ export function LaunchMode(props: { wsId: string }) {
               {tf(
                 mode() === "saved"
                   ? "저장소의 편성대로 시작합니다. 워크스페이스가 열리면 역할 세션이 바로 뜹니다. 슬롯은 {n}개까지 씁니다."
+                  : mode() === "quick" && engine() === "codex"
+                  ? "리드와 개발 2세션으로 시작합니다. 워크스페이스가 열리면 Codex가 바로 뜹니다. 슬롯 {n}개 중 2개를 씁니다."
                   : mode() === "quick"
                   ? "리드와 개발 2세션으로 시작합니다. 워크스페이스가 열리면 Claude Code가 바로 뜹니다. 슬롯 {n}개 중 2개를 씁니다."
                   : mode() === "terminal"
@@ -311,10 +325,7 @@ export function LaunchMode(props: { wsId: string }) {
             </span>
           </div>
           <div class="launch-footer-actions">
-            <button class="btn" onClick={() => setOverlay("connect")}>
-              {t("← 워크스페이스 열기")}
-            </button>
-            <button class="btn primary" disabled={starting() || (mode() === "quick" && claudeMissing())} onClick={next}>
+            <button class="btn primary" disabled={starting() || (mode() === "quick" && !engine())} onClick={next}>
               {starting() ? t("기동 중…") : nextLabel()}
             </button>
           </div>

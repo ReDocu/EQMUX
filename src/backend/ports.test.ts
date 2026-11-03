@@ -13,6 +13,7 @@ import {
   portUrl,
   reconcileAcked,
   parseCommands,
+  appendCommand,
 } from "./ports";
 import type { PortRow } from "./panels";
 
@@ -288,5 +289,46 @@ describe("parseCommands (C7)", () => {
     );
     expect(r.commands.map((c) => c.name)).toEqual(["ok"]);
     expect(r.skipped).toBe(4);
+  });
+});
+
+describe("appendCommand — 사람이 쓴 commands.json에 덧붙이기 (P63)", () => {
+  const dev = { name: "dev", run: "npm run dev", kind: "server" as const };
+
+  test("BOM · CRLF · 4칸 들여쓰기 · 끝 줄바꿈 · 모르는 키를 그대로 둔다", () => {
+    const src = ["﻿{", '    "version": 1,', '    "note": "x",', '    "commands": []', "}", ""].join("\r\n");
+    const r = appendCommand(src, dev);
+    if ("error" in r) throw new Error(r.error);
+    const want = [
+      "﻿{",
+      '    "version": 1,',
+      '    "note": "x",',
+      '    "commands": [',
+      "        {",
+      '            "name": "dev",',
+      '            "run": "npm run dev",',
+      '            "kind": "server"',
+      "        }",
+      "    ]",
+      "}",
+      "",
+    ].join("\r\n");
+    expect(r.text).toBe(want);
+    expect(parseCommands(r.text).commands).toEqual([dev]);
+  });
+
+  test("끝 줄바꿈이 없던 파일은 없는 채로, 한 줄 파일은 2칸 들여쓰기", () => {
+    const r = appendCommand('{"commands":[]}', dev);
+    if ("error" in r) throw new Error(r.error);
+    expect(r.text.endsWith("}")).toBe(true);
+    expect(r.text).toContain('\n  "commands"');
+  });
+
+  test("못 읽는 파일 · 중복 · 여러 줄 run은 고치지 않는다 (B251)", () => {
+    expect(appendCommand("{", dev)).toHaveProperty("error");
+    expect(appendCommand("{}", dev)).toHaveProperty("error");
+    expect(appendCommand('{"commands":[{"name":"a","run":"npm run dev"}]}', dev)).toHaveProperty("error");
+    expect(appendCommand('{"commands":[]}', { ...dev, run: "ls\u000f" })).toHaveProperty("error");
+    expect(appendCommand('{"commands":[]}', { ...dev, name: " " })).toHaveProperty("error");
   });
 });

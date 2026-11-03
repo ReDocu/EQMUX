@@ -205,6 +205,18 @@ export async function revealPersonasDir(): Promise<string | null> {
   );
 }
 
+/** [초상 고르기…] · [지우기] (0.6 QA P66) — 선택 창에서 png를 골라 personas/<id>.png로 복사하거나 지운다.
+ *  실패면 사유, 성공 · 취소면 null. 뒤에 목록을 다시 읽어 portraitMtimeMs가 바뀌면 아바타가 새로 그려진다 */
+export async function setPortrait(id: string, clear = false): Promise<string | null> {
+  if (!isTauri()) return null;
+  const err = await invoke(clear ? "library_portrait_clear" : "library_portrait_pick", { id }).then(
+    () => null,
+    (e) => t(String(e)),
+  );
+  await refreshLibrary();
+  return err;
+}
+
 /** 초상 이미지 (0.6 §15-4) — personas/<id>.png를 Blob URL로. 키가 id+mtime이라 파일을 바꾸면 새로 읽는다.
  *  없거나 브라우저 dev면 undefined (이니셜). ponytail: 지난 mtime의 URL은 해제하지 않는다 — 초상 수만큼만 남는다 */
 const portraits = new Map<string, Promise<string | undefined>>();

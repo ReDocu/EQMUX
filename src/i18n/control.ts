@@ -169,6 +169,10 @@ export const dict: Record<string, string> = {
   "제거 — 대화 기록 잃음": "Remove — lose the conversation",
   "재개하지 못했습니다 — {err}": "Couldn't resume — {err}",
   "에이전트를 띄우지 못했습니다 — {err}": "Couldn't start the agent — {err}",
+  // Rust(lib.rs) format! 오류 — tErr가 틀로 맞춘다 (U125 · B207)
+  "작업 폴더가 없습니다: {cwd} — 재개는 같은 폴더에서만 됩니다": "Working folder not found: {cwd} — resume works only in the same folder",
+  "작업 폴더가 없습니다: {cwd} — 폴더를 되돌리거나 세션을 다시 만드세요": "Working folder not found: {cwd} — restore the folder or recreate the session",
+  "실행 실패 — {err}": "Failed to start — {err}",
   "세션 시작 실패 — {err}": "Session failed to start — {err}",
   "승인 · 질문을 기다리는 중입니다 — 터미널에서 읽고 답하세요": "Waiting on an approval or question — read and answer it in the terminal",
   전송: "Send",

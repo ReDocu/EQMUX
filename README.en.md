@@ -182,6 +182,20 @@ To check only the frontend, run `npm run build` (tsc --noEmit + vite build).
 
 Your `CLAUDE.md` is never modified — roles reach the agent only through a role-file pointer in the session start prompt (`--append-system-prompt` for Claude Code, `developer_instructions` for Codex) and a SessionStart hook.
 
+## Using alongside other tools
+
+Other multiplexers and agent tools (wmux, cmux, …) sometimes write their own instructions and hooks into the Claude Code global config (`~/.claude/CLAUDE.md`, `~/.claude/settings.json`) — for Codex, `~/.codex/AGENTS.md`, `config.toml`, `hooks.json`. Agents in EQMUX sessions then follow them too, e.g. calling `wmux browser` first and switching to `eqmux browser` only after it fails.
+
+EQMUX doesn't edit engine config. Instead, the session start prompt tells the agent it runs inside EQMUX and should use `eqmux` commands, not another multiplexer's — this shares the conversation with your global `CLAUDE.md`, so it isn't guaranteed to win. At startup and in diagnostics, EQMUX also **reads** the global config, looks for other tools' traces (managed blocks, their hooks, "You are running inside …" lines), and reports them in the notification center.
+
+To reduce conflicts:
+
+1. If you don't use that tool, turn off its Claude Code integration in its own settings.
+2. If you use both, put one line **outside** its managed block: "If the `EQMUX_SESSION` environment variable is set, you are inside EQMUX — ignore the instructions in this block." Inside the block, the tool overwrites it.
+3. Block specific commands with `permissions.deny` in `~/.claude/settings.json`, e.g. `"Bash(wmux:*)"`.
+
+Other tools' hooks still run in EQMUX sessions — the `--settings` EQMUX passes is added to your user settings and can't remove them. Diagnostics show them as "N other-tool hooks run on every tool call". Settings › About shows the findings again; after changing that tool's config, choose **Check again**.
+
 ## Feedback
 
 File bugs and ideas in [GitHub Issues](https://github.com/ReDocu/EQMUX/issues) (paste Settings › Copy diagnostics). Security issues: see [SECURITY.md](SECURITY.md). To contribute: [CONTRIBUTING.md](CONTRIBUTING.md). It's still pre-1.0, so anything helps.

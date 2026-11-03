@@ -157,11 +157,20 @@ pub(crate) fn refresh(app: &AppHandle) {
     }
 }
 
+/// 닫으면 숨길지 미리 본다 (P65) — 숨길 거면 도는 PTY 수, 아니면 0. 프런트는 첫 숨김 전에 이 수로
+/// 앱 안 확인창을 띄운다 — OS 알림이 꺼져 있으면 사람은 앱이 꺼졌다고 믿는다
+#[tauri::command]
+pub(crate) fn window_would_hide(app: AppHandle) -> usize {
+    let n = running(&app);
+    let hide = app.try_state::<TrayItems>().is_some() && should_hide(crate::setting_str(&app, "closeAction").as_deref(), n);
+    if hide { n } else { 0 }
+}
+
 /// 창 닫기 요청 (프런트 onCloseRequested) — true면 숨겼다, false면 부른 쪽이 종료 흐름을 탄다
 #[tauri::command]
 pub(crate) fn window_close_to_tray(app: AppHandle) -> bool {
-    let n = running(&app);
-    if app.try_state::<TrayItems>().is_none() || !should_hide(crate::setting_str(&app, "closeAction").as_deref(), n) {
+    let n = window_would_hide(app.clone());
+    if n == 0 {
         return false;
     }
     let Some(w) = app.get_webview_window("main") else { return false };

@@ -3112,28 +3112,16 @@
 .lp-cell.main {
   background: var(--eq-blue-mid);
 }
-.lp-prev.lp-grid-row {
-  grid-template-columns: 1fr 1fr;
+/* 트랙은 LayoutPicker가 인라인으로 준다(previewTracks) — 세션이 없는 슬롯은 빈 칸 (0.6 QA U151) */
+.lp-cell.empty {
+  background: transparent;
+  border-style: dashed;
 }
 .lp-prev.lp-grid-col {
-  grid-template-columns: 1fr 1fr;
   grid-auto-flow: column;
-  grid-template-rows: 1fr 1fr;
-}
-.lp-prev.lp-stack-v {
-  grid-template-columns: 1fr;
-}
-.lp-prev.lp-row-h {
-  grid-template-columns: repeat(3, 1fr);
-}
-.lp-prev.lp-main-right {
-  grid-template-columns: 2fr 1fr;
 }
 .lp-prev.lp-main-right .lp-cell.main {
-  grid-row: 1 / span 2;
-}
-.lp-prev.lp-main-bottom {
-  grid-template-columns: 1fr 1fr;
+  grid-row: 1 / -1;
 }
 .lp-prev.lp-main-bottom .lp-cell.main {
   grid-column: 1 / -1;
@@ -3374,6 +3362,22 @@
   color: var(--eq-text);
   font-size: 12px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+/* 토스트 동작 버튼 (0.6 QA P71 · B177) — 호스트가 클릭을 통과시키므로 버튼만 받는다 */
+.eq-toast-act {
+  margin-left: 10px;
+  padding: 1px 8px;
+  pointer-events: auto;
+  background: none;
+  border: 1px solid var(--eq-line);
+  border-radius: var(--eq-r-sm);
+  color: var(--eq-blue);
+  font: inherit;
+  cursor: pointer;
+}
+.eq-toast-act:hover,
+.eq-toast-act:focus-visible {
+  border-color: var(--eq-blue);
 }
 .eq-confirm {
   width: 440px;
@@ -7449,6 +7453,20 @@ label.inbox-pop-row {
 }
 .launch-body .launch-choice .launch-route {
   margin-top: auto;
+}
+/* U150 남은 것 — 900px English에서 본문이 23px 넘쳤다. 카드는 트랙보다 넓어지지 않게(줄바꿈 없는 헤더 예는 말줄임),
+   좁은 창에서는 카드 안팎 간격을 줄여 세 카드가 한 화면에 든다. 1100px 이상은 그대로 */
+.launch-body .launch-choice {
+  min-width: 0;
+}
+@media (max-width: 1000px) {
+  .launch-body {
+    gap: 12px;
+  }
+  .launch-body .launch-choice {
+    gap: 10px;
+    padding: 16px;
+  }
 }
 
 /* 0.6 QA eqmux-dd: U148 — 좁은 카드에서 설명 칸이 90px로 눌려 낱말이 세로로 쌓였다. 180px 밑이면 컨트롤을 다음 줄로 */

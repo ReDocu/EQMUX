@@ -4,6 +4,7 @@
 // 포트 귀속은 Rust ports_snapshot이 PTY Job pid로 하므로 여기서 연 포트는 포트 패널에 "서버"로 뜬다.
 import { createEffect, createMemo, createResource, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import {
+  appendCommand,
   clearServerExit,
   COMMANDS_FILE,
   parseCommands,
@@ -98,6 +99,29 @@ function ServerTerm(props: { wsId: string }) {
     }
     void reloadSaved();
   };
+  // [저장 명령에 추가] 이름 칸 — null이면 닫힘 (P63)
+  const [naming, setNaming] = createSignal<string | null>(null);
+  const canSave = () => {
+    const r = saved();
+    return !!cmd() && !!r && !r.error && !r.commands.some((c) => c.run === cmd());
+  };
+  /** 마지막 서버 명령을 저장 명령에 더한다 (P63) — 사람이 쓴 파일이라 지금 원문을 다시 읽어 덧붙이고, 못 읽으면 고치지 않는다 */
+  const addSaved = async () => {
+    const run = cmd();
+    if (!run) return;
+    const fail = (err: string) => notify(tf("{f}에 더하지 못했습니다 — {err}", { f: COMMANDS_FILE, err }));
+    try {
+      const f = await fsRead(path, COMMANDS_FILE);
+      const r = appendCommand(f.text, { name: naming() ?? "", run, kind: "server" });
+      if ("error" in r) return fail(t(r.error));
+      await fsWrite(path, COMMANDS_FILE, r.text, f.mtimeMs); // 그사이 파일 탭에서 고쳤으면 거부된다
+      setNaming(null);
+      notify(tf("{f}에 더했습니다", { f: COMMANDS_FILE }), "ok");
+    } catch (e) {
+      fail(String(e));
+    }
+    void reloadSaved();
+  };
   /** 버튼이 꺼진 이유 — 셸 없음 · 종료됨 · 서버가 돌고 있음 (P63) */
   const blocked = () =>
     !open()
@@ -151,6 +175,12 @@ function ServerTerm(props: { wsId: string }) {
             {t("셸 다시 열기")}
           </button>
         </Show>
+        <Show when={canSave() && naming() === null}>
+          <button class="btn" title={t("마지막 서버 명령을 commands.json에 버튼으로 남깁니다")} onClick={() => setNaming("")}>
+            <Icon name="plus" size={12} />
+            {t("저장 명령에 추가")}
+          </button>
+        </Show>
         {/* 포트는 탭을 열 때와 서버 셸에 명령을 친 몇 초 뒤에 다시 본다 (B145) — 그 밖에는 여기서 실측한다 */}
         <button
           class="btn"
@@ -167,6 +197,29 @@ function ServerTerm(props: { wsId: string }) {
           {fileManagerName()}
         </button>
       </div>
+      <Show when={canSave() && naming() !== null}>
+        <div class="srvp-saved">
+          <input
+            class="panel-search mono"
+            placeholder={t("버튼 이름 (40자까지)")}
+            aria-label={t("버튼 이름 (40자까지)")}
+            maxLength={40}
+            value={naming() ?? ""}
+            ref={(el) => queueMicrotask(() => el.focus())}
+            onInput={(e) => setNaming(e.currentTarget.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (naming() ?? "").trim()) void addSaved();
+              if (e.key === "Escape") setNaming(null);
+            }}
+          />
+          <button class="btn primary" disabled={!(naming() ?? "").trim()} onClick={() => void addSaved()}>
+            {t("추가")}
+          </button>
+          <button class="btn ghost" onClick={() => setNaming(null)}>
+            {t("취소")}
+          </button>
+        </div>
+      </Show>
       <Show when={saved() === null}>
         <div class="srvp-saved muted">
           <span>{t("자주 쓰는 명령을 저장해 두면 버튼이 됩니다")}</span>

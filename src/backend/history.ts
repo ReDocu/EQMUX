@@ -65,3 +65,7 @@ export const resumeCommand = (uuid: string, cwd: string, shell?: string): string
 export function subagentCalls<T extends { role: string; text: string; summary: string | null }>(turns: T[]): T[] {
   return turns.filter((t) => t.role === "tool" && (t.text === "⚙ Agent" || t.text === "⚙ Task"));
 }
+
+/** 그 호출의 tool_result가 기록에 있는가 (U159) — transcript.rs attach_result가 tool_use_id로 짝지어
+ *  detail에 '\n출력:'을 붙인다. 입력은 pretty JSON이라 진짜 줄바꿈 뒤 '출력:'이 생기지 않는다 */
+export const subagentDone = (t: { detail: string | null }): boolean => !!t.detail?.includes("\n출력:");

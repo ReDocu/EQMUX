@@ -36,7 +36,7 @@ export const dict: Record<string, string> = {
   외부로: "External",
 
   // ── WorkspaceConnection 0.5 시안 (EYy9T) ──
-  "워크스페이스 열기 · 관리": "Open · manage workspaces",
+  "워크스페이스 연결 · 관리": "Connect · manage workspaces",
   "탭 줄의 + 로 연다 · 열려 있지 않은 워크스페이스가 위":
     "Opened from + in the tab bar · workspaces not open are listed first",
   "폴더 찾기…": "Browse folder…",
@@ -226,6 +226,12 @@ export const dict: Record<string, string> = {
   "다음 → 워크스페이스 (Claude Code 2개 기동)": "Next → Workspace (launches 2 Claude Code sessions)",
   "페르소나가 없어 빠른 시작을 할 수 없습니다 — 역할 팀으로 시작하세요": "No personas, so quick start can't run. Start with Role team",
   "2세션으로 시작 → 워크스페이스": "Start with 2 sessions → Workspace",
+  // 0.6 QA P64 — claude가 없고 codex만 있을 때
+  "Codex 2세션으로 시작 → 워크스페이스": "Start with 2 Codex sessions → Workspace",
+  "다음 → 워크스페이스 (Codex 2개 기동)": "Next → Workspace (launches 2 Codex sessions)",
+  "Codex는 설치돼 있어 같은 편성을 Codex 2세션으로 시작할 수 있습니다": "Codex is installed, so you can start the same team as 2 Codex sessions",
+  "리드와 개발 2세션으로 시작합니다. 워크스페이스가 열리면 Codex가 바로 뜹니다. 슬롯 {n}개 중 2개를 씁니다.":
+    "Starts with two sessions, a lead and a developer. Codex launches as soon as the workspace opens. Uses 2 of {n} slots.",
   "빠른 시작이 지금 팀을 바꿉니다": "Quick start will replace the current team",
   "시작하면 아래가 바로 일어납니다. 종료된 세션은 되돌릴 수 없습니다.": "Starting does the following right away. Stopped sessions can't be brought back.",
   "바꾸고 시작": "Replace and start",
@@ -234,6 +240,7 @@ export const dict: Record<string, string> = {
   "리드와 개발 2세션으로 시작합니다. 워크스페이스가 열리면 Claude Code가 바로 뜹니다. 슬롯 {n}개 중 2개를 씁니다.":
     "Starts with two sessions, a lead and a developer. Claude Code launches as soon as the workspace opens. Uses 2 of {n} slots.",
   "← 실행 방식": "← Launch mode",
+  "← 워크스페이스 연결": "← Workspace connection", // 0.6 QA U129 — 단계 01 · 연결 화면의 이름
   "셸 열기 → 워크스페이스": "Open shell → Workspace",
   "역할 팀으로 바꾸기 →": "Switch to Role team →",
   "← 팀 캐스팅": "← Team casting",
@@ -307,6 +314,20 @@ export const dict: Record<string, string> = {
   "clone 중… {s}초 · 창을 닫아도 계속됩니다": "Cloning… {s}s · keeps going if you close this window",
   "오래 걸리면 Git 로그인 창이 다른 창 뒤에 떠 있을 수 있습니다.":
     "If this takes long, a Git sign-in window may be hidden behind other windows.",
+  // ── 0.6 QA P71 · P72 (WorkspaceConnection.tsx · backend/workspaces.ts) ──
+  "{name}을(를) 등록 해제했습니다": "Unregistered {name}",
+  "되돌리기": "Undo",
+  "되돌리기 실패": "Undo failed",
+  "clone 취소": "Cancel clone",
+  "clone을 취소했습니다": "Clone cancelled",
+  "clone이 60분 안에 끝나지 않아 멈췄습니다": "Clone stopped — it didn't finish within 60 minutes",
+  "받다 만 폴더를 지웠습니다": "removed the partly cloned folder",
+  "받다 만 폴더가 남았습니다 — {path}": "the partly cloned folder is still there — {path}",
+  "원격 객체 세는 중": "Counting remote objects",
+  "원격 압축 중": "Remote compressing",
+  "객체 받는 중": "Receiving objects",
+  "델타 정리 중": "Resolving deltas",
+  "파일 풀어놓는 중": "Checking out files",
   "기동 중…": "Launching…",
   "알겠습니다": "Got it",
 };

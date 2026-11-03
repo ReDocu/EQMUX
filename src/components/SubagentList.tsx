@@ -4,7 +4,7 @@
 import { createEffect, createSignal, For, on, onCleanup, Show } from "solid-js";
 import { listen } from "@tauri-apps/api/event";
 import type { AgentStateEvt } from "../backend/agent";
-import { subagentCalls } from "../backend/history";
+import { subagentCalls, subagentDone } from "../backend/history";
 import { isTauri } from "../backend/pty";
 import { readTranscript } from "../backend/transcript";
 import type { TranscriptTurnReal } from "../backend/transcript";
@@ -53,7 +53,15 @@ export function SubagentList(props: { session: Session }) {
           <For each={calls()}>
             {(c) => (
               <div class="mono muted" style={{ "font-size": "11px", "line-height": 1.7 }} title={c.summary ?? undefined}>
-                {c.time} {c.summary ?? t("설명 없음")}
+                {c.time}{" "}
+                {/* 결과가 기록에 있으면 끝남, 없으면 진행 중 (U159) — 세션을 끊었으면 중단된 것일 수 있다 */}
+                <span
+                  classList={{ "st-waiting": !subagentDone(c) }}
+                  title={subagentDone(c) ? undefined : t("결과가 아직 기록되지 않았습니다 — 진행 중이거나 중단됐습니다")}
+                >
+                  {t(subagentDone(c) ? "끝남" : "진행 중")}
+                </span>{" "}
+                · {c.summary ?? t("설명 없음")}
               </div>
             )}
           </For>

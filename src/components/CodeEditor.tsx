@@ -2,7 +2,7 @@
 // 계약: 저장 배관(1MB 상한 · mtime 충돌 · .git 불가침)은 호출부(fsx)가 소유하고,
 // 여기는 텍스트 표면만 맡는다 — 구문 강조·줄 번호·검색·되돌리기.
 // 테마는 전부 CSS 토큰(var(--eq-*))으로 그려 라이트/다크 전환(M29)을 그대로 따라간다.
-import { onCleanup, onMount } from "solid-js";
+import { createEffect, on, onCleanup, onMount } from "solid-js";
 import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { indentWithTab } from "@codemirror/commands";
@@ -150,6 +150,8 @@ export function CodeEditor(props: {
   let host!: HTMLDivElement;
   let view: EditorView | undefined;
   const langSlot = new Compartment(); // 지연 로드 언어를 나중에 끼워 넣는 자리
+  const phraseSlot = new Compartment(); // 검색 패널 문구 — 설정 언어를 바꾸면 갈아 끼운다 (U164)
+  const phrases = (lang: string) => (lang === "en" ? [] : EditorState.phrases.of(PHRASES_KO));
 
   onMount(() => {
     const staticLang = langOf(props.fileName);
@@ -178,7 +180,7 @@ export function CodeEditor(props: {
           eqTheme,
           syntaxHighlighting(eqHighlight),
           isProse(props.fileName) ? EditorView.lineWrapping : [], // 임무·역할 문서는 산문이다 — 가로 스크롤보다 줄바꿈
-          settings().language === "en" ? [] : EditorState.phrases.of(PHRASES_KO),
+          phraseSlot.of(phrases(settings().language)),
           EditorView.updateListener.of((u) => {
             if (u.docChanged) props.onChange(u.state.doc.toString());
           }),
@@ -198,6 +200,14 @@ export function CodeEditor(props: {
         .catch(() => undefined); // 파서 로드 실패 = 평문 유지 — 편집을 막을 이유가 없다
     }
   });
+  // 편집기를 연 채 언어를 바꿔도 따라간다 (U164) — 이미 열려 있던 검색 패널은 닫았다 다시 열면 바뀐다
+  createEffect(
+    on(
+      () => settings().language,
+      (lang) => view?.dispatch({ effects: phraseSlot.reconfigure(phrases(lang)) }),
+      { defer: true },
+    ),
+  );
   onCleanup(() => {
     view?.destroy();
     view = undefined; // 언어 로드 완료 콜백이 파괴된 뷰에 dispatch하지 않게

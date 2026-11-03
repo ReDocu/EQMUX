@@ -23,7 +23,7 @@ import {
 } from "../backend/env";
 import type { EnvFile, EnvVar } from "../backend/env";
 import { clipWriteText } from "../backend/pty";
-import { t, tf } from "../i18n";
+import { t, tErr, tf } from "../i18n";
 import { Icon } from "./icons";
 import { Chip, ConfirmDialog, notify } from "./ui";
 
@@ -332,7 +332,7 @@ export function EnvPanelTab(props: { files: EnvFile[]; loading?: boolean; wsPath
                 </div>
               </Show>
 
-              <Show when={f.vars.length > 0 || f.example} fallback={<div class="muted">{f.error ?? t("이 파일에 변수가 없습니다")}</div>}>
+              <Show when={f.vars.length > 0 || f.example} fallback={<div class="muted">{f.error ? tErr(f.error) : t("이 파일에 변수가 없습니다")}</div>}>
                 <For each={f.vars.filter((v) => hit(v.key))}>
                   {(v) => (
                     <Show

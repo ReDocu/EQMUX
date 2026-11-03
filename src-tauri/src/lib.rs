@@ -2336,22 +2336,22 @@ async fn git_overview(ws_path: String) -> Result<workspace::GitOverview, String>
         .map_err(|e| e.to_string())?
 }
 
-/// 원격 clone 후 등록용 (FR-E-02) — clone된 로컬 경로를 돌려준다
+/// 원격 clone 후 등록용 (FR-E-02) — clone된 로컬 경로를 돌려준다. 진행 줄은 "clone-progress" 이벤트로 (P72)
 #[tauri::command]
-async fn ws_clone(url: String, parent: String) -> Result<String, String> {
+async fn ws_clone(app: AppHandle, url: String, parent: String) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let name = url
-            .trim_end_matches('/')
-            .trim_end_matches(".git")
-            .rsplit('/')
-            .next()
-            .unwrap_or("repo")
-            .to_string();
-        workspace::git_long(&["clone", &url], &parent)?; // 분 단위가 정상 — 기본 상한을 씌우면 잘린다
-        Ok(Path::new(&parent).join(name).to_string_lossy().into_owned())
+        workspace::clone_repo(&url, &parent, |line| {
+            let _ = app.emit("clone-progress", line);
+        })
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// 진행 중 clone 취소 (P72) — ws_clone이 자식 트리를 끝내고 받다 만 폴더를 정리한다
+#[tauri::command]
+fn ws_clone_cancel() {
+    workspace::CLONE_CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
 /// 등록 해제 (FR-E-09) — 레지스트리에서만 지운다
@@ -3006,6 +3006,8 @@ pub fn run() {
             let restored = workspace::restore_backup(&root);
             if restored > 0 {
                 diag::write(&format!("REGISTRY-RESTORED {restored} from backup"));
+                // 알림 센터에도 남긴다 (P65) — 프런트가 부트스트랩 때 가져간다
+                recovery::push_notice(format!("사라진 워크스페이스 등록 {restored}개를 백업에서 되살렸습니다"));
                 use tauri_plugin_notification::NotificationExt;
                 let _ = app
                     .notification()
@@ -3060,10 +3062,14 @@ pub fn run() {
             store::on_recover(move |ws, moved| {
                 use tauri_plugin_notification::NotificationExt;
                 let file = moved.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
+                let ko = format!("{ws}의 세션 기록 DB가 손상되어 새로 만들었습니다. 옛 파일은 {file}로 남겼습니다.");
+                // OS 토스트만으로는 놓친다 — 알림 센터에도 남긴다 (P65). 이미 떠 있는 프런트는 신호로 가져간다
+                recovery::push_notice(ko.clone());
+                let _ = notify_app.emit("app-notice", ());
                 let body = if setting_str(&notify_app, "language").as_deref() == Some("en") {
                     format!("The session history DB for {ws} was damaged and has been recreated. The old file was kept as {file}.")
                 } else {
-                    format!("{ws}의 세션 기록 DB가 손상되어 새로 만들었습니다. 옛 파일은 {file}로 남겼습니다.")
+                    ko
                 };
                 let _ = notify_app.notification().builder().title("EQMUX").body(body).show();
             });
@@ -3143,6 +3149,8 @@ pub fn run() {
             missions::mission_set_depends, // 선행 임무 화면 지정 (0.6 QA P60)
             library::library_portrait, // 초상 이미지 (§15-4) — 0.6 W4
             library::library_reveal_personas, // 초상 폴더 열기 (0.6 QA P66) — eqmux-88
+            library::library_portrait_pick, // [초상 고르기…] (0.6 QA P66)
+            library::library_portrait_clear, // 초상 [지우기] (0.6 QA P66)
             missions::mission_touched_files, // 임무 검토 필터 (§13-3) — 0.6 W4
             scrollback_tail,
             scrollback_search,
@@ -3166,6 +3174,7 @@ pub fn run() {
             ws_git_init,
             git_overview,
             ws_clone,
+            ws_clone_cancel,
             ws_unregister,
             ws_repath,
             ws_touch,
@@ -3197,6 +3206,7 @@ pub fn run() {
             fsx::fs_rename,
             fsx::fs_delete,
             fsx::reveal_path,
+            fsx::path_is_dir,
             diff_changed_files,
             diff_file,
             commit_changed_files,
@@ -3218,12 +3228,14 @@ pub fn run() {
             shutdown_flush,
             app_exit,
             tray::window_close_to_tray,
+            tray::window_would_hide,
             extensions::engine_plugin, // 확장 그룹 (0.6 §12)
             extensions::mcp_scan,
             extensions::skills_list,
             extensions::skill_create,
             extensions::skill_copy,
             recovery::crash_recovery,
+            recovery::app_notices_take,
             agent_snapshot,
             layout_load,
             layout_save,

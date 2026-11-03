@@ -24,10 +24,11 @@ export function defaultTerminalPlan(
 export type WizardPath = "quick" | "terminal" | "team";
 
 /** 단계 표시 (P49) — 마법사 모든 화면의 머리에 같은 줄을 둔다. 끝은 늘 도착지(워크스페이스)라
- *  '시작'이 언제 일어나는지 보인다 (P50) */
+ *  '시작'이 언제 일어나는지 보인다 (P50). 01은 연결 화면의 이름 '워크스페이스 연결' — '워크스페이스 열기'는
+ *  워크스페이스 탭으로 들어가는 말과 겹쳤다 (0.6 QA U129) */
 export function wizardSteps(path: WizardPath): string[] {
   const mid = path === "terminal" ? ["기본 터미널 구성"] : path === "team" ? ["팀 캐스팅", "팀 편성"] : [];
-  return ["워크스페이스 열기", "실행 방식", ...mid, "워크스페이스"];
+  return ["워크스페이스 연결", "실행 방식", ...mid, "워크스페이스"];
 }
 
 /** 빠른 시작 편성 (§10) — 리드 + 개발 2세션. 기본 직무가 맞는 페르소나를 먼저, 없으면 라이브러리 순서.
@@ -44,6 +45,13 @@ export function quickStartSlots(
     if (p) out.push({ personaId: p.id, jobId });
   }
   return out;
+}
+
+/** 빠른 시작 엔진 (0.6 QA P64) — claude가 있으면 claude, 없고 codex만 있으면 같은 편성을 Codex로 띄우자고 제안한다.
+ *  둘 다 없으면 undefined — 시작을 막고 설치 명령을 보인다 */
+export function quickEngine(clis: readonly { cmd: string; installed: boolean }[]): "claude" | "codex" | undefined {
+  const has = (cmd: string) => clis.some((a) => a.cmd === cmd && a.installed);
+  return has("claude") ? "claude" : has("codex") ? "codex" : undefined;
 }
 
 /** 기본 터미널 세션 id인가 (0.6 QA B227) — 페르소나 목록이 아니라 id 모양(`shell{N}@ws`)으로 가린다.

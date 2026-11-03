@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { defaultTerminalPlan, isDefaultTerminalId, openView, quickStartSlots, wizardSteps } from "./launchRules";
+import { defaultTerminalPlan, isDefaultTerminalId, openView, quickEngine, quickStartSlots, wizardSteps } from "./launchRules";
 
 describe("워크스페이스 열기 (U60 · B107)", () => {
   it("세션이 없으면 마법사, 있으면 그 탭", () => {
@@ -40,7 +40,7 @@ describe("빠른 시작 · 단계 표시 (§10 · P49)", () => {
     expect(quickStartSlots([{ id: "a" }, { id: "b" }], ["dev"])).toEqual([{ personaId: "a", jobId: "dev" }]);
   });
   it("모든 갈래의 끝은 워크스페이스다", () => {
-    expect(wizardSteps("quick")).toEqual(["워크스페이스 열기", "실행 방식", "워크스페이스"]);
+    expect(wizardSteps("quick")).toEqual(["워크스페이스 연결", "실행 방식", "워크스페이스"]);
     expect(wizardSteps("team").at(-1)).toBe("워크스페이스");
     expect(wizardSteps("terminal")).toHaveLength(4);
   });
@@ -50,4 +50,14 @@ it("기본 터미널은 id 모양으로 가린다 — 라이브러리에 없는 
   expect(isDefaultTerminalId("shell1@eqmux-1e3b93")).toBe(true);
   expect(isDefaultTerminalId("ghost@zzz-unknown")).toBe(false);
   expect(isDefaultTerminalId("shellby@academy")).toBe(false);
+});
+
+describe("빠른 시작 엔진 (0.6 QA P64)", () => {
+  const cli = (cmd: string, installed: boolean) => ({ cmd, installed });
+  it("claude가 있으면 claude, 없고 codex만 있으면 codex, 둘 다 없으면 막는다", () => {
+    expect(quickEngine([cli("claude", true), cli("codex", true)])).toBe("claude");
+    expect(quickEngine([cli("claude", false), cli("codex", true)])).toBe("codex");
+    expect(quickEngine([cli("claude", false), cli("codex", false)])).toBeUndefined();
+    expect(quickEngine([])).toBeUndefined();
+  });
 });

@@ -27,10 +27,10 @@ import { backend } from "../backend/mock";
 import { fsDelete, fsRead, fsWrite } from "../backend/panels";
 import { serverExited, serverTermId } from "../backend/ports";
 import { isTauri, listAlivePty, onPtyOutput, revealPath, writePty } from "../backend/pty";
-import { scopeWorkspace, setPanelTab } from "../state";
+import { defaultShell, scopeWorkspace, setPanelTab } from "../state";
 import { agentAttached, runCliOf, sessionName } from "../types";
 import type { Session } from "../types";
-import { t, tf } from "../i18n";
+import { t, tErr, tf } from "../i18n";
 import { markdownHtml } from "./markdownHtml";
 import { mdLinkClick, resolveRel } from "./MdViewTab";
 import { openServerTerm } from "./ServerPanelTab";
@@ -371,7 +371,7 @@ export function SkillsPanelTab() {
         await refetch();
         setSel(row);
       } catch (e) {
-        notify(t(String(e)));
+        notify(tErr(e));
       }
     };
     if (!all) return void run();
@@ -485,7 +485,7 @@ function SkillDetail(props: {
         await refetch();
         void props.onChanged({ ...r });
       } catch (e) {
-        notify(t(String(e))); // mtime 충돌이면 "파일이 밖에서 바뀌었습니다" — 파일이 이긴다
+        notify(tErr(e)); // mtime 충돌이면 "파일이 밖에서 바뀌었습니다" — 파일이 이긴다
       }
     };
     if (r.scope !== "user") return void run();
@@ -516,7 +516,7 @@ function SkillDetail(props: {
           await fsDelete(r.root, r.dir);
           void props.onChanged(undefined);
         } catch (e) {
-          notify(t(String(e)));
+          notify(tErr(e));
         }
       },
     });
@@ -526,7 +526,7 @@ function SkillDetail(props: {
       try {
         void props.onChanged(await skillCopy(r.root, r.dir, to, props.wsPath));
       } catch (e) {
-        notify(t(String(e)));
+        notify(tErr(e));
       }
     };
     if (to === "project") return void run();
@@ -682,8 +682,8 @@ export function McpPanelTab() {
         <button
           class="btn ghost"
           disabled={!ws()}
-          title={t("서버 탭 터미널 입력줄에 채웁니다 — <이름> · <명령>을 고친 뒤 Enter를 누르세요")}
-          onClick={() => void fill(mcpCommand.add("local"))}
+          title={t("서버 탭 터미널 입력줄에 주석 줄로 채웁니다 — 맨 앞 #(cmd는 rem)을 지우고 <이름> · <명령>을 고친 뒤 Enter를 누르세요")}
+          onClick={() => void fill(mcpCommand.add("local", defaultShell().label))}
         >
           {t("추가 명령 채우기")}
         </button>

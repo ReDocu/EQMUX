@@ -96,7 +96,10 @@ const SECTIONS: Section[] = [
         // 기본 셸은 settings.json이 아니라 layout.json에 남는 값이다 (관제 화면 셸 선택과 같은 신호)
         k: "기본 셸",
         d: "새로 여는 터미널이 쓰는 셸 · 이미 열린 터미널은 그대로",
-        labels: SHELLS.map((s) => t(s.name)),
+        // 첫 셸이 플랫폼 기본이다 — 다른 줄처럼 '(기본)'을 붙인다 (0.6 QA U149). getter라 렌더 때 번역된다
+        get labels() {
+          return SHELLS.map((s, i) => (i === 0 ? tf("{name} (기본)", { name: t(s.name) }) : t(s.name)));
+        },
         current: () => pick(SHELLS, defaultShell()),
         apply: (i) => setDefaultShell(SHELLS[i]),
       },

@@ -26,6 +26,7 @@ import {
   killPty,
   onPtyExit,
   onPtyOutput,
+  pathIsDir,
   resizePty,
   revealPath,
   noteUserInput,
@@ -37,9 +38,9 @@ import {
 import { spawnAgent } from "../backend/agent";
 import { backend } from "../backend/mock";
 import { settings } from "../backend/settings";
-import { t, tf } from "../i18n";
+import { t, tErr, tf } from "../i18n";
 import { notePtyShell, selectedSession, shellCmdOf } from "../state";
-import { ContextMenu } from "./ui";
+import { ContextMenu, notify } from "./ui";
 import type { MenuGroup } from "./ui";
 import type { AgentCliId, Permissions, Session } from "../types";
 import { cliOf, effectivePermissions, sessionName } from "../types";
@@ -310,6 +311,9 @@ export async function launchAgentInSession(
   cli: AgentCliId = "claude",
 ): Promise<void> {
   if (!isTauri()) return;
+  // 작업 폴더가 없으면 셸을 끝내기 전에 멈춘다 — 셸까지 잃고 'exit ?'만 남던 길 (B207)
+  if (!(await pathIsDir(cwd)))
+    throw tf("작업 폴더가 없습니다: {cwd} — 폴더를 되돌리거나 세션을 다시 만드세요", { cwd });
   const e = REGISTRY.get(id);
   await killAndWait(id); // 셸이 살아 있으면 Rust가 재부착만 한다 — 반드시 먼저 끝낸다
   const size = sessionTermSize(id);
@@ -349,9 +353,9 @@ export function launchRoleAgents(list: readonly Session[]): number {
     launchQueued.add(s.id);
     whenSessionReady(s.id, () =>
       void launchAgentInSession(s.id, s.workspaceId, s.cwd, a.name, a.permissions, cliOf(s))
-        .catch(() => {
-          /* 실패는 페인 출력과 이벤트 피드가 보여준다 (FR-D-08) */
-        })
+        // 실패 이유를 버리지 않는다 (B207) — 빠른 시작 · [모두 기동]은 관제 밖에서 불려 sessionFail 자리가 없다.
+        // 작업 폴더가 없으면 셸은 살아 있고(launchAgentInSession이 끄기 전에 멈춘다) 이유만 토스트로
+        .catch((err) => notify(tf("에이전트를 띄우지 못했습니다 — {err}", { err: tErr(err) })))
         .finally(() => launchQueued.delete(s.id)),
     );
   }
@@ -996,7 +1000,7 @@ export function TerminalPane(props: {
           e.unsubs?.forEach((u) => u());
           e.unsubs = undefined;
           try {
-            e.term.writeln(`\r\n\x1b[31m${tf("세션 시작 실패 — {err}", { err: String(err) })}\x1b[0m`);
+            e.term.writeln(`\r\n\x1b[31m${tf("세션 시작 실패 — {err}", { err: tErr(err) })}\x1b[0m`);
           } catch {
             /* 터미널이 이미 폐기됨 */
           }

@@ -5,7 +5,7 @@
 // UI 리파인 §git: 카드 스택 → 한 줄 툴바 · 밀도 높은 커밋 행(뱃지 복수 + 우측 메타) ·
 // 커밋 행 클릭 = 부모 커밋 ↔ 이 커밋 diff.
 import { batch, createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
-import { commandLine, commitWebUrl, failText, gitOverview, gitRefs, gitRun, remoteWebUrl, withHeadNotice } from "../backend/git";
+import { commandLine, commitWebUrl, failText, gitOverview, gitRefs, gitRun, remoteWebUrl, setRunLogOpen, withHeadNotice } from "../backend/git";
 import type { GitOverview } from "../backend/git";
 import { GIT_STATE, backend } from "../backend/mock";
 import { clipWriteText, isTauri, revealPath } from "../backend/pty";
@@ -166,23 +166,25 @@ export function GitPanelTab() {
   // ── pull · push 버튼 (§17 G7′) — 누르면 실행. pull은 §4-1 작업 중 경고를 거친다 ──
   const [actNote, setActNote] = createSignal<string | undefined>(undefined);
   const [authFail, setAuthFail] = createSignal(false);
+  const [actFail, setActFail] = createSignal(false); // 인증 말고 실패 — [실행 로그 열기]를 단다 (B177)
   // 실행 중인 워크스페이스 id들 (B240) — A에서 시작한 push가 B의 버튼을 잠그지 않는다
   const [runningIn, setRunningIn] = createSignal<string[]>([]);
   const running = () => !!ws() && runningIn().includes(ws()!.id);
   // B240 — 워크스페이스를 바꾸면 이전 저장소의 개요 · 실행 결과 줄을 바로 지운다 (새 응답까지 A의 커밋이 B 이름 아래 남았다)
-  createEffect(on(createMemo(() => ws()?.id), () => batch(() => (setReal(undefined), setActNote(undefined), setAuthFail(false))), { defer: true }));
+  createEffect(on(createMemo(() => ws()?.id), () => batch(() => (setReal(undefined), setActNote(undefined), setAuthFail(false), setActFail(false))), { defer: true }));
   const [guardAsk, setGuardAsk] = createSignal<{ level: "busy" | "waiting"; names: string[] } | undefined>();
   const runCmd = async (args: string[]) => {
     const w = ws();
     if (!w || runningIn().includes(w.id)) return;
     setRunningIn([...runningIn(), w.id]);
-    batch(() => (setActNote(tf("실행 중 — {cmd}", { cmd: commandLine(args) })), setAuthFail(false)));
+    batch(() => (setActNote(tf("실행 중 — {cmd}", { cmd: commandLine(args) })), setAuthFail(false), setActFail(false)));
     // 바뀐 뒤 알림 (§17-3 · B175) — git 화면과 같은 설정 · 같은 HEAD 해시 비교. push는 HEAD를 안 바꿔 알림이 안 간다
     const r = await withHeadNotice(w.id, w.path, () => gitRun(w.id, w.path, args));
     setRunningIn(runningIn().filter((x) => x !== w.id));
     if (ws()?.id !== w.id) return; // 그새 다른 워크스페이스로 갔다 — 결과는 실행 로그에만 (B240)
     batch(() => {
       setAuthFail(r.auth);
+      setActFail(!r.ok && !r.auth);
       setActNote(
         r.ok
           ? tf("{cmd} 완료", { cmd: r.command })
@@ -383,6 +385,16 @@ export function GitPanelTab() {
             {" "}
             <button class="btn ghost" style={{ "font-size": "10px", padding: "0 4px" }} onClick={() => void clipWriteText("git fetch")}>
               {t("`git fetch` 복사")}
+            </button>
+          </Show>
+          <Show when={actFail()}>
+            {" "}
+            <button
+              class="btn ghost"
+              style={{ "font-size": "10px", padding: "0 4px" }}
+              onClick={() => (setRunLogOpen(true), openGitScreen())}
+            >
+              {t("실행 로그 열기")}
             </button>
           </Show>
         </div>

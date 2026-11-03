@@ -8,7 +8,7 @@ import type { FeedEvent } from "../backend/events";
 import { backend, MAX_OPEN_WORKSPACES, onEventLog } from "../backend/mock";
 import { isTauri, killPty, revealPath } from "../backend/pty";
 import { maxSlots, settings } from "../backend/settings";
-import { t, tf } from "../i18n";
+import { t, tErr, tf } from "../i18n";
 import { focusSession, jumpToSession, openPanel, setLastWorkspaceId, setOverlay, setView, tick, view } from "../state";
 import { Chip, ContextMenu, Identity, notify, PaneNoText, StopConfirm } from "../components/ui";
 import type { ChipTone } from "../components/ui";
@@ -109,7 +109,7 @@ export function Dashboard() {
       try {
         await resumeAgent(s.id, s.workspaceId, s.cwd, sessionName(s, personaOf(s)), p, size.cols, size.rows, cliOf(s));
       } catch (err) {
-        return notify(`${t("재개 실패")} — ${String(err)}`);
+        return notify(`${t("재개 실패")} — ${tErr(err)}`);
       }
     }
     backend.resumeSession(s.id);
@@ -229,8 +229,8 @@ export function Dashboard() {
           </div>
         </div>
         {/* 워크스페이스 관리를 관제에서 바로 연다 — 앱 바 + 와 같은 팝업 */}
-        {/* 화면 이름 '워크스페이스 열기 · 관리'와 같은 말을 쓴다 (0.6 QA P83) */}
-        <button class="btn" title={t("워크스페이스 열기 · 관리")} onClick={() => setOverlay("connect")}>
+        {/* 화면 이름 '워크스페이스 연결 · 관리'와 같은 말을 쓴다 (0.6 QA P83) */}
+        <button class="btn" title={t("워크스페이스 연결 · 관리")} onClick={() => setOverlay("connect")}>
           {t("워크스페이스 열기")}
         </button>
       </div>
@@ -639,7 +639,7 @@ export function Dashboard() {
                           const s = m().s;
                           const size = sessionTermSize(s.id);
                           void startFresh(s, size.cols, size.rows).then((err) =>
-                            err ? notify(t(err)) : jumpToSession(s.workspaceId, s.id),
+                            err ? notify(tErr(err)) : jumpToSession(s.workspaceId, s.id),
                           );
                         },
                       },

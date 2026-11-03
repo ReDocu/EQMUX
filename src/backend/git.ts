@@ -3,7 +3,7 @@
 // 허용 목록(gitx.rs check_args)으로 한 번 더 거른다. 에이전트 · 메시지 · 자동 규칙은 부르지 않는다.
 import { invoke } from "@tauri-apps/api/core";
 import { createSignal } from "solid-js";
-import { t, tf } from "../i18n";
+import { t, tErr, tf } from "../i18n";
 import { sendConversation } from "./conversation";
 import { MOCK_WORKTREES } from "./mock";
 import { isTauri } from "./pty";
@@ -307,6 +307,8 @@ export interface RunLogEntry extends RunResult {
 /** 실행 로그 (§17-4) — 이번 실행 동안 앱이 돌린 git 쓰기. 로그 패널(event 테이블)에도 한 줄씩 남긴다 */
 const [runLog, setRunLog] = createSignal<RunLogEntry[]>([]);
 export { runLog };
+/** 실행 로그 펼침 — 모듈에 둔다. 실패 알림 · 사이드 패널의 [실행 로그 열기]가 git 화면 밖에서 켠다 (B177) */
+export const [runLogOpen, setRunLogOpen] = createSignal(false);
 
 /** 실패 원인 줄 (B177) — git은 첫 줄에 진행 머리말(To · From · On branch)을 찍는다. 원인 줄을 먼저 찾는다 */
 function causeLine(output: string): string {
@@ -316,7 +318,7 @@ function causeLine(output: string): string {
 
 /** 실패 알림 문구 (B177 · U125) — 흔한 경우는 할 일을 앞에 붙이고, 원인 줄은 사전을 한 번 거친다(없으면 원문) */
 export function failText(output: string): string {
-  const cause = t(causeLine(output)) || t("실패");
+  const cause = tErr(causeLine(output)) || t("실패");
   const hint = /\[rejected\].*\((fetch first|non-fast-forward)\)/.test(output)
     ? "원격에 새 커밋이 있습니다 — Pull 하세요"
     : /Not possible to fast-forward/.test(output)

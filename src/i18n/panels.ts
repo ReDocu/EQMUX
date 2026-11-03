@@ -230,4 +230,13 @@ export const dict: Record<string, string> = {
   "다른 워크스페이스": "Other workspaces",
   "{n}개 리슨": "{n} listening",
   "commands 배열이 없습니다": "No commands array",
+  // 서버 탭 [저장 명령에 추가] (P63)
+  "저장 명령에 추가": "Add to saved commands",
+  "마지막 서버 명령을 commands.json에 버튼으로 남깁니다": "Keeps the last server command as a button in commands.json",
+  "버튼 이름 (40자까지)": "Button name (up to 40 characters)",
+  "{f}에 더했습니다": "Added to {f}",
+  "{f}에 더하지 못했습니다 — {err}": "Couldn't add to {f} — {err}",
+  "이름은 1~40자, 명령은 한 줄이어야 합니다": "The name must be 1–40 characters and the command a single line",
+  "JSON으로 읽을 수 없어 고치지 않았습니다 — 파일 탭에서 먼저 고치세요": "Left unchanged because it isn't valid JSON — fix it in the Files tab first",
+  "이미 저장된 명령입니다": "This command is already saved",
 };

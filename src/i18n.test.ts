@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { josa, tf } from "./i18n";
+import { josa, tErr, tf } from "./i18n";
 import { dict as common } from "./i18n/common";
 import { dict as settingsDict } from "./i18n/settings";
 import { dict as control } from "./i18n/control";
@@ -55,5 +55,30 @@ describe("josa (U176)", () => {
     expect(tf("에이전트 없음 — PATH에 {cmd}이(가) 없어 기동할 수 없습니다", { cmd: "codex" })).toBe("에이전트 없음 — PATH에 codex가 없어 기동할 수 없습니다");
     expect(tf("{u}와(과) 갈라짐", { u: "origin/main" })).toBe("origin/main과 갈라짐");
     expect(tf("오늘 비용이 예산 ${budget}을(를) 넘었습니다", { budget: 10 })).toBe("오늘 비용이 예산 $10을 넘었습니다");
+  });
+});
+
+// format!으로 만든 Rust 오류도 사전의 {자리표시} 틀로 번역한다 (U125)
+describe("tErr (U125)", () => {
+  const d = {
+    "에이전트를 띄우지 못했습니다 — {err}": "Couldn't start the agent — {err}",
+    "작업 폴더가 없습니다: {cwd} — 폴더를 되돌리거나 세션을 다시 만드세요": "Working folder not found: {cwd} — restore it or recreate the session",
+    "git 저장소가 아닙니다": "Not a git repository",
+    "{name} · {n}": "{name} · {n}", // 한글 낱말이 없는 틀은 쓰지 않는다
+  };
+  test("통째 키 · 틀 · 끼인 값까지 푼다", () => {
+    expect(tErr("git 저장소가 아닙니다", d)).toBe("Not a git repository");
+    expect(tErr("에이전트를 띄우지 못했습니다 — 작업 폴더가 없습니다: D:\w (x) — 폴더를 되돌리거나 세션을 다시 만드세요", d)).toBe(
+      "Couldn't start the agent — Working folder not found: D:\w (x) — restore it or recreate the session",
+    );
+  });
+  test("못 맞추면 원문 · 한국어 모드면 그대로", () => {
+    expect(tErr("모르는 오류 · 3", d)).toBe("모르는 오류 · 3");
+    expect(tErr(new Error("boom"), d)).toBe("Error: boom");
+    expect(tErr("git 저장소가 아닙니다", undefined)).toBe("git 저장소가 아닙니다");
+  });
+  test("실제 사전의 Rust 오류 틀이 맞는다", () => {
+    expect(tErr("허용하지 않는 git 명령: rm", { ...git })).toBe("git command not allowed: rm");
+    expect(tErr("실행 실패 — \"claude\": not found", { ...control })).toBe('Failed to start — "claude": not found');
   });
 });

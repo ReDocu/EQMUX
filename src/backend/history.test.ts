@@ -1,6 +1,6 @@
 // 과거 세션 검색 묶기 (0.6 §4) — 최근 대화 먼저, 대화 안은 시간 순, 슬롯 매핑은 대화 단위로 남는다
 import { describe, expect, test } from "vitest";
-import { groupByConversation, resumeCommand, subagentCalls } from "./history";
+import { groupByConversation, resumeCommand, subagentCalls, subagentDone } from "./history";
 import type { HistoryHit } from "./history";
 
 const hit = (uuid: string, ts: number, extra: Partial<HistoryHit> = {}): HistoryHit => ({
@@ -39,5 +39,12 @@ describe("subagentCalls", () => {
     const turn = (role: string, text: string) => ({ role, text, summary: null });
     const turns = [turn("tool", "⚙ Agent"), turn("tool", "⚙ Bash"), turn("agent", "⚙ Agent"), turn("tool", "⚙ Task")];
     expect(subagentCalls(turns)).toEqual([turns[0], turns[3]]);
+  });
+
+  test("tool_result가 짝지어진 호출만 끝남 (U159)", () => {
+    const input = (v: object) => `입력:\n${JSON.stringify(v, null, 2)}`; // transcript.rs와 같은 pretty JSON
+    expect(subagentDone({ detail: `${input({ description: "출력: 정리" })}\n출력:\n완료` })).toBe(true);
+    expect(subagentDone({ detail: input({ prompt: "a\n출력: b" }) })).toBe(false); // 입력 안의 줄바꿈은 \\n으로 이스케이프된다
+    expect(subagentDone({ detail: null })).toBe(false);
   });
 });

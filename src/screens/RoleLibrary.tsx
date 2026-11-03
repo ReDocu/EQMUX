@@ -14,6 +14,7 @@ import {
   saveCharacterFile,
   saveJobFile,
   savePersonaFile,
+  setPortrait,
 } from "../backend/library";
 import type { LibSource, MergedLibrary } from "../backend/library";
 import { backend } from "../backend/mock";
@@ -651,6 +652,15 @@ export function RoleLibrary() {
                   {tf("앱 데이터 personas 폴더에 {id}.png를 두면 이름 첫 글자 대신 그 그림을 씁니다 (4MB까지)", { id: sel()!.id })}
                 </span>
                 <Show when={isTauri()}>
+                  {/* 고른 png를 그 자리로 복사한다 (P66) — 파일 규약을 몰라도 된다 */}
+                  <button class="btn ghost" onClick={() => void setPortrait(sel()!.id).then((err) => err && notify(err))}>
+                    {t("초상 고르기…")}
+                  </button>
+                  <Show when={sel()!.portraitMtimeMs}>
+                    <button class="btn ghost" onClick={() => void setPortrait(sel()!.id, true).then((err) => err && notify(err))}>
+                      {t("지우기")}
+                    </button>
+                  </Show>
                   <button class="btn ghost" onClick={() => void revealPersonasDir().then((err) => err && notify(err))}>
                     {t("폴더 열기")}
                   </button>

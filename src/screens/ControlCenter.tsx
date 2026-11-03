@@ -50,6 +50,7 @@ import { removeRoleFile } from "../backend/roles";
 import { maxSlots, settings, toggleMuted } from "../backend/settings";
 import { ensureWorktree } from "../backend/team";
 import { gridTemplateStyle, PaneDividers } from "../components/PaneDividers";
+import { slotCells } from "./gridSlots";
 import { SidePanel } from "../components/SidePanel";
 import {
   disposeSessionTerminal,
@@ -62,7 +63,7 @@ import {
   TerminalPane,
   whenSessionReady,
 } from "../components/TerminalPane";
-import { t, tf } from "../i18n";
+import { t, tErr, tf } from "../i18n";
 import { SessionDetailPanel } from "./SessionDetailPanel";
 import { TranscriptPane } from "./TranscriptPane";
 import type { AgentCliId, Session, Workspace } from "../types";
@@ -255,9 +256,8 @@ export function ControlCenter(props: { workspace: Workspace }) {
       </Show>
     </div>
   );
-  // 레일 항목 — 세션과 빈 슬롯 번호를 슬롯 순으로 (QA: 04 카이가 01~03 빈 슬롯보다 먼저 보였다)
-  const railItems = (): (Session | number)[] =>
-    [...sessions(), ...emptySlots()].sort((x, y) => (typeof x === "number" ? x : x.slot) - (typeof y === "number" ? y : y.slot));
+  // 레일 항목 — 세션과 빈 슬롯 번호를 슬롯 순으로 (QA: 04 카이가 01~03 빈 슬롯보다 먼저 보였다). 그리드도 같은 순서 (B208)
+  const railItems = (): (Session | number)[] => slotCells(sessions(), maxSlots());
   /** 지금 사람을 기다리는 세션 — 오래 기다린 것이 먼저다 (ATTENTION_ORDER와 같은 취지) */
   const waitingSessions = createMemo(() =>
     sessions()
@@ -441,7 +441,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
       const now = Date.now();
       const visible =
         document.hasFocus() && centerTab() === "terminal"
-          ? gridSessions().filter((s) => s.unseenDone === "turn")
+          ? gridItems().filter((s): s is Session => typeof s !== "number" && s.unseenDone === "turn")
           : [];
       const ids = new Set(visible.map((s) => s.id));
       for (const id of seenSince.keys()) if (!ids.has(id)) seenSince.delete(id);
@@ -676,7 +676,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
       try {
         await resumeAgent(s.id, s.workspaceId, s.cwd, sessionName(s, persona(s.personaId)), p, size.cols, size.rows, cliOf(s));
       } catch (err) {
-        return sessionFail(s, tf("재개하지 못했습니다 — {err}", { err: String(err) }));
+        return sessionFail(s, tf("재개하지 못했습니다 — {err}", { err: tErr(err) }));
       }
     }
     backend.resumeSession(s.id);
@@ -752,7 +752,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
               label: t("새로 시작 (요약만 넘김 · 이전 대화는 잇지 않음)"),
               action: () => {
                 const size = sessionTermSize(s.id);
-                void startFresh(s, size.cols, size.rows).then((err) => err && notify(t(err)));
+                void startFresh(s, size.cols, size.rows).then((err) => err && notify(tErr(err)));
               },
             },
           ]
@@ -816,7 +816,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
       await launchAgentInSession(s.id, s.workspaceId, s.cwd, a.name, a.permissions, cliOf(s));
     } catch (err) {
       // 기동은 셸을 먼저 끝낸다 — 실패하면 'exit ?'만 남았다. Rust가 준 이유를 남긴다 (B207)
-      sessionFail(s, tf("에이전트를 띄우지 못했습니다 — {err}", { err: String(err) }));
+      sessionFail(s, tf("에이전트를 띄우지 못했습니다 — {err}", { err: tErr(err) }));
     }
   };
 
@@ -854,7 +854,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
             onClick={(e) => {
               e.stopPropagation();
               const size = sessionTermSize(s.id);
-              void startFresh(s, size.cols, size.rows).then((err) => err && notify(t(err)));
+              void startFresh(s, size.cols, size.rows).then((err) => err && notify(tErr(err)));
             }}
           >
             {t("새로 시작")}
@@ -893,13 +893,15 @@ export function ControlCenter(props: { workspace: Workspace }) {
     </div>
   );
 
-  const gridSessions = () => {
+  // 그리드 칸 — 슬롯 순서로 세션이나 빈 칸을 그 자리에 (B208). 세션을 앞에 몰면 01·03만 있을 때
+  // 03이 두 번째 칸에 그려져 Ctrl+Alt+2 · '+' 칸과 어긋났다. 줌 중에는 그 페인 하나만
+  const gridItems = (): (Session | number)[] => {
     const z = zoomed();
     if (z) {
       const s = sessions().find((x) => x.id === z);
       if (s) return [s];
     }
-    return sessions();
+    return railItems();
   };
 
   // 터미널 그리드 + 상태 바 — 일반 배치와 전체 화면 오버레이 양쪽에서 사용.
@@ -910,8 +912,12 @@ export function ControlCenter(props: { workspace: Workspace }) {
       classList={{ zoomed: !!zoomed() }}
       style={zoomed() ? undefined : gridTemplateStyle(paneLayout())}
     >
-      <For each={gridSessions()}>
-        {(s) => (
+      <For each={gridItems()}>
+        {(it) => typeof it === "number" ? (
+          <button class="terminal-pane pane-empty pane-add mono" title={t("빈 슬롯에 세션 추가")} onClick={() => openAdd(it)}>
+            {t("+ 세션 추가")}
+          </button>
+        ) : ((s: Session) => (
           <div
             class="terminal-pane"
             classList={{ "pane-waiting": s.status === "waiting", "pane-dead": s.status === "dead", "pane-selected": selected()?.id === s.id }}
@@ -1056,14 +1062,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
               />
             </Show>
           </div>
-        )}
-      </For>
-      <For each={Array.from({ length: zoomed() ? 0 : Math.max(0, maxSlots() - sessions().length) })}>
-        {() => (
-          <button class="terminal-pane pane-empty pane-add mono" title={t("빈 슬롯에 세션 추가")} onClick={() => openAdd()}>
-            {t("+ 세션 추가")}
-          </button>
-        )}
+        ))(it)}
       </For>
       {/* 분할선 드래그 (M30) — gap 위 핸들. 줌 중에는 트랙이 하나라 의미가 없다 */}
       <Show when={!zoomed()}>
@@ -1665,7 +1664,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
                 </div>
               </Show>
               <Show when={addErr()}>
-                <div class="mono st-dead create-note">{addErr()}</div>
+                <div class="mono st-dead create-note">{tErr(addErr())}</div>
               </Show>
             </Show>
 
@@ -1878,7 +1877,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
             </div>
             <Show when={purgeErr()}>
               <div class="mono" style={{ color: "var(--eq-red)", "font-size": "11px", "margin-top": "8px" }}>
-                {t("초기화 실패")} — {purgeErr()}
+                {t("초기화 실패")} — {tErr(purgeErr())}
               </div>
             </Show>
             <div style={{ display: "flex", gap: "8px", "justify-content": "flex-end", "margin-top": "14px" }}>

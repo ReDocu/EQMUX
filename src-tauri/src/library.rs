@@ -688,6 +688,42 @@ pub fn library_portrait(store_state: tauri::State<crate::StoreState>, id: String
     read_portrait(&store_state.0.root(), &id).map(tauri::ipc::Response::new)
 }
 
+/// 초상 복사 (0.6 QA P66) — 고른 png를 전역 personas/<id>.png로. 크기 상한과 PNG 서명을 먼저 본다
+pub fn set_portrait(app_root: &Path, id: &str, src: &Path) -> Result<(), String> {
+    if fs::metadata(src).map_err(|e| e.to_string())?.len() > MAX_PORTRAIT_BYTES {
+        return Err("초상이 4MB를 넘습니다".into());
+    }
+    let bytes = fs::read(src).map_err(|e| e.to_string())?;
+    if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Err("PNG 파일이 아닙니다".into());
+    }
+    let dir = personas_dir(app_root);
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    fs::write(dir.join(format!("{}.png", safe_id(id))), bytes).map_err(|e| e.to_string())
+}
+
+/// 초상 지우기 (0.6 QA P66) — 없는 파일은 성공으로 친다 (멱등)
+pub fn delete_portrait(app_root: &Path, id: &str) -> Result<(), String> {
+    match fs::remove_file(personas_dir(app_root).join(format!("{}.png", safe_id(id)))) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
+        _ => Ok(()),
+    }
+}
+
+/// [초상 고르기…] (0.6 QA P66) — 동기 커맨드라 메인 스레드에서 선택 창을 연다(msg_export와 같다). 취소면 Ok(false)
+#[tauri::command]
+pub fn library_portrait_pick(store_state: tauri::State<crate::StoreState>, id: String) -> Result<bool, String> {
+    let Some(src) = rfd::FileDialog::new().set_title("초상 고르기").add_filter("PNG", &["png"]).pick_file() else {
+        return Ok(false);
+    };
+    set_portrait(&store_state.0.root(), &id, &src).map(|()| true)
+}
+
+#[tauri::command]
+pub fn library_portrait_clear(store_state: tauri::State<crate::StoreState>, id: String) -> Result<(), String> {
+    delete_portrait(&store_state.0.root(), &id)
+}
+
 /// 초상을 둘 폴더 열기 (0.6 QA P66) — 전역 personas/. 없으면 만든 뒤 탐색기로 연다
 #[tauri::command]
 pub fn library_reveal_personas(store_state: tauri::State<crate::StoreState>) -> Result<(), String> {
@@ -1026,6 +1062,26 @@ mod tests {
         assert!(read_portrait(&root, "luca").is_err());
         fs::write(root.join("secret.png"), b"x").unwrap();
         assert!(read_portrait(&root, "../secret").is_err()); // safe_id가 / 를 _로 바꾼다
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// [초상 고르기…] · [지우기] (0.6 QA P66) — PNG 서명만 받고, 지우기는 두 번 해도 성공
+    #[test]
+    fn portrait_set_and_delete() {
+        let root = temp_root("portrait-set");
+        let png = root.join("pick.png");
+        fs::write(&png, b"\x89PNG\r\n\x1a\nbody").unwrap();
+        let jpg = root.join("pick.jpg.png");
+        fs::write(&jpg, b"\xff\xd8\xffjpeg").unwrap();
+        assert!(set_portrait(&root, "kai", &jpg).is_err());
+        assert!(!root.join("personas").join("kai.png").exists());
+        set_portrait(&root, "kai", &png).unwrap(); // personas/가 없어도 만든다
+        assert_eq!(read_portrait(&root, "kai").unwrap(), b"\x89PNG\r\n\x1a\nbody");
+        set_portrait(&root, "../x", &png).unwrap(); // 밖으로 못 나간다
+        assert!(root.join("personas").join(".._x.png").is_file());
+        delete_portrait(&root, "kai").unwrap();
+        delete_portrait(&root, "kai").unwrap();
+        assert!(read_portrait(&root, "kai").is_err());
         fs::remove_dir_all(&root).ok();
     }
 

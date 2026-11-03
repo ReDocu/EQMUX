@@ -205,7 +205,6 @@ export const dict: Record<string, string> = {
   "빌드 엔지니어": "Build engineer",
   // ── 0.5 W2 시안 적용 — LaunchMode (xfVq4) ──
   "→ 계속": "→ Continue",
-  "← 워크스페이스 열기": "← Open workspace",
   "역할 팀": "Role team",
   "셸만 엽니다. 에이전트는 필요할 때 직접 띄웁니다. 셸은 설정의 기본 셸이고, 이름은 워크스페이스명XX({name}01…)로 붙습니다 — 연 뒤 세션 상세에서 바꿀 수 있습니다.":
     "Opens shells only. You start agents yourself when needed. The shell is the Default shell from Settings, and names are workspace-name + XX ({name}01…) — rename in session details after opening.",
@@ -310,4 +309,9 @@ export const dict: Record<string, string> = {
   초상: "Portrait",
   "앱 데이터 personas 폴더에 {id}.png를 두면 이름 첫 글자 대신 그 그림을 씁니다 (4MB까지)":
     "Put {id}.png in the app-data personas folder to use it instead of the name initial (up to 4 MB)",
+  // [초상 고르기…] · [지우기] (0.6 QA P66) — 뒤 둘은 Rust 오류
+  "초상 고르기…": "Choose portrait…",
+  지우기: "Remove",
+  "PNG 파일이 아닙니다": "Not a PNG file",
+  "초상이 4MB를 넘습니다": "The portrait is larger than 4 MB",
 };

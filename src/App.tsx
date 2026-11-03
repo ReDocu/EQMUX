@@ -17,7 +17,7 @@ import { isServerTermId, startPortWatch } from "./backend/ports";
 import { startRecapUpdates } from "./backend/recap";
 import { ensurePtyListeners, isTauri, listAlivePty, setPtyExitHook } from "./backend/pty";
 import { crashOpen, crashReport, loadCrashRecovery, setCrashOpen } from "./backend/recovery";
-import { loadSettings } from "./backend/settings";
+import { loadSettings, settings, updateSettings } from "./backend/settings";
 import { FirstRunNotice, firstRunPending, startForeignCheck } from "./components/FirstRunNotice";
 import { performShutdown } from "./backend/shutdown";
 import { startTeamSync } from "./backend/team";
@@ -38,11 +38,12 @@ import {
   view,
 } from "./state";
 import type { View } from "./state";
-import { t } from "./i18n";
+import { t, tf } from "./i18n";
+import { IS_MAC } from "./platform";
 import { ScreenOverlay } from "./components/ScreenOverlay";
 import { blocksNavKey, isNavChord } from "./components/keynav";
 import { JumpPalette, jumpOpen, toggleJump } from "./components/JumpPalette"; // §4 W3
-import { notify } from "./components/ui";
+import { ConfirmDialog, notify } from "./components/ui";
 import { ControlCenter } from "./screens/ControlCenter";
 import { CrashRecovery } from "./screens/CrashRecovery";
 import { Dashboard } from "./screens/Dashboard";
@@ -137,19 +138,34 @@ export function App() {
   // 없으면 flush 시퀀스만 돌고 조용히 종료된다.
   // macOS ⌘Q·Dock '종료'도 같은 길로 온다 (B112) — 창 닫기를 거치지 않으므로 Rust(quit.rs)가
   // terminate를 취소하고 'app-quit-requested'를 보낸다. 로그아웃은 Rust가 직접 정리한다
+  const requestQuit = async () => {
+    // 서버 탭 PTY는 세션 목록 밖이다 — 그것만 돌 때도 dev 서버가 말없이 죽지 않게 묻는다 (BR-05)
+    const running =
+      backend.listSessions().some((s) => s.status !== "dead") ||
+      (await listAlivePty()).some(isServerTermId);
+    if (running) setExitOpen(true);
+    else void performShutdown();
+  };
+  // 첫 트레이 숨김 확인 (P65) — 창을 숨기기 전에 앱 안에서 묻는다. OS 알림은 꺼져 있거나 포터블
+  // 빌드에서 안 뜰 수 있어, 사람은 앱이 꺼졌다고 믿고 에이전트는 계속 돈다(§1-1). 값은 숨길 PTY 수
+  const [trayAsk, setTrayAsk] = createSignal(0);
+  const [trayNoAsk, setTrayNoAsk] = createSignal(false);
+  let trayAsked = false; // 이번 실행에서 물었다 — [다시 묻지 않기]를 안 골랐으면 다음 실행에 다시 묻는다
+  const hideToTray = () => {
+    trayAsked = true;
+    if (trayNoAsk()) updateSettings({ trayAskOff: true });
+    setTrayAsk(0);
+    void invoke<boolean>("window_close_to_tray").then((hid) => void (hid || requestQuit()), () => requestQuit());
+  };
   onMount(() => {
     if (!isTauri()) return;
-    const requestQuit = async () => {
-      // 서버 탭 PTY는 세션 목록 밖이다 — 그것만 돌 때도 dev 서버가 말없이 죽지 않게 묻는다 (BR-05)
-      const running =
-        backend.listSessions().some((s) => s.status !== "dead") ||
-        (await listAlivePty()).some(isServerTermId);
-      if (running) setExitOpen(true);
-      else void performShutdown();
-    };
     // 정적 import — 다른 모듈이 이미 같은 패키지를 정적으로 실어서 동적 import는 청크를 나누지 못했다
     void getCurrentWindow().onCloseRequested(async (e) => {
       e.preventDefault();
+      if (!trayAsked && !settings().trayAskOff) {
+        const n = await invoke<number>("window_would_hide").catch(() => 0);
+        if (n > 0) return void setTrayAsk(n);
+      }
       // 트레이로 숨겼으면 끝 (W1 §1-1) — Rust는 closeAction이 quit가 아니고 PTY가 돌 때만 true다
       if (await invoke<boolean>("window_close_to_tray").catch(() => false)) return;
       await requestQuit();
@@ -322,7 +338,7 @@ export function App() {
         </ScreenOverlay>
       </Show>
       <Show when={overlay() === "connect"}>
-        <ScreenOverlay title={t("워크스페이스 열기 · 관리")} icon="folder-open">
+        <ScreenOverlay title={t("워크스페이스 연결 · 관리")} icon="folder-open">
           <WorkspaceConnection />
         </ScreenOverlay>
       </Show>
@@ -338,6 +354,32 @@ export function App() {
       </Show>
       <Show when={exitOpen()}>
         <ExitDialog />
+      </Show>
+      <Show when={trayAsk() > 0}>
+        <ConfirmDialog
+          title={tf(IS_MAC ? "창을 닫아도 세션 {n}개가 Dock에서 계속 돕니다" : "창을 닫아도 세션 {n}개가 트레이에서 계속 돕니다", { n: trayAsk() })}
+          body={
+            <>
+              <div>
+                {t(
+                  IS_MAC
+                    ? "Dock에 남겨도 세션이 계속 돕니다 · 끝내려면 ⌘Q 또는 메뉴 막대 아이콘의 [전부 종료]를 누릅니다"
+                    : "트레이로 숨기면 세션이 계속 돕니다 · 끝내려면 트레이 메뉴의 [전부 종료]를 누릅니다",
+                )}
+              </div>
+              <label style={{ display: "flex", gap: "6px", "align-items": "center", "margin-top": "10px" }}>
+                <input type="checkbox" checked={trayNoAsk()} onChange={(e) => setTrayNoAsk(e.currentTarget.checked)} />
+                {t("다시 묻지 않기")}
+              </label>
+              <button class="btn" style={{ "margin-top": "10px" }} onClick={() => (setTrayAsk(0), void requestQuit())}>
+                {t("모두 종료…")}
+              </button>
+            </>
+          }
+          confirmLabel={t(IS_MAC ? "Dock으로 숨기기" : "트레이로 숨기기")}
+          onConfirm={hideToTray}
+          onCancel={() => setTrayAsk(0)}
+        />
       </Show>
       <Show when={crashOpen() && crashReport()}>
         {(r) => <CrashRecovery report={r()} onClose={() => setCrashOpen(false)} />}

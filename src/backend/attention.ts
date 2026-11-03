@@ -2,13 +2,14 @@
 // 순위는 기획서 §UX 기반 › 주의 신호 표 하나를 따른다: 행동(waiting · dead) → 확인(메시지 대기 ·
 // 보고 전 · 완료 보고 · 턴 완료). 벨 목록·대시보드 정렬·`응답 대기` 칩·Ctrl+Shift+U가 모두 이 순서다.
 // 앱은 이동만 한다 — 세션에 아무것도 입력하지 않고 상태도 바꾸지 않는다(본 것 표시는 jumpToSession이 한다).
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { createSignal } from "solid-js";
 import { pendingCount, unmanagedAgent } from "./conversation";
 import { backend } from "./mock";
 import { isTauri } from "./pty";
 import { jumpToSession, modalOpen, setFocusRequest } from "../state";
-import { t, tf } from "../i18n";
+import { t, tErr, tf } from "../i18n";
 import type { ConversationMessage, Session } from "../types";
 import { sessionName } from "../types";
 
@@ -135,6 +136,15 @@ export function startNotifyFeed(): void {
   if (feedStarted || !isTauri()) return;
   feedStarted = true;
   void listen<Omit<NotifyItem, "count">>("notify-item", (e) => setNotifyItems((l) => pushNotify(l, e.payload)));
+  // 앱 알림 큐 (P65) — DB 손상 복구 · 등록 복구는 OS 토스트뿐이었다. Rust가 쌓아 둔 줄을 지금 한 번,
+  // 그 뒤엔 'app-notice' 신호마다 가져간다(가져가면 비워져 두 번 안 남는다)
+  const takeNotices = () =>
+    void invoke<string[]>("app_notices_take").then(
+      (l) => l.forEach((m) => notifyLocal({ session: "app:recovered", workspace: "", kind: "app", title: t("데이터 복구"), body: tErr(m) })),
+      () => {},
+    );
+  void listen("app-notice", takeNotices);
+  takeNotices();
   // OS 토스트 클릭 (P2 A2) — Rust가 창을 앞으로 올린 뒤 보낸다. 알림 센터 항목을 누른 것과 같은 길로 간다
   void listen<{ session: string }>("notify-activate", (e) => {
     const s = backend.listSessions().find((x) => x.id === e.payload.session);

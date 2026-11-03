@@ -129,9 +129,12 @@ export function mcpCheck(wsPath?: string): Promise<string> {
 }
 
 /** 서버 탭 입력줄에 채울 명령 — 앱이 실행하지 않는다(Enter는 사람이).
- *  add의 <이름> · <명령>은 고치지 않고 Enter를 치면 셸이 리디렉션 문법 오류로 막는다 — 아무것도 실행되지 않는다 */
+ *  add는 자리표시라 주석 줄로 채운다 (P68) — 그대로 Enter해도 아무것도 돌지 않고, PowerShell `<` 연산자 오류도 없다.
+ *  (zsh는 interactivecomments가 꺼져 있으면 '#: command not found'로 끝난다 — 역시 아무것도 돌지 않는다.)
+ *  사람은 맨 앞 `# `(cmd는 `rem `)를 지우고 <이름> · <명령>을 고친다. shell은 ShellChoice.label */
 export const mcpCommand = {
-  add: (scope: "local" | "user") => `claude mcp add --scope ${scope} <이름> -- <명령>`,
+  add: (scope: "local" | "user", shell?: string) =>
+    `${shell === "cmd" ? "rem" : "#"} claude mcp add --scope ${scope} <이름> -- <명령>`,
   remove: (name: string, scope: string) => `claude mcp remove --scope ${scope} ${quoteArg(name)}`,
 };
 

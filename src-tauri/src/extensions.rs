@@ -90,7 +90,7 @@ fn spawn(cli: &str, args: &[String], cwd: Option<&str>, via_shell: bool) -> std:
 }
 
 /// 시한 초과 — 셸 폴백(cmd /c · sh -lc)이나 `mcp list`가 띄운 서버까지 나무째 끝낸다. 자식만 죽이면 손자가 남는다
-fn kill_tree(child: &mut std::process::Child) {
+pub(crate) fn kill_tree(child: &mut std::process::Child) {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;

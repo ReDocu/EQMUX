@@ -15,6 +15,7 @@ export const dict: Record<string, string> = {
     "UI language — Korean (default) or English. Only the display changes; Korean source data stays as-is.",
   "표시 언어": "Display language",
   "한국어 (기본)": "한국어 (default)",
+  "{name} (기본)": "{name} (default)", // 기본 셸 줄 (0.6 QA U149)
   "이벤트 로그·생성 파일": "Event logs · generated files",
   "원문 유지 (데이터 불변)": "Kept as written (data is immutable)",
 

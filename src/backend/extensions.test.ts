@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { duplicateNames, parseAlwaysOn, parseMcpList, parsePluginList, sessionCell, validSkillName } from "./extensions";
+import { duplicateNames, mcpCommand, parseAlwaysOn, parseMcpList, parsePluginList, sessionCell, validSkillName } from "./extensions";
 import type { SkillRow } from "./extensions";
 
 describe("확장 출력 해석 (§12)", () => {
@@ -60,5 +60,13 @@ describe("확장 출력 해석 (§12)", () => {
     expect(sessionCell(p, "claude")).toBe("on");
     expect(sessionCell({ ...p, enabled: false }, "claude")).toBe("none");
     expect(sessionCell(p, "codex")).toBe("none");
+  });
+});
+
+describe("mcpCommand.add — 그대로 Enter해도 아무것도 돌지 않는 자리표시 (P68)", () => {
+  test("셸 주석 줄로 채운다 — cmd는 rem", () => {
+    expect(mcpCommand.add("local", "pwsh")).toBe("# claude mcp add --scope local <이름> -- <명령>");
+    expect(mcpCommand.add("user")).toMatch(/^# claude mcp add --scope user /);
+    expect(mcpCommand.add("local", "cmd")).toMatch(/^rem claude mcp add /);
   });
 });

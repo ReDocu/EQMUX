@@ -68,8 +68,9 @@ export const dict: Record<string, string> = {
   "점검하지 못했습니다 — {err}": "Could not check — {err}",
   "추가 명령 채우기": "Fill add command",
   "제거 명령 채우기": "Fill remove command",
-  "서버 탭 터미널 입력줄에 채웁니다 — <이름> · <명령>을 고친 뒤 Enter를 누르세요":
-    "Fills the Server tab prompt — replace <이름> and <명령>, then press Enter",
+  // 주석 줄로 채운다 (P68)
+  "서버 탭 터미널 입력줄에 주석 줄로 채웁니다 — 맨 앞 #(cmd는 rem)을 지우고 <이름> · <명령>을 고친 뒤 Enter를 누르세요":
+    "Fills the Server tab prompt as a comment line — delete the leading # (rem in cmd), replace <이름> and <명령>, then press Enter",
   "MCP 설정을 읽지 못했습니다 — {err}": "Couldn't read the MCP config — {err}",
   // 접근 가능한 이름 (U131)
   "켜짐": "On",
@@ -95,4 +96,10 @@ export const dict: Record<string, string> = {
   "복사할 곳이 없습니다": "There's nowhere to copy to",
   "스킬이 아닙니다 (SKILL.md 없음)": "Not a skill (no SKILL.md)",
   "파일이 밖에서 바뀌었습니다 — 편집을 취소하고 다시 열어 확인하세요": "The file changed outside the app. Cancel your edit and reopen it to check",
+  // U125 extensions.rs format! 오류 — tErr가 틀로 맞춘다
+  "허용하지 않는 인자입니다: {bad}": "Argument not allowed: {bad}",
+  "허용하지 않는 하위 명령입니다: {a} {b}": "Subcommand not allowed: {a} {b}",
+  "{cli}가 PATH에 없습니다": "{cli} isn't on PATH",
+  "{cli}를 실행하지 못했습니다 — {e}": "Couldn't run {cli} — {e}",
+  "{cli}가 실패했습니다 (출력 없음)": "{cli} failed (no output)",
 };

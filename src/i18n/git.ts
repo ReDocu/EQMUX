@@ -170,6 +170,7 @@ export const dict: Record<string, string> = {
   "현재 브랜치": "Current branch",
   "앱이 실행한 git 명령": "git commands the app ran",
   "실행 로그 {n}": "Run log {n}",
+  "실행 로그 열기": "Open run log", // 실패 알림 · 패널 동작 (B177)
   "닫기 (Esc)": "Close (Esc)",
   "실행 중 — {cmd}": "Running — {cmd}",
   "{cmd} — 로그인이 필요합니다. 앱은 비밀번호·토큰을 받지 않습니다. 터미널에서 `git fetch`를 한 번 실행해 로그인하세요.":
@@ -310,6 +311,25 @@ export const dict: Record<string, string> = {
   "기준 {base} ↔ 워크트리": "Base {base} ↔ worktree",
   "비교 · 기준 커밋 {base} ↔ 워크트리 · {stat}": "Compare · base commit {base} ↔ worktree · {stat}",
   // ── 0.6 QA (eqmux-d7) — git 화면 · 사이드 패널 git 탭 ──
+  // U125 Rust format! 오류 (gitx.rs 허용 목록 · workspace.rs · fsx.rs) — tErr가 틀로 맞춘다
+  "허용하지 않는 git 명령: {sub}": "git command not allowed: {sub}",
+  "git {sub}은 경로를 받지 않습니다": "git {sub} doesn't take paths",
+  "{a} 뒤에 값이 없습니다": "No value after {a}",
+  "허용하지 않는 옵션: {a}": "Option not allowed: {a}",
+  "허용하지 않는 refspec: {a}": "refspec not allowed: {a}",
+  "허용하지 않는 stash 동작: {a}": "stash action not allowed: {a}",
+  "git {sub}에는 {r}가 필요합니다": "git {sub} needs {r}",
+  "git 실행 실패: {e}": "Couldn't run git: {e}",
+  "git 응답 없음 ({n}초 초과): git {args}": "git didn't respond (over {n}s): git {args}",
+  "워크트리 생성 실패 — {first} / {second}": "Couldn't create the worktree — {first} / {second}",
+  "workspaces.json 읽기 실패: {e}": "Couldn't read workspaces.json: {e}",
+  "workspaces.json 파싱 실패: {e}": "Couldn't parse workspaces.json: {e}",
+  "폴더를 찾을 수 없습니다": "Folder not found",
+  "휴지통 이동 실패 — {e}": "Couldn't move to the Recycle Bin — {e}",
+  "경로를 찾을 수 없습니다": "Path not found",
+  "파일이 아닙니다": "Not a file",
+  "1MB 초과 — 앱에서 편집할 수 없습니다": "Over 1 MB — can't be edited in the app",
+  "텍스트 파일이 아닙니다 (UTF-8 아님)": "Not a text file (not UTF-8)",
   // B177 · U125 실패 알림
   "원격에 새 커밋이 있습니다 — Pull 하세요": "The remote has new commits — Pull first",
   "원격과 갈라졌습니다 — Pull ▾에서 merge 또는 rebase를 고르세요": "Diverged from the remote — choose merge or rebase from Pull ▾",

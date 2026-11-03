@@ -4,9 +4,13 @@ import { createSignal, For, onCleanup, Show } from "solid-js";
 import { backend, MAX_OPEN_WORKSPACES } from "../backend/mock";
 import { remoteWebUrl } from "../backend/git";
 import { isTauri, revealPath } from "../backend/pty";
+import { listen } from "@tauri-apps/api/event";
 import { openLink } from "../backend/browser";
 import {
+  cancelClone,
+  cloneProgressText,
   cloneRepo,
+  cloneStopText,
   gitInit,
   pickFolder,
   refreshWorkspaces,
@@ -16,7 +20,7 @@ import {
   unregisterWorkspace,
 } from "../backend/workspaces";
 import { pushLayer, setView, tick } from "../state";
-import { t, tf } from "../i18n";
+import { t, tErr, tf } from "../i18n";
 import { ConfirmDialog, KV, notify } from "../components/ui";
 import { Icon } from "../components/icons";
 import type { Workspace } from "../types";
@@ -35,8 +39,10 @@ function Layer(props: { close: () => void; box?: () => HTMLElement | undefined }
 // 있었다. 모듈에 두어 다시 열어도 '진행 중'이 보이고, 끝나면 토스트로 알린다.
 // ponytail: 한 번에 하나 — 예전에도 창 하나에서 하나씩이었다. 여러 개가 필요하면 주소별 Map으로
 const [cloneBusy, setCloneBusy] = createSignal<string | undefined>(undefined); // clone 중인 주소
-// clone 경과 초 (0.6 QA P72) — 진행률은 못 받지만 멈춘 것인지 도는 것인지는 보인다
+// clone 경과 초 (0.6 QA P72) — 멈춘 것인지 도는 것인지 보인다
 const [cloneSecs, setCloneSecs] = createSignal(0);
+// clone 진행 줄 (P72) — git clone --progress의 마지막 줄을 '객체 받는 중 42%'로
+const [cloneLine, setCloneLine] = createSignal("");
 
 export function WorkspaceConnection() {
   const workspaces = () => {
@@ -130,7 +136,9 @@ export function WorkspaceConnection() {
     if (!parent || cloneBusy()) return;
     setCloneBusy(url);
     setCloneSecs(0);
+    setCloneLine("");
     const timer = setInterval(() => setCloneSecs((n) => n + 1), 1000);
+    const unlisten = await listen<string>("clone-progress", (e) => setCloneLine(cloneProgressText(e.payload)));
     try {
       const clonedPath = await cloneRepo(url, parent);
       const info = await registerWorkspace(clonedPath);
@@ -140,10 +148,16 @@ export function WorkspaceConnection() {
       setCloneUrl("");
       notify(tf("clone 완료 · 목록에 등록했습니다 — {name}",{ name: info.entry.name }), "ok");
     } catch (e) {
+      const stop = cloneStopText(String(e)); // [clone 취소] · 상한 — 받다 만 폴더를 지웠는지 말한다 (P72)
+      if (stop) {
+        if (!stop.clean) setError(stop.text);
+        return notify(stop.text, stop.clean ? "ok" : "error");
+      }
       const msg = `${t("clone 실패")} · ${String(e)}`;
       setError(msg);
       notify(msg); // 창 · 팝업을 닫았으면 위 오류 줄은 아무도 못 본다 (B258)
     } finally {
+      unlisten();
       clearInterval(timer);
       setCloneBusy(undefined);
     }
@@ -175,6 +189,7 @@ export function WorkspaceConnection() {
 
   const unregister = async (id: string) => {
     setUnregTarget(undefined);
+    const ws = workspaces().find((w) => w.id === id);
     if (isTauri()) {
       // 실패를 삼키면 버튼이 안 먹은 것처럼 보였다 (0.6 QA B230) — 다른 동작과 같이 보이고 선택은 그대로
       try {
@@ -189,6 +204,23 @@ export function WorkspaceConnection() {
       backend.removeWorkspace(id);
     }
     if (selectedId() === id) setSelectedId(groups()[0]?.items[0]?.id); // 화면 맨 위 행 (U62)
+    // [되돌리기] (0.6 QA P71) — 같은 경로로 재등록하고 그 행을 고른다. id는 경로에서 나와 같고,
+    // team.json도 디스크에 그대로라 슬롯이 돌아온다(죽은 세션은 확인창이 말한 대로 안 돌아온다). 목은 되살릴 길이 없다
+    if (!ws) return;
+    const name = ws.name;
+    if (!isTauri()) return notify(tf("{name}을(를) 등록 해제했습니다", { name }), "ok");
+    notify(tf("{name}을(를) 등록 해제했습니다", { name }), "ok", {
+      label: t("되돌리기"),
+      run: async () => {
+        try {
+          const info = await registerWorkspace(ws.path);
+          await refreshWorkspaces();
+          setSelectedId(info.entry.id);
+        } catch (e) {
+          notify(`${t("되돌리기 실패")} · ${String(e)}`);
+        }
+      },
+    });
   };
 
   // 목록 행과 상세의 [열기]는 같은 일을 한다 (U60) — 열고 그 워크스페이스로 간다. 세션이 없으면
@@ -208,7 +240,7 @@ export function WorkspaceConnection() {
     <div class="screen">
       <div class="screen-head">
         <div>
-          <h1>{t("워크스페이스 열기 · 관리")}</h1>
+          <h1>{t("워크스페이스 연결 · 관리")}</h1>
           <div class="sub mono">{t("탭 줄의 + 로 연다 · 열려 있지 않은 워크스페이스가 위")}</div>
         </div>
         <div style={{ display: "flex", gap: "8px" }}>
@@ -225,7 +257,7 @@ export function WorkspaceConnection() {
       <div class="screen-body conn-body">
         <div class="conn-list">
           <Show when={error()}>
-            <div class="card conn-error mono">{error()}</div>
+            <div class="card conn-error mono">{tErr(error())}</div>
           </Show>
           <div class="conn-registry" role="list">
             <For each={groups()}>
@@ -495,6 +527,9 @@ export function WorkspaceConnection() {
               <div class="muted mono" style={{ "font-size": "11px", margin: "0 0 8px" }}>
                 {tf("clone 중… {s}초 · 창을 닫아도 계속됩니다", { s: cloneSecs() })}
                 <div>{cloneBusy()}</div>
+                <Show when={cloneLine()}>
+                  <div>{cloneLine()}</div>
+                </Show>
                 <Show when={cloneSecs() >= 30}>
                   <div>{t("오래 걸리면 Git 로그인 창이 다른 창 뒤에 떠 있을 수 있습니다.")}</div>
                 </Show>
@@ -528,6 +563,12 @@ export function WorkspaceConnection() {
               <button class="btn" onClick={() => setCloneOpen(false)}>
                 {t(cloneBusy() ? "닫기" : "취소")}
               </button>
+              {/* 자식 git 트리를 끝내고 받다 만 폴더를 지운다 — 결과는 토스트로 (P72) */}
+              <Show when={cloneBusy()}>
+                <button class="btn danger" onClick={cancelClone}>
+                  {t("clone 취소")}
+                </button>
+              </Show>
               <button class="btn primary" disabled={!!cloneBusy() || !cloneUrl().trim()} onClick={() => void runClone()}>
                 {t(cloneBusy() ? "clone 중…" : "폴더 선택 후 Clone")}
               </button>

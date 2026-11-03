@@ -98,9 +98,34 @@ pub fn crash_recovery(store_state: State<StoreState>, dirty: State<DirtyStart>) 
     CrashReport { dirty: true, sessions: crash_scan(&store_state.0.root()) }
 }
 
+/// 앱 알림 큐 (P65) — DB 손상 복구 · 등록 복구는 OS 토스트 한 번뿐이라 알림을 꺼 두었거나
+/// 포터블 빌드면 놓친다. 한국어 원문을 쌓고, 프런트가 부트스트랩 때(그 뒤엔 'app-notice' 신호마다)
+/// 가져가 알림 센터에 남긴다. 번역은 프런트 사전이 한다
+static NOTICES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+pub fn push_notice(msg: String) {
+    if let Ok(mut l) = NOTICES.lock() {
+        l.push(msg);
+    }
+}
+
+/// 쌓인 앱 알림을 비우며 돌려준다 — 두 번 가져가도 같은 줄이 두 번 안 남게
+#[tauri::command]
+pub fn app_notices_take() -> Vec<String> {
+    NOTICES.lock().map(|mut l| std::mem::take(&mut *l)).unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn notices_drain_once() {
+        push_notice("a".into());
+        push_notice("b".into());
+        assert_eq!(app_notices_take(), vec!["a".to_string(), "b".to_string()]);
+        assert!(app_notices_take().is_empty(), "가져간 줄은 다시 오지 않는다 (P65)");
+    }
 
     /// exit 기록이 없는 세션만, 최근 활동순으로, 등록된 워크스페이스에서만 잡힌다 (FR-C-35)
     #[test]

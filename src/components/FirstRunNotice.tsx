@@ -14,8 +14,12 @@ import { IS_MAC } from "../platform";
 import { pushLayer, setOverlay, setSettingsCat } from "../state";
 import { notify } from "./ui";
 
-// 절 앵커까지 (0.6 QA P81) — 1,250줄 문서의 맨 위로 열렸다. 영어판 문서는 아직 없다
-const HOWTO_URL = "https://github.com/ReDocu/EQMUX/blob/main/docs/site/docs.md#다른-도구와-같이-쓰기";
+// 절 앵커까지 (0.6 QA P81) — 1,250줄 문서의 맨 위로 열렸다. 영어 화면은 README.en.md의 같은 절로 보낸다
+// (앵커는 각 문서의 '## 다른 도구와 같이 쓰기' · '## Using alongside other tools' 제목에서 나온다)
+const howtoUrl = () =>
+  settings().language === "en"
+    ? "https://github.com/ReDocu/EQMUX/blob/main/README.en.md#using-alongside-other-tools"
+    : "https://github.com/ReDocu/EQMUX/blob/main/docs/site/docs.md#다른-도구와-같이-쓰기";
 const APP_DATA = IS_MAC ? "~/Library/Application Support/com.eqment.eqmux" : "%APPDATA%\\com.eqment.eqmux";
 
 /** 점검 결과 — 앱 수명 동안 한 번 잰다(기동 때). 설정 › 정보의 [다시 점검]이 다시 잰다 */
@@ -138,7 +142,7 @@ function ForeignList() {
             </For>
             <div class="muted frn-note">
               {t("EQMUX는 이 파일을 고치지 않습니다. 그 도구가 다시 써 넣기 때문입니다.")}{" "}
-              <button class="wizard-link" onClick={() => openLink(HOWTO_URL, true)}>
+              <button class="wizard-link" onClick={() => openLink(howtoUrl(), true)}>
                 {t("끄는 방법 →")}
               </button>
             </div>

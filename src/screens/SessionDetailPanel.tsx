@@ -11,7 +11,7 @@ import { nudgeRoleReload, nudgeTeamReload, removeRoleFile, saveRoleFile } from "
 import { isTauri, killPty, openLogDir, storeUsageReal } from "../backend/pty";
 import { sessionTermSize } from "../components/TerminalPane";
 import { settings, toggleMuted } from "../backend/settings";
-import { t, tf } from "../i18n";
+import { t, tErr, tf } from "../i18n";
 import { jumpToSession } from "../state";
 import { Eyebrow, FieldHint, Identity, KV, StatusLabel, StopConfirm } from "../components/ui";
 import { SubagentList } from "../components/SubagentList"; // §4 서브에이전트 목록 (W3)
@@ -629,7 +629,7 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
 
       <Show when={actionErr()}>
         <div class="card conn-error mono" style={{ "margin-top": "8px" }}>
-          {actionErr()}
+          {tErr(actionErr())}
         </div>
       </Show>
 
