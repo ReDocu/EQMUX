@@ -7,9 +7,8 @@
 | 운영체제 | 파일 | 비고 |
 |---|---|---|
 | Windows 10·11 (x64) | `EQMUX_0.6.1_x64_portable.zip` | 압축을 풀어 `EQMUX\eqmux.exe` 실행 |
-| macOS 11+ | `EQMUX_0.6.1_universal.dmg` | Apple Silicon · Intel 공용 |
 
-1.0 전에는 설치 파일을 내지 않습니다. 아직 코드 서명이 없습니다. Windows는 SmartScreen에서 [추가 정보] → [실행]을, macOS는 Finder에서 앱을 우클릭 → [열기]를 누릅니다.
+macOS 판은 나중에 따로 올립니다. 1.0 전에는 설치 파일을 내지 않습니다. 아직 코드 서명이 없습니다. Windows는 SmartScreen에서 [추가 정보] → [실행]을 누릅니다.
 
 ## 고친 것
 
@@ -30,7 +29,6 @@
 ## 바뀐 배포
 
 - Windows는 포터블 zip 하나만 냅니다(0.6.0에 붙었던 `setup.exe`는 더 내지 않습니다).
-- 0.6.0에서 빠졌던 macOS 판을 이번에 함께 냅니다.
 
 ## 아는 한계
 

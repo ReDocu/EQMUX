@@ -1,4 +1,4 @@
-# 0.6 §9-1 — Windows(포터블 zip) + macOS(universal dmg)를 GitHub 호스팅 러너에서 빌드한다.
+# 0.6 §9-1 — Windows(포터블 zip) + macOS(universal dmg, 0.7 전까지 꺼 둠)를 GitHub 호스팅 러너에서 빌드한다.
 # Windows 배포물은 포터블 zip 하나다 — 1.0 전에는 NSIS 설치본을 만들지 않는다(명령어 정리.md §4).
 # v* 태그를 밀면 두 플랫폼 산출물과 SHA256SUMS.txt를 붙인 **초안** 릴리스를 만든다. 공개는 사람이 누른다.
 # 서명: SignPath(Windows) · Developer ID(macOS)는 계정이 준비되면 아래 "서명 자리"에 붙인다.
@@ -54,6 +54,7 @@ jobs:
         with: { name: windows, path: out/* }
 
   macos:
+    if: false # 0.7 전까지 mac은 빌드하지 않는다 — 다시 켤 때 release의 needs에 macos를 되돌린다
     needs: test
     runs-on: macos-latest
     steps:
@@ -79,7 +80,7 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [windows, macos]
+    needs: [windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
