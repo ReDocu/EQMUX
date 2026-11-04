@@ -14,7 +14,6 @@ export const dict: Record<string, string> = {
   종료: "Exit",
 
   // ── AppBar 0.5 — 탭 메뉴 · 벨 ──
-  "워크스페이스 열기·관리": "Open or manage workspaces",
   "워크스페이스 메뉴": "Workspace menu",
   "이전 탭": "Previous tabs",
   "다음 탭": "Next tabs",
@@ -151,7 +150,6 @@ export const dict: Record<string, string> = {
   "레지스트리에서만 제거 — 디스크의 저장소는 그대로 · 실행 중 세션은 종료됩니다":
     "Removes from the registry only — the repo on disk stays, but running sessions are terminated",
   "등록 해제 (디스크는 그대로 · 세션 종료)": "Unregister (disk untouched · sessions end)",
-  "등록을 해제할까요?": "Unregister this workspace?",
   "실행 중인 세션 {n}개가 지금 종료됩니다 — 재등록해도 돌아오지 않습니다.":
     "{n} running session(s) will be terminated now — re-registering will not bring them back.",
   "디스크의 저장소와 .eqmux 파일은 그대로 남습니다.": "The repo on disk and its .eqmux files are left untouched.",
@@ -244,7 +242,6 @@ export const dict: Record<string, string> = {
   "셸 열기 → 워크스페이스": "Open shell → Workspace",
   "역할 팀으로 바꾸기 →": "Switch to Role team →",
   "← 팀 캐스팅": "← Team casting",
-  "워크스페이스 열기": "Open workspace",
   "기동 없이 열기": "Open without launching",
   "{n}개 모두 기동 → 워크스페이스": "Launch all {n} → Workspace",
 
@@ -340,4 +337,9 @@ export const dict: Record<string, string> = {
   "되돌릴 등록 정보가 없습니다": "There's no registration to restore",
   "등록 항목 없음": "Registration not found",
   "실행 중인 세션이 없습니다.": "No sessions are running.",
+  // 0.6.3 eqmux-ce: 등록 해제 · 되돌리기 진행 표시 (B272)
+  "{name}을(를) 등록 해제할까요?": "Unregister {name}?",
+  "{name}을(를) 등록 해제하는 중…": "Unregistering {name}…",
+  "{name}을(를) 되돌리는 중…": "Restoring {name}…",
+  "처리하는 중…": "Working…",
 };

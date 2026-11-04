@@ -2,7 +2,22 @@ import { expect, test, vi } from "vitest";
 
 // missions · team → ui.tsx가 window를 찾는다 — 여기서 보는 것은 순수 변환뿐이다
 vi.mock("../components/ui", () => ({ notify: () => {} }));
-import { cloneProgressText, cloneStopText, toWorkspace, wsNameAfter } from "./workspaces";
+import { cloneProgressText, cloneStopText, tabLabels, toWorkspace, wsNameAfter } from "./workspaces";
+
+test("탭 이름이 겹치면 부모 폴더 이름을 붙인다 — 사람이 바꾼 이름도 같다 (U178)", () => {
+  const labels = tabLabels([
+    { id: "a", name: "qa-repo", path: "D:\\t\\8eb05fc9d1a2b3c4\\qa-repo" },
+    { id: "b", name: "qa-repo", path: "D:\\t\\f1f03a90\\qa-repo\\" },
+    { id: "c", name: "앱", path: "D:\\w\\app" },
+    { id: "d", name: "앱", path: "/Users/me/web" },
+    { id: "e", name: "solo", path: "D:\\w\\solo" },
+  ]);
+  expect(labels.get("a")).toBe("qa-repo · 8eb05fc9…");
+  expect(labels.get("b")).toBe("qa-repo · f1f03a90");
+  expect(labels.get("c")).toBe("앱 · w");
+  expect(labels.get("d")).toBe("앱 · me");
+  expect(labels.get("e")).toBe("solo");
+});
 
 test("이름 바꾸기 — 앞뒤 공백을 떼고, 비우면 폴더 이름으로 돌아간다 (S23)", () => {
   expect(wsNameAfter("  웹 앱 ", "D:\\work\\app")).toBe("웹 앱");

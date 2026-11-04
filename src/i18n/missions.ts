@@ -185,9 +185,9 @@ export const dict: Record<string, string> = {
   "확장 탭에서 사람이 누른 플러그인 · 스킬 변경만 씁니다": "Only plugin and skill changes you press in the Extensions tab are written",
   "확장 탭에서 사람이 누른 스킬 · settings.local.json 변경만 씁니다":
     "Only skill and settings.local.json changes you press in the Extensions tab are written",
-  // P83 관제 빈 상태 — 화면 이름 '워크스페이스 열기'로
-  "열린 워크스페이스가 없습니다 — 탭 줄의 + 또는 [워크스페이스 열기]에서 git 저장소를 여세요":
-    "No open workspaces — open a git repository with + in the tab bar or [Open workspace]",
+  // P83 · U177 관제 빈 상태 — 화면 이름 '워크스페이스 연결'로
+  "열린 워크스페이스가 없습니다 — 탭 줄의 + 또는 [워크스페이스 연결]에서 git 저장소를 여세요":
+    "No open workspaces — open a git repository with + in the tab bar or [Workspace connection]",
   // ── 0.6 QA eqmux-52: 파일 탭(탐색기) — U163 · B215 · B220 ──
   "상한에 걸려 이 폴더 안은 읽지 않았습니다": "Stopped at the limit — this folder's contents weren't read",
   "{n}개 상한에서 멈췄습니다 — 이 아래로 더 있습니다": "Stopped at the {n}-entry limit — there's more below",

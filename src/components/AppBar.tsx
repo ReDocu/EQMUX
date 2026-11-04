@@ -21,7 +21,7 @@ import { unseenPortCount } from "../backend/ports";
 import { revealPath } from "../backend/pty";
 import { openLink } from "../backend/browser";
 import { settings, toggleMuted } from "../backend/settings";
-import { crossProjectOn, setCrossProject } from "../backend/workspaces";
+import { crossProjectOn, setCrossProject, tabLabels } from "../backend/workspaces";
 import {
   jumpToSession,
   overlay,
@@ -55,6 +55,8 @@ export function AppBar() {
     tick();
     return backend.listWorkspaces().filter((w) => w.open);
   };
+  // 열린 탭끼리 이름이 겹치면 부모 폴더 이름을 붙인다 (U178)
+  const tabLabel = (ws: Workspace) => tabLabels(workspaces()).get(ws.id) ?? ws.name;
   // 탭 뱃지 — 미확인 신호는 상위 전파된다 (FR-G-46). waiting > dead 만 색을 갖는다.
   const wsSignal = (wsId: string) => {
     tick();
@@ -307,6 +309,8 @@ export function AppBar() {
                 role="tab"
                 aria-selected={tabWs() === ws.id}
                 classList={{ active: tabWs() === ws.id }}
+                // 이름 · 경로 툴팁 (U178) — 눌러 보기 전에 어느 저장소인지 보인다. ⋯ · ✕는 자기 툴팁이 있다
+                title={`${ws.name}\n${ws.path}`}
                 onClick={() => setView({ kind: "workspace", id: ws.id })}
                 onDblClick={() => setRenaming(ws.id)}
                 onContextMenu={(e) => {
@@ -318,9 +322,7 @@ export function AppBar() {
                 <Show when={wsSignal(ws.id)}>
                   {(color) => <span class="dot" style={{ background: color() }} />}
                 </Show>
-                <span class="tab-label" title={ws.name}>
-                  {ws.name}
-                </span>
+                <span class="tab-label">{tabLabel(ws)}</span>
                 <Show when={wsUnseen(ws.id)}>
                   <span class="unread-dot" />
                 </Show>
@@ -383,8 +385,8 @@ export function AppBar() {
         </Show>
         <button
           class="tab tab-add"
-          title={t("워크스페이스 열기·관리")}
-          aria-label={t("워크스페이스 열기·관리")}
+          title={t("워크스페이스 연결 · 관리")}
+          aria-label={t("워크스페이스 연결 · 관리")}
           onClick={() => toggleOverlay("connect")}
         >
           <Icon name="plus" size={14} />

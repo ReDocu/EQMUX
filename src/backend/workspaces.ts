@@ -174,6 +174,21 @@ export function restoreWorkspace(id: string): Promise<WsInfo> {
 /** 비워 두면 돌아갈 이름 — 경로의 마지막 폴더 (Rust entry_name과 같은 규칙) */
 export const folderName = (path: string): string => path.split(/[\\/]/).filter(Boolean).pop() ?? path;
 
+/** 탭 이름 (U178) — 열린 탭끼리 이름이 겹치면 부모 폴더 이름을 덧붙인다(qa-repo · 8eb05fc9…).
+ *  사람이 바꾼 이름(S23)도 같은 규칙이다. 긴 부모 이름은 앞 8글자만 — 전체 경로는 탭 툴팁이 보인다.
+ *  ponytail: 부모 폴더 이름까지 같으면 그대로 겹친다 — 그때는 툴팁의 경로로 가른다 */
+export function tabLabels(list: readonly Pick<Workspace, "id" | "name" | "path">[]): Map<string, string> {
+  const count = new Map<string, number>();
+  for (const w of list) count.set(w.name, (count.get(w.name) ?? 0) + 1);
+  return new Map(
+    list.map((w) => {
+      const parent = w.path.split(/[\\/]/).filter(Boolean).at(-2);
+      if (count.get(w.name)! < 2 || !parent) return [w.id, w.name];
+      return [w.id, `${w.name} · ${parent.length > 10 ? `${parent.slice(0, 8)}…` : parent}`];
+    }),
+  );
+}
+
 /** 저장하면 붙을 이름 (S23) — 앞뒤 공백을 떼고, 비면 폴더 이름 */
 export const wsNameAfter = (draft: string, path: string): string => draft.trim() || folderName(path);
 

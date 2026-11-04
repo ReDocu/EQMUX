@@ -53,6 +53,17 @@
 - **S23 · B289 · B290**은 모두 `ws_repath` · `ws_register`를 고칩니다. eqmux-ce 한 세션이 맡아 순서대로 고칩니다. 이름은 화면 말고도 자동 세션 이름 접두(`types.ts` `projectStem`)와 다른 프로젝트 주소(`conversation.ts` `projectLabels`)에 쓰입니다. 이 두 곳은 eqmux-32 · 리드와 맞춥니다.
 - **`i18n/panels.ts`**(주인 eqmux-b1): eqmux-11도 키를 덧붙입니다. 덧붙이기 전에 다시 읽습니다. 대화 · 이벤트 문구(U186)는 `i18n/common.ts`(리드)에 덧붙이고 알립니다.
 
+## 2차 — 0.6.3 전에 고칠 것 (QA 4차 남은 행)
+
+2026-11-04 · 기준 sub_main `59e3e35`. 0.6.0 QA 4차(`qa-0.6.0-release-usability.md`)에서 0.6.1 · 0.6.2에 들어가지 못한 7행입니다. 규칙 · 파일 주인은 위와 같습니다.
+
+| 세션 | 행 | 비고 |
+|---|---|---|
+| eqmux-75 | B271 (높음) | Windows ConPTY — 자식 대기로 종료를 감지한다. B287의 세대 판정과 맞물린다 |
+| eqmux-ce | B272 B273 U177 U178 U179 | U177의 `docs/site/docs.md` 부분은 리드가 고친다. U179가 `backend/events.ts`를 고치면 eqmux-32에게 알린다 |
+| eqmux-b1 | U181 | 그리드 접기 CSS는 `screens.css` 국소 수정 · 끝 블록 |
+| eqmux-eb (리드) | U177 설명서 · 원장 · 0.6.3 버전 · 변경 기록 · 릴리스 노트 | |
+
 ## 기준선
 
 수정 전 작업 트리(S23 · 원장 행만 추가된 상태)에서 리드가 돌린 결과는 `docs/fix-0.6.2-qa-status.md`에 적습니다.

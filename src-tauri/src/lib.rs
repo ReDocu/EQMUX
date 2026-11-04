@@ -90,7 +90,8 @@ struct PtySession {
     /// 세션별 잠금 — ConPTY 리사이즈도 블로킹 호출이다 (ResizePseudoConsole은 출력 파이프가
     /// 차 있고 리더가 비우지 못하면 반환하지 않는다). writer와 같은 이유로 전역 PtyState
     /// 잠금 밖에서 부른다 — 한 세션이 막혀도 다른 세션의 write/resize·kill이 살아 있어야 한다.
-    master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
+    /// None = 자식이 끝나 의사 콘솔을 이미 닫았다 (B271, close_console_when_child_exits) — 세션은 리더 꼬리가 거둔다
+    master: Arc<Mutex<Option<Box<dyn MasterPty + Send>>>>,
     /// 리사이즈 요청 순번 — 잠금 밖에서 돌기 때문에 뒤늦게 도착한 옛 요청이
     /// 최신 크기를 덮지 않도록 자기가 최신인지 확인하고 적용한다
     resize_seq: Arc<std::sync::atomic::AtomicU64>,
@@ -125,6 +126,48 @@ static NEXT_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::ne
 /// 끝난 PTY(세대 gen)가 같은 id의 새 PTY로 이미 바뀌었는가 (B287) — current는 지금 맵에 있는 그 id의 세대
 fn superseded(current: Option<u64>, gen: u64) -> bool {
     current.is_some_and(|g| g != gen)
+}
+
+/// 자기 세대의 의사 콘솔을 꺼낸다 (B271) — 세션이 이미 버려졌거나(약한 참조가 죽었다) 이미 꺼냈으면 None.
+/// 꺼낸 값은 잠금 밖에서 버린다 — ClosePseudoConsole이 막혀도 리사이즈 잠금을 쥔 채 막히지 않게
+#[cfg_attr(not(windows), allow(dead_code))]
+fn take_console<T>(console: &std::sync::Weak<Mutex<Option<T>>>) -> Option<T> {
+    let arc = console.upgrade()?;
+    let mut guard = arc.lock().ok()?;
+    guard.take()
+}
+
+/// 자식이 끝난 뒤 콘솔을 닫기까지의 유예 — conhost가 마지막 화면(exit 입력 · 마지막 출력)을 파이프로 내보낼 틈.
+/// ponytail: 고정 유예다. 끝 화면이 잘리는 것이 실기로 보이면 출력이 잠잠해질 때까지 기다리는 판정으로 바꾼다
+#[cfg(windows)]
+const CONSOLE_CLOSE_GRACE: std::time::Duration = std::time::Duration::from_millis(200);
+
+/// 자식이 끝나면 그 세대의 의사 콘솔을 닫는다 (B271, Windows만 — macOS는 자식이 끝나면 리더가 EOF를 받는다).
+/// Windows 11 10.0.26300의 conhost는 클라이언트(pwsh · claude)가 끝나도 출력 파이프를 닫지 않아 리더에 EOF가 오지 않았다.
+/// 종료 감지가 EOF뿐이라 페인이 '셸' · '기동 중'으로 남고 실행 중 수에 계속 들어갔다. 콘솔을 닫으면 conhost가 끝나
+/// 리더가 EOF를 받고, 그 뒤(세대 판정 · 종료 코드 child.wait · pty-exit)는 리더 꼬리가 지금처럼 한다.
+/// - 프로세스 핸들을 따로 열어 기다린다 — PtySession의 child를 두 번 기다리지 않는다(리더 꼬리의 wait는 곧바로 돌아온다)
+/// - 약한 참조다 — 같은 id의 새 세대 콘솔은 건드릴 수 없고, kill · 재시작 · 앱 종료가 먼저 세션을 버리면 할 일이 없다
+/// - ClosePseudoConsole은 옛 빌드에서 출력을 다 읽을 때까지 막힐 수 있다 — 리더는 살아서 비우고 있고, 이 스레드는 아무도 기다리지 않는다
+#[cfg(windows)]
+fn close_console_when_child_exits(pid: u32, console: std::sync::Weak<Mutex<Option<Box<dyn MasterPty + Send>>>>) {
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::System::Threading::{OpenProcess, WaitForSingleObject, INFINITE, PROCESS_SYNCHRONIZE};
+    // child 핸들이 열려 있는 스폰 직후에 연다 — pid가 다른 프로세스로 재사용될 틈이 없다
+    let h = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+    if h.is_null() {
+        return; // 못 열면 예전처럼 리더 EOF만 기다린다
+    }
+    let h = h as usize; // HANDLE(원시 포인터)은 Send가 아니다 — 커널 핸들 값으로 넘긴다
+    std::thread::spawn(move || {
+        let h = h as HANDLE;
+        unsafe {
+            WaitForSingleObject(h, INFINITE);
+            CloseHandle(h);
+        }
+        std::thread::sleep(CONSOLE_CLOSE_GRACE);
+        drop(take_console(&console));
+    });
 }
 
 /// 기동 경로(셸 스폰·에이전트 기동·재개·재시작)는 한 번에 하나씩 돈다. 메인 스레드에서 돌던
@@ -589,11 +632,16 @@ fn spawn_pty_session(
     let resize_hint = Arc::new(std::sync::atomic::AtomicU64::new(epoch_ms())); // 스폰 직후 첫 프레임도 크게 묶는다
     let size = Arc::new(std::sync::atomic::AtomicU32::new(pack_size(rows, cols)));
     let reader_size = size.clone();
+    let master = Arc::new(Mutex::new(Some(pair.master)));
+    #[cfg(windows)]
+    if let Some(pid) = child.process_id() {
+        close_console_when_child_exits(pid, Arc::downgrade(&master));
+    }
     let mut sessions = state.0.lock().map_err(|e| e.to_string())?;
     sessions.insert(
         id.clone(),
         PtySession {
-            master: Arc::new(Mutex::new(pair.master)),
+            master,
             resize_seq: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             writer,
             child,
@@ -928,11 +976,12 @@ async fn pty_resize(app: AppHandle, id: String, cols: u16, rows: u16) -> Result<
     // ponytail: 정말 막힌 ConPTY는 이 블로킹 스레드 하나를 붙든 채 남는다 (앱은 산다).
     // 새는 것이 실측으로 보이면 그때 세션별 리사이즈 워커 하나로 직렬화한다.
     tauri::async_runtime::spawn_blocking(move || {
-        let m = master.lock().map_err(|e| e.to_string())?;
-        // 기다리는 사이 더 새 요청이 들어왔으면 이 크기는 이미 옛 값이다 — 덮지 않는다
-        if !resize_is_current(&seq_cell, seq) {
+        let guard = master.lock().map_err(|e| e.to_string())?;
+        // 기다리는 사이 더 새 요청이 들어왔으면 이 크기는 이미 옛 값이다 — 덮지 않는다.
+        // 콘솔이 이미 닫혔으면(자식 종료 — B271) 맞출 것이 없다
+        let Some(m) = guard.as_ref().filter(|_| resize_is_current(&seq_cell, seq)) else {
             return Ok(());
-        }
+        };
         // 크기를 resize *앞에* 알린다 — ConPTY는 ResizePseudoConsole 안에서 새 크기의 리페인트를
         // 파이프로 밀어 넣으므로, 뒤에 알리면 리더가 그 리페인트를 옛 크기 화면에 먼저 그린다.
         // ponytail: 리더가 이미 집어 든 한 덩어리는 여전히 옛 크기로 그려질 수 있다 (덩어리 경계 경합)
@@ -3353,6 +3402,22 @@ mod tests {
         assert!(super::superseded(Some(8), 7));
         assert!(!super::superseded(Some(7), 7));
         assert!(!super::superseded(None, 7));
+    }
+
+    /// B271 — 자식 대기는 자기 세대의 콘솔만, 한 번만 닫는다. 세션이 먼저 버려졌으면(kill · 재시작) 할 일이 없다
+    #[test]
+    fn child_wait_closes_only_its_own_console_once() {
+        use std::sync::{Arc, Mutex};
+        let old = Arc::new(Mutex::new(Some("old")));
+        let new = Arc::new(Mutex::new(Some("new")));
+        let old_wait = Arc::downgrade(&old);
+        assert_eq!(super::take_console(&old_wait), Some("old"));
+        assert_eq!(super::take_console(&old_wait), None, "두 번 닫지 않는다");
+        assert_eq!(*new.lock().unwrap(), Some("new"), "같은 id의 새 세대 콘솔은 그대로다");
+        let gone = Arc::new(Mutex::new(Some("killed")));
+        let gone_wait = Arc::downgrade(&gone);
+        drop(gone); // pty_kill · kill_pty_for_restart가 세션을 버렸다 — 콘솔은 그 drop이 닫았다
+        assert_eq!(super::take_console(&gone_wait), None);
     }
 
     /// B291 — Windows는 실제로 뜬 실행 파일을 프런트 셸 라벨로 바꾼다

@@ -31,6 +31,13 @@ export interface EventRow {
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
+/** 피드 시각 (U179) — 오늘이면 'HH:MM', 아니면 'MM/DD HH:MM'. 어제 이벤트가 오늘 것과 같은 꼴(시각만)이었다 */
+export function feedTime(ts: number, now = new Date()): string {
+  const d = new Date(ts);
+  const hm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return d.toDateString() === now.toDateString() ? hm : `${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${hm}`;
+}
+
 /** 셸 하나의 종료가 세 줄('프로세스 종료 · exit ?' · 'dead' · '세션 종료 · exit ?')로 남던 것을 한 줄로 (U175).
  *  PTY가 끝나면 Rust가 늘 session-exit 줄을 적으므로 그것이 정본이다 — 같은 세션 · 같은 때(5초 안)의
  *  agent-state 'dead'와 프런트가 적던 '프로세스 종료 · exit …'(앞 실행의 기록)은 뺀다.

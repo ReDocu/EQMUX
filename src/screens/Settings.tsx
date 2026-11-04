@@ -3,7 +3,7 @@
 // 고정 정책 항목은 클릭해도 바뀌지 않는 선언으로 남는다. Tauri 밖에서는 저장 없이 화면만 바뀐다.
 // 0.5 — 클릭마다 다음 값으로 넘어가던 버튼을 없앴다: 선택지 3개 이하는 세그먼트, 4개 이상은 드롭다운.
 // 0.5 시안(mT3kL·fvlW8) — 카테고리 탭 줄 + 카드. 행은 "이름·설명 | 컨트롤" 한 줄이다.
-import { createSignal, For, Show } from "solid-js";
+import { createSignal, For, Index, Show } from "solid-js";
 import {
   BUDGET_OPTIONS,
   DEFAULT_SETTINGS,
@@ -494,7 +494,15 @@ export function Settings() {
                             value={String(it.current())}
                             onChange={(e) => it.apply(Number(e.currentTarget.value))}
                           >
-                            <For each={it.labels}>{(l, i) => <option value={String(i())}>{t(l)}</option>}</For>
+                            {/* Index — 언어를 바꾸면 라벨 글자만 바뀐다. For는 라벨이 바뀐 option 노드를 갈아 끼워
+                                select가 남은 첫 option을 고른 것처럼 보였다 (B273). selected로 값도 다시 건다 */}
+                            <Index each={it.labels}>
+                              {(l, i) => (
+                                <option value={String(i)} selected={i === it.current()}>
+                                  {t(l())}
+                                </option>
+                              )}
+                            </Index>
                           </select>
                         }
                       >

@@ -1,7 +1,14 @@
 // 이벤트 피드 — 셸 하나의 종료는 한 줄 (U175)
 import { expect, test } from "vitest";
-import { dropExitTwins, feedLevel } from "./events";
+import { dropExitTwins, feedLevel, feedTime } from "./events";
 import type { EventRow } from "./events";
+
+test("오늘이 아닌 이벤트는 날짜를 붙인다 — 오늘 것은 시각만 (U179)", () => {
+  const now = new Date(2026, 10, 3, 21, 45);
+  expect(feedTime(new Date(2026, 10, 3, 0, 4).getTime(), now)).toBe("00:04");
+  expect(feedTime(new Date(2026, 10, 2, 23, 55).getTime(), now)).toBe("11/02 23:55");
+  expect(feedTime(new Date(2025, 10, 3, 9, 5).getTime(), now)).toBe("11/03 09:05"); // 한 해 전 같은 날은 오늘이 아니다
+});
 
 const row = (id: number, ts: number, kind: string, payload: string | null, sessionId = "shell1@w"): EventRow => ({ id, ts, sessionId, kind, payload });
 

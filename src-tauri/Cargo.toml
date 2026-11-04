@@ -1,6 +1,6 @@
 [package]
 name = "eqmux"
-version = "0.6.2"
+version = "0.6.3"
 description = "EQMUX — 멀티 에이전트 관제 MUX"
 edition = "2021"
 default-run = "eqmux" # 콘솔 대리인(src/bin/eqmux-console.rs, B248)이 두 번째 bin이다

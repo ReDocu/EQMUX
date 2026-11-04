@@ -3,7 +3,7 @@
 // UI 리파인 §03: 통계 타일 4개 → 제목 옆 요약 한 줄 · 빈 슬롯 병합 · 닫힌 워크스페이스 한 줄 강등 ·
 // 세션 셀 우클릭 메뉴 (§06 — 셀에는 상태만 남고 액션은 메뉴로).
 import { createMemo, createSignal, For, Index, onCleanup, onMount, Show } from "solid-js";
-import { queryGlobalEvents } from "../backend/events";
+import { feedTime, queryGlobalEvents } from "../backend/events";
 import type { FeedEvent } from "../backend/events";
 import { backend, MAX_OPEN_WORKSPACES, onEventLog } from "../backend/mock";
 import { isTauri, killPty, revealPath } from "../backend/pty";
@@ -121,6 +121,14 @@ export function Dashboard() {
   const jobName = (s: Session) => jobLabel(backend.listJobs().find((j) => j.id === s.jobId), t("셸"));
   const missionName = (s: Session) => missions().find((m) => m.id === s.missionId)?.name;
   // 피드 행의 발신자 — 이미 사라진 세션의 이벤트도 남으므로 안전 조회
+  // 세션 이벤트는 어느 워크스페이스 것인지 붙인다 (U179) — 여럿이면 'shell8 세션 종료'만으로는 모른다.
+  // 앱 이벤트는 문구에 이름이 이미 있다('워크스페이스 열림 · qa-repo')
+  const eventWs = (e: { sessionId?: string; workspaceId?: string }) => {
+    const list = backend.listWorkspaces();
+    if (!e.sessionId || list.length < 2) return undefined;
+    const id = e.workspaceId ?? sessions().find((x) => x.id === e.sessionId)?.workspaceId;
+    return list.find((w) => w.id === id)?.name;
+  };
   const eventName = (sessionId?: string) => {
     if (!sessionId) return t("앱");
     const s = sessions().find((x) => x.id === sessionId);
@@ -231,9 +239,9 @@ export function Dashboard() {
           </div>
         </div>
         {/* 워크스페이스 관리를 관제에서 바로 연다 — 앱 바 + 와 같은 팝업 */}
-        {/* 화면 이름 '워크스페이스 연결 · 관리'와 같은 말을 쓴다 (0.6 QA P83) */}
+        {/* 화면 이름 '워크스페이스 연결 · 관리'와 같은 말을 쓴다 (0.6 QA P83 · U177) */}
         <button class="btn" title={t("워크스페이스 연결 · 관리")} onClick={() => setOverlay("connect")}>
-          {t("워크스페이스 열기")}
+          {t("워크스페이스 연결")}
         </button>
       </div>
       {/* 지표 타일 (시안 SgZhp Metric) — 색은 단계 색만: 행동 amber · 확인 blue · 실행 green */}
@@ -454,7 +462,7 @@ export function Dashboard() {
           </For>
           <Show when={openWs().length === 0}>
             <div class="card" style={{ padding: "16px" }}>
-              <div class="muted">{t("열린 워크스페이스가 없습니다 — 탭 줄의 + 또는 [워크스페이스 열기]에서 git 저장소를 여세요")}</div>
+              <div class="muted">{t("열린 워크스페이스가 없습니다 — 탭 줄의 + 또는 [워크스페이스 연결]에서 git 저장소를 여세요")}</div>
             </div>
           </Show>
           {/* 닫힌 워크스페이스 — 한 줄 강등은 유지하되 항목을 카드로 (U4).
@@ -613,8 +621,12 @@ export function Dashboard() {
             <For each={events()}>
               {(e) => (
                 <div class="event-row">
-                  <span class="mono muted ev-time">{e.time}</span>
-                  <span class="ev-name">{eventName(e.sessionId)}</span>
+                  {/* 오늘이 아니면 날짜도 (U179) — 목 이벤트는 시각만 있다 */}
+                  <span class="mono muted ev-time">{"ts" in e ? feedTime(e.ts) : e.time}</span>
+                  <span class="ev-name">
+                    {eventName(e.sessionId)}
+                    <Show when={eventWs(e)}>{(n) => <span class="muted ev-ws"> · {n()}</span>}</Show>
+                  </span>
                   <span class="muted ev-msg" title={e.message}>{e.message}</span>
                 </div>
               )}

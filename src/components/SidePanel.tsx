@@ -120,7 +120,9 @@ export function SidePanel() {
             <button
               class="panel-tab"
               classList={{ active: active().key === g.key }}
-              title={g.key === "run" && unseenPortCount() > 0 ? t("세션이 연 새 포트가 있습니다") : undefined}
+              // 좁은 창에서는 고르지 않은 탭이 아이콘만 남는다 (U181, screens.css) — 이름은 title · aria-label로 남긴다
+              title={g.key === "run" && unseenPortCount() > 0 ? `${t(g.label)} — ${t("세션이 연 새 포트가 있습니다")}` : t(g.label)}
+              aria-label={t(g.label)}
               onClick={() => setPanelTab(lastSub.get(g.key) ?? g.tabs[0].key)}
             >
               <Icon name={g.icon} size={13} />

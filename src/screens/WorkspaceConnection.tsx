@@ -187,41 +187,55 @@ export function WorkspaceConnection() {
   const liveOf = (id: string) => backend.listSessions().filter((s) => s.workspaceId === id && s.status !== "dead");
   const [unregTarget, setUnregTarget] = createSignal<string | undefined>(undefined);
 
-  // 말줄임표 버튼은 늘 확인창을 연다 (0.6 QA P71) — 세션이 없으면 가벼운 확인
-  const askUnregister = (id: string) => setUnregTarget(id);
+  // 해제 · 되돌리기 진행 중 (B272) — 레지스트리를 다시 읽는 1–2초 동안 아무 표시가 없어 다시 눌렀고, 그사이
+  // 선택이 맨 위 행으로 옮겨 가 다른 워크스페이스가 해제됐다. 도는 동안 버튼을 잠그고 무엇을 하는지 한 줄로 보인다
+  const [busy, setBusy] = createSignal<string | undefined>(undefined);
 
+  // 말줄임표 버튼은 늘 확인창을 연다 (0.6 QA P71) — 세션이 없으면 가벼운 확인
+  const askUnregister = (id: string) => !busy() && setUnregTarget(id);
+
+  // id는 확인창을 연 때의 대상이다 — 지금 선택(selectedId)이 아니다. 제목에 그 이름을 보인다
   const unregister = async (id: string) => {
     setUnregTarget(undefined);
     const ws = workspaces().find((w) => w.id === id);
-    if (isTauri()) {
-      // 실패를 삼키면 버튼이 안 먹은 것처럼 보였다 (0.6 QA B230) — 다른 동작과 같이 보이고 선택은 그대로
-      try {
-        await unregisterWorkspace(id);
-      } catch (e) {
-        setError(String(e));
-        return;
-      } finally {
-        await refreshWorkspaces();
+    if (busy() || !ws) return;
+    const name = ws.name;
+    setBusy(tf("{name}을(를) 등록 해제하는 중…", { name }));
+    try {
+      if (isTauri()) {
+        // 실패를 삼키면 버튼이 안 먹은 것처럼 보였다 (0.6 QA B230) — 다른 동작과 같이 보이고 선택은 그대로
+        try {
+          await unregisterWorkspace(id);
+        } catch (e) {
+          setError(String(e));
+          return;
+        } finally {
+          await refreshWorkspaces();
+        }
+      } else {
+        backend.removeWorkspace(id);
       }
-    } else {
-      backend.removeWorkspace(id);
+    } finally {
+      setBusy(undefined);
     }
     if (selectedId() === id) setSelectedId(groups()[0]?.items[0]?.id); // 화면 맨 위 행 (U62)
     // [되돌리기] (0.6 QA P71) — 지운 항목을 같은 id로 되살리고 그 행을 고른다 (B289). 경로로 다시 등록하면
     // 재지정한 항목은 새 경로의 해시로 다른 id가 돼 대화 · 스크롤백 · 재개 정보가 옛 id 아래 남았다.
     // team.json도 디스크에 그대로라 슬롯이 돌아온다(죽은 세션은 확인창이 말한 대로 안 돌아온다). 목은 되살릴 길이 없다
-    if (!ws) return;
-    const name = ws.name;
     if (!isTauri()) return notify(tf("{name}을(를) 등록 해제했습니다", { name }), "ok");
     notify(tf("{name}을(를) 등록 해제했습니다", { name }), "ok", {
       label: t("되돌리기"),
       run: async () => {
+        if (busy()) return;
+        setBusy(tf("{name}을(를) 되돌리는 중…", { name }));
         try {
-          const info = await restoreWorkspace(ws.id);
+          const info = await restoreWorkspace(id);
           await refreshWorkspaces();
           setSelectedId(info.entry.id);
         } catch (e) {
-          notify(`${t("되돌리기 실패")} · ${String(e)}`);
+          notify(`${t("되돌리기 실패")} · ${tErr(e)}`);
+        } finally {
+          setBusy(undefined);
         }
       },
     });
@@ -262,6 +276,11 @@ export function WorkspaceConnection() {
         <div class="conn-list">
           <Show when={error()}>
             <div class="card conn-error mono">{tErr(error())}</div>
+          </Show>
+          <Show when={busy()}>
+            <div class="card mono muted conn-busy" role="status">
+              {busy()}
+            </div>
           </Show>
           <div class="conn-registry" role="list">
             <For each={groups()}>
@@ -463,10 +482,11 @@ export function WorkspaceConnection() {
                   </button>
                   <button
                     class="btn conn-unreg"
+                    disabled={!!busy()}
                     title={t("레지스트리에서만 제거 — 디스크의 저장소는 그대로 · 실행 중 세션은 종료됩니다")}
                     onClick={() => askUnregister(ws().id)}
                   >
-                    {t("등록 해제…")}
+                    {busy() ? t("처리하는 중…") : t("등록 해제…")}
                   </button>
                 </div>
               </>
@@ -492,7 +512,7 @@ export function WorkspaceConnection() {
         {(id) => (
           <ConfirmDialog
             danger={liveOf(id()).length > 0}
-            title={t("등록을 해제할까요?")}
+            title={tf("{name}을(를) 등록 해제할까요?", { name: workspaces().find((w) => w.id === id())?.name ?? "" })}
             body={
               <>
                 <Show

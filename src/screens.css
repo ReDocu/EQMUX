@@ -834,7 +834,8 @@
 
 /* ── 사이드 패널 (화면 #10) ── */
 .side-panel {
-  width: 440px;
+  /* 창 폭의 40%를 넘지 않는다 (U181) — 900px 창에서 440px를 그대로 먹어 본문 그리드가 칸당 50px로 줄었다 */
+  width: min(440px, 40vw);
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -7552,4 +7553,43 @@ body[data-browser-side="left"] #eq-toasts {
   border-radius: var(--eq-r-sm);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
   pointer-events: none;
+}
+
+/* 0.6.3 eqmux-ce: 등록 해제 · 되돌리기 진행 줄 (B272) · 이벤트의 워크스페이스 이름 (U179) */
+.conn-busy {
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  font-size: 11px;
+}
+.event-row .ev-ws {
+  font-weight: 400;
+}
+
+/* 0.6.3 eqmux-b1: 좁은 창 (U181) — 사이드 패널 폭 상한은 위 .side-panel(min(440px, 40vw)) */
+/* 패널이 440px보다 좁아지면(= 창 1100px 미만) 고르지 않은 그룹 탭은 아이콘만 둔다. 이름은 title · aria-label에 남는다.
+   패널 폭이 창 폭만으로 정해져 미디어 쿼리로 충분하다 — 패널을 컨테이너로 만들면 안의 확인창(position: fixed)이 걸릴 수 있다 */
+@media (max-width: 1099.98px) {
+  .panel-tab:not(.active) .panel-tab-label {
+    display: none;
+  }
+  .panel-tab:not(.active) {
+    padding: 0 9px;
+  }
+}
+/* 본문 그리드가 좁으면 3열 이상 배치를 2열로 접는다 — 900px 창 + 패널에서 4열이 칸당 50px였다.
+   CSS 트랙만 바꾼다: 슬롯 번호 · 순서(읽는 순서)는 그대로고, 줌은 원래 규칙이 이긴다.
+   분할선(M30)은 원래 트랙 위치에 그려지므로 접힌 동안 숨긴다 — 저장된 비율은 그대로 남는다 */
+.cc-center,
+.tf-main {
+  container: cc-grid / inline-size;
+}
+@container cc-grid (max-width: 640px) {
+  .terminal-grid:not(.zoomed):is(.layout-row-h, .layout-main-bottom, .slots-6.layout-grid-col, .slots-8.layout-grid-col, .slots-6.layout-grid-row, .slots-8.layout-grid-row) {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    grid-template-rows: none !important;
+    grid-auto-flow: row !important;
+  }
+  .terminal-grid:not(.zoomed):is(.layout-row-h, .layout-main-bottom, .slots-6.layout-grid-col, .slots-8.layout-grid-col, .slots-6.layout-grid-row, .slots-8.layout-grid-row) > .pane-divider {
+    display: none;
+  }
 }
