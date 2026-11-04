@@ -5,9 +5,12 @@ const MARK = "EQMUX_EXIT:";
 
 /** 셸별 표식 꼬리 — 명령 바로 뒤에 붙인다. cmd는 %ERRORLEVEL%이 줄을 읽을 때 펼쳐져 못 쓴다 → undefined.
  *  입력 줄 에코에는 `$?`·`$LASTEXITCODE`가 그대로 보여 숫자 표식과 섞이지 않는다 */
+const shellBase = (shellCmd: string) => shellCmd.toLowerCase().replace(/\\/g, "/").split("/").pop()?.replace(/\.exe$/, "") ?? "";
+export const isPowerShell = (shellCmd: string): boolean => ["pwsh", "powershell"].includes(shellBase(shellCmd));
+
 export function exitMarkerSuffix(shellCmd: string, tag: string): string | undefined {
-  const sh = shellCmd.toLowerCase().replace(/\\/g, "/").split("/").pop()?.replace(/\.exe$/, "") ?? "";
-  if (sh === "pwsh" || sh === "powershell") return `; echo "${MARK}${tag}:$LASTEXITCODE"`;
+  const sh = shellBase(shellCmd);
+  if (isPowerShell(sh)) return `; echo "${MARK}${tag}:$LASTEXITCODE"`;
   if (sh === "cmd") return undefined;
   return `; echo "${MARK}${tag}:$?"`; // bash · zsh · sh · fish(…$status가 맞지만 $?도 받는다)
 }
@@ -16,12 +19,13 @@ export function exitMarkerSuffix(shellCmd: string, tag: string): string | undefi
 // eslint-disable-next-line no-control-regex
 const ANSI = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
 
-/** 누적 출력에서 이 실행(tag)의 마지막 표식 종료 코드 — 없으면 undefined. 빈 `$LASTEXITCODE`(cmdlet만 돈 경우)는 0.
- *  tag가 다른 표식(같은 셸에서 먼저 돌던 실행)은 무시한다 */
-export function findExitCode(buf: string, tag: string): number | undefined {
+/** 누적 출력에서 이 실행(tag)의 마지막 표식 종료 코드 — 없으면 undefined. tag가 다른 표식(같은 셸에서 먼저 돌던 실행)은 무시한다.
+ *  빈 값은 PowerShell에서만 0이다(cmdlet만 돈 `$LASTEXITCODE`). 다른 셸의 `$?`는 비지 않으니, 비었으면 셸을 잘못 안 것이다 (B276) */
+export function findExitCode(buf: string, tag: string, emptyIsZero = false): number | undefined {
   const text = buf.replace(ANSI, "");
   const all = [...text.matchAll(new RegExp(`${MARK}${tag}:(-?\\d*)\\s*$`, "gm"))];
   const last = all.at(-1);
   if (!last) return undefined;
-  return last[1] === "" ? 0 : Number(last[1]);
+  if (last[1] === "") return emptyIsZero ? 0 : undefined;
+  return Number(last[1]);
 }

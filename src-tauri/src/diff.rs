@@ -351,12 +351,22 @@ fn valid_hash(hash: &str) -> bool {
     (4..=64).contains(&hash.len()) && hash.chars().all(|c| c.is_ascii_hexdigit())
 }
 
-/// 커밋의 변경 파일 목록 — diff-tree 부모↔커밋. 루트 커밋은 --root로 전체 A가 된다.
+/// 커밋의 변경 파일 목록 — diff-tree 첫 부모↔커밋. 루트 커밋은 --root로 전체 A가 된다.
+/// B300 — 한 인자 꼴(`diff-tree <hash>`)은 merge 커밋에 아무것도 내지 않는다. 부모가 있으면 두 트리 꼴로
+/// 첫 부모와 비교한다 — 파일 하나의 diff(commit_file_diff)도 `hash^` 기준이다
 pub fn commit_changed_files(ws_path: &str, hash: &str) -> Result<Vec<ChangedFile>, String> {
     if !valid_hash(hash) {
         return Err("잘못된 커밋 해시".into());
     }
-    let args = |what: &'static str| ["diff-tree", "-r", "--no-commit-id", "--root", "--find-renames", what, hash];
+    let parent = format!("{hash}^");
+    let has_parent = git(&["rev-parse", "--verify", "-q", &parent], ws_path).is_ok();
+    let args = |what: &'static str| {
+        if has_parent {
+            vec!["diff-tree", "-r", "--find-renames", what, parent.as_str(), hash]
+        } else {
+            vec!["diff-tree", "-r", "--no-commit-id", "--root", "--find-renames", what, hash]
+        }
+    };
     let ns = git(&args("--name-status"), ws_path)?;
     // 경로 → (+, −) — rename 표기는 numstat_path로 새 경로 기준 정규화 (P-9와 같은 규칙)
     let mut stats: std::collections::HashMap<String, (String, String)> = std::collections::HashMap::new();
@@ -660,5 +670,28 @@ mod tests {
         assert_eq!(numstat_path("old.txt => new.txt"), "new.txt");
         assert_eq!(numstat_path("src/{old.rs => new.rs}"), "src/new.rs");
         assert_eq!(numstat_path("src/{ => sub}/mod.rs"), "src/sub/mod.rs");
+    }
+
+    /// B300 — merge 커밋은 첫 부모와 비교한 목록을 낸다 (한 인자 꼴 diff-tree는 빈 목록이었다)
+    #[test]
+    fn merge_commit_lists_first_parent_changes() {
+        let (dir, ws) = temp_repo("merge");
+        fs::write(dir.join("a.txt"), "a\n").unwrap();
+        git(&["add", "."], &ws).unwrap();
+        git(&["commit", "-m", "root"], &ws).unwrap();
+        let main = git(&["rev-parse", "--abbrev-ref", "HEAD"], &ws).unwrap().trim().to_string();
+        git(&["switch", "-c", "feat"], &ws).unwrap();
+        fs::write(dir.join("b.txt"), "b\n").unwrap();
+        git(&["add", "."], &ws).unwrap();
+        git(&["commit", "-m", "feat"], &ws).unwrap();
+        git(&["switch", &main], &ws).unwrap();
+        fs::write(dir.join("a.txt"), "a2\n").unwrap();
+        git(&["commit", "-am", "main"], &ws).unwrap();
+        git(&["merge", "--no-ff", "-m", "merge feat", "feat"], &ws).unwrap();
+        let m = git(&["rev-parse", "HEAD"], &ws).unwrap().trim().to_string();
+        let files = commit_changed_files(&ws, &m).unwrap();
+        assert_eq!(files.iter().map(|f| (f.status.as_str(), f.path.as_str())).collect::<Vec<_>>(), vec![("A", "b.txt")], "첫 부모(main)에 없던 것만");
+        assert_eq!(commit_file_diff(&ws, &m, "b.txt").unwrap().current.len(), 1);
+        fs::remove_dir_all(&dir).ok();
     }
 }

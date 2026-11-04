@@ -7,7 +7,7 @@ import { backend } from "./mock";
 import { cancelBrief, injectLine, queueBrief, sendConversation } from "./conversation";
 import { isTauri, listAlivePty, onPtyOutput, writePty } from "./pty";
 import { serverTermId } from "./ports";
-import { exitMarkerSuffix, findExitCode } from "../screens/reviewRules";
+import { exitMarkerSuffix, findExitCode, isPowerShell } from "../screens/reviewRules";
 import { canInject } from "../types";
 import type { ConversationMessage, Mission, MissionStatus } from "../types";
 import { notify } from "../components/ui";
@@ -148,18 +148,25 @@ export async function toggleAssign(
   const m = backend.listMissions().find((x) => x.id === missionId && x.workspaceId === wsId);
   if (!m) return;
   const wasAssigned = m.assigned.includes(sessionId);
-  if (!wasAssigned) assignedAt.set(atKey(wsId, missionId, sessionId), Date.now());
   const movedFrom = wasAssigned
     ? []
     : backend.listMissions().filter((x) => x.workspaceId === wsId && x.id !== missionId && x.assigned.includes(sessionId));
   // 역할 파일과 같은 cwd 규약 (FR-E-63 · B59) — repo 루트에 쓰면 워크트리 세션은 에이전트가
-  // 읽는 파일이 아니라 루트의 반쪽 스텁에 임무가 들어가고, 화면만 ✓가 붙는다
+  // 읽는 파일이 아니라 루트의 반쪽 스텁에 임무가 들어가고, 화면만 ✓가 붙는다.
+  // 임무 파일은 repo 루트에서 읽는다 (B277) — 워크트리에는 커밋 전 임무가 없다
   const sess = backend.listSessions().find((x) => x.id === sessionId);
-  await invoke("mission_assign", {
+  const ok = await invoke("mission_assign", {
     wsPath: sess?.cwd || path,
+    root: path,
     session: sessionId,
     missionId: wasAssigned ? null : missionId,
-  }).catch(failed);
+  }).then(
+    () => true,
+    (e) => (failed(e), false),
+  );
+  // 쓰기가 실패하면 배정 시각 · 브리프로 가지 않는다 (B278) — 에이전트만 임무를 안다고 믿게 된다
+  if (!ok) return;
+  if (!wasAssigned) assignedAt.set(atKey(wsId, missionId, sessionId), Date.now());
   // 배정 시각 (B92) — repo 루트의 임무 파일에 남긴다(워크트리 세션도 같은 파일). 옮겨 온 임무의 항목은 지운다.
   // 실패해도 배정은 이미 됐다 — 그때는 시각을 몰라 예전처럼 모든 보고를 본다
   const mark = (id: string, assigned: boolean) =>
@@ -291,18 +298,20 @@ export type TestRun = number | "no-shell" | "unsupported" | "timeout";
 
 /** [테스트 실행] — 서버 탭 셸에 명령 + 종료 표식을 치고, 출력에서 표식을 찾아 종료 코드를 돌려준다.
  *  서버 셸이 안 떠 있으면 "no-shell"(화면이 서버 탭을 연다), 표식을 못 붙이는 셸(cmd)은 "unsupported".
+ *  shellCmd는 서버 PTY가 실제로 뜬 셸이다 (B276 — 누르는 순간의 기본 셸 설정이 아니다). 모르면 "unsupported".
  *  ponytail: 30분 넘게 표식이 없으면 "timeout" — 셸은 그대로 두고 기다리기만 그만둔다 */
-export async function runReviewTest(wsId: string, run: string, shellCmd: string): Promise<TestRun> {
+export async function runReviewTest(wsId: string, run: string, shellCmd: string | undefined): Promise<TestRun> {
   const id = serverTermId(wsId);
   if (!(await listAlivePty()).includes(id)) return "no-shell";
   const tag = Date.now().toString(36); // 실행마다 다른 꼬리표 — 같은 셸의 앞 실행 표식과 섞이지 않게
-  const suffix = exitMarkerSuffix(shellCmd, tag);
+  const suffix = shellCmd && exitMarkerSuffix(shellCmd, tag);
   if (!suffix) return "unsupported";
+  const pwsh = isPowerShell(shellCmd);
   return new Promise((resolve) => {
     let buf = "";
     const off = onPtyOutput(id, (d) => {
       buf = (buf + d).slice(-8000);
-      const code = findExitCode(buf, tag);
+      const code = findExitCode(buf, tag, pwsh);
       if (code === undefined) return;
       off();
       clearTimeout(timer);

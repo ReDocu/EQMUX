@@ -1,5 +1,6 @@
 // 포트·탐색기 패널 브리지 (PRD H) — 관측 전용 실측. 브라우저 dev에서는 목 폴백.
 import { invoke } from "@tauri-apps/api/core";
+import { createSignal } from "solid-js";
 import { isTauri } from "./pty";
 import { sessionDisplayName } from "../types";
 import type { Session } from "../types";
@@ -79,6 +80,18 @@ export function fsRename(wsPath: string, rel: string, newName: string): Promise<
 export function fsDelete(wsPath: string, rel: string): Promise<void> {
   return invoke("fs_delete", { wsPath, rel });
 }
+
+/** 저장이 밖에서 바뀐 파일 때문에 거부됐는가 (U189) — fsx.rs write_file의 거부 문구와 짝이다 */
+export const isStaleWrite = (err: unknown) => /밖에서 바뀌었/.test(String(err));
+
+// 미저장 편집 표식 (B302) — 환경변수 [원문 편집] · 스킬 [편집]이 세우고, 내려가면 끈다.
+// 사이드 패널이 닫기 가드와 '편집 중인 하위 탭 살려 두기'에 쓴다 (확장 탭은 지연 로드라 표식이 여기 산다)
+export const [envDirty, setEnvDirty] = createSignal(false);
+export const [skillDirty, setSkillDirty] = createSignal(false);
+
+/** 패널을 닫으면 사라질 미저장 편집의 자리 (B302) — 비면 묻지 않고 닫는다 */
+export const unsavedWhere = (files: boolean, env: boolean, skills: boolean): string[] =>
+  [files && "파일", env && "환경변수", skills && "스킬"].filter((x): x is string => !!x);
 
 // ── 스크롤백 검색·디스크 페이징 (FR-C-13·14·16) ──
 

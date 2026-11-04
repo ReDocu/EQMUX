@@ -13,13 +13,12 @@ import { startAgentProbe } from "./backend/agentprobe";
 import { startMemorySampling } from "./backend/memory";
 import { diagSnapshot, startDiagnostics } from "./backend/diag";
 import { startBrowserRequests } from "./backend/browser";
-import { isServerTermId, startPortWatch } from "./backend/ports";
+import { startPortWatch } from "./backend/ports";
 import { startRecapUpdates } from "./backend/recap";
-import { ensurePtyListeners, isTauri, listAlivePty, setPtyExitHook } from "./backend/pty";
+import { ensurePtyListeners, isTauri, setPtyExitHook } from "./backend/pty";
 import { crashOpen, crashReport, loadCrashRecovery, setCrashOpen } from "./backend/recovery";
 import { loadSettings, settings, updateSettings } from "./backend/settings";
 import { FirstRunNotice, firstRunPending, startForeignCheck } from "./components/FirstRunNotice";
-import { performShutdown } from "./backend/shutdown";
 import { startTeamSync } from "./backend/team";
 import { startFileWatch } from "./backend/watch";
 import { refreshWorkspaces } from "./backend/workspaces";
@@ -30,7 +29,6 @@ import {
   overlay,
   panelOpen,
   scopeWorkspace,
-  setExitOpen,
   setLayoutPickerOpen,
   setPanelOpen,
   setView,
@@ -47,7 +45,7 @@ import { ConfirmDialog, notify } from "./components/ui";
 import { ControlCenter } from "./screens/ControlCenter";
 import { CrashRecovery } from "./screens/CrashRecovery";
 import { Dashboard } from "./screens/Dashboard";
-import { ExitDialog } from "./screens/ExitDialog";
+import { ExitDialog, requestQuit } from "./screens/ExitDialog";
 import { LayoutPicker } from "./screens/LayoutPicker";
 
 // 첫 화면 밖 화면은 나눠 싣는다 (최적화 D6) — 설정·역할 라이브러리·diff 편집기·캐스팅 등은
@@ -115,9 +113,9 @@ export function App() {
       // e.code로 본다 — macOS에서 Option이 눌리면 e.key가 'd'가 아니라 '∂'로 온다 (U69)
       if (!e.ctrlKey || !e.altKey || e.code !== "KeyD") return;
       e.preventDefault();
-      setDiagMark("진단 기록 중…");
+      setDiagMark(t("진단 기록 중…")); // 영어 화면에도 (U186)
       void diagSnapshot("USER-MARK 화면 손상 신고").then(() => {
-        setDiagMark("진단에 기록했습니다 — ~/.eqmux/logs/diagnostics.log"); // 저장소의 .eqmux/가 아니다 (U127)
+        setDiagMark(t("진단에 기록했습니다 — ~/.eqmux/logs/diagnostics.log")); // 저장소의 .eqmux/가 아니다 (U127)
         setTimeout(() => setDiagMark(undefined), 2600);
       });
     };
@@ -137,15 +135,8 @@ export function App() {
   // 창 닫기 = 앱 완전 종료 (FR-C-60) — 실행 중 세션이 있으면 확인 다이얼로그 (FR-C-61),
   // 없으면 flush 시퀀스만 돌고 조용히 종료된다.
   // macOS ⌘Q·Dock '종료'도 같은 길로 온다 (B112) — 창 닫기를 거치지 않으므로 Rust(quit.rs)가
-  // terminate를 취소하고 'app-quit-requested'를 보낸다. 로그아웃은 Rust가 직접 정리한다
-  const requestQuit = async () => {
-    // 서버 탭 PTY는 세션 목록 밖이다 — 그것만 돌 때도 dev 서버가 말없이 죽지 않게 묻는다 (BR-05)
-    const running =
-      backend.listSessions().some((s) => s.status !== "dead") ||
-      (await listAlivePty()).some(isServerTermId);
-    if (running) setExitOpen(true);
-    else void performShutdown();
-  };
+  // terminate를 취소하고 'app-quit-requested'를 보낸다. 로그아웃은 Rust가 직접 정리한다.
+  // requestQuit은 ExitDialog에 있다 — 앱 바 [종료]도 같은 길을 탄다 (U187), 살아 있는 PTY만 센다 (B292)
   // 첫 트레이 숨김 확인 (P65) — 창을 숨기기 전에 앱 안에서 묻는다. OS 알림은 꺼져 있거나 포터블
   // 빌드에서 안 뜰 수 있어, 사람은 앱이 꺼졌다고 믿고 에이전트는 계속 돈다(§1-1). 값은 숨길 PTY 수
   const [trayAsk, setTrayAsk] = createSignal(0);

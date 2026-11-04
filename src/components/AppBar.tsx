@@ -28,7 +28,6 @@ import {
   panelOpen,
   pushLayer,
   scopeWorkspace,
-  setExitOpen,
   setFocusRequest,
   setOverlay,
   setPanelOpen,
@@ -48,6 +47,8 @@ import { crashReport, setCrashOpen } from "../backend/recovery";
 import type { MenuGroup } from "./ui";
 import { SessionPortrait } from "./PersonaAvatar";
 import { revealLabel } from "../labels";
+import { WsNameInput } from "./WsNameEdit";
+import { requestQuit } from "../screens/ExitDialog";
 
 export function AppBar() {
   const workspaces = () => {
@@ -83,6 +84,8 @@ export function AppBar() {
     if (view().kind === "workspace" && (view() as { id?: string }).id === id) setView({ kind: "control" });
   };
 
+  // 이름을 바꾸는 중인 탭 (S23) — 더블클릭 · 탭 메뉴 [이름 바꾸기…]
+  const [renaming, setRenaming] = createSignal<string | undefined>(undefined);
   // 워크스페이스 탭 메뉴 (0.5 iGjf9) — 우클릭 또는 `⋯`. 열기 · 알림 · 닫기 묶음 순서
   const [tabMenu, setTabMenu] = createSignal<{ x: number; y: number; ws: Workspace } | undefined>(undefined);
   const tabMenuGroups = (ws: Workspace): MenuGroup[] => {
@@ -101,6 +104,8 @@ export function AppBar() {
         // 웹 주소로 바꿀 수 없는 원격(로컬 경로·없음)은 숨긴다 — 조건이 영영 맞지 않는 동작이다
         ...(web ? [{ label: t("원격 저장소 열기"), action: () => openLink(web) }] : []),
         { label: t("워크스페이스 관리…"), action: () => toggleOverlay("connect") },
+        // 더블클릭과 같은 입력칸 — 키보드로는 `⋯` 메뉴에서 닿는다 (S23)
+        { label: t("이름 바꾸기…"), action: () => setRenaming(ws.id) },
       ],
       [
         { label: t("알림 음소거"), checked: settings().muted.includes(ws.id), action: () => toggleMuted(ws.id) },
@@ -287,12 +292,23 @@ export function AppBar() {
           </button>
           <For each={workspaces()}>
             {(ws) => (
+              <Show
+                when={renaming() !== ws.id}
+                fallback={
+                  // 이름 바꾸는 동안은 버튼이 아니다 — 버튼 안의 입력칸은 클릭 · Space가 탭 전환으로 샌다 (S23)
+                  <div class="tab ws-tab ws-tab-rename" classList={{ active: tabWs() === ws.id }}>
+                    <Icon name="users" size={13} />
+                    <WsNameInput ws={ws} onDone={() => setRenaming(undefined)} />
+                  </div>
+                }
+              >
               <button
                 class="tab ws-tab"
                 role="tab"
                 aria-selected={tabWs() === ws.id}
                 classList={{ active: tabWs() === ws.id }}
                 onClick={() => setView({ kind: "workspace", id: ws.id })}
+                onDblClick={() => setRenaming(ws.id)}
                 onContextMenu={(e) => {
                   e.preventDefault();
                   setTabMenu({ x: e.clientX, y: e.clientY, ws });
@@ -350,6 +366,7 @@ export function AppBar() {
                   <Icon name="x" size={11} />
                 </span>
               </button>
+              </Show>
             )}
           </For>
         </div>
@@ -440,7 +457,8 @@ export function AppBar() {
           <Icon name="settings" size={13} />
           <span class="tool-label">{t("설정")}</span>
         </button>
-        <button class="tool exit" title={t("종료")} aria-label={t("종료")} onClick={() => setExitOpen(true)}>
+        {/* 창 닫기 · ⌘Q · 트레이와 같은 길 — 끌 것이 없으면 확인창 없이 끝난다 (U187) */}
+        <button class="tool exit" title={t("종료")} aria-label={t("종료")} onClick={() => void requestQuit()}>
           <Icon name="power" size={13} />
           <span class="tool-label">{t("종료")}</span>
         </button>

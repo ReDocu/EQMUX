@@ -22,6 +22,12 @@ describe("groupByConversation", () => {
     expect(g[0].session).toBeUndefined(); // null(Rust None)도 undefined로
   });
 
+  test("워크트리 대화는 그 워크트리 폴더를 대화 단위로 싣는다 (S24)", () => {
+    const wt = "D:\\w\\app\\.eqmux\\worktrees\\kai@w";
+    const g = groupByConversation([hit("a", 10, { worktree: wt }), hit("b", 5)]);
+    expect(g.map((x) => x.worktree)).toEqual([wt, undefined]);
+  });
+
   test("빈 결과", () => {
     expect(groupByConversation([])).toEqual([]);
   });

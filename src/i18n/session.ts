@@ -84,7 +84,6 @@ export const dict: Record<string, string> = {
   "EQMUX를 종료할까요?": "Quit EQMUX?",
   "실행 중인 세션 {n}개가 종료됩니다. 자동 재개하지 않습니다.":
     "{n} running session(s) will be terminated. They will not auto-resume.",
-  "실행 중인 세션이 없습니다 — 바로 종료합니다.": "No sessions running — quitting immediately.",
   "승인 대기 — 종료하면 거부로 끝남": "awaiting approval — quitting denies it",
   "모두 종료": "Quit all",
   "종료 중…": "Quitting…",
@@ -127,7 +126,14 @@ export const dict: Record<string, string> = {
   "{n}줄을 붙여넣어 실행합니다": "Pasting {n} lines — they will run",
   "직무 권한을 찾을 수 없습니다 — 역할을 다시 지정하세요":
     "No job permissions found — assign the role again",
-  "이미지 붙여넣기 → 파일 저장 후 경로 삽입": "Paste image → saved to file, path inserted",
+  "이미지만 있으면 붙여넣기 → 파일 저장 후 경로 삽입": "Paste with only an image on the clipboard → saved to file, path inserted",
+  // 0.6.2 QA eqmux-75 (B294 · B295 · B291)
+  "이미지로 붙여넣기": "Paste as image",
+  "클립보드에 이미지가 없습니다": "There is no image on the clipboard",
+  "작업 폴더가 없어 홈 폴더에서 열었습니다: {cwd} — 경로 재지정이 필요합니다":
+    "The working folder is missing, so the shell opened in your home folder: {cwd} — re-point the path",
+  "고른 셸 없음": "chosen shell not found",
+  "셸 다시 열기 → {cwd}": "Shell reopened → {cwd}",
   "탐색기에서 열기": "Reveal in File Explorer",
   더블클릭: "Double-click",
 

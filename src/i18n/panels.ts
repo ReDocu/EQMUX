@@ -204,7 +204,6 @@ export const dict: Record<string, string> = {
   파일: "Files",
   "셸 다시 열기": "Reopen shell",
   "저장하지 않은 편집": "Unsaved edits",
-  "파일 탭에 저장하지 않은 편집이 있습니다. 패널을 닫으면 사라집니다.": "The Files tab has unsaved edits. Closing the panel discards them.",
   "버리고 닫기": "Discard and close",
   // 편집기 [취소] · 워크스페이스 전환 확인 (P77 · B200) — 제목 '저장하지 않은 편집이 있습니다'는 roles 사전
   "버리면 고친 내용이 사라집니다. 남기려면 [계속 편집]을 누르고 [저장]하세요.":
@@ -239,4 +238,20 @@ export const dict: Record<string, string> = {
   "이름은 1~40자, 명령은 한 줄이어야 합니다": "The name must be 1–40 characters and the command a single line",
   "JSON으로 읽을 수 없어 고치지 않았습니다 — 파일 탭에서 먼저 고치세요": "Left unchanged because it isn't valid JSON — fix it in the Files tab first",
   "이미 저장된 명령입니다": "This command is already saved",
+  // ── 0.6.2 QA eqmux-11: B307 서버 명령 비밀값 확인 ──
+  "비밀값으로 보이는 부분이 있습니다": "Part of this looks like a secret",
+  "{f}은(는) 커밋 대상입니다. 그대로 쓰면 다음 커밋에 비밀값이 함께 올라갈 수 있습니다.":
+    "{f} is committed to the repository. Writing it as is may push the secret with your next commit.",
+  "그대로 쓰기": "Write anyway",
+  // 0.6.2 QA eqmux-b1: 파일 탭 · 패널 닫기 (B302 · U189 · S28)
+  "저장하지 않은 편집이 있습니다 — {where}. 패널을 닫으면 사라집니다.": "There are unsaved edits — {where}. Closing the panel discards them.",
+  "파일이 밖에서 바뀌었습니다 — [덮어쓰기]로 내 편집을 저장하거나, [내 편집 복사] 뒤 [취소]하고 다시 여세요":
+    "The file changed outside the app — choose [Overwrite] to save your edit, or [Copy my edit], then [Cancel] and reopen it",
+  "덮어쓰기": "Overwrite",
+  "내 편집 복사": "Copy my edit",
+  "내 편집을 복사했습니다": "Copied your edit",
+  "밖에서 바뀐 파일 덮어쓰기": "Overwrite the changed file",
+  "디스크의 지금 내용을 내 편집으로 바꿉니다. 밖에서 고친 내용은 사라집니다.":
+    "Replaces what is on disk now with your edit. Changes made outside the app are lost.",
+  "실측 · 탭을 볼 때와 ⟳로 새로 읽음": "Live · rereads when shown and with ⟳",
 };

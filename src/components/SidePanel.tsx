@@ -3,10 +3,12 @@
 // 환경변수 탭은 늘 보인다 — .env가 없을 때 만들기의 입구가 그 탭이다 (§16 V2).
 // 하위 키(PanelTab)는 그대로라 openPanel("git") 같은 호출부가 그대로 그 하위 탭을 연다.
 // 파일 탐색기는 임무 팝업에서 코드 그룹으로 옮겼다 (결정 21) — 임무 팝업은 임무만 그린다.
-// 파일 탭은 한 번 열면 숨겨도 살려 둔다 — 탭을 오가도 편집 중인 내용이 사라지지 않게. 패널을 닫을 때만 묻는다.
+// 파일 탭은 한 번 열면 숨겨도 살려 둔다 — 탭을 오가도 편집 중인 내용이 사라지지 않게. 환경변수 · 확장 탭은
+// 저장 안 한 편집이 있는 동안만 살려 둔다 (B302). 패널을 닫을 때만 묻는다.
 // 위치 전환 — 플렉스 order로 좌/우를 오간다 (app-row · tf-body 양쪽 컨테이너 공용).
 import { createEffect, createResource, createSignal, For, lazy, onCleanup, Show } from "solid-js";
 import { loadEnvFiles } from "../backend/env";
+import { envDirty, skillDirty, unsavedWhere } from "../backend/panels";
 import { priorLayout } from "../backend/layout";
 import { unseenPortCount } from "../backend/ports";
 import {
@@ -100,10 +102,13 @@ export function SidePanel() {
   // 파일 탭은 한 번 열면 살려 둔다 (머리 주석)
   const [filesSeen, setFilesSeen] = createSignal(false);
   createEffect(() => panelTab() === "files" && setFilesSeen(true));
-  // 패널 닫기 — 탐색기에 저장하지 않은 편집이 있으면 묻는다. 닫는 길(앱 바 · git · 로컬 폴더 · 이 버튼)이 모두
-  // setPanelOpen을 지나므로 거기에 건 가드 하나로 지킨다 (state.ts). 확인창은 여기서 띄운다.
+  // 패널 닫기 — 파일 · 환경변수 원문 · 스킬에 저장하지 않은 편집이 있으면 묻는다 (B302). 닫는 길(앱 바 · git ·
+  // 로컬 폴더 · 이 버튼)이 모두 setPanelOpen을 지나므로 거기에 건 가드 하나로 지킨다 (state.ts). 확인창은 여기서 띄운다.
+  // 하위 탭 이동은 묻지 않는다 — 편집 중인 탭은 숨겨 두고 살린다(아래 env · ext).
   // ponytail: 전체 화면 터미널로 패널이 가려질 때도 내려가 편집이 사라진다 — 닫기가 아니라 가드 밖이다
-  onCleanup(setPanelGuard(() => editorGuard()));
+  const unsaved = () => unsavedWhere(editorGuard(), envDirty(), skillDirty());
+  onCleanup(setPanelGuard(() => unsaved().length > 0));
+  const isExt = (k: PanelTab) => k === "mcp" || k === "plugins" || k === "skills";
   createEffect(() => lastSub.set(groupOf(panelTab()).key, panelTab()));
   // 새 사용자(이전 layout.json 없음)는 묶이기 전 탭을 본 적이 없다 — 안내 없이 본 것으로 적어 둔다 (U40)
   createEffect(() => priorLayout() === false && notice() && dismissNotice());
@@ -184,23 +189,29 @@ export function SidePanel() {
         <Show when={panelTab() === "mdview"}>
           <MdViewTab />
         </Show>
-        <Show when={panelTab() === "env"}>
-          <EnvPanelTab files={envFiles() ?? []} loading={!!scopeWorkspace() && envFiles() === undefined} wsPath={scopeWorkspace()?.path} onReload={() => void reloadEnv()} />
+        {/* 고친 원문이 있으면 다른 탭에 가도 숨겨 두고 살린다 (B302). 그 밖에는 원래대로 들어올 때마다 새로 그린다 (P67) */}
+        <Show when={panelTab() === "env" || envDirty()}>
+          <div style={{ display: panelTab() === "env" ? "contents" : "none" }}>
+            <EnvPanelTab files={envFiles() ?? []} loading={!!scopeWorkspace() && envFiles() === undefined} wsPath={scopeWorkspace()?.path} onReload={() => void reloadEnv()} />
+          </div>
         </Show>
         <Show when={filesSeen()}>
           <div class="panel-files" style={{ display: panelTab() === "files" ? undefined : "none" }}>
             <MissionExplorerTab />
           </div>
         </Show>
-        <Show when={panelTab() === "mcp" || panelTab() === "plugins" || panelTab() === "skills"}>
-          <ExtensionsPanelTab kind={panelTab() as "mcp" | "plugins" | "skills"} />
+        {/* 스킬 편집이 남아 있으면 확장 그룹 밖에서도 숨겨 두고 살린다 (B302) — 숨은 동안 kind는 스킬이다 */}
+        <Show when={isExt(panelTab()) || skillDirty()}>
+          <div style={{ display: isExt(panelTab()) ? "contents" : "none" }}>
+            <ExtensionsPanelTab kind={isExt(panelTab()) ? (panelTab() as "mcp" | "plugins" | "skills") : "skills"} />
+          </div>
         </Show>
       </div>
       <Show when={panelCloseAsk()}>
         <ConfirmDialog
           danger
           title={t("저장하지 않은 편집")}
-          body={<span>{t("파일 탭에 저장하지 않은 편집이 있습니다. 패널을 닫으면 사라집니다.")}</span>}
+          body={<span>{tf("저장하지 않은 편집이 있습니다 — {where}. 패널을 닫으면 사라집니다.", { where: unsaved().map((w) => t(w)).join(" · ") })}</span>}
           confirmLabel={t("버리고 닫기")}
           onConfirm={() => {
             setPanelCloseAsk(false);

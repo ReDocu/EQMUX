@@ -21,13 +21,14 @@ import {
   watchServerTerm,
 } from "../backend/ports";
 import { fsCreate, fsRead, fsWrite } from "../backend/panels";
+import { maskSecrets } from "../backend/secrets";
 import { isTauri, listAlivePty, revealPath, spawnPty } from "../backend/pty";
-import { defaultShell, scopeWorkspace, setPanelNote } from "../state";
+import { defaultShell, notePtyShell, scopeWorkspace, setPanelNote } from "../state";
 import { t, tf } from "../i18n";
 import { fileManagerName } from "../labels"; // mac은 Finder (U76)
 import { sessionTermSize, TerminalPane } from "./TerminalPane";
 import { Icon } from "./icons";
-import { notify } from "./ui";
+import { ConfirmDialog, notify } from "./ui";
 
 // 사람이 [서버 터미널 만들기]를 누른 서버 셸 id — 탭을 닫았다 열어도 다시 묻지 않는다
 const [opened, setOpened] = createSignal<string[]>([]);
@@ -60,7 +61,7 @@ function ServerTerm(props: { wsId: string }) {
   const reopen = async () => {
     const size = sessionTermSize(id);
     try {
-      await spawnPty(id, path, size.cols, size.rows, props.wsId, shell);
+      notePtyShell(id, await spawnPty(id, path, size.cols, size.rows, props.wsId, shell)); // 임무 검토 종료 표식이 실제 셸을 본다 (B276)
       clearServerExit(id);
     } catch (e) {
       notify(tf("서버를 다시 실행하지 못했습니다 — {err}", { err: String(e) }));
@@ -74,6 +75,18 @@ function ServerTerm(props: { wsId: string }) {
   });
   onCleanup(() => setPanelNote(""));
   const cmd = () => serverCommands()[props.wsId];
+  // 화면에는 가린 명령을 보인다 (B307) — [실행]만 원문을 셸에 친다
+  const shown = () => {
+    const c = cmd();
+    return c === undefined ? undefined : maskSecrets(c);
+  };
+  // commands.json은 커밋 대상이다 — 비밀값으로 보이는 명령을 쓰기 전에 묻는다 (B307). 값 = 확인 뒤 할 저장
+  const [secretAsk, setSecretAsk] = createSignal<(() => void) | null>(null);
+  const guardSecret = (save: () => void) => {
+    const c = cmd();
+    if (c && shown() !== c) setSecretAsk(() => save);
+    else save();
+  };
   // 이 서버 셸이 연 포트 — 돌고 있으면 [실행]을 끈다. 돌고 있는 서버 위에 명령 줄이 하나 더 들어가지 않게 (B77)
   const running = () => portEntries().filter((e) => e.session === id).map((e) => `:${e.port}`);
   // 저장 명령 (D2 · C7) — 파일이 없으면 만들기 안내 한 줄 (P63). [다시 읽기]가 같이 다시 읽는다.
@@ -141,10 +154,27 @@ function ServerTerm(props: { wsId: string }) {
 
   return (
     <div class="srvp">
+      <Show when={secretAsk()}>
+        {(save) => (
+          <ConfirmDialog
+            title={t("비밀값으로 보이는 부분이 있습니다")}
+            body={tf("{f}은(는) 커밋 대상입니다. 그대로 쓰면 다음 커밋에 비밀값이 함께 올라갈 수 있습니다.", { f: COMMANDS_FILE })}
+            info={[shown() ?? ""]}
+            danger
+            confirmLabel={t("그대로 쓰기")}
+            onConfirm={() => {
+              const go = save();
+              setSecretAsk(null);
+              go();
+            }}
+            onCancel={() => setSecretAsk(null)}
+          />
+        )}
+      </Show>
       {/* 명령 줄 (시안) — 마지막 서버 명령 · 실행/다시 실행 · 탐색기. 자동으로 치지 않는다 (1-7) */}
       <div class="srvp-cmd">
-        <div class="srvp-cmd-box mono" classList={{ empty: !cmd() }} title={cmd() ?? undefined}>
-          {cmd() ?? t("마지막 서버 명령 없음 — 이 셸에서 포트를 연 명령을 기억합니다")}
+        <div class="srvp-cmd-box mono" classList={{ empty: !cmd() }} title={shown()}>
+          {shown() ?? t("마지막 서버 명령 없음 — 이 셸에서 포트를 연 명령을 기억합니다")}
         </div>
         <Show
           when={serverExited(id)}
@@ -208,11 +238,11 @@ function ServerTerm(props: { wsId: string }) {
             ref={(el) => queueMicrotask(() => el.focus())}
             onInput={(e) => setNaming(e.currentTarget.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && (naming() ?? "").trim()) void addSaved();
+              if (e.key === "Enter" && (naming() ?? "").trim()) guardSecret(() => void addSaved());
               if (e.key === "Escape") setNaming(null);
             }}
           />
-          <button class="btn primary" disabled={!(naming() ?? "").trim()} onClick={() => void addSaved()}>
+          <button class="btn primary" disabled={!(naming() ?? "").trim()} onClick={() => guardSecret(() => void addSaved())}>
             {t("추가")}
           </button>
           <button class="btn ghost" onClick={() => setNaming(null)}>
@@ -223,7 +253,7 @@ function ServerTerm(props: { wsId: string }) {
       <Show when={saved() === null}>
         <div class="srvp-saved muted">
           <span>{t("자주 쓰는 명령을 저장해 두면 버튼이 됩니다")}</span>
-          <button class="btn ghost" title={COMMANDS_FILE} onClick={() => void createSaved()}>
+          <button class="btn ghost" title={COMMANDS_FILE} onClick={() => guardSecret(() => void createSaved())}>
             {t("commands.json 만들기")}
           </button>
         </div>
@@ -241,7 +271,7 @@ function ServerTerm(props: { wsId: string }) {
                   class="btn"
                   classList={{ primary: c.kind === "server" }}
                   disabled={!!blocked()}
-                  title={blocked() ?? tf("셸 입력줄에 채웁니다 — Enter는 직접 누르세요: {run}", { run: c.run })}
+                  title={blocked() ?? tf("셸 입력줄에 채웁니다 — Enter는 직접 누르세요: {run}", { run: maskSecrets(c.run) })}
                   onClick={() => typeServer(id, c.run)}
                 >
                   {c.name}

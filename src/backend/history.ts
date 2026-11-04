@@ -12,12 +12,16 @@ export interface HistoryHit {
   ts: number;
   role: "user" | "agent";
   snippet: string;
+  /** 워크트리 세션 대화면 그 워크트리 폴더 (S24) — 재개 명령이 이 폴더로 옮긴다 */
+  worktree?: string;
 }
 
 export interface HistoryGroup {
   uuid: string;
   session?: string;
   resumable: boolean;
+  /** 워크트리 세션 대화면 그 워크트리 폴더 (S24) */
+  worktree?: string;
   /** 가장 최근 매치 시각 */
   last: number;
   hits: HistoryHit[];
@@ -45,7 +49,7 @@ export function groupByConversation(hits: HistoryHit[]): HistoryGroup[] {
       g.hits.push(h);
       g.last = Math.max(g.last, h.ts);
     } else {
-      by.set(h.uuid, { uuid: h.uuid, session: h.session ?? undefined, resumable: h.resumable, last: h.ts, hits: [h] });
+      by.set(h.uuid, { uuid: h.uuid, session: h.session ?? undefined, resumable: h.resumable, worktree: h.worktree, last: h.ts, hits: [h] });
     }
   }
   const groups = [...by.values()];

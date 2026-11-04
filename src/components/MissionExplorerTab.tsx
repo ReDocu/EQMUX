@@ -1,17 +1,17 @@
 // 임무 · 파일 탐색기 패널 (ehpqx) — 워크스페이스 파일 트리 + 미리보기 + 파일 CRUD (M24).
 // Tauri에서는 실제 FS를 읽고 쓴다 (깊이·개수 상한 · .git 불가침 · 삭제는 휴지통).
 // 파일이 원본이라는 계약 그대로: 임무 파일은 backend의 실측 임무 데이터로, 그 외 텍스트는 원문으로.
-import { createEffect, createMemo, createSignal, For, lazy, on, onMount, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, lazy, on, onCleanup, onMount, Show } from "solid-js";
 import { Portal } from "solid-js/web";
 import { backend } from "../backend/mock";
-import { fsCreate, fsDelete, fsPreview, fsRead, fsRename, fsTree, fsWrite } from "../backend/panels";
+import { fsCreate, fsDelete, fsPreview, fsRead, fsRename, fsTree, fsWrite, isStaleWrite } from "../backend/panels";
 import type { FsNode, FsTree } from "../backend/panels";
 import { markMissionBase, refreshMissions } from "../backend/missions";
 import { sendConversation } from "../backend/conversation";
-import { isTauri, revealPath } from "../backend/pty";
+import { clipWriteText, isTauri, revealPath } from "../backend/pty";
 import { t, tf } from "../i18n";
 import { jobName, revealLabel } from "../labels";
-import { openPanel, scopeWorkspace, selectedSession, setOverlay, setView, tick, toggleExplorer, view } from "../state";
+import { openPanel, panelTab, scopeWorkspace, selectedSession, setOverlay, setView, tick, toggleExplorer, view } from "../state";
 import { Icon } from "./icons";
 import { ConfirmDialog, ContextMenu, notify } from "./ui";
 import { isSubmitEnter } from "../platform"; // 한글 조합 중 Enter는 제출이 아니다 (B130)
@@ -95,6 +95,20 @@ export function MissionExplorerTab() {
         else clearSel();
       }),
     );
+    // 탭이 다시 보일 때 새로 읽는다 (S28) — 탭은 숨겨도 살아 있어, 에이전트가 만든 파일이 ⟳ 전까지 안 보였다.
+    // 미리보기도 같이 — 편집 중이면 편집기를 건드리지 않는다
+    createEffect(
+      on(
+        () => panelTab() === "files",
+        (shown) => {
+          if (!shown) return;
+          void loadTree();
+          const s = sel();
+          if (s && !s.dir && editing() === undefined) void loadPreview(s.rel, true);
+        },
+        { defer: true },
+      ),
+    );
     createEffect(
       on(explorerPick, (rel) => {
         if (!rel) return;
@@ -149,8 +163,9 @@ export function MissionExplorerTab() {
     return list.filter((n) => !hiddenByFold(n.rel));
   };
 
-  const loadPreview = async (rel: string) => {
-    setPreview(undefined);
+  /** keep — 다시 읽는 동안 지금 미리보기를 둔다 (S28 새로 읽기). 비우면 잠깐 '불러올 수 없습니다'가 깜박인다 */
+  const loadPreview = async (rel: string, keep = false) => {
+    if (!keep) setPreview(undefined);
     const target = opWs();
     if (!isTauri() || !target) return;
     const p = await fsPreview(target.path, rel);
@@ -188,6 +203,8 @@ export function MissionExplorerTab() {
   const [pendingSwitch, setPendingSwitch] = createSignal<string | undefined>(undefined);
   // 오버레이 ESC 가드 — 편집 중 + 미저장일 때만 닫기를 막는다
   createEffect(() => setEditorGuard(editing() !== undefined && dirty()));
+  // 패널을 [버리고 닫기]로 내리면 표식도 끈다 — 남으면 다시 연 패널(파일 탭 미방문)의 닫기가 헛되이 물었다
+  onCleanup(() => setEditorGuard(false));
   // 선택이 만들어진 워크스페이스 (B200) — 파일 조작은 지금 탭(ws)이 아니라 이 워크스페이스에 한다
   const [selWs, setSelWs] = createSignal<ReturnType<typeof ws>>(undefined);
   const opWs = () => (sel() ? selWs() : ws());
@@ -287,28 +304,42 @@ export function MissionExplorerTab() {
       setEditing(fc.text);
       setEditMtime(fc.mtimeMs);
       setDirty(false);
+      setStale(false);
     } catch (err) {
       setFsErr(String(err));
     }
   };
 
-  const saveEdit = async () => {
+  // 밖에서 바뀌어 저장이 거부된 편집 (U189) — [취소]만 남으면 고친 내용을 손으로 옮겨야 했다.
+  // [덮어쓰기](확인창) · [내 편집 복사]를 더한다. 새 편집을 열거나 다시 저장하면 끈다
+  const [stale, setStale] = createSignal(false);
+  const [askOverwrite, setAskOverwrite] = createSignal(false);
+  const saveEdit = async (force = false) => {
     const target = opWs();
     const s = sel();
     const content = editing();
     if (!target || !s || content === undefined) return;
     setFsErr(undefined);
+    setStale(false);
     try {
-      // 충돌 감지 — 편집 시작 후 파일이 밖에서(에이전트 등) 바뀌었으면 거부된다
-      const next = await fsWrite(target.path, s.rel, content, editMtime());
+      // 충돌 감지 — 편집 시작 후 파일이 밖에서(에이전트 등) 바뀌었으면 거부된다. [덮어쓰기]만 기준 mtime 없이 쓴다
+      const next = await fsWrite(target.path, s.rel, content, force ? undefined : editMtime());
       setEditMtime(next);
       setEditing(undefined);
       setDirty(false);
       void loadPreview(s.rel);
       if (isMissionFile(s.rel)) void refreshMissions(target.id); // 임무는 파일이 원본 (FR-E-74)
     } catch (err) {
-      setFsErr(String(err));
+      const isStale = isStaleWrite(err);
+      setStale(isStale);
+      setFsErr(isStale ? t("파일이 밖에서 바뀌었습니다 — [덮어쓰기]로 내 편집을 저장하거나, [내 편집 복사] 뒤 [취소]하고 다시 여세요") : String(err));
     }
+  };
+  const copyEdit = async () => {
+    const text = editing();
+    if (text === undefined) return;
+    if (await clipWriteText(text)) notify(t("내 편집을 복사했습니다"), "ok");
+    else notify(t("복사하지 못했습니다"));
   };
 
   // 임무 파일이면 실측 임무 데이터로 구조화 미리보기 (파일이 원본 — 목록도 파일 실측이다)
@@ -530,6 +561,14 @@ export function MissionExplorerTab() {
                 <button class="btn primary" style={{ padding: "2px 8px" }} onClick={() => void saveEdit()}>
                   {t("저장")}
                 </button>
+                <Show when={stale()}>
+                  <button class="btn ghost danger" style={{ padding: "2px 6px" }} onClick={() => setAskOverwrite(true)}>
+                    {t("덮어쓰기")}
+                  </button>
+                  <button class="btn ghost" style={{ padding: "2px 6px" }} onClick={() => void copyEdit()}>
+                    {t("내 편집 복사")}
+                  </button>
+                </Show>
                 <button class="btn ghost" style={{ padding: "2px 6px" }} onClick={cancelEdit}>
                   {t("취소")}
                 </button>
@@ -637,7 +676,7 @@ export function MissionExplorerTab() {
       <div class="msnp-footer">
         <div>
           <div class="mono" style={{ "font-size": "10px", color: "var(--eq-green)" }}>
-            {t(isTauri() ? "실측 · 열 때 새로 읽음" : "WATCHING · .eqmux/ (목)")}
+            {t(isTauri() ? "실측 · 탭을 볼 때와 ⟳로 새로 읽음" : "WATCHING · .eqmux/ (목)")}
           </div>
           <div class="muted" style={{ "font-size": "10px" }}>
             {t("파일 우선 · 삭제는 휴지통 · .git 불가침")}
@@ -679,6 +718,22 @@ export function MissionExplorerTab() {
             />
           </Portal>
         )}
+      </Show>
+      <Show when={askOverwrite()}>
+        <Portal>
+          <ConfirmDialog
+            danger
+            title={t("밖에서 바뀐 파일 덮어쓰기")}
+            body={t("디스크의 지금 내용을 내 편집으로 바꿉니다. 밖에서 고친 내용은 사라집니다.")}
+            info={[sel()?.rel ?? ""]}
+            confirmLabel={t("덮어쓰기")}
+            onConfirm={() => {
+              setAskOverwrite(false);
+              void saveEdit(true);
+            }}
+            onCancel={() => setAskOverwrite(false)}
+          />
+        </Portal>
       </Show>
     </div>
   );

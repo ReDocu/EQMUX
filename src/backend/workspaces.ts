@@ -166,6 +166,26 @@ export function unregisterWorkspace(id: string): Promise<void> {
   return invoke("ws_unregister", { id });
 }
 
+/** 등록 해제 [되돌리기] (B289) — 같은 id로 되살린다. 경로로 다시 등록하면 재지정한 항목은 다른 id가 됐다 */
+export function restoreWorkspace(id: string): Promise<WsInfo> {
+  return invoke<WsInfo>("ws_restore", { id });
+}
+
+/** 비워 두면 돌아갈 이름 — 경로의 마지막 폴더 (Rust entry_name과 같은 규칙) */
+export const folderName = (path: string): string => path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+
+/** 저장하면 붙을 이름 (S23) — 앞뒤 공백을 떼고, 비면 폴더 이름 */
+export const wsNameAfter = (draft: string, path: string): string => draft.trim() || folderName(path);
+
+/** 워크스페이스 이름 바꾸기 (S23) — 등록 정보의 이름만, 폴더는 그대로. 이미 있는 세션 이름은 그대로 두고
+ *  새 세션 자동 이름(projectStem)과 다른 프로젝트 주소(projectLabels)가 새 이름을 쓴다. 실패는 던진다 */
+export async function renameWorkspace(id: string, draft: string): Promise<void> {
+  const ws = backend.listWorkspaces().find((w) => w.id === id);
+  if (!ws) return;
+  const name = isTauri() ? await invoke<string>("ws_rename", { id, name: draft }) : wsNameAfter(draft, ws.path);
+  backend.renameWorkspace(id, name);
+}
+
 export function repathWorkspace(id: string, path: string): Promise<WsInfo> {
   return invoke<WsInfo>("ws_repath", { id, path });
 }

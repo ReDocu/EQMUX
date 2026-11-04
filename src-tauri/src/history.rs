@@ -26,10 +26,13 @@ pub struct HistoryHit {
     /// "user" | "agent"
     pub role: String,
     pub snippet: String,
+    /// 워크트리 세션 대화면 그 워크트리 폴더 (S24) — [재개 명령 복사]가 이 폴더로 옮긴다. 워크스페이스 폴더 대화는 None
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<String>,
 }
 
-/// 대화 줄 → (역할, 시각, 텍스트). 도구 호출·결과·메타 줄은 검색 대상이 아니다 (사람이 찾는 것은 대화다)
-fn turn_text(line: &str) -> Option<(&'static str, Option<i64>, String)> {
+/// 대화 줄 → (역할, 시각, 텍스트, cwd). 도구 호출·결과·메타 줄은 검색 대상이 아니다 (사람이 찾는 것은 대화다)
+fn turn_text(line: &str) -> Option<(&'static str, Option<i64>, String, Option<String>)> {
     let v: serde_json::Value = serde_json::from_str(line).ok()?;
     let role = match v["type"].as_str()? {
         "user" => "user",
@@ -48,7 +51,8 @@ fn turn_text(line: &str) -> Option<(&'static str, Option<i64>, String)> {
         _ => return None,
     };
     let text = text.trim();
-    (!text.is_empty()).then(|| (role, ts, text.to_string()))
+    let cwd = v["cwd"].as_str().map(str::to_string);
+    (!text.is_empty()).then(|| (role, ts, text.to_string(), cwd))
 }
 
 /// 매치 둘레 한 줄 — 앞 60자 · 뒤 140자, 공백은 하나로
@@ -82,7 +86,8 @@ pub struct HistoryResult {
 /// 폴더의 *.jsonl을 최근 수정 순으로 훑는다. slots: 대화 uuid → (슬롯 세션 id, 재개 가능).
 /// 폴더가 없으면 이 폴더에서 돈 대화가 없는 것이라 빈 결과, 그 밖에 폴더를 못 읽으면 Err다 (B252 —
 /// 예전에는 빈 결과로 삼켜 '맞는 대화가 없습니다'와 읽기 실패가 같아 보였다)
-fn search_dir(dir: &Path, query: &str, slots: &HashMap<String, (String, bool)>) -> std::io::Result<HistoryResult> {
+/// worktree: 워크트리 대화 폴더면 맞은 줄의 cwd(없으면 폴더 이름)를 결과에 싣는다 (S24)
+fn search_dir(dir: &Path, query: &str, slots: &HashMap<String, (String, bool)>, worktree: bool) -> std::io::Result<HistoryResult> {
     let q = query.trim().to_lowercase();
     if q.is_empty() {
         return Ok(HistoryResult::default());
@@ -124,7 +129,7 @@ fn search_dir(dir: &Path, query: &str, slots: &HashMap<String, (String, bool)>) 
             if !line.to_lowercase().contains(&q) {
                 continue; // 원문 줄로 먼저 거른다 — JSON 해석은 맞을 법한 줄에만
             }
-            let Some((role, ts, text)) = turn_text(&line) else { continue };
+            let Some((role, ts, text, cwd)) = turn_text(&line) else { continue };
             if !text.to_lowercase().contains(&q) {
                 continue; // 도구 입력·메타 필드에서만 맞았다
             }
@@ -135,6 +140,7 @@ fn search_dir(dir: &Path, query: &str, slots: &HashMap<String, (String, bool)>) 
                 ts: ts.unwrap_or(file_ms),
                 role: role.into(),
                 snippet: snippet(&text, &q),
+                worktree: worktree.then(|| cwd.unwrap_or_else(|| dir.file_name().unwrap_or_default().to_string_lossy().into_owned())),
             });
             n += 1;
             if n >= PER_CONVERSATION || hits.len() >= MAX_HITS {
@@ -162,7 +168,39 @@ fn slot_map(root: &Path, ws: &str) -> HashMap<String, (String, bool)> {
         .unwrap_or_default()
 }
 
-/// 과거 세션 검색 — 워크스페이스 폴더(cwd)의 Claude Code 대화에서 query가 든 대화 줄
+/// 워크트리 세션의 대화 폴더 (S24) — 워크트리 cwd는 `<워크스페이스>/.eqmux/worktrees/<세션>`이라 Claude Code가
+/// 워크스페이스 대화 폴더 이름 뒤에 `--eqmux-worktrees-<세션>`을 붙인 옆 폴더에 쌓는다. 워크트리를 지워도 대화는
+/// 남으므로 디스크의 워크트리 목록이 아니라 폴더 이름 접두로 찾는다. 드라이브 글자 대소문자는 가리지 않는다
+fn worktree_dirs(main: &Path) -> Vec<std::path::PathBuf> {
+    let (Some(parent), Some(name)) = (main.parent(), main.file_name()) else { return Vec::new() };
+    let prefix = format!("{}--eqmux-worktrees-", name.to_string_lossy()).to_ascii_lowercase();
+    let Ok(entries) = std::fs::read_dir(parent) else { return Vec::new() };
+    entries
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().to_ascii_lowercase().starts_with(&prefix))
+        .map(|e| e.path())
+        .collect()
+}
+
+/// 워크스페이스 대화 폴더 + 워크트리 대화 폴더들을 합친다 (S24). 워크스페이스 폴더를 못 읽으면 Err,
+/// 워크트리 폴더를 못 읽으면 unreadable에 센다. 합친 뒤 최근 줄부터 MAX_HITS까지
+fn search_all(main: &Path, query: &str, slots: &HashMap<String, (String, bool)>) -> std::io::Result<HistoryResult> {
+    let mut r = search_dir(main, query, slots, false)?;
+    for dir in worktree_dirs(main) {
+        match search_dir(&dir, query, slots, true) {
+            Ok(w) => {
+                r.hits.extend(w.hits);
+                r.unreadable += w.unreadable;
+            }
+            Err(_) => r.unreadable += 1,
+        }
+    }
+    r.hits.sort_by_key(|h| std::cmp::Reverse(h.ts));
+    r.hits.truncate(MAX_HITS);
+    Ok(r)
+}
+
+/// 과거 세션 검색 — 워크스페이스 폴더(cwd)와 그 워크트리 세션의 Claude Code 대화에서 query가 든 대화 줄
 #[tauri::command(async)]
 pub fn history_search(
     store_state: tauri::State<crate::StoreState>,
@@ -171,7 +209,7 @@ pub fn history_search(
     query: String,
 ) -> Result<HistoryResult, String> {
     let Some(dir) = crate::agent::transcript_path(&cwd, "_").parent().map(Path::to_path_buf) else { return Ok(HistoryResult::default()) };
-    search_dir(&dir, &query, &slot_map(&store_state.0.root(), &workspace)).map_err(|e| format!("{} — {e}", dir.display()))
+    search_all(&dir, &query, &slot_map(&store_state.0.root(), &workspace)).map_err(|e| format!("{} — {e}", dir.display()))
 }
 
 #[cfg(test)]
@@ -202,20 +240,20 @@ mod tests {
         std::fs::write(dir.join("note.txt"), "login").unwrap();
         let slots = HashMap::from([("aaa".to_string(), ("kai@w".to_string(), true))]);
 
-        let hits = search_dir(&dir, "  LOGIN ", &slots).unwrap().hits;
+        let hits = search_dir(&dir, "  LOGIN ", &slots, false).unwrap().hits;
         assert_eq!(hits.len(), 2, "{hits:?}");
         assert_eq!((hits[0].role.as_str(), hits[1].role.as_str()), ("user", "agent"));
         assert_eq!(hits[1].snippet, "Login API 수정을 시작합니다"); // 도구 블록은 빠지고 텍스트만
         assert!(hits.iter().all(|h| h.uuid == "aaa" && h.session.as_deref() == Some("kai@w") && h.resumable));
         assert_eq!(hits[0].ts, chrono::DateTime::parse_from_rfc3339("2026-11-02T01:00:00Z").unwrap().timestamp_millis());
-        let other = search_dir(&dir, "다른", &slots).unwrap().hits;
+        let other = search_dir(&dir, "다른", &slots, false).unwrap().hits;
         assert_eq!((other.len(), other[0].session.clone(), other[0].resumable), (1, None, false)); // 매핑 없는 대화
-        assert!(search_dir(&dir, " ", &slots).unwrap().hits.is_empty());
-        assert!(search_dir(&dir.join("없음"), "login", &slots).unwrap().hits.is_empty()); // 폴더가 없음 = 대화 없음
+        assert!(search_dir(&dir, " ", &slots, false).unwrap().hits.is_empty());
+        assert!(search_dir(&dir.join("없음"), "login", &slots, false).unwrap().hits.is_empty()); // 폴더가 없음 = 대화 없음
         // 폴더가 아닌 곳은 오류, 못 연 대화 파일은 센다 (B252)
-        assert!(search_dir(&dir.join("note.txt"), "login", &slots).is_err());
+        assert!(search_dir(&dir.join("note.txt"), "login", &slots, false).is_err());
         std::fs::create_dir_all(dir.join("ddd.jsonl")).unwrap();
-        let r = search_dir(&dir, "login", &slots).unwrap();
+        let r = search_dir(&dir, "login", &slots, false).unwrap();
         assert_eq!((r.hits.len(), r.unreadable), (2, 1));
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -229,7 +267,7 @@ mod tests {
         bytes.extend_from_slice(b"\r\n{\"type\":\"user\",\"message\":{\"content\":\"deploy \xEA\xB0\n");
         bytes.extend_from_slice(line("assistant", "2026-11-02T01:01:00Z", serde_json::json!("deploy 둘째")).as_bytes());
         std::fs::write(dir.join("ccc.jsonl"), bytes).unwrap();
-        let hits = search_dir(&dir, "deploy", &HashMap::new()).unwrap().hits;
+        let hits = search_dir(&dir, "deploy", &HashMap::new(), false).unwrap().hits;
         assert_eq!(hits.iter().map(|h| h.snippet.as_str()).collect::<Vec<_>>(), ["deploy 첫째", "deploy 둘째"]);
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -241,5 +279,28 @@ mod tests {
         assert!(s.starts_with('…') && s.ends_with('…') && s.contains("핵심 단어"));
         assert!(s.chars().count() <= 60 + 2 + 140 + 2);
         assert_eq!(snippet("짧은\n\n  글", "글"), "짧은 글");
+    }
+
+    /// S24 — 워크트리 세션 대화 폴더(지운 워크트리 것도)를 함께 찾고, 그 워크트리 폴더를 싣는다. 남의 폴더는 빼놓는다
+    #[test]
+    fn searches_worktree_conversations_too() {
+        let root = std::env::temp_dir().join(format!("eqmux-hist-wt-{}", crate::workspace::now_ms()));
+        let main = root.join("D--w-app");
+        let wt = root.join("d--w-app--eqmux-worktrees-kai-w"); // 드라이브 글자 대소문자가 달라도
+        let other = root.join("D--w-app2");
+        for d in [&main, &wt, &other] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        let with_cwd = |ts: &str, text: &str, cwd: &str| {
+            serde_json::json!({ "type": "user", "timestamp": ts, "cwd": cwd, "message": { "content": text } }).to_string()
+        };
+        std::fs::write(main.join("m.jsonl"), with_cwd("2026-11-01T00:00:00Z", "deploy 본", "D:\\w\\app")).unwrap();
+        std::fs::write(wt.join("k.jsonl"), with_cwd("2026-11-02T00:00:00Z", "deploy 워크트리", "D:\\w\\app\\.eqmux\\worktrees\\kai@w")).unwrap();
+        std::fs::write(other.join("o.jsonl"), with_cwd("2026-11-03T00:00:00Z", "deploy 남의 것", "D:\\w\\app2")).unwrap();
+
+        let r = search_all(&main, "deploy", &HashMap::new()).unwrap();
+        let got: Vec<_> = r.hits.iter().map(|h| (h.uuid.as_str(), h.worktree.as_deref())).collect();
+        assert_eq!(got, [("k", Some("D:\\w\\app\\.eqmux\\worktrees\\kai@w")), ("m", None)], "최근 줄 먼저");
+        std::fs::remove_dir_all(&root).ok();
     }
 }

@@ -150,7 +150,8 @@ fn parse_bool_line(fm: &[String], key: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// 본문에서 "## 책임"·"## 금지" 문단을 뽑는다 — missions와 같은 관용 파싱
+/// 본문에서 "## 책임"·"## 금지" 문단을 뽑는다 — missions와 같은 관용 파싱.
+/// 줄은 그대로 잇는다 (B282) — 공백으로 붙이면 편집기에서 적은 목록이 다시 읽을 때 한 줄이 됐다. 섹션 앞뒤 빈 줄만 걷는다
 fn parse_job_body(body: &str) -> (String, String) {
     let mut responsibility = Vec::new();
     let mut forbidden = Vec::new();
@@ -166,16 +167,14 @@ fn parse_job_body(body: &str) -> (String, String) {
             };
             continue;
         }
-        if line.trim().is_empty() {
-            continue;
-        }
         match section {
-            "r" => responsibility.push(line.trim().to_string()),
-            "f" => forbidden.push(line.trim().to_string()),
+            "r" => responsibility.push(line.trim_end()),
+            "f" => forbidden.push(line.trim_end()),
             _ => {}
         }
     }
-    (responsibility.join(" "), forbidden.join(" "))
+    let text = |lines: &[&str]| lines.join("\n").trim_matches('\n').to_string();
+    (text(&responsibility), text(&forbidden))
 }
 
 fn file_mtime_ms(path: &Path) -> i64 {
@@ -864,6 +863,17 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("eqmux-lib-{tag}-{}", crate::workspace::now_ms()));
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// B282 — 여러 줄 책임 · 금지(가운데 빈 줄 포함)가 render_job → parse_job_body 왕복에서 그대로다
+    #[test]
+    fn multiline_job_sections_roundtrip() {
+        let mut j = fixed_jobs()[0].clone();
+        j.responsibility = "- 테스트를 먼저 쓴다\n- 커밋은 리드가 한다\n\n  들여쓴 문단".into();
+        j.forbidden = "- 원격 push\n- 강제 push".into();
+        let (_, body) = split_frontmatter(&render_job(&j));
+        assert_eq!(parse_job_body(&body), (j.responsibility.clone(), j.forbidden.clone()));
+        assert_eq!(parse_job_body("## 책임\n\n\n한 줄\n\n## 금지\n"), ("한 줄".to_string(), String::new()));
     }
 
     #[test]

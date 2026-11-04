@@ -69,6 +69,9 @@ export interface Backend {
    *  호출부가 PTY를 다시 스폰해야 한다 (B58): 상태만 shell로 되돌리면 프로세스 없이
    *  '실행 중'으로 남아 입력이 전부 증발한다 */
   startDefaultTerminal(wsId: string, shell?: string): Session | undefined;
+  /** 종료된 역할 없는 셸 세션을 같은 슬롯 · 같은 이름으로 되살린다 (S25) — 되살렸으면 그 세션.
+   *  startDefaultTerminal과 같이 호출부가 PTY를 다시 스폰한다 (B58) */
+  reviveTerminal(id: string, shell?: string): Session | undefined;
   /** 슬롯에 터미널 추가 — 페르소나·직무 없이 빈 슬롯 하나를 셸 세션으로 채운다.
    *  cwd를 주면 그 경로에서 시작한다 (M36 — git 패널의 워크트리 셸 열기) */
   addTerminal(wsId: string, shell?: string, cwd?: string, name?: string, slot?: number): Session | undefined;
@@ -131,6 +134,8 @@ export interface Backend {
   openWorkspace(id: string): void;
   closeWorkspace(id: string): void;
   repairWorkspace(id: string): void;
+  /** 표시 이름 바꾸기 (S23) — 레지스트리 저장은 workspaces.ts가 먼저 한다. 여기서는 화면 목록만 */
+  renameWorkspace(id: string, name: string): void;
   /** 실물 레지스트리(workspaces.json)로 목록을 교체 — Tauri 부트스트랩 (PRD E) */
   hydrateWorkspaces(list: Workspace[]): void;
   /** 라이브러리 실파일(jobs/·personas/)로 목 배열을 교체 (FR-E-20~23) — Tauri에서만 */
@@ -867,23 +872,24 @@ export class MockBackend implements Backend {
 
   startDefaultTerminal(wsId: string, shell?: string): Session | undefined {
     const existing = SESSIONS.find((x) => x.workspaceId === wsId && x.personaId === "");
-    if (existing) {
-      if (existing.status === "dead") {
-        // 마법사 카드에 보인 셸로 다시 띄운다 (0.6 QA B202)
-        if (shell) existing.shell = shell;
-        existing.status = "shell";
-        existing.exitCode = undefined;
-        existing.sinceMs = 0;
-        existing.sinceTs = Date.now();
-        existing.lastOutput = "기본 터미널 · 재시작";
-        this.logEvent("state", "기본 터미널 재시작", existing.id);
-        this.broadcast();
-        return existing; // 호출부가 PTY를 다시 스폰한다 (B58)
-      }
-      return undefined;
-    }
+    // 마법사 카드에 보인 셸로 다시 띄운다 (0.6 QA B202). 호출부가 PTY를 다시 스폰한다 (B58)
+    if (existing) return this.reviveTerminal(existing.id, shell);
     this.addTerminal(wsId, shell);
     return undefined;
+  }
+
+  reviveTerminal(id: string, shell?: string): Session | undefined {
+    const existing = SESSIONS.find((x) => x.id === id);
+    if (!existing || existing.personaId || existing.status !== "dead") return undefined;
+    if (shell) existing.shell = shell;
+    existing.status = "shell";
+    existing.exitCode = undefined;
+    existing.sinceMs = 0;
+    existing.sinceTs = Date.now();
+    existing.lastOutput = "기본 터미널 · 재시작";
+    this.logEvent("state", "기본 터미널 재시작", existing.id);
+    this.broadcast();
+    return existing;
   }
 
   addTerminal(wsId: string, shell?: string, cwd?: string, name?: string, want?: number): Session | undefined {
@@ -1387,6 +1393,16 @@ export class MockBackend implements Backend {
     ws.branch = "main";
     ws.branchNote = "main · 경로 재지정됨";
     this.logEvent("app", `경로 재지정 · ${ws.name}`, undefined, ws.id);
+    this.broadcast();
+  }
+
+  renameWorkspace(id: string, name: string) {
+    const i = WORKSPACES.findIndex((x) => x.id === id);
+    const ws = WORKSPACES[i];
+    if (!ws || ws.name === name) return;
+    this.logEvent("app", `워크스페이스 이름 변경 · ${ws.name} → ${name}`, undefined, ws.id);
+    // 새 객체로 바꾼다 — 탭 · 행 · 카드의 For는 같은 객체면 다시 그리지 않아 옛 이름이 남는다 (hydrateWorkspaces와 같다)
+    WORKSPACES[i] = { ...ws, name };
     this.broadcast();
   }
 

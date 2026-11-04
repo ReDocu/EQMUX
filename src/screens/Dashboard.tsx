@@ -18,6 +18,7 @@ import { awayCard, dismissAway } from "../backend/away";
 import { overBudget, spendText } from "../backend/budget";
 import { LIMIT_WARN, limitText, resetAt, worstLimit } from "../backend/usage";
 import { ConflictCards } from "../components/EditConflicts";
+import { WsNameInput } from "../components/WsNameEdit";
 import { sessionTermSize } from "../components/TerminalPane";
 import type { PendingTool, Session } from "../types";
 import { AGENT_CLI_LABEL, ATTENTION_ORDER, cliOf, detectedCli, effectiveTitle, fmtSince, nameBesideNo, paneNo, sessionDisplayName, sessionName, statusText } from "../types";
@@ -194,6 +195,7 @@ export function Dashboard() {
   };
 
   // 세션 셀 우클릭 메뉴 (§06) — 점프·이동·중지. 승인·거부는 승인함 몫이다
+  const [renaming, setRenaming] = createSignal<string | undefined>(undefined); // 이름을 바꾸는 중인 워크스페이스 (S23)
   const [cellMenu, setCellMenu] = createSignal<{ x: number; y: number; s: Session } | undefined>(undefined);
   // 중지는 확인을 거친다 (BR-08)
   const [stopTarget, setStopTarget] = createSignal<Session | undefined>(undefined);
@@ -351,9 +353,12 @@ export function Dashboard() {
             {(ws) => (
               <div class="dash-ws">
                 <div class="ws-row-head">
-                  <span class="ws-name" title={ws.name}>
-                    {ws.name}
-                  </span>
+                  {/* 더블클릭하면 그 자리가 입력칸 (S23) */}
+                  <Show when={renaming() !== ws.id} fallback={<WsNameInput ws={ws} onDone={() => setRenaming(undefined)} />}>
+                    <span class="ws-name" title={`${ws.name} · ${t("더블클릭해 이름 바꾸기")}`} onDblClick={() => setRenaming(ws.id)}>
+                      {ws.name}
+                    </span>
+                  </Show>
                   <span class="mono muted" title={ws.path}>
                     {ws.path} · {ws.branch ?? "—"} · {tf("{n} 세션", { n: wsSessions(ws.id).length })}
                   </span>
@@ -460,9 +465,15 @@ export function Dashboard() {
               <For each={closedWs()}>
                 {(ws) => (
                   <div class="card ws-closed-card">
-                    <span class="ws-closed-name" title={ws.name}>
-                      {ws.name}
-                    </span>
+                    <Show when={renaming() !== ws.id} fallback={<WsNameInput ws={ws} onDone={() => setRenaming(undefined)} />}>
+                      <span
+                        class="ws-closed-name"
+                        title={`${ws.name} · ${t("더블클릭해 이름 바꾸기")}`}
+                        onDblClick={() => setRenaming(ws.id)}
+                      >
+                        {ws.name}
+                      </span>
+                    </Show>
                     <span class="badge" classList={{ amber: ws.pathMissing }}>
                       {t(ws.pathMissing ? "경로 소실" : "닫힘")}
                     </span>

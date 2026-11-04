@@ -51,6 +51,9 @@ fn mission_path(ws_path: &str, id: &str) -> PathBuf {
 /// frontmatter id로 찾는다. list()가 id를 frontmatter에서 뽑으므로(파일명은 폴백),
 /// 조회·변경 경로도 같은 규칙이어야 rename 후 상태·배정이 무반응이 되지 않는다.
 fn find_path(ws_path: &str, id: &str) -> Option<PathBuf> {
+    if !valid_id(id) {
+        return None; // B279 — '../../README' · 절대 경로 id가 missions/ 밖 파일을 고쳐 쓰지 않게
+    }
     let direct = mission_path(ws_path, id);
     if direct.exists() {
         return Some(direct);
@@ -66,6 +69,12 @@ fn find_path(ws_path: &str, id: &str) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// 임무 id는 파일 이름 한 칸이다 (B279) — 경로 구분자 · 드라이브 콜론 · 제어 문자가 들면 쓰지 않는다.
+/// slug()가 만드는 id(영숫자 · - · _ · .)는 언제나 통과한다
+fn valid_id(id: &str) -> bool {
+    !id.is_empty() && !id.chars().any(|c| matches!(c, '/' | '\\' | ':') || c.is_control())
 }
 
 fn now_stamp() -> String {
@@ -155,7 +164,7 @@ fn parse_file(path: &Path) -> Option<(String, MissionInfo)> {
     let text = fs::read_to_string(path).ok()?;
     let stem = path.file_stem()?.to_string_lossy().into_owned();
     let (fm, body) = split_frontmatter(&text);
-    let id = roles::fm_value(&fm, "id").unwrap_or_else(|| stem.clone());
+    let id = roles::fm_value(&fm, "id").filter(|v| valid_id(v)).unwrap_or_else(|| stem.clone()); // B279 — 어긋나면 파일 이름
     let status = roles::fm_value(&fm, "status")
         .filter(|s| STATUSES.contains(&s.as_str()))
         .unwrap_or_else(|| "todo".into());
@@ -459,6 +468,15 @@ pub fn get(ws_path: &str, id: &str) -> Option<MissionInfo> {
     parse_file(&find_path(ws_path, id)?).map(|(_, m)| m)
 }
 
+/// 배정 (B277) — 임무는 repo 루트에서 읽고, 블록은 세션 cwd의 역할 파일에 쓴다. 워크트리 세션의 cwd에는
+/// 커밋 전 임무가 없고, 커밋된 임무도 갈라진 때의 사본이다. 반환은 (블록 id, 임무 이름)
+pub fn assign(root: &str, cwd: &str, session: &str, id: &str) -> Result<(String, String), String> {
+    let m = get(root, id).ok_or("임무 파일을 찾을 수 없습니다")?;
+    let block = roles::MissionBlock { id: m.id, name: m.name, status: m.status, goal: m.goal, outputs: m.outputs, branch: m.branch };
+    roles::set_mission(cwd, session, Some(&block))?;
+    Ok((block.id, block.name))
+}
+
 /// frontmatter의 default 키만 고쳐 쓴다 — 본문·다른 키는 보존 (FR-E-74와 같은 원칙)
 fn write_default_flag(path: &Path, on: bool) -> Result<(), String> {
     let text = fs::read_to_string(path).map_err(|_| "임무 파일을 찾을 수 없습니다".to_string())?;
@@ -644,6 +662,43 @@ mod tests {
         set_depends(&ws, &m.id, &[]).unwrap();
         assert!(!fs::read_to_string(&path).unwrap().contains("depends_on"));
         fs::remove_dir_all(&ws).ok();
+    }
+
+    /// B279 — 경로 같은 frontmatter id는 버리고 파일 이름을 쓴다. 그런 id로 고쳐 쓰면 Err, 밖의 파일은 그대로
+    #[test]
+    fn path_like_mission_id_stays_inside() {
+        let ws = temp_ws("id-escape");
+        let readme = std::path::Path::new(&ws).join("README.md");
+        fs::write(&readme, "# 원래\r\n").unwrap();
+        let abs = readme.with_extension("").to_string_lossy().into_owned();
+        fs::create_dir_all(missions_dir(&ws)).unwrap();
+        fs::write(missions_dir(&ws).join("a.md"), "---\nid: ../../README\nname: a\n---\n").unwrap();
+        fs::write(missions_dir(&ws).join("b.md"), format!("---\nid: {abs}\nname: b\n---\n")).unwrap();
+        let ids: Vec<String> = list(&ws).into_iter().map(|m| m.id).collect();
+        assert_eq!(ids, vec!["a", "b"]);
+        for bad in ["../../README", abs.as_str()] {
+            assert!(set_status(&ws, bad, "in-progress").is_err());
+            assert!(mark_assigned(&ws, bad, "kai@w", Some(1)).is_err());
+            assert!(set_depends(&ws, bad, &[]).is_err());
+        }
+        assert_eq!(fs::read_to_string(&readme).unwrap(), "# 원래\r\n");
+        set_status(&ws, "a", "done").unwrap(); // 파일 이름 id로는 그대로 고친다
+        assert_eq!(get(&ws, "a").unwrap().status, "done");
+        fs::remove_dir_all(&ws).ok();
+    }
+
+    /// B277 — 임무 파일은 루트에만 있고(커밋 전) 세션 cwd는 워크트리다. 블록은 워크트리 역할 파일에 생기고 루트 역할 파일은 없다
+    #[test]
+    fn assign_reads_root_writes_worktree_role() {
+        let root = temp_ws("assign-root");
+        let wt = std::path::Path::new(&root).join(".eqmux").join("worktrees").join("kai@w").to_string_lossy().into_owned();
+        fs::create_dir_all(&wt).unwrap();
+        let m = create(&root, "루트 임무", "목표", None, vec![]).unwrap();
+        assert!(assign(&wt, &wt, "kai@w", &m.id).is_err()); // 예전 길 — 워크트리에서 찾으면 없다
+        assert_eq!(assign(&root, &wt, "kai@w", &m.id).unwrap(), (m.id.clone(), "루트 임무".to_string()));
+        assert_eq!(roles::scan_assignments(&wt), vec![("kai@w".into(), m.id.clone())]);
+        assert!(!roles::role_path(&root, "kai@w").exists());
+        fs::remove_dir_all(&root).ok();
     }
 
     /// 메모장 'UTF-8(BOM)' 임무 파일 (B270) — 읽을 때 BOM을 넘어 frontmatter를 보고, 고쳐 써도 BOM 하나와 본문이 그대로다

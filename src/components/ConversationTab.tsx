@@ -24,7 +24,7 @@ import { backend } from "../backend/mock";
 import { canRespondInline } from "../backend/agent";
 import { isTauri, revealPath } from "../backend/pty";
 import { t, tf } from "../i18n";
-import { draftRequest, focusSession, jumpToSession, scopeWorkspace, setDraftRequest, setView, tick, view } from "../state";
+import { draftRequest, focusSession, jumpToSession, pushLayer, scopeWorkspace, setDraftRequest, setView, tick, view } from "../state";
 import { ContextMenu, Eyebrow, notify } from "./ui";
 import { SessionPortrait } from "./PersonaAvatar";
 import { effectiveTitle, sessionName as sessionNameOf } from "../types";
@@ -692,18 +692,35 @@ function ForwardDialog(props: { m: ConversationMessage; from?: string; onClose: 
     if (e) setErr(e);
     else props.onClose();
   };
-  // 모달로 띄우고 Esc로 닫는다 (U53) — 예전에는 탭 맨 아래 composer 밑에 붙었다
+  // 모달로 띄운다 (U53) — 예전에는 탭 맨 아래 composer 밑에 붙었다. 레이어 스택에 올려야 Esc가 맨 위 하나만
+  // 닫고, Tab이 창 안에서 돌고, 화면을 옮기는 단축키가 막힌다 (U185 — B205와 같은 빈틈). 열면 첫 칸에 포커스
+  let box!: HTMLDivElement;
+  let first!: HTMLSelectElement;
   onMount(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && props.onClose();
-    window.addEventListener("keydown", onKey);
-    onCleanup(() => window.removeEventListener("keydown", onKey));
+    onCleanup(pushLayer(props.onClose, () => box));
+    first.focus();
   });
   return (
     <div class="overlay" onClick={props.onClose}>
-      <div class="dialog card conv-forward" role="dialog" aria-label={t("다른 워크스페이스로 전달")} onClick={(e) => e.stopPropagation()}>
+      <div
+        ref={box}
+        class="dialog card conv-forward"
+        role="dialog"
+        aria-modal="true"
+        aria-label={t("다른 워크스페이스로 전달")}
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => {
+          // 칸(select)의 Esc는 원래 칸 빠져나오기라(state.ts) 두 번 눌러야 닫혔다 — Jump 팔레트처럼 바로 닫는다
+          if (e.key !== "Escape") return;
+          e.preventDefault();
+          e.stopPropagation();
+          props.onClose();
+        }}
+      >
         <div class="eyebrow">{t("다른 워크스페이스로 전달")}</div>
         <div style={{ display: "flex", gap: "6px" }}>
           <select
+            ref={first}
             value={wsId()}
             onChange={(e) => {
               setWsId(e.currentTarget.value);

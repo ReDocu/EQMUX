@@ -41,6 +41,8 @@ pub fn write(line: &str) {
     if std::fs::metadata(&path).map(|m| m.len() > MAX_BYTES).unwrap_or(false) {
         let _ = std::fs::remove_file(&path);
     }
+    // 디스크에도 비밀값을 남기지 않는다 — BROWSER-OPEN 주소의 user:pass@ 등 (B310)
+    let line = crate::secrets::mask_secrets(line);
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
         let _ = writeln!(f, "{} {line}", stamp());
     }
@@ -457,8 +459,8 @@ pub fn mask(text: &str, home: &str, user: &str) -> String {
         let (w, tail) = rest.split_at(n);
         if !w.is_empty() {
             let low = w.to_ascii_lowercase();
-            if low == "bearer" {
-                out.push_str(w); // `Authorization: Bearer <값>` — 가릴 것은 그다음 낱말이다
+            if low == "bearer" || (after_key && low == "basic") {
+                out.push_str(w); // `Authorization: Bearer|Basic <값>` — 가릴 것은 그다음 낱말이다 (B310)
                 after_key = true;
             } else if after_key || secret_like(w) {
                 out.push_str("<secret>");
@@ -483,7 +485,8 @@ pub fn mask(text: &str, home: &str, user: &str) -> String {
             None => rest = "",
         }
     }
-    out
+    // 공용 가리기를 한 번 더 — 주소 속 user:pass@ 등 위 낱말 판정이 못 보는 모양 (B310). 이 고침 전에 적힌 로그 줄도 덮는다
+    crate::secrets::mask_secrets(&out)
 }
 
 fn bundle_text() -> String {
@@ -572,11 +575,13 @@ mod tests {
         let text = "log C:\\Users\\Kim\\.eqmux\\logs\\x · D:/work/Kim/app\n\
                     token=abcd1234 · \"api_key\": \"zz9\" · Authorization: Bearer qqq\n\
                     sk-ant-REALLYSECRET123 · ghp_abcdefghij1234 · 7f3a9c1e2b4d6f8091a2b3c4d5e6f7081a2b3c4d\n\
-                    session 590d81a0-4e66-4c49-be0f-44abda8b5301 BAD_TOKEN mismatch";
+                    session 590d81a0-4e66-4c49-be0f-44abda8b5301 BAD_TOKEN mismatch\n\
+                    BROWSER-OPEN http://admin:hunter22@localhost:15672 · Authorization: Basic dXNlcjpwYXNz";
         let m = mask(text, "C:\\Users\\Kim", "kim");
         assert!(m.contains("log ~\\.eqmux\\logs\\x"), "{m}");
         assert!(m.contains("D:/work/<user>/app"), "{m}");
-        for leak in ["abcd1234", "zz9", "qqq", "REALLYSECRET", "ghp_abc", "7f3a9c1e"] {
+        assert!(m.contains("http://admin:") && m.contains("@localhost:15672"), "주소 모양은 남긴다: {m}");
+        for leak in ["abcd1234", "zz9", "qqq", "REALLYSECRET", "ghp_abc", "7f3a9c1e", "hunter22", "dXNlcjpwYXNz"] {
             assert!(!m.contains(leak), "{leak} 새어 나감: {m}");
         }
         assert!(m.contains("590d81a0-4e66-4c49-be0f-44abda8b5301"), "UUID는 남긴다");

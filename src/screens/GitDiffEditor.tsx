@@ -5,8 +5,8 @@
 //   props.only가 있으면 그 경로(저장소 기준 상대, `/`)만 목록에 보인다 — undefined = 전부
 // 양측 행은 1:1 정렬돼 있고(B8 — pad 필러) 세로·가로 스크롤이 동기화된다.
 // 변경 내비게이션(U10): n/p 점프 · 스크롤바 마커 · ±3줄 문맥 접기 · ↑↓ 파일 이동.
-// Tauri에서는 실측 (PRD H) · 읽기 전용이다 — 스테이지·커밋·편집은 터미널에서 사람이 한다
-// (다른 패널과 같은 원칙). 브라우저 dev에서는 기존 목 데이터를 보여준다.
+// Tauri에서는 실측 (PRD H) · 읽기 전용이다 — 스테이지·커밋은 git 화면(GitScreen)에서, 편집은 편집기에서 한다
+// (U191 — 툴바의 [git 화면에서 스테이지 →]가 그리로 보낸다). 브라우저 dev에서는 기존 목 데이터를 보여준다.
 import { createEffect, createMemo, createSignal, For, on, onCleanup, onMount, Show } from "solid-js";
 import type { JSX } from "solid-js";
 import { commitChangedFiles, commitFileDiff, diffChangedFiles, diffChangedFilesSince, diffFile, diffFileSince, gitOverview } from "../backend/git";
@@ -15,7 +15,7 @@ import { backend, DIFF_BRANCH, DIFF_CONTENT, DIFF_FILES, GIT_STATE } from "../ba
 import { isTauri } from "../backend/pty";
 import { t, tf } from "../i18n";
 import { openPanel, scopeWorkspace, setView, tick, view } from "../state";
-import { diffKeyAction } from "./diffKeys";
+import { diffKeyAction, pickFile } from "./diffKeys";
 import { isDotenvPath } from "./gitWrite";
 import { maskDotenvLine } from "../backend/secrets";
 import { Icon } from "../components/icons";
@@ -24,7 +24,7 @@ const FOLD_CONTEXT = 3; // 변경 주변에 남기는 문맥 줄 수 (U10)
 
 type DispRow = { type: "line"; i: number } | { type: "fold"; start: number; end: number };
 
-export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; message: string }; base?: string; only?: string[] }) {
+export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; message: string; file?: string }; base?: string; only?: string[] }) {
   // 커밋 모드 (UI 리파인 §git) — 있으면 부모 커밋 ↔ 이 커밋, 없으면 HEAD ↔ 워크트리
   const commit = () => props.commit;
   // wsId 지정(진입점이 안다)이 우선, 없으면 현재 워크스페이스 문맥 (단일 소스 — 임의 폴백 없음)
@@ -79,8 +79,9 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
     const list = result ?? [];
     setFiles(list);
     // 파일이 바뀌지 않아 selectFile이 안 불려도 새 대상에선 diff를 다시 읽는다
-    if (!selected() || !list.some((f) => f.path === selected())) {
-      selectFile(list[0]?.path);
+    const pick = pickFile(list.map((f) => f.path), selected(), c?.file);
+    if (pick !== selected()) {
+      selectFile(pick);
     } else {
       void loadDiff();
     }
@@ -339,6 +340,12 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
     setView(back ?? { kind: "control" });
     if (back && back.kind !== "git") openPanel("git"); // git 화면에서 왔으면 패널 없이 그 화면으로
   };
+  /** U191 — git 화면으로. 거기서 왔으면 그 화면으로 돌아가고, 아니면 ✕가 이 diff로 돌아오게 연다 */
+  const openGitScreen = () => {
+    const v = view();
+    const back = v.kind === "gitdiff" ? v.back : undefined;
+    setView(back?.kind === "git" ? back : { kind: "git", wsId: ws()?.id, back: v });
+  };
 
   // 키보드 (U10·U11·U66) — n/p 변경 점프 · Alt+↑↓·[ ] 파일 이동 · Esc 닫기 (diffKeys.ts)
   onMount(() => {
@@ -511,7 +518,7 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
                   ? tf("비교 · 부모 커밋 {base} ↔ {hash} · {stat}", { base: baseLabel(), hash: commit()!.hash, stat: t(stat()) })
                   : props.base
                     ? tf("비교 · 기준 커밋 {base} ↔ 워크트리 · {stat}", { base: baseLabel(), stat: t(stat()) })
-                    : tf("비교 · {base} ({branch}) ↔ 워크트리 · {stat} — 커밋·편집은 터미널에서", { base: baseLabel(), branch: branch(), stat: t(stat()) })}
+                    : tf("비교 · {base} ({branch}) ↔ 워크트리 · {stat} — 스테이지·커밋은 git 화면에서", { base: baseLabel(), branch: branch(), stat: t(stat()) })}
               </div>
             </div>
             <div class="gde-toolbar-actions">
@@ -547,6 +554,12 @@ export function GitDiffEditor(props: { wsId?: string; commit?: { hash: string; m
               <button class="btn ghost" classList={{ on: wrap() }} title={t("줄바꿈")} onClick={() => setWrap(!wrap())}>
                 <Icon name="wrap-text" size={11} /> {t("줄바꿈")}
               </button>
+              {/* U191 — 워크트리 diff에서 스테이지 · 커밋은 git 화면이 한다 */}
+              <Show when={standalone() && !commit() && !props.base}>
+                <button class="btn ghost" title={t("git 화면을 엽니다 — 덩어리 스테이징 · 커밋")} onClick={openGitScreen}>
+                  {t("git 화면에서 스테이지 →")}
+                </button>
+              </Show>
               <Show when={standalone()}>
                 <button class="btn ghost" title={t("닫기 (Esc) — 진입한 화면으로 복귀")} onClick={close}>
                   <Icon name="x" size={11} />

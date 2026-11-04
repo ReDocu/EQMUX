@@ -270,6 +270,7 @@ export interface StatusFile {
   from: string | null;
   x: string; // 인덱스 쪽 — " "면 스테이지된 것 없음
   y: string; // 작업 트리 쪽 — "?"는 추적 안 됨
+  marks?: boolean | null; // 충돌 파일만 — 표식이 남았나 (B297, Rust가 줄 머리를 훑는다). null = 읽지 못함
 }
 
 export interface WorkStatus {
@@ -316,17 +317,24 @@ function causeLine(output: string): string {
   return lines.find((l) => /^(error|fatal):|^! \[|^CONFLICT\b/.test(l)) ?? lines[0] ?? "";
 }
 
-/** 실패 알림 문구 (B177 · U125) — 흔한 경우는 할 일을 앞에 붙이고, 원인 줄은 사전을 한 번 거친다(없으면 원문) */
-export function failText(output: string): string {
+/** 실패 알림 문구 (B177 · U125) — 흔한 경우는 할 일을 앞에 붙이고, 원인 줄은 사전을 한 번 거친다(없으면 원문).
+ *  panel = 사이드 패널 git 탭 (U190) — Pull ▾ · 배너는 git 화면에만 있어, 그 화면으로 보낸다 */
+export function failText(output: string, panel = false): string {
   const cause = tErr(causeLine(output)) || t("실패");
   const hint = /\[rejected\].*\((fetch first|non-fast-forward)\)/.test(output)
     ? "원격에 새 커밋이 있습니다 — Pull 하세요"
     : /Not possible to fast-forward/.test(output)
-      ? "원격과 갈라졌습니다 — Pull ▾에서 merge 또는 rebase를 고르세요"
+      ? panel
+        ? "원격과 갈라졌습니다 — git 화면에서 merge 또는 rebase를 고르세요"
+        : "원격과 갈라졌습니다 — Pull ▾에서 merge 또는 rebase를 고르세요"
       : /is now empty/.test(output)
-        ? "이 커밋의 변경이 이미 있습니다 — 배너의 [건너뛰기]로 넘어가세요"
+        ? panel
+          ? "이 커밋의 변경이 이미 있습니다 — git 화면 배너의 [건너뛰기]로 넘어가세요"
+          : "이 커밋의 변경이 이미 있습니다 — 배너의 [건너뛰기]로 넘어가세요"
         : /^CONFLICT\b/m.test(output)
-          ? "충돌이 났습니다 — 배너에서 [충돌 보기]를 고르세요"
+          ? panel
+            ? "충돌이 났습니다 — git 화면 배너에서 [충돌 보기]를 고르세요"
+            : "충돌이 났습니다 — 배너에서 [충돌 보기]를 고르세요"
           : undefined;
   return hint ? `${t(hint)} (${cause})` : cause;
 }

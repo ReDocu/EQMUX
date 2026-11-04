@@ -330,4 +330,14 @@ export const dict: Record<string, string> = {
   "파일 풀어놓는 중": "Checking out files",
   "기동 중…": "Launching…",
   "알겠습니다": "Got it",
+  // 0.6.2 QA eqmux-ce: 워크스페이스 이름 바꾸기 (S23) · 등록 되돌리기 · 재지정 중복 (B289 · B290) · 종료 (U187)
+  "이름 바꾸기…": "Rename…",
+  "워크스페이스 이름": "Workspace name",
+  "더블클릭해 이름 바꾸기": "Double-click to rename",
+  "이름을 바꾸지 못했습니다 — {err}": "Couldn't rename — {err}",
+  "다른 프로젝트에서 부르는 주소가 바뀝니다 — 이름@{name} · 있는 세션 이름은 그대로입니다": "Other projects will address it as name@{name} · existing session names stay as they are",
+  "이미 등록된 폴더입니다 — {name}": "This folder is already registered — {name}",
+  "되돌릴 등록 정보가 없습니다": "There's no registration to restore",
+  "등록 항목 없음": "Registration not found",
+  "실행 중인 세션이 없습니다.": "No sessions are running.",
 };

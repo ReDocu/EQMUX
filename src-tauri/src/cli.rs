@@ -152,10 +152,7 @@ fn powershell_pipe_cp(err: bool) -> Option<u32> {
         if GetFileType(h) != FILE_TYPE_PIPE {
             return None;
         }
-        let cp = GetConsoleOutputCP();
-        if cp == 0 || cp == 65001 {
-            return None;
-        }
+        let cp = console_cp(GetConsoleOutputCP(), std::env::var("EQMUX_CONSOLE_CP").ok().as_deref())?;
         // 파이프를 만든 쪽 = 읽는 쪽. PowerShell이 자기 stdout을 물려준 경우(Codex의 `pwsh -c "eqmux who"`)는
         // 만든 쪽이 Codex라 UTF-8 그대로 간다
         let mut pid = 0u32;
@@ -166,6 +163,14 @@ fn powershell_pipe_cp(err: bool) -> Option<u32> {
 #[cfg(not(windows))]
 fn powershell_pipe_cp(_err: bool) -> Option<u32> {
     None
+}
+
+/// 바꿔 쓸 콘솔 코드 페이지 — 콘솔이 없는 GUI 프로세스(릴리스 eqmux.exe)는 GetConsoleOutputCP가 0이라
+/// eqmux.com 대리인이 넘긴 값을 쓴다 (B285). UTF-8(65001)이거나 모르면 None — 바꾸지 않는다
+#[cfg_attr(not(windows), allow(dead_code))]
+fn console_cp(own: u32, from_proxy: Option<&str>) -> Option<u32> {
+    let cp = if own != 0 { own } else { from_proxy?.trim().parse().ok()? };
+    (cp != 0 && cp != 65001).then_some(cp)
 }
 
 fn is_powershell(exe_stem: &str) -> bool {
@@ -1089,6 +1094,19 @@ mod tests {
         assert!(!is_powershell("node") && !is_powershell("codex") && !is_powershell("?"));
         #[cfg(windows)]
         assert_eq!(encode_cp("한 —\n", 949).unwrap(), vec![0xC7, 0xD1, b' ', 0xA1, 0xAA, b'\n']);
+    }
+
+    /// B285 — 콘솔 없는 릴리스 eqmux.exe(GetConsoleOutputCP 0)는 eqmux.com이 넘긴 코드 페이지를 쓴다
+    #[test]
+    fn console_cp_falls_back_to_proxy_value() {
+        assert_eq!(console_cp(949, None), Some(949)); // 콘솔이 있으면 자기 값
+        assert_eq!(console_cp(949, Some("437")), Some(949));
+        assert_eq!(console_cp(0, Some("949")), Some(949)); // GUI 프로세스 — 대리인 값
+        assert_eq!(console_cp(0, None), None);
+        assert_eq!(console_cp(0, Some("0")), None);
+        assert_eq!(console_cp(0, Some("x")), None);
+        assert_eq!(console_cp(65001, None), None); // UTF-8 콘솔은 그대로 둔다
+        assert_eq!(console_cp(0, Some("65001")), None);
     }
 
     /// 저장소 경계 — 저장소 안·엔진 작업 폴더는 통과, 밖·`..` 탈출·`~`·Glob 절대 패턴은 거부

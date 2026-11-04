@@ -25,8 +25,8 @@ export const dict: Record<string, string> = {
   "⟳ 새로 읽기": "⟳ Refresh",
   "파일을 선택하세요": "Select a file",
   "비교 · 부모 커밋 {base} ↔ {hash} · {stat}": "Compare · parent commit {base} ↔ {hash} · {stat}",
-  "비교 · {base} ({branch}) ↔ 워크트리 · {stat} — 커밋·편집은 터미널에서":
-    "Compare · {base} ({branch}) ↔ worktree · {stat} — commit/edit in the terminal",
+  "비교 · {base} ({branch}) ↔ 워크트리 · {stat} — 스테이지·커밋은 git 화면에서":
+    "Compare · {base} ({branch}) ↔ worktree · {stat} — stage/commit in the git screen",
   "변경 {cur}/{total}": "Change {cur}/{total}",
   "변경 없음": "No changes",
   "이전 변경 (p)": "Previous change (p)",
@@ -377,4 +377,17 @@ export const dict: Record<string, string> = {
   "지운 파일": "Deleted",
   "추가 + 수정 + 삭제 — 추적 안 된 파일은 추가, 이름 바꾸기는 수정으로 셉니다":
     "Added + modified + deleted — untracked files count as added, renames as modified",
+  // 0.6.2 QA (eqmux-90) — B297 · B298 · B300 · U190 · U191
+  "충돌 표식을 확인하지 못한 파일 {n}개는 스테이지하지 않았습니다 — 편집기 · 터미널에서 확인하세요":
+    "Did not stage {n} conflicted file(s) whose markers could not be checked — check them in an editor or terminal",
+  "앱에서 열 수 없는 충돌 파일입니다 ({err}) — 편집기 · 터미널에서 표식을 푼 뒤 스테이지하세요.":
+    "This conflicted file can't be opened in the app ({err}) — resolve the markers in an editor or terminal, then stage it.",
+  "stash 목록이 바뀌어 {h}을(를) 찾지 못했습니다 — 목록을 다시 읽었습니다":
+    "The stash list changed and {h} is no longer in it — reloaded the list",
+  "첫 부모 기준": "vs. first parent",
+  "원격과 갈라졌습니다 — git 화면에서 merge 또는 rebase를 고르세요": "Diverged from the remote — choose merge or rebase in the git screen",
+  "이 커밋의 변경이 이미 있습니다 — git 화면 배너의 [건너뛰기]로 넘어가세요": "This commit's changes are already there — use [Skip] in the git screen banner",
+  "충돌이 났습니다 — git 화면 배너에서 [충돌 보기]를 고르세요": "Conflicts — choose [View conflicts] in the git screen banner",
+  "git 화면을 엽니다 — 덩어리 스테이징 · 커밋": "Opens the git screen — hunk staging · commit",
+  "git 화면에서 스테이지 →": "Stage in the git screen →",
 };

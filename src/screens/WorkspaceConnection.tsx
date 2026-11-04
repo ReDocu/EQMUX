@@ -16,9 +16,11 @@ import {
   refreshWorkspaces,
   registerWorkspace,
   repathWorkspace,
+  restoreWorkspace,
   touchWorkspace,
   unregisterWorkspace,
 } from "../backend/workspaces";
+import { WsNameInput } from "../components/WsNameEdit";
 import { pushLayer, setView, tick } from "../state";
 import { t, tErr, tf } from "../i18n";
 import { ConfirmDialog, KV, notify } from "../components/ui";
@@ -79,6 +81,7 @@ export function WorkspaceConnection() {
   };
 
   const [error, setError] = createSignal<string | undefined>(undefined);
+  const [renaming, setRenaming] = createSignal<string | undefined>(undefined); // 이름을 바꾸는 중인 행 (S23)
   const [initTarget, setInitTarget] = createSignal<string | undefined>(undefined); // FR-E-01 — git init 확인
   const [cloneOpen, setCloneOpen] = createSignal(false);
   const [cloneUrl, setCloneUrl] = createSignal("");
@@ -204,7 +207,8 @@ export function WorkspaceConnection() {
       backend.removeWorkspace(id);
     }
     if (selectedId() === id) setSelectedId(groups()[0]?.items[0]?.id); // 화면 맨 위 행 (U62)
-    // [되돌리기] (0.6 QA P71) — 같은 경로로 재등록하고 그 행을 고른다. id는 경로에서 나와 같고,
+    // [되돌리기] (0.6 QA P71) — 지운 항목을 같은 id로 되살리고 그 행을 고른다 (B289). 경로로 다시 등록하면
+    // 재지정한 항목은 새 경로의 해시로 다른 id가 돼 대화 · 스크롤백 · 재개 정보가 옛 id 아래 남았다.
     // team.json도 디스크에 그대로라 슬롯이 돌아온다(죽은 세션은 확인창이 말한 대로 안 돌아온다). 목은 되살릴 길이 없다
     if (!ws) return;
     const name = ws.name;
@@ -213,7 +217,7 @@ export function WorkspaceConnection() {
       label: t("되돌리기"),
       run: async () => {
         try {
-          const info = await registerWorkspace(ws.path);
+          const info = await restoreWorkspace(ws.id);
           await refreshWorkspaces();
           setSelectedId(info.entry.id);
         } catch (e) {
@@ -281,9 +285,20 @@ export function WorkspaceConnection() {
                         </span>
                         <span class="ws-row-copy">
                           <span class="ws-row-top">
-                            <button class="ws-row-name" aria-pressed={selectedId() === ws.id}>
-                              {ws.name}
-                            </button>
+                            {/* 더블클릭하면 그 자리가 입력칸 (S23) */}
+                            <Show
+                              when={renaming() !== ws.id}
+                              fallback={<WsNameInput ws={ws} onDone={() => setRenaming(undefined)} />}
+                            >
+                              <button
+                                class="ws-row-name"
+                                aria-pressed={selectedId() === ws.id}
+                                title={t("더블클릭해 이름 바꾸기")}
+                                onDblClick={() => setRenaming(ws.id)}
+                              >
+                                {ws.name}
+                              </button>
+                            </Show>
                             <span class="mono muted ws-row-note" classList={{ "st-dead": ws.pathMissing }}>
                               {rowNote(ws)}
                             </span>

@@ -156,6 +156,15 @@ const SECTIONS: Section[] = [
         apply: (i) => updateSettings({ closeAction: CLOSE_ACTIONS[i] }),
       },
       {
+        // 숨김 확인창의 [다시 묻지 않기]를 되돌리는 자리 (U180). 행이 있어야 [기본값 복원]이 이 값을
+        // 화면의 값으로 세어 확인창에 보인다 — 행 없이 비교만 하면 '0개 값이 바뀝니다'였다 (B286)
+        k: "숨기기 전에 묻기",
+        d: "세션이 도는 채로 창을 닫으면 숨기기 전에 묻습니다 · 확인창에서 [다시 묻지 않기]를 고르면 꺼집니다",
+        labels: ["묻기 (기본)", "묻지 않기"],
+        current: (s = settings()) => (s.trayAskOff ? 1 : 0),
+        apply: (i) => updateSettings({ trayAskOff: i === 1 }),
+      },
+      {
         k: "스크롤백 재생",
         d: "앱을 다시 켰을 때 페인에 다시 그리는 줄 수",
         labels: ["250줄", "500줄 (기본)", "1,000줄"],

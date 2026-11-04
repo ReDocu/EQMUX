@@ -29,9 +29,14 @@ export interface TeamSlotInfo {
   worktreePath: string | null; // 이 머신에 워크트리가 실재할 때만 — 없으면 repo 루트 폴백
 }
 
-export async function loadTeam(workspaceId: string, wsPath: string): Promise<TeamSlotInfo[]> {
+/** report — 복원 경로만 켠다. team.json을 해석하지 못하면(B275) 빈 팀처럼 열되 이유를 알린다.
+ *  원래 편성을 덮는 일은 Rust team_save가 막는다 (사람이 파일을 고치거나 지울 때까지) */
+export async function loadTeam(workspaceId: string, wsPath: string, report = false): Promise<TeamSlotInfo[]> {
   if (!isTauri()) return [];
-  return invoke<TeamSlotInfo[]>("team_load", { workspaceId, wsPath }).catch(() => []);
+  return invoke<TeamSlotInfo[]>("team_load", { workspaceId, wsPath }).catch((e) => {
+    if (report) notify(tf("{ws} 팀 편성을 복원하지 않았습니다 — {err}", { ws: wsPath, err: String(e) }));
+    return [];
+  });
 }
 
 /** 세션 워크트리 보장 (FR-E-62) — 멱등. `.eqmux/worktrees/<세션>` + 브랜치 `eqmux/<세션>` */
@@ -140,7 +145,7 @@ export async function restoreTeams(): Promise<void> {
   const alive = new Set(await listAlivePty());
   for (const ws of backend.listWorkspaces()) {
     if (ws.pathMissing) continue;
-    const slots = await loadTeam(ws.id, ws.path);
+    const slots = await loadTeam(ws.id, ws.path, true);
     if (slots.length > 0) {
       lastSaved.set(ws.id, JSON.stringify(slots.map(({ slot, persona, personaName, job, jobName, name, worktree, permissions, cli, title }) => ({ slot, persona, personaName, job, jobName, name: name ?? null, worktree, permissions: permissions ?? null, cli: cli ?? null, title: title ?? null }))));
       backend.hydrateTeam(ws.id, slots, alive);

@@ -504,8 +504,9 @@ pub fn transcript_path(cwd: &str, uuid: &str) -> PathBuf {
         .join(format!("{uuid}.jsonl"))
 }
 
-/// Windows canonicalize의 `\\?\` 접두를 떼어 사람이 쓰는 경로로 (`\\?\UNC\srv` → `\\srv`)
-fn strip_verbatim(p: &str) -> String {
+/// Windows canonicalize의 `\\?\` 접두를 떼어 사람이 쓰는 경로로 (`\\?\UNC\srv` → `\\srv`).
+/// messages.rs `--file` 첨부도 같은 규칙을 쓴다 (B283)
+pub(crate) fn strip_verbatim(p: &str) -> String {
     if let Some(rest) = p.strip_prefix(r"\\?\UNC\") {
         format!(r"\\{rest}")
     } else {

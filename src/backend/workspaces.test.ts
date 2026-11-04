@@ -2,7 +2,13 @@ import { expect, test, vi } from "vitest";
 
 // missions · team → ui.tsx가 window를 찾는다 — 여기서 보는 것은 순수 변환뿐이다
 vi.mock("../components/ui", () => ({ notify: () => {} }));
-import { cloneProgressText, cloneStopText, toWorkspace } from "./workspaces";
+import { cloneProgressText, cloneStopText, toWorkspace, wsNameAfter } from "./workspaces";
+
+test("이름 바꾸기 — 앞뒤 공백을 떼고, 비우면 폴더 이름으로 돌아간다 (S23)", () => {
+  expect(wsNameAfter("  웹 앱 ", "D:\\work\\app")).toBe("웹 앱");
+  expect(wsNameAfter(" ", "D:\\work\\app\\")).toBe("app");
+  expect(wsNameAfter("", "/Users/me/repo")).toBe("repo");
+});
 
 const entry = { id: "w", name: "W", path: "D:/w", remote: null, branch: null, last_used: 0 };
 

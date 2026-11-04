@@ -55,7 +55,8 @@ function spans(s: string): [number, number][] {
   for (let i = 0; i < n; i++) {
     if (!isKey(c(i)) || (i > 0 && isKey(c(i - 1)))) continue;
     const k = run(i, isKey);
-    const word = s.slice(i, k).toUpperCase();
+    // 하이픈 꼴(x-api-key · --api-key · private-key)도 밑줄 꼴 키워드에 걸리게 (B308)
+    const word = s.slice(i, k).toUpperCase().replace(/-/g, "_");
     i = k - 1;
     const hits = PATTERNS.keywords.filter((w) => word.includes(w));
     if (!hits.length) continue;
@@ -64,10 +65,14 @@ function spans(s: string): [number, number][] {
     p = run(p, isSpace);
     if (p >= n || (c(p) !== 61 && c(p) !== 58)) continue; // = :
     p = run(p + 1, isSpace);
-    if (p < n && isQuote(c(p))) p++;
-    const e = run(p, (ch) => !endsValue(ch));
+    // 따옴표로 연 값은 같은 따옴표(또는 줄 끝)까지다 — "my secret pass"를 공백에서 끊지 않는다 (B308)
+    const open = p < n && isQuote(c(p)) ? c(p) : 0;
+    if (open) p++;
+    let e = open ? run(p, (ch) => ch !== open && ch !== 10 && ch !== 13) : run(p, (ch) => !endsValue(ch));
     // 이름의 키워드가 TOKEN뿐이고 값이 숫자만이면 토큰 수다 — max_tokens=128000 (B196). 비밀번호 숫자는 그대로 가린다
     if (hits.every((w) => w === "TOKEN") && /^\d+$/.test(s.slice(p, e))) continue;
+    // 따옴표 없는 값이 , ; &에서 짧게 끊겼으면 공백까지 본다 — DB_PASSWORD=Pa;ss!w0rd (B308)
+    if (!open && e - p < PATTERNS.minValue) e = run(p, (ch) => !isWs(ch) && !isQuote(ch));
     if (e - p >= PATTERNS.minValue) out.push([p, e]);
   }
 

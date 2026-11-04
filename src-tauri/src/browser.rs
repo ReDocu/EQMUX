@@ -56,6 +56,7 @@ pub async fn browser_open(app: AppHandle, url: String, x: f64, y: f64, w: f64, h
     }
     let win = app.get_window("main").ok_or("메인 창을 찾지 못했습니다")?;
     let emitter = app.clone();
+    let popup = app.clone();
     let builder = WebviewBuilder::new(LABEL, WebviewUrl::External(target))
         .initialization_script(CONSOLE_HOOK) // `eqmux browser console` (G5)
         // 주소 바 동기화 — 웹뷰 안에서 링크를 따라가도 패널 입력칸이 따라온다.
@@ -66,6 +67,23 @@ pub async fn browser_open(app: AppHandle, url: String, x: f64, y: f64, w: f64, h
                 let _ = emitter.emit_to("main", "browser-nav", NavPayload { url: u.to_string() });
             }
             allowed
+        })
+        // 새 창 요청(target="_blank" · window.open) — 처리기가 없으면 WebView2가 조용히 버린다 (B305).
+        // 새 창은 만들지 않고 같은 패널에서 그 주소로 간다(설정 webOpen이 Chrome이면 Chrome으로). http·https만.
+        // 처리기 안(WebView2 이벤트 중)에서 바로 navigate하지 않고 런타임 작업으로 넘긴다.
+        // ponytail: OAuth 팝업처럼 opener와 postMessage로 주고받는 흐름은 같은 웹뷰로 가면 opener가 없어진다 — 필요해지면 진짜 새 창(Create)을 띄운다
+        .on_new_window(move |u, _features| {
+            if parse_http(u.as_str()).is_ok() {
+                let app = popup.clone();
+                tauri::async_runtime::spawn(async move {
+                    if crate::setting_str(&app, "webOpen").as_deref() == Some("chrome") {
+                        let _ = crate::launch_web(u.as_str(), true);
+                    } else if let Some(wv) = app.get_webview(LABEL) {
+                        let _ = wv.navigate(u);
+                    }
+                });
+            }
+            tauri::webview::NewWindowResponse::Deny
         });
     win.add_child(builder, LogicalPosition::new(x, y), LogicalSize::new(w, h))
         .map_err(|e| format!("웹뷰 생성 실패: {e}"))?;

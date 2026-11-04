@@ -195,8 +195,14 @@ export function notify(msg: string, kind: "error" | "ok" = "error", action?: { l
   setTimeout(close, action ? 8000 : 4000);
 }
 
+/** 글을 치는 칸 — textarea · 텍스트 input. 그 칸의 Enter · Esc는 칸 몫이다 (B185 · B256 · U183) */
+export function typingField(t: EventTarget | null): boolean {
+  return t instanceof HTMLTextAreaElement || (t instanceof HTMLInputElement && !/^(checkbox|radio|button|submit|reset|range|color|file)$/.test(t.type));
+}
+
 /** 되돌릴 수 없는 동작 확인창 — 제목에 대상 이름, 본문에 되돌릴 수 있는지, 위험 버튼은 동사.
- *  기본 포커스는 취소이고 Enter·Esc 모두 취소다 (위험 버튼에 탭으로 옮겨 누른 Enter만 실행) */
+ *  기본 포커스는 취소이고 Enter·Esc 모두 취소다 (위험 버튼에 탭으로 옮겨 누른 Enter만 실행).
+ *  본문의 글 칸에서는 Enter가 줄바꿈이고, textarea의 Ctrl+Enter가 확인이다 (U183) */
 export function ConfirmDialog(props: {
   title: string;
   body: JSX.Element;
@@ -216,7 +222,16 @@ export function ConfirmDialog(props: {
     cancelBtn.focus();
     onCleanup(pushLayer(() => props.onCancel(), () => box)); // ESC = 맨 위 레이어 닫기 (P30) · 모달 (B72·U37)
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Enter" && document.activeElement !== okBtn) {
+      if (e.key !== "Enter") return;
+      if (typingField(e.target) && box.contains(e.target as Node)) {
+        if ((e.ctrlKey || e.metaKey) && e.target instanceof HTMLTextAreaElement && !props.busy) {
+          e.preventDefault();
+          e.stopPropagation();
+          props.onConfirm();
+        }
+        return;
+      }
+      if (document.activeElement !== okBtn) {
         e.preventDefault();
         e.stopPropagation();
         props.onCancel();

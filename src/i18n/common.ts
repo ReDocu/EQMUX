@@ -114,4 +114,11 @@ export const dict: Record<string, string> = {
   "{ws}의 세션 기록 DB가 손상되어 새로 만들었습니다. 옛 파일은 {file}로 남겼습니다.":
     "The session history DB for {ws} was damaged and has been recreated. The old file was kept as {file}.",
   "사라진 워크스페이스 등록 {restored}개를 백업에서 되살렸습니다": "Restored {restored} missing workspace registration(s) from backup",
+  // ── 0.6.2 QA eqmux-32: U186 이벤트 줄 머리 · 진단 표식 (원장 원문은 번역하지 않는다) ──
+  "세션 시작 · {what}": "Session started · {what}",
+  "세션 종료 · {code}": "Session ended · {code}",
+  "종료 코드 없음": "no exit code",
+  "사용자 요청으로 종료": "Stopped by user",
+  "진단 기록 중…": "Recording diagnostics…",
+  "진단에 기록했습니다 — ~/.eqmux/logs/diagnostics.log": "Recorded in diagnostics — ~/.eqmux/logs/diagnostics.log",
 };

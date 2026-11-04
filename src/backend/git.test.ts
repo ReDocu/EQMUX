@@ -66,3 +66,13 @@ test("실패 알림 — 진행 머리말이 아니라 원인 줄, 흔한 경우�
   expect(failText("Auto-merging a.txt\nCONFLICT (content): Merge conflict in a.txt")).toContain("CONFLICT (content)");
   expect(failText("그냥 한 줄")).toBe("그냥 한 줄");
 });
+
+test("사이드 패널의 실패 안내는 git 화면을 가리킨다 — 패널에는 Pull ▾ · 배너가 없다 (U190)", async () => {
+  const { failText } = await import("./git");
+  const pull = "fatal: Not possible to fast-forward, aborting.";
+  expect(failText(pull)).toContain("Pull ▾");
+  expect(failText(pull, true)).toContain("git 화면에서 merge 또는 rebase");
+  expect(failText(pull, true)).not.toContain("Pull ▾");
+  expect(failText("CONFLICT (content): Merge conflict in a.txt", true)).toContain("git 화면 배너");
+  expect(failText("The previous cherry-pick is now empty", true)).toContain("git 화면 배너");
+});

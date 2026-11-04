@@ -7,7 +7,8 @@ import { listen } from "@tauri-apps/api/event";
 import { backend } from "../backend/mock";
 import type { AgentStateEvt } from "../backend/agent";
 import { cleanScrollback, exportSessionScrollback } from "../backend/panels";
-import { clipWriteText, isTauri, scrollbackTail, writePty } from "../backend/pty";
+import { clipWriteText, isTauri, scrollbackTail } from "../backend/pty";
+import { injectLine } from "../backend/conversation";
 import { t as tr, tf } from "../i18n";
 import { readTranscript } from "../backend/transcript";
 import type { TranscriptData } from "../backend/transcript";
@@ -126,7 +127,9 @@ export function TranscriptPane(props: { session: Session; onJump?: () => void })
     const text = draft().trim();
     if (!text || blocked()) return;
     if (isTauri()) {
-      writePty(props.session.id, text + "\r"); // V3 — 별도 경로 없이 PTY로
+      // 대화 주입과 같은 큐 · 2단계 제출 (B281) — `…\r` 한 번이면 TUI가 붙여넣기로 묶어 입력란에 남고
+      // 제출되지 않는다(B94). 큐를 거치지 않으면 대화 주입의 본문과 \r 사이에 끼어 두 글이 섞인다
+      injectLine(props.session.id, text);
     } else {
       backend.sendInput(props.session.id, text);
     }

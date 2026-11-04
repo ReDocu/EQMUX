@@ -256,4 +256,9 @@ export const dict: Record<string, string> = {
   // 줄마다 기본값 표시 (0.6 QA U149)
   "관제 대시보드 (기본)": "Control dashboard (default)",
   "500줄 (기본)": "500 lines (default)",
+  // 0.6.2 QA eqmux-ce: 숨기기 전에 묻기 (B286 · U180)
+  "숨기기 전에 묻기": "Ask before hiding",
+  "세션이 도는 채로 창을 닫으면 숨기기 전에 묻습니다 · 확인창에서 [다시 묻지 않기]를 고르면 꺼집니다": "Asks before hiding when you close the window while sessions run · choosing [Don't ask again] there turns this off",
+  "묻기 (기본)": "Ask (default)",
+  "묻지 않기": "Don't ask",
 };

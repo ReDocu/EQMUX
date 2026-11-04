@@ -12,7 +12,7 @@ import { isTauri, killPty, openLogDir, storeUsageReal } from "../backend/pty";
 import { sessionTermSize } from "../components/TerminalPane";
 import { settings, toggleMuted } from "../backend/settings";
 import { t, tErr, tf } from "../i18n";
-import { jumpToSession } from "../state";
+import { jumpToSession, ptyShells } from "../state";
 import { Eyebrow, FieldHint, Identity, KV, StatusLabel, StopConfirm } from "../components/ui";
 import { SubagentList } from "../components/SubagentList"; // §4 서브에이전트 목록 (W3)
 import type { AgentCliId, Permissions, Session } from "../types";
@@ -310,7 +310,8 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
             v={s().resumable ? `${t("가능")} · ${t(s().resumeReason ?? "")}` : `${t("불가")} · ${t(s().resumeReason ?? "대화 기록 없음")}`}
           />
           <Show when={s().pid}>
-            <KV k={t("PID · 셸")} v={`${s().pid} · ${s().shell}`} />
+            {/* 실제로 뜬 셸 (B291) — 고른 셸이 없어 물러났으면 고른 라벨이 아니라 뜬 셸이다 */}
+            <KV k={t("PID · 셸")} v={`${s().pid} · ${ptyShells()[s().id] ?? s().shell}`} />
           </Show>
           <Show when={s().personaId}>
             <KV

@@ -105,9 +105,9 @@ pub fn attach_file(repo: &str, path: &str) -> Result<FileRef, String> {
     if !meta.is_file() {
         return Err("FILE_NOT_FOUND".into());
     }
-    // canonicalize는 Windows에서 \\?\ 접두를 붙인다 — 사람·에이전트가 여는 경로로 돌려 놓는다
-    let shown = file.to_string_lossy();
-    let shown = shown.strip_prefix(r"\\?\").unwrap_or(&shown).to_string();
+    // canonicalize는 Windows에서 \\?\ 접두를 붙인다 — 사람·에이전트가 여는 경로로 돌려 놓는다.
+    // 공유 폴더 · 네트워크 드라이브는 \\?\UNC\srv\share라 접두만 떼면 'UNC\srv…'가 남는다 (B283)
+    let shown = crate::agent::strip_verbatim(&file.to_string_lossy());
     Ok(FileRef { path: shown, size: meta.len() })
 }
 

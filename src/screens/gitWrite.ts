@@ -2,7 +2,8 @@
 // · workGuard: §4-1 작업 중 경고 — HEAD · 작업 트리를 바꾸기 전에 그 폴더 세션의 상태를 본다
 // · splitHunks · hunkPatch: 덩어리 스테이징 — `git diff` 원문을 덩어리로 나눠 하나짜리 패치를 만든다
 import type { Session } from "../types";
-import type { GitRefs } from "../backend/git";
+import type { GitRefs, NamedRef, StatusFile } from "../backend/git";
+import { isConflict } from "../backend/git";
 import { EXAMPLE_FILES } from "../backend/env";
 
 export type GuardLevel = "busy" | "waiting" | "none";
@@ -144,6 +145,25 @@ export function pushRemote(remoteRefs: string[]): string {
 export function pushArgs(refs: GitRefs | undefined): string[] {
   const b = refs?.local.find((x) => x.head);
   return b && !b.upstream ? ["push", "-u", pushRemote((refs?.remote ?? []).map((r) => r.name)), b.name] : ["push"];
+}
+
+/** B171 · B297 — 스테이지하면 안 되는 충돌 파일. 판정은 지금 상태(fresh)로 한다 — 화면 목록은 10초 전 것일 수 있다.
+ *  marked = 표식이 남았다 · unknown = 앱이 확인하지 못했다(파일을 못 읽음 · 상태를 못 읽음). 둘 다 스테이지하지 않는다 */
+export function heldConflicts(asked: StatusFile[], fresh: StatusFile[] | undefined): { marked: string[]; unknown: string[] } {
+  const marked: string[] = [];
+  const unknown: string[] = [];
+  for (const f of asked.filter(isConflict)) {
+    const now = fresh?.find((x) => x.path === f.path);
+    if (fresh && (!now || !isConflict(now))) continue; // 그사이 다른 곳에서 풀었다
+    if (now?.marks === true) marked.push(f.path);
+    else if (now?.marks !== false) unknown.push(f.path);
+  }
+  return { marked, unknown };
+}
+
+/** B298 — stash 순번(stash@{n})은 새 stash가 생기면 밀린다. 실행 직전 목록에서 화면에 보인 해시로 순번을 다시 찾는다 */
+export function stashRefOf(stashes: NamedRef[] | undefined, hash: string): string | undefined {
+  return stashes?.find((s) => s.hash === hash)?.name.split(":")[0];
 }
 
 /** 경로를 명령 줄 상한 안쪽 묶음으로 나눈다 (B179) — Windows 명령 줄은 32,767자까지다 */

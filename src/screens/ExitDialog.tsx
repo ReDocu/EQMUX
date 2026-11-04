@@ -1,16 +1,27 @@
 // 종료 확인 (sYRf5 → 0.5 시안 mMpfq) — 실행 중 에이전트 목록 + 재개 가능 여부. 자동 재개하지 않는다 (FR-C-61 · C10).
 // 종료를 누르면 실제 시퀀스가 돈다 (FR-C-62·63): 입력 차단(이 다이얼로그) → flush → 신호 → 유예 → 종료.
 import { createResource, createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { invoke } from "@tauri-apps/api/core";
 import { backend } from "../backend/mock";
 import { isServerTermId, portEntries, serverTermId } from "../backend/ports";
 import { isTauri, listAlivePty } from "../backend/pty";
-import { performShutdown } from "../backend/shutdown";
+import { liveSessions, performShutdown } from "../backend/shutdown";
 import type { ShutdownPhase } from "../backend/shutdown";
 import { Chip, Identity, notify } from "../components/ui";
 import { t, tf } from "../i18n";
 import { pushLayer, setExitOpen } from "../state";
 import { effectiveTitle, paneNo, sessionName } from "../types";
 import { Icon } from "../components/icons";
+
+/** 종료 요청 — 창 닫기 · ⌘Q · 트레이 [전부 종료] · 앱 바 [종료]가 모두 이 길이다 (FR-C-60 · U187).
+ *  끌 것이 있으면 확인창(FR-C-61), 없으면 flush 시퀀스만 돌고 조용히 끝난다 */
+export async function requestQuit(): Promise<void> {
+  // 목록을 못 읽으면 상태로 센다 — 빈 목록으로 보고 묻지 않고 끄면 도는 에이전트가 말없이 죽는다
+  const alive = isTauri() ? await invoke<string[]>("pty_list").catch(() => undefined) : undefined;
+  // 서버 탭 PTY는 세션 목록 밖이다 — 그것만 돌 때도 dev 서버가 말없이 죽지 않게 묻는다 (BR-05)
+  if (liveSessions(backend.listSessions(), alive).length > 0 || (alive ?? []).some(isServerTermId)) setExitOpen(true);
+  else void performShutdown();
+}
 
 const PHASE_TEXT: Record<ShutdownPhase, string> = {
   flush: "대화·로그 저장 중…",
@@ -25,9 +36,10 @@ const STATE_TEXT: Record<string, string> = { busy: "작업 중", idle: "대기",
 const AGENT_UP = new Set(["busy", "idle", "waiting", "starting"]);
 
 export function ExitDialog() {
-  const running = () => backend.listSessions().filter((s) => s.status !== "dead");
   // 서버 탭 PTY (BR-05) — 세션 목록 밖이라 따로 센다. 끄면 dev 서버도 함께 죽는다
   const [alive] = createResource(() => listAlivePty());
+  // 프로세스가 있는 세션만 (B292) — 복원만 되고 열어 보지 않은 슬롯을 '실행 중'으로 세지 않는다
+  const running = () => liveSessions(backend.listSessions(), isTauri() ? alive() : undefined);
   const servers = () => (alive() ?? []).filter(isServerTermId).map((id) => id.slice(id.indexOf("@") + 1));
   const persona = (id: string) => backend.listPersonas().find((p) => p.id === id);
   const ws = (id: string) => backend.listWorkspaces().find((w) => w.id === id);
@@ -69,8 +81,9 @@ export function ExitDialog() {
           <div>
             <div class="exit-title">{t("EQMUX를 종료할까요?")}</div>
             <div class="exit-sub">
+              {/* 끌 것이 없으면 확인창 없이 끝난다(requestQuit) — 연 뒤에 세션이 다 끝난 경우만 여기 온다 (U187) */}
               {total() === 0
-                ? t("실행 중인 세션이 없습니다 — 바로 종료합니다.")
+                ? t("실행 중인 세션이 없습니다.")
                 : tf("실행 중 {n} — 에이전트 {a} · 셸만 연 역할 세션 {r} · 기본 터미널 {d} · 서버 {s}. 자동 재개하지 않습니다.", {
                     n: total(),
                     a: agents(),
@@ -145,7 +158,7 @@ export function ExitDialog() {
             {t("취소")}
           </button>
           <button class="btn danger" disabled={busy()} onClick={doExit}>
-            {busy() ? t("종료 중…") : t("모두 종료")}
+            {busy() ? t("종료 중…") : total() === 0 ? t("종료") : t("모두 종료")}
           </button>
         </div>
       </div>

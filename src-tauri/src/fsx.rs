@@ -282,7 +282,11 @@ pub fn rename_entry(ws_path: &str, rel: &str, new_name: &str) -> Result<String, 
     let target = resolve_existing(ws_path, rel)?;
     let parent = target.parent().ok_or("부모 폴더 없음")?;
     let next = parent.join(new_name.trim());
-    if next.exists() {
+    // 대소문자만 바꾸는 이름(readme.md → README.md)은 막지 않는다 (B303) — 대소문자를 가리지 않는
+    // NTFS · APFS에서는 새 경로가 '있다'로 나오지만 같은 파일이다. 이름이 대소문자만 다르고 실제 경로도
+    // 같을 때만 넘긴다 — 대소문자를 가리는 파일 시스템의 다른 파일 · 같은 파일을 가리키는 심링크는 그대로 막는다
+    let case_only = target.file_name().is_some_and(|n| n.to_string_lossy().to_lowercase() == new_name.trim().to_lowercase());
+    if next.exists() && !(case_only && fs::canonicalize(&next).ok().as_ref() == Some(&target)) {
         return Err("같은 이름이 이미 있습니다".into());
     }
     fs::rename(&target, &next).map_err(|e| e.to_string())?;
@@ -300,54 +304,54 @@ pub fn delete_entry(ws_path: &str, rel: &str) -> Result<(), String> {
 }
 
 // ── Tauri 커맨드 표면 — 로직은 위의 순수 함수들, 여기는 이름과 시그니처만 소유한다 ──
+// 모두 디스크(트리는 git도) 입출력이라 blocking 스레드에서 돈다 (B301) — 동기 커맨드는 메인 스레드에서 돌아,
+// 큰 저장소 · 느린 드라이브에서 트리를 읽는 동안 창 그리기와 다른 커맨드가 함께 멈췄다.
 
 /// 탐색기 파일 트리 (PRD H) — 깊이·개수 상한, 무거운 디렉터리 제외.
 /// 상한에 걸렸는지도 함께 돌려준다 (B15) — 화면이 잘림을 말할 수 있어야 한다.
 #[tauri::command]
-pub fn fs_tree(ws_path: String) -> FsTree {
-    tree(&ws_path)
+pub async fn fs_tree(ws_path: String) -> Result<FsTree, String> {
+    crate::gitx::blocking(move || Ok(tree(&ws_path))).await
 }
 
 /// 텍스트 미리보기 — 경로 탈출 방지 + 64KB 상한
 #[tauri::command]
-pub fn fs_preview(ws_path: String, rel: String) -> Result<String, String> {
-    preview(&ws_path, &rel)
+pub async fn fs_preview(ws_path: String, rel: String) -> Result<String, String> {
+    crate::gitx::blocking(move || preview(&ws_path, &rel)).await
 }
 
 /// 편집용 원문 (1MB 상한 — 미리보기 잘림을 저장해 뒷부분을 날리는 사고 방지)
 #[tauri::command]
-pub fn fs_read(ws_path: String, rel: String) -> Result<FileContent, String> {
-    read_full(&ws_path, &rel)
+pub async fn fs_read(ws_path: String, rel: String) -> Result<FileContent, String> {
+    crate::gitx::blocking(move || read_full(&ws_path, &rel)).await
 }
 
 /// 저장 — expectedMtimeMs가 있으면 외부 변경 충돌을 검사한다. 반환은 저장 후 mtime
 #[tauri::command]
-pub fn fs_write(
+pub async fn fs_write(
     ws_path: String,
     rel: String,
     content: String,
     expected_mtime_ms: Option<i64>,
 ) -> Result<i64, String> {
-    write_file(&ws_path, &rel, &content, expected_mtime_ms)
+    crate::gitx::blocking(move || write_file(&ws_path, &rel, &content, expected_mtime_ms)).await
 }
 
 /// relDir(빈 문자열 = 루트) 아래에 생성 — 반환은 새 항목의 상대 경로
 #[tauri::command]
-pub fn fs_create(ws_path: String, rel_dir: String, name: String, dir: bool) -> Result<String, String> {
-    create_entry(&ws_path, &rel_dir, &name, dir)
+pub async fn fs_create(ws_path: String, rel_dir: String, name: String, dir: bool) -> Result<String, String> {
+    crate::gitx::blocking(move || create_entry(&ws_path, &rel_dir, &name, dir)).await
 }
 
 #[tauri::command]
-pub fn fs_rename(ws_path: String, rel: String, new_name: String) -> Result<String, String> {
-    rename_entry(&ws_path, &rel, &new_name)
+pub async fn fs_rename(ws_path: String, rel: String, new_name: String) -> Result<String, String> {
+    crate::gitx::blocking(move || rename_entry(&ws_path, &rel, &new_name)).await
 }
 
 /// 휴지통으로 이동 — 영구 삭제 폴백 없음
 #[tauri::command]
 pub async fn fs_delete(ws_path: String, rel: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || delete_entry(&ws_path, &rel))
-        .await
-        .map_err(|e| e.to_string())?
+    crate::gitx::blocking(move || delete_entry(&ws_path, &rel)).await
 }
 
 // ── 탐색기에서 열기 (터미널 경로 더블클릭) ─────────────────────────────
@@ -511,6 +515,24 @@ mod tests {
         assert!(rename_entry(&ws, "docs", "..").is_err());
         assert!(delete_entry(&ws, "").is_err());
         assert!(create_entry(&ws, "docs", "note2.md", false).is_err());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// B303 — 대소문자만 바꾸는 이름 변경은 된다. 다른 파일 이름으로는 여전히 막는다
+    #[test]
+    fn rename_allows_case_only_change() {
+        let dir = std::env::temp_dir().join(format!("eqmux-fscase-{}", crate::workspace::now_ms()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("readme.md"), "a").unwrap();
+        fs::write(dir.join("other.md"), "b").unwrap();
+        let ws = dir.to_string_lossy().into_owned();
+
+        assert_eq!(rename_entry(&ws, "readme.md", "README.md").unwrap(), "README.md");
+        let names: Vec<String> = fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        assert!(names.contains(&"README.md".to_string()), "디스크 이름이 바뀌어야 한다: {names:?}");
+        assert_eq!(fs::read_to_string(dir.join("README.md")).unwrap(), "a");
+        assert!(rename_entry(&ws, "README.md", "other.md").is_err(), "다른 파일을 덮지 않는다");
+        assert!(rename_entry(&ws, "README.md", "OTHER.md").is_err(), "대소문자만 다른 남의 이름도 막는다");
         fs::remove_dir_all(&dir).ok();
     }
 

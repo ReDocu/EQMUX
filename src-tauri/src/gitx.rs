@@ -278,6 +278,8 @@ pub struct StatusFile {
     pub from: Option<String>, // 이름 변경의 원래 경로
     pub x: String,            // 인덱스 쪽 — ' '면 스테이지된 것 없음
     pub y: String,            // 작업 트리 쪽 — '?'는 추적 안 됨
+    /// 충돌 파일에 표식이 남았나 (B297) — 충돌 파일만 채운다. null = 충돌 아님 또는 읽지 못함
+    pub marks: Option<bool>,
 }
 
 #[derive(Serialize, Debug)]
@@ -316,9 +318,41 @@ fn parse_status_z(out: &str) -> Vec<StatusFile> {
         }
         let (x, y) = (&e[0..1], &e[1..2]);
         let from = if x == "R" || x == "C" { it.next().map(String::from) } else { None };
-        files.push(StatusFile { path: e[3..].into(), from, x: x.into(), y: y.into() });
+        files.push(StatusFile { path: e[3..].into(), from, x: x.into(), y: y.into(), marks: None });
     }
     files
+}
+
+/// 충돌 파일 — 프런트 isConflict(git.ts)와 같은 규칙 (U · AA · DD)
+fn is_conflict(f: &StatusFile) -> bool {
+    f.x == "U" || f.y == "U" || (f.x == "A" && f.y == "A") || (f.x == "D" && f.y == "D")
+}
+
+/// B297 — 충돌 표식이 남았나. fs_read(1MB · UTF-8 상한)를 거치지 않고 줄 머리만 본다 — 큰 lock 파일 · EUC-KR도 본다.
+/// 없는 파일(한쪽이 지운 파일)은 Some(false). BOM 있는 UTF-16은 풀어서 본다. 못 읽으면 None — 프런트가 스테이지를 막는다
+fn conflict_marks(path: &std::path::Path) -> Option<bool> {
+    let data = match std::fs::read(path) {
+        Ok(d) => d,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Some(false),
+        Err(_) => return None,
+    };
+    let utf16 = |b: &[u8], f: fn([u8; 2]) -> u16| String::from_utf16_lossy(&b.chunks_exact(2).map(|c| f([c[0], c[1]])).collect::<Vec<_>>());
+    let text: std::borrow::Cow<str> = match data.as_slice() {
+        [0xFF, 0xFE, rest @ ..] => utf16(rest, u16::from_le_bytes).into(),
+        [0xFE, 0xFF, rest @ ..] => utf16(rest, u16::from_be_bytes).into(),
+        _ => String::from_utf8_lossy(&data),
+    };
+    // conflictParts(gitWrite.ts)와 같은 꼴 — 여는 줄, 그 뒤 가운데 줄, 그 뒤 닫는 줄
+    let mut stage = 0;
+    for l in text.lines() {
+        stage = match stage {
+            0 if l == "<<<<<<<" || l.starts_with("<<<<<<< ") => 1,
+            1 if l == "=======" => 2,
+            2 if l.starts_with(">>>>>>>") => return Some(true),
+            s => s,
+        };
+    }
+    Some(false)
 }
 
 pub fn status(ws_path: &str) -> Result<WorkStatus, String> {
@@ -335,7 +369,11 @@ pub fn status(ws_path: &str) -> Result<WorkStatus, String> {
     let progress = git(&["rev-parse", "--absolute-git-dir"], ws_path)
         .ok()
         .and_then(|d| progress_in(std::path::Path::new(&d)));
-    Ok(WorkStatus { files: parse_status_z(&o.stdout), head_pushed, has_head, progress })
+    let mut files = parse_status_z(&o.stdout);
+    for f in files.iter_mut().filter(|f| is_conflict(f)) {
+        f.marks = conflict_marks(&std::path::Path::new(ws_path).join(&f.path));
+    }
+    Ok(WorkStatus { files, head_pushed, has_head, progress })
 }
 
 /// 한 파일의 unified diff 원문 — 프런트가 덩어리로 나눠 [스테이지]용 패치를 만든다
@@ -671,7 +709,7 @@ pub async fn git_path_status(ws_path: String, paths: Vec<String>) -> Result<Vec<
     blocking(move || Ok(path_status(&ws_path, &paths))).await
 }
 
-async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
+pub(crate) async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
     tauri::async_runtime::spawn_blocking(f).await.map_err(|e| e.to_string())?
 }
 
@@ -831,6 +869,35 @@ mod tests {
         assert_eq!(f[2].path, "한글.txt");
     }
 
+    /// B297 — 1MB 넘는 파일 · UTF-16 · CRLF도 표식을 본다. 없는 파일은 '표식 없음'
+    #[test]
+    fn conflict_marks_ignores_size_and_encoding() {
+        let dir = std::env::temp_dir().join(format!("eqmux-gitx-marks-{}", crate::workspace::now_ms()));
+        fs::create_dir_all(&dir).unwrap();
+        let block = "<<<<<<< HEAD\r\nours\r\n=======\r\ntheirs\r\n>>>>>>> feat\r\n";
+        let big = format!("{}{block}", "x\n".repeat(700_000)); // 1.4MB — fs_read 상한 밖
+        fs::write(dir.join("big.lock"), &big).unwrap();
+        let mut u16le = vec![0xFF, 0xFE];
+        u16le.extend(block.encode_utf16().flat_map(u16::to_le_bytes));
+        fs::write(dir.join("u16.txt"), u16le).unwrap();
+        fs::write(dir.join("euckr.txt"), b"<<<<<<< HEAD\n\xC7\xD1\n=======\n\xB1\xDB\n>>>>>>> feat\n").unwrap();
+        fs::write(dir.join("done.txt"), "<<<<<<< 제목처럼 보이는 줄\n끝 표식 없음\n").unwrap();
+        assert_eq!(conflict_marks(&dir.join("big.lock")), Some(true));
+        assert_eq!(conflict_marks(&dir.join("u16.txt")), Some(true));
+        assert_eq!(conflict_marks(&dir.join("euckr.txt")), Some(true), "UTF-8이 아닌 파일");
+        assert_eq!(conflict_marks(&dir.join("done.txt")), Some(false), "가운데 · 닫는 표식이 없으면 충돌이 아니다");
+        assert_eq!(conflict_marks(&dir.join("gone.txt")), Some(false), "한쪽이 지운 파일");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    /// B299 — 앱이 부르는 git(과 그 자식)은 메시지 언어가 영어로 고정된다 — 판정이 영어 원문을 본다
+    #[test]
+    fn run_git_pins_message_language() {
+        let cwd = std::env::temp_dir().to_string_lossy().into_owned();
+        let o = run_git(&["-c", "alias.msglang=!echo \"$LC_MESSAGES/$LANGUAGE\"", "msglang"], &cwd, Duration::from_secs(30), &[]).unwrap();
+        assert_eq!(o.stdout.trim(), "C/en", "{}", o.stderr);
+    }
+
     fn temp_repo(tag: &str) -> (std::path::PathBuf, String) {
         let dir = std::env::temp_dir().join(format!("eqmux-gitx-{tag}-{}", crate::workspace::now_ms()));
         fs::create_dir_all(&dir).unwrap();
@@ -891,7 +958,7 @@ mod tests {
         // 덩어리 스테이징 — 떨어진 두 곳을 고치고 첫 덩어리만 인덱스로
         fs::write(dir.join("a.txt"), "1x\n2\n3\n4\n5\n6\n7\n8\n9\n10x\n").unwrap();
         let st = status(&path).unwrap();
-        assert_eq!(st.files, vec![StatusFile { path: "a.txt".into(), from: None, x: " ".into(), y: "M".into() }]);
+        assert_eq!(st.files, vec![StatusFile { path: "a.txt".into(), from: None, x: " ".into(), y: "M".into(), marks: None }]);
         assert!(!st.head_pushed);
         let p = file_patch(&path, "a.txt", false).unwrap();
         let first_hunk_end = p.match_indices("\n@@").nth(1).map(|(i, _)| i + 1).unwrap();

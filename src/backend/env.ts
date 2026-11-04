@@ -3,7 +3,7 @@
 // 원문 보존: 변수 하나를 고칠 때 파일을 다시 쓰지 않고 그 한 줄만 바꾼다 — 주석·순서·export·줄바꿈이 남는다.
 import { invoke } from "@tauri-apps/api/core";
 import { MOCK_ENV } from "./mock";
-import { fsCreate, fsDelete, fsRead, fsWrite } from "./panels";
+import { fsCreate, fsDelete, fsRead, fsWrite, isStaleWrite } from "./panels";
 import type { FileContent } from "./panels";
 import { isTauri } from "./pty";
 
@@ -224,7 +224,7 @@ export async function editEnvFile(wsPath: string, f: EnvFile, change: (text: str
     return;
   }
   await fsWrite(wsPath, f.file, next, f.mtimeMs).catch((e) => {
-    throw new Error(/밖에서 바뀌었/.test(String(e)) ? STALE : String(e));
+    throw new Error(isStaleWrite(e) ? STALE : String(e));
   });
 }
 

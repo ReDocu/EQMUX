@@ -31,7 +31,7 @@ import {
   setRunLogOpen as setLogOpen,
   withHeadNotice,
 } from "../backend/git";
-import type { BlameLine, BranchRef, ChangedFile, CommitDetail, GitRefs, LogCommit, RunResult, StatusFile, WorkStatus } from "../backend/git";
+import type { BlameLine, BranchRef, ChangedFile, CommitDetail, GitRefs, LogCommit, NamedRef, RunResult, StatusFile, WorkStatus } from "../backend/git";
 import { backend } from "../backend/mock";
 import { clipWriteText, isTauri } from "../backend/pty";
 import { openLink } from "../backend/browser";
@@ -52,6 +52,7 @@ import {
   conflictParts,
   guardSessions,
   guardWorsened,
+  heldConflicts,
   hunkPatch,
   hunkRange,
   isDotenvPath,
@@ -60,6 +61,7 @@ import {
   refNameProblem,
   resolveConflicts,
   splitHunks,
+  stashRefOf,
   workGuard,
 } from "./gitWrite";
 import type { ConflictPart, ConflictPick, FilePatch, GuardLevel } from "./gitWrite";
@@ -366,12 +368,15 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
     return w ? workGuard(backend.listSessions(), w.id) : { level: "none", busy: 0, waiting: 0 };
   };
 
-  /** §4-1 — busy면 강한 경고, waiting만이면 약한 경고, 아니면 바로 실행. 누른 순간 한 번 더 본다 */
-  const guarded = (args: string[], after?: (r: RunResult | undefined) => void) => {
+  /** §4-1 — busy면 강한 경고, waiting만이면 약한 경고, 아니면 바로 실행. 누른 순간 한 번 더 본다.
+   *  fresh — 실행 직전에 인자를 다시 정한다 (B298 stash 순번). undefined를 돌려주면 실행하지 않는다 */
+  const guarded = (args: string[], after?: (r: RunResult | undefined) => void, fresh?: () => Promise<string[] | undefined>) => {
     // 바뀐 뒤 알림 (§17-3) — HEAD 해시 전후 비교 (B175: 이름만 보면 같은 브랜치 pull · reset이 빠졌다)
     const go = async () => {
       const w = ws();
-      const r = w ? await withHeadNotice(w.id, w.path, () => run(args)) : undefined;
+      const a = fresh ? await fresh() : args;
+      if (!a) return;
+      const r = w ? await withHeadNotice(w.id, w.path, () => run(a)) : undefined;
       await loadSide();
       after?.(r);
     };
@@ -523,14 +528,25 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
     });
   /** `stash@{0}: 메시지` → `stash@{0}` */
   const stashRef = (name: string) => name.split(":")[0];
-  const stashDrop = (r: { name: string; hash: string }) =>
+  /** B298 — 순번은 그사이 새 stash가 생기면 밀린다. 실행 직전에 목록을 다시 읽어 화면의 stash(해시)가 지금 몇 번인지 찾는다 */
+  const freshStash = async (r: NamedRef, verb: "apply" | "pop" | "drop"): Promise<string[] | undefined> => {
+    const w = ws();
+    const ref = w ? stashRefOf((await gitRefs(w.path))?.stashes, r.hash) : undefined;
+    if (!ref) {
+      notify(tf("stash 목록이 바뀌어 {h}을(를) 찾지 못했습니다 — 목록을 다시 읽었습니다", { h: r.hash.slice(0, 10) }));
+      void loadSide();
+      return undefined;
+    }
+    return ["stash", verb, ref];
+  };
+  const stashDrop = (r: NamedRef) =>
     setConfirm({
       title: tf("{s} 버리기", { s: stashRef(r.name) }),
       body: <p>{t("stash 목록에서 지웁니다. 아래 해시로 한동안 되살릴 수 있습니다(git gc 전까지).")}</p>,
       info: [commandLine(["stash", "drop", stashRef(r.name)]), tf("되살리기: git stash apply {h}", { h: r.hash.slice(0, 10) })],
       danger: true,
       confirmLabel: t("버리기"),
-      onConfirm: () => (setConfirm(undefined), void run(["stash", "drop", stashRef(r.name)])),
+      onConfirm: () => (setConfirm(undefined), void freshStash(r, "drop").then((a) => a && run(a))),
     });
 
   // ── 진행 중 상태 (§17-4 배너) · 충돌 ──
@@ -556,15 +572,23 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
       [progress()!, "--abort"],
     );
 
-  // 충돌 파일 하나 — 작업 트리 원문의 표식을 덩어리별로 고른다
-  const [conflictText, setConflictText] = createSignal<{ path: string; parts: ConflictPart[]; mtime: number } | undefined>();
+  // 충돌 파일 하나 — 작업 트리 원문의 표식을 덩어리별로 고른다.
+  // unreadable = 앱이 못 여는 이유(1MB 초과 · UTF-8 아님 · 없음). 그때는 Rust가 훑은 표식(marks)이 없을 때만 스테이지를 권한다 (B297)
+  const [conflictText, setConflictText] = createSignal<
+    { path: string; parts: ConflictPart[]; mtime: number; unreadable?: string; marks?: boolean | null } | undefined
+  >();
   const [picks, setPicks] = createSignal<(ConflictPick | undefined)[]>([]);
   const openConflict = async (path: string) => {
     const w = ws();
     if (!w) return;
     setHunkFile({ path, staged: false });
-    const c = await fsRead(w.path, path).catch(() => undefined);
-    setConflictText(c ? { path, parts: conflictParts(c.text), mtime: c.mtimeMs } : { path, parts: [], mtime: 0 });
+    try {
+      const c = await fsRead(w.path, path);
+      setConflictText({ path, parts: conflictParts(c.text), mtime: c.mtimeMs });
+    } catch (e) {
+      const marks = (await gitStatus(w.path))?.files.find((f) => f.path === path)?.marks;
+      setConflictText({ path, parts: [], mtime: 0, unreadable: String(e), marks });
+    }
     setPicks([]);
   };
   const conflictBlocks = () => conflictText()?.parts.filter((p) => p.kind === "conflict") ?? [];
@@ -719,20 +743,19 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
   // ── 작업 트리 · 스테이징 ──
   const unstaged = () => (work()?.files ?? []).filter((f) => f.y !== " ");
   const staged = () => (work()?.files ?? []).filter((f) => f.x !== " " && f.x !== "?");
-  // B171 — git은 표식(<<<<<<<)이 남은 충돌 파일도 add를 받아 해결로 친다. 표식이 남은 파일은 빼고 [충돌 보기]로 보낸다
+  // B171 — git은 표식(<<<<<<<)이 남은 충돌 파일도 add를 받아 해결로 친다. 표식이 남은 파일은 빼고 [충돌 보기]로 보낸다.
+  // B297 — 표식은 Rust가 지금 파일의 줄 머리를 훑어 본다(git_status marks) — 편집기 상한(1MB · UTF-8)과 상관없다.
+  // 확인하지 못한 파일도 스테이지하지 않는다 (예전엔 못 읽음 = 표식 없음으로 쳐서 표식째 올라갔다)
   const stageFiles = async (fs: StatusFile[]) => {
     const w = ws();
     if (!w || !fs.length) return;
-    const marked: string[] = [];
-    for (const f of fs.filter(isConflict)) {
-      const c = await fsRead(w.path, f.path).catch(() => undefined); // 못 읽음 = 한쪽이 지운 파일 — 표식 없음
-      if (c && conflictParts(c.text).some((p) => p.kind === "conflict")) marked.push(f.path);
-    }
-    if (marked.length) {
-      notify(tf("충돌 표식이 남은 파일 {n}개는 스테이지하지 않았습니다 — [충돌 보기]에서 먼저 푸세요", { n: marked.length }));
-      void openConflict(marked[0]);
-    }
-    const rest = fs.filter((f) => !marked.includes(f.path));
+    const fresh = fs.some(isConflict) ? (await gitStatus(w.path))?.files : undefined;
+    const { marked, unknown } = heldConflicts(fs, fresh);
+    if (marked.length) notify(tf("충돌 표식이 남은 파일 {n}개는 스테이지하지 않았습니다 — [충돌 보기]에서 먼저 푸세요", { n: marked.length }));
+    if (unknown.length) notify(tf("충돌 표식을 확인하지 못한 파일 {n}개는 스테이지하지 않았습니다 — 편집기 · 터미널에서 확인하세요", { n: unknown.length }));
+    const held = [...marked, ...unknown];
+    if (held.length) void openConflict(held[0]);
+    const rest = fs.filter((f) => !held.includes(f.path));
     await runChunked(["add", "--"], rest.map((f) => f.path));
   };
   /** B179 — 경로를 한 번에 다 붙이면 Windows 명령 줄 상한(32,767자)을 넘는다. 묶음마다 돌리고 실패하면 멈춘다 */
@@ -813,9 +836,10 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
   const copyMenu = (args: string[]) => (e: MouseEvent) =>
     openMenu(e, undefined, [[{ label: tf("명령 복사 — {cmd}", { cmd: commandLine(args) }), action: () => void clipWriteText(commandLine(args)) }]]);
 
-  const openCommitDiff = (hash: string, subject: string) => {
+  /** file — 상세의 변경 파일을 눌렀으면 그 파일로 연다 (U192) */
+  const openCommitDiff = (hash: string, subject: string, file?: string) => {
     const cur = view();
-    setView({ kind: "gitdiff", wsId: ws()?.id, commit: { hash: hash.slice(0, 12), message: subject }, back: cur });
+    setView({ kind: "gitdiff", wsId: ws()?.id, commit: { hash: hash.slice(0, 12), message: subject, file }, back: cur });
   };
   const commitMenu = (e: MouseEvent, c: LogCommit) =>
     openMenu(e, `${c.hash.slice(0, 8)} · ${c.subject}`, [
@@ -1181,15 +1205,28 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
                   onContextMenu={(e) =>
                     openMenu(e, r.name, [
                       [
-                        { label: t("적용 (apply — 목록에 남김)"), action: () => guarded(["stash", "apply", stashRef(r.name)]) },
+                        {
+                          label: t("적용 (apply — 목록에 남김)"),
+                          action: () => guarded(["stash", "apply", stashRef(r.name)], undefined, () => freshStash(r, "apply")),
+                        },
                         {
                           label: t("꺼내기 (pop — 적용하고 목록에서 뺌)"),
-                          action: () =>
-                            guarded(["stash", "pop", stashRef(r.name)], (res) => {
-                              // U126 — 충돌이 나면 git은 stash를 목록에 남긴다. 풀고 나서 버려야 다시 적용되지 않는다
-                              if (res && !res.ok && /stash entry is kept|CONFLICT/.test(res.output))
-                                notify(tf("{s}이(가) 목록에 남았습니다 — 충돌을 푼 뒤 버리세요", { s: stashRef(r.name) }));
-                            }),
+                          action: () => {
+                            let used = stashRef(r.name);
+                            guarded(
+                              ["stash", "pop", used],
+                              (res) => {
+                                // U126 — 충돌이 나면 git은 stash를 목록에 남긴다. 풀고 나서 버려야 다시 적용되지 않는다
+                                if (res && !res.ok && /stash entry is kept|CONFLICT/.test(res.output))
+                                  notify(tf("{s}이(가) 목록에 남았습니다 — 충돌을 푼 뒤 버리세요", { s: used }));
+                              },
+                              async () => {
+                                const a = await freshStash(r, "pop");
+                                if (a) used = a[2];
+                                return a;
+                              },
+                            );
+                          },
                         },
                       ],
                       [{ label: t("버리기…"), danger: true, action: () => stashDrop(r) }],
@@ -1345,12 +1382,18 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
                 <button class="btn" disabled={d().parents.length === 0} onClick={() => openCommitDiff(d().hash, d().body.split("\n")[0])}>
                   {t("부모 커밋과 비교 (diff)")}
                 </button>
-                <div class="gx-sec">{tf("변경 파일 {n}", { n: detailFiles().length })}</div>
+                <div class="gx-sec">
+                  {tf("변경 파일 {n}", { n: detailFiles().length })}
+                  {/* B300 — merge 커밋은 첫 부모와 비교한 목록이다 */}
+                  <Show when={d().parents.length > 1}>
+                    <span class="muted"> · {t("첫 부모 기준")}</span>
+                  </Show>
+                </div>
                 <For each={detailFiles()}>
                   {(f) => (
                     <div class="gx-dfile mono" title={f.path}>
                       <span class="gx-st">{f.status}</span>
-                      <span class="gx-wpath" onClick={() => openCommitDiff(d().hash, d().body.split("\n")[0])}>
+                      <span class="gx-wpath" onClick={() => openCommitDiff(d().hash, d().body.split("\n")[0], f.path)}>
                         {f.path}
                       </span>
                       <span class="muted">{f.stat}</span>
@@ -1411,12 +1454,22 @@ export function GitScreen(props: { wsId?: string; file?: string }) {
                       <Show
                         when={conflictBlocks().length}
                         fallback={
-                          <div class="muted gx-empty">
-                            {t("충돌 표식이 없습니다 — 한쪽이 지운 파일이거나 이미 고쳤습니다. 남길 내용이면 스테이지하세요.")}{" "}
-                            <button class="btn ghost gx-mini" onClick={() => void run(["add", "--", c().path], { quiet: true })}>
-                              {t("스테이지")}
-                            </button>
-                          </div>
+                          // B297 — 못 여는 파일은 Rust가 표식이 없다고 본 때만 스테이지를 권한다
+                          <Show
+                            when={!c().unreadable || c().marks === false}
+                            fallback={
+                              <div class="muted gx-empty">
+                                {tf("앱에서 열 수 없는 충돌 파일입니다 ({err}) — 편집기 · 터미널에서 표식을 푼 뒤 스테이지하세요.", { err: tErr(c().unreadable!) })}
+                              </div>
+                            }
+                          >
+                            <div class="muted gx-empty">
+                              {t("충돌 표식이 없습니다 — 한쪽이 지운 파일이거나 이미 고쳤습니다. 남길 내용이면 스테이지하세요.")}{" "}
+                              <button class="btn ghost gx-mini" onClick={() => void run(["add", "--", c().path], { quiet: true })}>
+                                {t("스테이지")}
+                              </button>
+                            </div>
+                          </Show>
                         }
                       >
                         <For each={conflictBlocks()}>

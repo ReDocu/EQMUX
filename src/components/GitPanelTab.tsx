@@ -190,7 +190,7 @@ export function GitPanelTab() {
           ? tf("{cmd} 완료", { cmd: r.command })
           : r.auth
             ? t("로그인이 필요합니다 — 터미널에서 `git fetch`를 한 번 실행해 로그인하세요")
-            : `${r.command} — ${failText(r.output)}`,
+            : `${r.command} — ${failText(r.output, true)}`, // 안내는 git 화면을 가리킨다 (U190)
       );
     });
     void load();
@@ -221,6 +221,13 @@ export function GitPanelTab() {
   const copyMenu = (args: string[]) => (e: MouseEvent) => {
     e.preventDefault();
     setCopyMenu({ x: e.clientX, y: e.clientY, cmd: commandLine(args) });
+  };
+  /** B304 — push는 버튼이 실제로 치는 인자(업스트림이 없으면 -u <원격> <브랜치>)를 복사한다 */
+  const pushCopyMenu = (e: MouseEvent) => {
+    e.preventDefault();
+    const w = ws();
+    const at = { x: e.clientX, y: e.clientY };
+    if (w) void gitRefs(w.path).then((r) => setCopyMenu({ ...at, cmd: commandLine(pushArgs(r)) }));
   };
 
   // ── 저장소 드롭다운 (UI 리파인 §git) — 워크스페이스 전환 = 패널 스코프 전환 ──
@@ -349,7 +356,7 @@ export function GitPanelTab() {
           disabled={!ws() || running()}
           title={t("git push 실행 — 업스트림이 없으면 -u로 올립니다 · 우클릭: 명령 복사")}
           onClick={() => void push()}
-          onContextMenu={copyMenu(["push"])}
+          onContextMenu={pushCopyMenu}
         >
           ↑ {t("Push")}
           <Show when={g().ahead > 0}>

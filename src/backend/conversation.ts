@@ -197,7 +197,7 @@ export async function exportConversation(
   return invoke<ConversationExport | null>("msg_export", {
     workspace: wsId,
     wsName,
-    suggested: `${safe}-대화-${stamp}.md`,
+    suggested: `${safe}-${t("대화")}-${stamp}.md`, // 영어 화면이면 '-Conversation-' (U186)
     names,
   });
 }
@@ -868,6 +868,9 @@ export function flushInboxOnState(sessionId: string, status: string | undefined)
   const s = backend.listSessions().find((x) => x.id === sessionId);
   if (s && unmanagedAgent(s) && !autoManual()) return;
   if (limitHit(s)) return; // 한도 소진 (F1) — 넣어도 거절된다. 재설정 뒤 오는 상태 이벤트가 다시 부른다
+  // 사람이 그 페인에 치다 만 줄이 있다 (B274 — B20이 빠뜨린 길). 작업 중에 쳐 둔 다음 지시 뒤에 붙으면
+  // \r이 둘을 한 프롬프트로 제출한다 — 줄이 끝나면(Enter·Ctrl+C·60초) retryWhenFree가 다시 부른다
+  if (humanTyping(sessionId)) return retryWhenFree(sessionId);
   if (brief !== undefined) {
     briefs.delete(sessionId);
     injectLine(sessionId, brief); // 같은 주입 큐 — 아래 대화 묶음과 겹치지 않는다

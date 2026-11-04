@@ -4,6 +4,7 @@ import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-j
 import { rankItems } from "../backend/jump";
 import type { JumpItem, JumpKind } from "../backend/jump";
 import { backend } from "../backend/mock";
+import { missionStatusText } from "../backend/missions";
 import { t, tf } from "../i18n";
 import { setMissionToOpen } from "../screens/Missions";
 import { isSubmitEnter } from "../platform";
@@ -75,7 +76,7 @@ function buildItems(): JumpItem[] {
   for (const [label, run, sub] of screens) items.push({ id: `v:${label}`, kind: "screen", label: t(label), sub, run });
   for (const [tab, label] of PANEL_TABS) items.push({ id: `p:${tab}`, kind: "panel", label: t(label), run: () => openPanel(tab) });
   // 임무는 그 워크스페이스로 가서 임무 팝업을 열고 그 임무를 고른다 (B221 — 전에는 첫 임무가 열렸다).
-  // 상태는 임무 화면과 같은 원값(todo · in-progress …)으로 둔다
+  // 상태는 임무 화면 · 검토 화면과 같은 라벨(할 일 · 진행 중 …)로 보인다 (U184 — P87 재발)
   for (const m of backend.listMissions()) {
     const ws = wsName(m.workspaceId);
     if (!ws) continue;
@@ -83,7 +84,7 @@ function buildItems(): JumpItem[] {
       id: `m:${m.workspaceId}:${m.id}`,
       kind: "mission",
       label: m.name,
-      sub: `${ws} · ${m.status}`,
+      sub: `${ws} · ${missionStatusText(m.status)}`,
       run: () => {
         setMissionToOpen({ wsId: m.workspaceId, id: m.id });
         setView({ kind: "workspace", id: m.workspaceId });

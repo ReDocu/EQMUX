@@ -75,12 +75,14 @@ export function HistorySearch(props: { wsId?: string }) {
     backend.resumeSession(s.id);
     jumpToSession(s.workspaceId, s.id);
   };
-  const copyResume = async (uuid: string) => {
+  // 워크트리 세션 대화는 그 워크트리 폴더에서만 --resume이 찾는다 (S24)
+  const copyResume = async (g: HistoryGroup) => {
     const w = ws();
     if (!w) return;
+    const path = g.worktree ?? w.path;
     // 클립보드 쓰기가 실패하면 성공 토스트를 띄우지 않는다 (B262) · 기본 셸이 cmd면 cmd 문법으로 (B259)
-    if (await clipWriteText(resumeCommand(uuid, w.path, defaultShell().label)))
-      notify(tf("복사했습니다 — 터미널에 붙여 넣으면 {path}로 옮겨 재개합니다", { path: w.path }), "ok");
+    if (await clipWriteText(resumeCommand(g.uuid, path, defaultShell().label)))
+      notify(tf("복사했습니다 — 터미널에 붙여 넣으면 {path}로 옮겨 재개합니다", { path }), "ok");
     else notify(t("복사하지 못했습니다"));
   };
 
@@ -153,6 +155,13 @@ export function HistorySearch(props: { wsId?: string }) {
               <section class="hs-conv">
                 <div class="hs-conv-head">
                   <strong>{slot(g) ? slotName(slot(g)!) : t("앱 밖 · 옛 대화")}</strong>
+                  <Show when={g.worktree}>
+                    {(wt) => (
+                      <span class="muted mono" title={wt()}>
+                        {t("워크트리 세션")} · {wt().split(/[\\/]/).pop()}
+                      </span>
+                    )}
+                  </Show>
                   <span class="muted mono">
                     {g.uuid.slice(0, 8)} · {when(g.last)}
                   </span>
@@ -163,7 +172,7 @@ export function HistorySearch(props: { wsId?: string }) {
                       <button
                         class="btn ghost"
                         title={t("슬롯의 마지막 대화가 아니라 앱에서 재개할 수 없습니다 — 명령을 복사해 터미널에서 이어 가세요")}
-                        onClick={() => void copyResume(g.uuid)}
+                        onClick={() => void copyResume(g)}
                       >
                         <Icon name="copy" size={12} /> {t("재개 명령 복사")}
                       </button>
@@ -197,7 +206,7 @@ export function HistorySearch(props: { wsId?: string }) {
               </section>
             )}
           </For>
-          <p class="muted hs-note">{t("Codex 대화와 워크트리 세션은 아직 찾지 않습니다")}</p>
+          <p class="muted hs-note">{t("Codex 대화는 아직 찾지 않습니다 — 워크트리 세션 대화는 함께 찾습니다")}</p>
         </Show>
       </div>
     </div>

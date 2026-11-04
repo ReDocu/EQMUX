@@ -178,6 +178,7 @@ export const dict: Record<string, string> = {
   "personas/<id>.md 파일 삭제": "Deletes the personas/<id>.md file",
   "(캐스팅 중)": "(in casting)",
   "팀 편성 저장 실패 — {err}": "Team save failed — {err}",
+  "{ws} 팀 편성을 복원하지 않았습니다 — {err}": "Did not restore the team for {ws} — {err}",
 
   // ── 0.5 W3 · 직함·추천 칩·캐스팅 직무 변경 ──
   "직함 — 직무 안에서 맡는 영역 (선택). 모든 워크스페이스의 이 페르소나에 쓰입니다": "Title — the area this persona covers within its job (optional). Used in every workspace",

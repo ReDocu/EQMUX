@@ -5,6 +5,8 @@
 //!   저장한 자리가 있으면 → 지금 붙은 모니터의 작업 영역 안으로 당겨 넣어 되살린다
 //!   없으면(첫 기동)        → 작업 영역(메뉴 막대·Dock 뺀 화면)을 채운다 — Windows 최대화와 같은 첫인상
 //! 자리는 정상 종료 때 저장한다(app_exit·시스템 종료 경로). 크래시면 직전 저장값을 쓴다.
+//! Windows (S26) — 창은 tauri.conf.json대로 주 모니터에 최대화로 뜬다. 저장한 자리가 있으면 여기서 옮긴다:
+//!   최대화였으면 그 모니터로 옮겨 다시 최대화하고, 아니면 그 자리 · 크기로. 첫 기동은 최대화 그대로다.
 
 use serde::{Deserialize, Serialize};
 
@@ -15,6 +17,15 @@ pub struct Rect {
     pub y: i32,
     pub w: u32,
     pub h: u32,
+}
+
+/// 저장 꼴 — 0.6.1까지(mac)는 Rect만 썼다. max가 없으면 최대화 아님
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+struct Saved {
+    #[serde(flatten)]
+    r: Rect,
+    #[serde(default)]
+    max: bool,
 }
 
 /// 이만큼은 화면 안에 보여야 '그 모니터에 있다'고 본다 — 제목 막대를 잡아 끌 수 있는 최소한
@@ -57,9 +68,9 @@ pub fn fit(saved: Option<Rect>, areas: &[Rect]) -> Option<Rect> {
     })
 }
 
-#[cfg(target_os = "macos")]
-mod mac {
-    use super::{fit, Rect};
+#[cfg(any(target_os = "macos", windows))]
+mod imp {
+    use super::{fit, Rect, Saved};
     use std::path::Path;
     use tauri::{PhysicalPosition, PhysicalSize, Runtime, WebviewWindow};
 
@@ -72,9 +83,12 @@ mod mac {
 
     /// 창을 정한 자리에 두고 보인다 — 실패해도 창은 반드시 보인다(숨은 채 남으면 앱이 없는 것과 같다)
     pub fn restore<R: Runtime>(win: &WebviewWindow<R>, root: &Path) {
-        let saved: Option<Rect> = std::fs::read_to_string(root.join(FILE))
+        let saved: Option<Saved> = std::fs::read_to_string(root.join(FILE))
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok());
+        if cfg!(windows) && saved.is_none() {
+            return; // Windows 첫 기동 — tauri.conf.json의 최대화가 이미 보여 있다
+        }
         // 주 모니터를 앞에 — 저장값이 쓸모없을 때 채울 곳
         let mut areas: Vec<Rect> = win.primary_monitor().ok().flatten().iter().map(area_of).collect();
         for m in win.available_monitors().unwrap_or_default() {
@@ -83,9 +97,24 @@ mod mac {
                 areas.push(a);
             }
         }
-        if let Some(r) = fit(saved, &areas) {
-            let _ = win.set_size(PhysicalSize::new(r.w, r.h));
-            let _ = win.set_position(PhysicalPosition::new(r.x, r.y));
+        if let Some(r) = fit(saved.map(|s| s.r), &areas) {
+            #[cfg(target_os = "macos")]
+            {
+                let _ = win.set_size(PhysicalSize::new(r.w, r.h));
+                let _ = win.set_position(PhysicalPosition::new(r.x, r.y));
+            }
+            // 최대화된 창은 옮겨지지 않는다 — 풀고 옮긴 뒤 그 모니터에서 다시 최대화한다.
+            // 위치가 먼저다 — 배율이 다른 모니터로 건너가면 Windows가 크기를 그 모니터 기준으로 다시 잰다.
+            // ponytail: 최대화로 끈 창은 최대화 크기를 저장한다 — 풀면 작업 영역을 채운다. 풀린 크기까지 원하면 GetWindowPlacement
+            #[cfg(windows)]
+            {
+                let _ = win.unmaximize();
+                let _ = win.set_position(PhysicalPosition::new(r.x, r.y));
+                let _ = win.set_size(PhysicalSize::new(r.w, r.h));
+                if saved.is_some_and(|s| s.max) {
+                    let _ = win.maximize();
+                }
+            }
         }
         let _ = win.show();
         let _ = win.set_focus();
@@ -98,14 +127,15 @@ mod mac {
         }
         let (Ok(p), Ok(s)) = (win.outer_position(), win.outer_size()) else { return };
         let r = Rect { x: p.x, y: p.y, w: s.width, h: s.height };
-        if let Ok(json) = serde_json::to_string(&r) {
+        let saved = Saved { r, max: win.is_maximized().unwrap_or(false) };
+        if let Ok(json) = serde_json::to_string(&saved) {
             let _ = crate::workspace::atomic_write(&root.join(FILE), json.as_bytes());
         }
     }
 }
 
-#[cfg(target_os = "macos")]
-pub use mac::{restore, save};
+#[cfg(any(target_os = "macos", windows))]
+pub use imp::{restore, save};
 
 #[cfg(test)]
 mod tests {
@@ -142,6 +172,20 @@ mod tests {
         assert_eq!(fit(Some(gone), &[MAIN]), Some(MAIN));
         let side = Rect { x: 1920, y: 0, w: 2560, h: 1415 };
         assert_eq!(fit(Some(gone), &[MAIN, side]), Some(gone), "모니터가 그대로면 그 자리");
+    }
+
+    /// S26 — 0.6.1까지의 mac 파일(Rect만)도 읽고, 최대화 여부를 함께 남긴다
+    #[test]
+    fn saved_file_reads_old_format_and_keeps_maximized() {
+        let old: Saved = serde_json::from_str(r#"{"x":10,"y":20,"w":1200,"h":800}"#).unwrap();
+        assert_eq!(old, Saved { r: Rect { x: 10, y: 20, w: 1200, h: 800 }, max: false });
+        // 보조 모니터에서 최대화 — 창 테두리(8px)만큼 작업 영역 밖으로 나간다
+        let max = Saved { r: Rect { x: 1912, y: -8, w: 2576, h: 1416 }, max: true };
+        let back: Saved = serde_json::from_str(&serde_json::to_string(&max).unwrap()).unwrap();
+        assert_eq!(back, max);
+        // 그 모니터의 작업 영역으로 당긴다 — 거기서 다시 최대화한다
+        let side = Rect { x: 1920, y: 0, w: 2560, h: 1400 };
+        assert_eq!(fit(Some(max.r), &[MAIN, side]), Some(side));
     }
 
     #[test]

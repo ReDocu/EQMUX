@@ -160,7 +160,6 @@ export const dict: Record<string, string> = {
   "대화 로그": "Conversation log",
   "{name}에게 입력 보내기": "Send input to {name}",
   // 터미널에 앱이 찍는 경계 줄 (U154)
-  "브랜치 부여 → {cwd}": "Branch assigned → {cwd}",
   "이전 세션 스크롤백 · 마지막 {n}줄 재생": "Previous session scrollback · replaying last {n} lines",
   "웹뷰 재시작 — 실행 중인 세션에 재부착": "Webview restarted — reattached to the running session",
   "새 세션 시작": "New session started",
@@ -362,4 +361,6 @@ export const dict: Record<string, string> = {
   // 0.6 QA eqmux-17: 빠진 원문 (B195) · 진단 복사 실패 (B197)
   "열린 창을 먼저 닫으세요": "Close the open window first",
   "진단 정보를 클립보드에 넣지 못했습니다 — 다시 눌러 주세요": "Couldn't put the diagnostic info on the clipboard. Try again",
+  // 0.6.2 QA eqmux-ce: 종료된 기본 터미널 셸 다시 열기 (S25)
+  "같은 슬롯 · 같은 이름 · 같은 셸로 다시 엽니다": "Reopens in the same slot with the same name and shell",
 };

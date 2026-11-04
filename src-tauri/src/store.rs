@@ -829,10 +829,11 @@ pub struct SearchHit {
     pub text: String,
 }
 
-/// FTS5 질의 정제 — 토큰마다 큰따옴표로 감싸 연산자·따옴표로 인한 구문 오류를 막는다 (AND 의미)
+/// FTS5 질의 정제 — 토큰마다 큰따옴표로 감싸 연산자·따옴표로 인한 구문 오류를 막는다 (AND 의미).
+/// 토큰마다 접두 일치(`*`)다 — unicode61은 '에이전트가'를 한 토큰으로 두므로 '에이전트'로 찾으려면 접두여야 한다 (U182)
 pub fn fts_escape(q: &str) -> String {
     q.split_whitespace()
-        .map(|t| format!("\"{}\"", t.replace('"', "")))
+        .map(|t| format!("\"{}\"*", t.replace('"', "")))
         .collect::<Vec<_>>()
         .join(" ")
 }
@@ -874,9 +875,11 @@ pub fn search(
             &[&fts, &limit],
         ),
     };
+    // 0건도 LIKE로 한 번 더 — 접두로도 못 찾는 낱말 가운데 일치('build' → 'rebuild')를 놓치지 않게 (U182).
+    // ponytail: FTS가 몇 건이라도 찾으면 가운데 일치는 더하지 않는다 — 다 잡으려면 tokenize='trigram' 표로 옮긴다
     match via_fts {
-        Ok(hits) => Ok(hits),
-        Err(_) => {
+        Ok(hits) if !hits.is_empty() => Ok(hits),
+        _ => {
             let pat = format!("%{}%", query.trim());
             match session {
                 Some(s) => run(
@@ -1223,7 +1226,33 @@ mod tests {
 
     #[test]
     fn fts_query_is_escaped_per_token() {
-        assert_eq!(fts_escape(r#"foo "bar" NEAR"#), r#""foo" "bar" "NEAR""#);
+        assert_eq!(fts_escape(r#"foo "bar" NEAR"#), r#""foo"* "bar"* "NEAR"*"#);
+    }
+
+    /// U182 — 조사가 붙은 낱말은 접두로, 낱말 가운데 일치는 0건 뒤 LIKE로 찾는다
+    #[test]
+    fn search_finds_prefix_and_infix() {
+        let dir = std::env::temp_dir().join(format!("eqmux-u182-{}", crate::workspace::now_ms()));
+        std::fs::create_dir_all(&dir).unwrap();
+        {
+            let conn = open_db(&dir, "ws").unwrap();
+            for (i, text) in [(1i64, "에이전트가 끝났다"), (2, "npm run rebuild")] {
+                conn.execute(
+                    "INSERT INTO scrollback (session_id, seq, ts, text) VALUES ('s1', ?1, ?1, ?2)",
+                    params![i, text],
+                )
+                .unwrap();
+                let _ = conn.execute(
+                    "INSERT INTO scrollback_fts (text, session_id, seq, ts) VALUES (?2, 's1', ?1, ?1)",
+                    params![i, text],
+                );
+            }
+        }
+        let hit = |q: &str| search(&dir, "ws", q, None, 10).unwrap().iter().map(|h| h.seq).collect::<Vec<_>>();
+        assert_eq!(hit("에이전트"), [1], "조사가 붙어도 찾는다");
+        assert_eq!(hit("build"), [2], "낱말 가운데 일치");
+        assert!(hit("없는말").is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// M7 — 모두 읽음과 '내 마지막 완료 보고' 하위 쿼리가 원장 전체가 아니라 인덱스를 탄다

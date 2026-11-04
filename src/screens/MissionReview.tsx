@@ -17,15 +17,27 @@ import {
 } from "../backend/missions";
 import type { TestRun } from "../backend/missions";
 import { fsRead } from "../backend/panels";
-import { COMMANDS_FILE, parseCommands } from "../backend/ports";
+import { COMMANDS_FILE, parseCommands, serverTermId } from "../backend/ports";
 import type { SavedCommand } from "../backend/ports";
 import { t, tf } from "../i18n";
-import { defaultShell, openPanel, setView, tick } from "../state";
+import { openPanel, ptyShells, setView, tick } from "../state";
 import type { View } from "../state";
-import { Chip, ConfirmDialog, notify } from "../components/ui";
+import { Chip, ConfirmDialog, notify, typingField } from "../components/ui";
 import { GitDiffEditor } from "./GitDiffEditor";
 
-export function MissionReview(props: { wsId: string; missionId: string; back?: View }) {
+type ReviewProps = { wsId: string; missionId: string; back?: View };
+
+/** 임무마다 새로 만든다 (B280) — App은 review 뷰 안에서 props만 바꾸므로, 대화 탭 [검토 →]로 다른 임무를 열면
+ *  고친 파일 · 테스트 결과 · 적던 의견 · retryTo가 앞 임무 것으로 남았다 */
+export function MissionReview(props: ReviewProps) {
+  return (
+    <Show when={`${props.wsId}|${props.missionId}`} keyed>
+      {(_key) => <Review wsId={props.wsId} missionId={props.missionId} back={props.back} />}
+    </Show>
+  );
+}
+
+function Review(props: ReviewProps) {
   const ws = () => backend.listWorkspaces().find((w) => w.id === props.wsId);
   const m = () => {
     tick();
@@ -60,9 +72,7 @@ export function MissionReview(props: { wsId: string; missionId: string; back?: V
   // 글자를 치는 칸만 뺀다 (B256) — 체크박스 · select를 누른 뒤에도 ESC가 막혀 화면이 닫히지 않았다
   const onKey = (e: KeyboardEvent) => {
     if (e.key !== "Escape" || sendBackOpen()) return;
-    const el = e.target as HTMLElement | null;
-    if (el?.tagName === "TEXTAREA") return;
-    if (el instanceof HTMLInputElement && !/^(checkbox|radio|button|submit|reset|range|color|file)$/.test(el.type)) return;
+    if (typingField(e.target)) return;
     close();
   };
   onMount(() => {
@@ -83,7 +93,8 @@ export function MissionReview(props: { wsId: string; missionId: string; back?: V
     const c = tests()[pick()];
     if (!c) return;
     setTestState("running");
-    const r = await runReviewTest(props.wsId, c.run, defaultShell().cmd ?? defaultShell().label); // mac 로그인 셸은 cmd 없음 → posix
+    // 서버 PTY가 실제로 뜬 셸 (B276) — 기본 셸 설정은 이미 열린 서버 셸에 닿지 않는다. mac 로그인 셸도 pty_spawn이 zsh 등으로 돌려준다
+    const r = await runReviewTest(props.wsId, c.run, ptyShells()[serverTermId(props.wsId)]);
     setTestState(r);
     if (r === "no-shell") openPanel("server"); // 서버 셸이 떠야 칠 수 있다 — 탭을 열어 띄우게 한다
   };
@@ -92,7 +103,7 @@ export function MissionReview(props: { wsId: string; missionId: string; back?: V
     if (s === undefined) return "";
     if (s === "running") return t("실행 중 — 서버 탭에서 출력을 볼 수 있습니다");
     if (s === "no-shell") return t("서버 탭 셸이 없습니다 — 서버 탭을 열었습니다. 셸이 뜬 뒤 다시 누르세요");
-    if (s === "unsupported") return t("이 셸(cmd)에서는 종료 코드를 읽을 수 없습니다 — 서버 탭 출력으로 판단하세요");
+    if (s === "unsupported") return t("이 셸에서는 종료 코드를 읽을 수 없습니다(cmd · 셸을 모름) — 서버 탭 출력으로 판단하세요");
     if (s === "timeout") return t("30분 동안 끝나지 않았습니다 — 서버 탭을 확인하세요");
     return s === 0 ? tf("종료 코드 {code} — 통과", { code: s }) : tf("종료 코드 {code} — 실패", { code: s });
   };
@@ -259,7 +270,7 @@ export function MissionReview(props: { wsId: string; missionId: string; back?: V
                   <textarea
                     rows={4}
                     style={{ width: "100%" }}
-                    placeholder={t("고칠 점 — 담당 세션에게 review 메시지로 갑니다")}
+                    placeholder={t("고칠 점 — 담당 세션에게 review 메시지로 갑니다 · Ctrl+Enter로 보냅니다")}
                     value={note()}
                     onInput={(e) => setNote(e.currentTarget.value)}
                   />

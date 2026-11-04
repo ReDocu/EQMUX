@@ -29,6 +29,28 @@ test("기본 터미널은 넘겨받은 셸로 뜬다 (0.6 QA B202)", () => {
   expect(term?.shell).toBe("Git Bash");
 });
 
+test("종료된 역할 없는 셸은 같은 슬롯 · 같은 이름으로 되살린다, 역할 세션 · 산 세션은 아니다 (S25)", () => {
+  const ws = backend.listWorkspaces().find((w) => backend.listSessions().filter((x) => x.workspaceId === w.id).length < 4)!;
+  const term = backend.addTerminal(ws.id, "pwsh", undefined, "내 셸")!;
+  expect(backend.reviveTerminal(term.id)).toBeUndefined(); // 살아 있다
+  backend.sessionExited(term.id, 0);
+  const back = backend.reviveTerminal(term.id);
+  expect(back).toMatchObject({ id: term.id, slot: term.slot, name: "내 셸", status: "shell" });
+  expect(back?.exitCode).toBeUndefined();
+  const role = backend.listSessions().find((x) => x.personaId)!;
+  backend.sessionExited(role.id, 1);
+  expect(backend.reviveTerminal(role.id)).toBeUndefined();
+});
+
+test("워크스페이스 이름 바꾸기는 새 객체로 바꾼다 — 같은 객체면 목록(For)이 옛 이름을 그대로 둔다 (S23)", () => {
+  const before = backend.listWorkspaces()[0];
+  backend.renameWorkspace(before.id, "새 이름");
+  const after = backend.listWorkspaces().find((w) => w.id === before.id)!;
+  expect(after.name).toBe("새 이름");
+  expect(after).not.toBe(before);
+  backend.renameWorkspace(before.id, before.name);
+});
+
 test("누른 빈 슬롯 번호에 만든다 — 첫 빈 슬롯이 아니라 (0.6 QA B208)", () => {
   const free = (wsId: string) => {
     const used = new Set(backend.listSessions().filter((x) => x.workspaceId === wsId).map((x) => x.slot));

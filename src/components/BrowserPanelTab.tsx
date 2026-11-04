@@ -25,6 +25,15 @@ import { Icon } from "./icons";
 import { isSubmitEnter } from "../platform"; // 한글 조합 중 Enter는 제출이 아니다 (B130)
 
 const LOCAL_RE = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/i;
+// 다이얼로그·전체 화면 팝업 — 자식 웹뷰가 이들을 가리므로 떠 있는 동안 숨긴다. 벨 팝업 · 컨텍스트 메뉴도 패널 자리와 겹친다 (B224)
+const COVER = ".overlay, .explorer-fullscreen, .bell-pop, .cmenu";
+/** 웹뷰를 보이되 덮개가 이미 떠 있으면 숨긴다 (B306) — 덮개 감시는 붙거나 떨어지는 순간만 판정하므로,
+ *  덮개가 먼저 떠 있는 동안의 열기 · 재마운트는 여기서 막는다. 덮개가 닫히면 감시가 다시 보인다 */
+const showUnlessCovered = () => {
+  const covered = document.querySelector(COVER) !== null;
+  void browserVisible(!covered);
+  return !covered;
+};
 
 // 웹뷰는 컴포넌트보다 오래 산다 — 다른 탭에 다녀와도 페이지·주소가 유지되게 모듈 스코프
 const [addr, setAddr] = createSignal("");
@@ -81,8 +90,10 @@ export function BrowserPanelTab() {
       .then(() => {
         setAddr(full);
         setActive(true);
-        reportBrowserRect(b);
-        diagNote(`BROWSER-OPEN ${full} rect=${b.x},${b.y} ${b.w}x${b.h}`);
+        // browser_open은 웹뷰를 늘 보인다 — 확인창 · 설정이 떠 있는 동안 에이전트가 열면 바로 다시 숨긴다 (B306)
+        const shown = showUnlessCovered();
+        reportBrowserRect(shown ? b : undefined);
+        diagNote(`BROWSER-OPEN ${full} rect=${b.x},${b.y} ${b.w}x${b.h}${shown ? "" : " (덮개 — 숨김)"}`);
       })
       .catch((e) => setError(String(e)));
   };
@@ -110,7 +121,7 @@ export function BrowserPanelTab() {
     });
     if (!isTauri()) return;
     if (active()) {
-      void browserVisible(true);
+      showUnlessCovered(); // 덮개가 떠 있는 동안 패널이 다시 열려도 (에이전트 open → openPanel) 가리지 않게 (B306)
       syncSoon();
     }
     const unNav = onBrowserNav(setAddr);
@@ -166,8 +177,7 @@ export function BrowserPanelTab() {
   // 다이얼로그·전체 화면 팝업 감시 — 자식 웹뷰가 이들을 가리므로 떠 있는 동안 숨긴다.
   // 덮개가 붙거나 떨어진 레코드에서만 판정을 예약한다 (최적화 C7) — 터미널 DOM 행 교체처럼
   // 덮개와 무관한 변경 폭주는 레코드를 훑기만 하고 문서 전체 querySelector를 돌리지 않는다
-  // 벨 팝업 · 컨텍스트 메뉴도 패널 자리와 겹친다 (B224)
-  const COVER = ".overlay, .explorer-fullscreen, .bell-pop, .cmenu";
+  // 덮개 선택자 COVER는 모듈 위에 있다
   const touchesCover = (nodes: NodeList) => {
     for (const n of nodes) {
       if (n instanceof Element && (n.matches(COVER) || n.querySelector(COVER))) return true;

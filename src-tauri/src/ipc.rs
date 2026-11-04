@@ -798,8 +798,16 @@ fn resolve_in(dir: &[DirEntry], my_ws: &str, raw: &str) -> Result<Option<DirEntr
     if let Some(e) = dir.iter().find(|e| e.session == m) {
         return Ok(Some(e.clone()));
     }
+    // 프로젝트 이름에도 '@'가 들 수 있다(폴더 이름 · S23 이름 바꾸기) — 마지막 '@'로 자르면 `@노엘@a@b`가
+    // '노엘@a' · 'b'가 된다. 아는 프로젝트 이름으로 끝나는지 먼저 보고(긴 것이 이긴다), 없으면 마지막 '@'
+    let split = dir
+        .iter()
+        .filter_map(|e| Some((m.strip_suffix(e.project.as_str())?.strip_suffix('@')?, e.project.as_str())))
+        .filter(|(n, _)| !n.is_empty())
+        .max_by_key(|(_, p)| p.len())
+        .or_else(|| m.rsplit_once('@'));
     let find = |is: fn(&DirEntry, &str) -> bool| -> Result<Option<DirEntry>, String> {
-        if let Some((n, p)) = m.rsplit_once('@') {
+        if let Some((n, p)) = split {
             pick(dir.iter().filter(|e| e.project == p && is(e, n)).collect())
         } else {
             match pick(dir.iter().filter(|e| e.workspace == my_ws && is(e, m)).collect())? {
@@ -1060,7 +1068,7 @@ fn resolve_recipient(ws: &str, ws_path: &str, raw: &str) -> Result<String, Strin
     if m.contains('@') {
         return if m.ends_with(&format!("@{ws}")) { Ok(m.to_string()) } else { Err("UNKNOWN_RECIPIENT".into()) };
     }
-    for sl in &crate::team::load(ws_path).slots {
+    for sl in &crate::team::load(ws_path).unwrap_or_default().slots {
         let display = sl.name.as_deref().unwrap_or(&sl.persona_name);
         if sl.persona == m || sl.persona_name == m || display == m {
             return Ok(format!("{}@{ws}", sl.persona));
@@ -1146,6 +1154,18 @@ mod tests {
         assert_eq!(sid(resolve_in(&d, "w1", "@카이@app-2")), Some("kai@w2".into()));
         assert_eq!(sid(resolve_in(&d, "w1", "kai@w3")), Some("kai@w3".into())); // 세션 id 그대로
         assert_eq!(sid(resolve_in(&d, "w1", "@kai@tool")), Some("kai@w3".into())); // 페르소나 id도
+    }
+
+    /// S23 이름 바꾸기 뒤 — 프로젝트 이름에 '@'가 있어도 `@이름@프로젝트`가 그 프로젝트로 간다
+    #[test]
+    fn resolves_project_names_with_at_sign() {
+        let mut d = dir();
+        d.push(e("noel@w4", "w4", "team@home", "노엘"));
+        d.push(e("noel@w5", "w5", "home", "노엘"));
+        assert_eq!(sid(resolve_in(&d, "w1", "@노엘@team@home")), Some("noel@w4".into())); // 긴 프로젝트 이름이 이긴다
+        assert_eq!(sid(resolve_in(&d, "w1", "@노엘@home")), Some("noel@w5".into()));
+        assert_eq!(sid(resolve_in(&d, "w1", "@카이@app-2")), Some("kai@w2".into())); // 보통 이름은 그대로
+        assert!(matches!(resolve_in(&d, "w1", "@노엘@nowhere"), Err(e) if e == "UNKNOWN_RECIPIENT"));
     }
 
     /// B125 — 요청 줄: 1MB 상한 · UTF-8만, 빈 연결은 답하지 않는다. B124 — BUSY만 재시도 대상

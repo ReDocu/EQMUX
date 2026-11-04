@@ -39,14 +39,14 @@ import { spawnAgent } from "../backend/agent";
 import { backend } from "../backend/mock";
 import { settings } from "../backend/settings";
 import { t, tErr, tf } from "../i18n";
-import { notePtyShell, selectedSession, shellCmdOf } from "../state";
+import { notePtyShell, ptyShells, selectedSession, shellCmdOf } from "../state";
 import { ContextMenu, notify } from "./ui";
 import type { MenuGroup } from "./ui";
 import type { AgentCliId, Permissions, Session } from "../types";
 import { cliOf, effectivePermissions, sessionName } from "../types";
 import { Icon } from "./icons";
 import { IS_MAC, isImeEnter, keyLabel } from "../platform";
-import { findPathLinks, pathChunkAt } from "./termPaths";
+import { findPathLinks, pathChunkAt, quotePath } from "./termPaths";
 import { fileManagerName, revealLabel } from "../labels";
 
 /** 터미널 색 — styles.css의 --eq-term-* 토큰이 원본이다 (설정 · 색 팔레트가 이 토큰을 고른다).
@@ -275,16 +275,25 @@ async function killAndWait(id: string): Promise<void> {
   });
 }
 
-/** 브랜치 부여 (워크트리 이동) — 기존 셸 PTY를 끝내고 같은 세션 id로 새 cwd에서 다시 연다.
+/** 작업 폴더가 없으면 Rust(resolve_cwd)는 홈 폴더에서 셸을 띄운다 — 그 사실을 페인에 남긴다 (B295).
+ *  모르면 그 셸에서 친 git · 빌드 명령이 엉뚱한 곳에서 돈다. 스폰 전에 찍어 셸 출력보다 앞에 둔다 */
+async function warnIfNoCwd(term: Terminal, cwd: string): Promise<void> {
+  if (!(await pathIsDir(cwd)))
+    term.writeln(`\x1b[33m─── ${tf("작업 폴더가 없어 홈 폴더에서 열었습니다: {cwd} — 경로 재지정이 필요합니다", { cwd })} ───\x1b[0m`);
+}
+
+/** 셸 다시 열기 — 같은 세션 id로 cwd에서 셸을 새로 띄운다. 살아 있는 PTY가 있으면 먼저 끝낸다.
+ *  부르는 곳은 종료된 셸 되살리기뿐이다(기본 터미널 마법사 · 관제 [셸 다시 열기] S25) — 브랜치 부여는 이 길을 타지 않는다.
  *  출력·종료 구독은 세션 id 키라 재스폰 후에도 그대로 이어진다. */
 /** shell은 Session.shell 라벨이다 — 실행 파일로는 여기서 바꾼다 (B253, ControlCenter의 shellCmdFor와 같은 길) */
 export async function respawnSessionShell(id: string, cwd: string, wsId?: string, shell?: string): Promise<void> {
   if (!isTauri()) return;
-  const e = REGISTRY.get(id); // 페인 미마운트 세션도 이동은 된다 — 크기만 기본값 폴백
+  const e = REGISTRY.get(id); // 페인 미마운트 세션도 다시 열 수 있다 — 크기만 기본값 폴백
   await killAndWait(id);
-  e?.term.writeln(`\x1b[90m─── ${tf("브랜치 부여 → {cwd}", { cwd })} ───\x1b[0m`);
+  e?.term.writeln(`\x1b[90m─── ${tf("셸 다시 열기 → {cwd}", { cwd })} ───\x1b[0m`);
   const size = sessionTermSize(id); // 재개/재시작과 같은 크기 규약 — 미마운트면 기본값 폴백
   try {
+    if (e) await warnIfNoCwd(e.term, cwd);
     notePtyShell(id, await spawnPty(id, cwd, size.cols, size.rows, wsId, shellCmdOf(shell)));
   } finally {
     doneRespawning(id);
@@ -382,15 +391,28 @@ setTerminalDisposer(disposeSessionTerminal);
 
 // ── 클립보드 — 네이티브(arboard) 경로. WebView2의 웹 Clipboard API는 권한 문제로 조용히 실패한다 ──
 
-/** 붙여넣기 — 클립보드에 이미지가 있으면 파일로 저장해 경로를 삽입, 아니면 텍스트 */
-async function pasteFromClipboard(sessionId: string, term: Terminal): Promise<void> {
+/** 경로를 감쌀 셸 (B293) — 맨 셸이면 실제로 뜬 셸 이름, 에이전트 TUI가 떠 있으면 undefined(큰따옴표 그대로) */
+function quoteShellOf(id: string): string | undefined {
+  const s = backend.listSessions().find((x) => x.id === id);
+  return s?.status === "shell" ? (ptyShells()[id] ?? s.shell) : undefined;
+}
+
+/** 클립보드 이미지를 %TEMP%\eqmux-pastes에 저장하고 그 경로를 넣는다. 이미지가 없으면 false */
+async function pasteImage(sessionId: string): Promise<boolean> {
   const imgPath = await clipSaveImage();
-  if (imgPath) {
-    writePty(sessionId, `"${imgPath}" `);
+  if (imgPath) writePty(sessionId, `${quotePath(imgPath, quoteShellOf(sessionId))} `);
+  return !!imgPath;
+}
+
+/** 붙여넣기 — 글이 있으면 글, 글 없이 이미지만 있으면 파일로 저장해 경로를 넣는다 (B294).
+ *  Excel 셀 · 일부 앱의 글 복사는 비트맵을 함께 올린다 — 이미지를 먼저 보면 표의 글 대신 png 경로가 들어갔다.
+ *  둘 다 있을 때 이미지가 필요하면 우클릭 [이미지로 붙여넣기]로 고른다 */
+async function pasteFromClipboard(sessionId: string, term: Terminal): Promise<void> {
+  const text = await clipReadText();
+  if (!text) {
+    await pasteImage(sessionId);
     return;
   }
-  const text = await clipReadText();
-  if (!text) return;
   // 브래킷 붙여넣기(DECSET 2004)를 켠 TUI는 개행을 실행으로 바꾸지 않는다 — 그대로 넘긴다.
   // 맨 셸(pwsh·cmd)은 켜지 않으므로 xterm이 개행을 CR로 바꿔 붙는 즉시 실행된다 (B45):
   // 마지막 개행은 떼어 마지막 줄은 사용자가 Enter를 치게 하고, 그러고도 줄이 남으면 확인을 받는다.
@@ -411,6 +433,16 @@ let lastAppPaste = 0;
 
 /** 여러 줄 붙여넣기 확인 (B45) — 세션별 1건. 페인이 카드로 그린다 */
 const [pasteAsk, setPasteAsk] = createSignal<{ id: string; text: string } | undefined>(undefined);
+
+/** 붙여넣기 확인에 답한다 — 카드 버튼과 터미널의 Enter · Esc(U188)가 같은 길을 탄다 */
+function answerPasteAsk(ok: boolean): void {
+  const ask = pasteAsk();
+  setPasteAsk(undefined);
+  const e = ask && REGISTRY.get(ask.id);
+  if (!e || !ask) return;
+  if (ok) e.term.paste(ask.text);
+  e.term.focus();
+}
 
 function copySelection(term: Terminal): void {
   if (term.hasSelection()) clipWriteText(term.getSelection());
@@ -567,7 +599,8 @@ async function ensureDragDrop(): Promise<void> {
       clearDropTarget();
       const sessionId = host?.getAttribute("data-session-id");
       if (sessionId && p.paths.length > 0) {
-        writePty(sessionId, p.paths.map((f) => `"${f}"`).join(" ") + " ");
+        const sh = quoteShellOf(sessionId); // 셸이 따옴표 안의 $ · ` · !를 풀지 않게 (B293)
+        writePty(sessionId, p.paths.map((f) => quotePath(f, sh)).join(" ") + " ");
         REGISTRY.get(sessionId)?.term.focus();
       }
     } else {
@@ -662,6 +695,12 @@ async function initSession(
     return false; // xterm은 이 키를 처리하지 않는다
   };
   term.attachCustomKeyEventHandler((ev) => {
+    // 여러 줄 붙여넣기 확인이 떠 있으면 Enter = 붙여넣기 · Esc = 취소 (U188) — 포커스는 터미널에 있으므로
+    // 여기서 받지 않으면 Enter가 셸의 지금 줄을 실행한다. 조합 중인 Enter(IME)는 그대로 둔다
+    if (ev.type === "keydown" && pasteAsk()?.id === props.sessionId && (ev.key === "Escape" || (ev.key === "Enter" && !isImeEnter(ev)))) {
+      answerPasteAsk(ev.key === "Enter");
+      return handled(ev);
+    }
     // macOS는 ⌘가 앱 키(복사·붙여넣기·찾기)이고 Ctrl은 셸 제어키다 (B126·B127). Ctrl+C는 선택이 있어도
     // SIGINT, Ctrl+F는 forward-char, Ctrl+V는 quoted-insert로 그대로 PTY에 간다 — 아래 Ctrl 갈래는 Windows만 탄다
     if (IS_MAC) {
@@ -773,6 +812,7 @@ async function initSession(
     // 셸 우선 모델 — 처음 켜는 세션은 역할이 있어도 전부 일반 셸이다. 여기는 유일한
     // 자동 스폰 게이트라, 이 자리에서 에이전트를 띄우지 않는 것이 "자동 실행 없음"의 구조적 보장이다.
     // 에이전트 기동은 명시 액션(재개 버튼·세션 상세)만 남는다.
+    await warnIfNoCwd(term, props.cwd);
     notePtyShell(props.sessionId, await spawnPty(props.sessionId, props.cwd, term.cols, term.rows, props.wsId, props.shell));
     entry.lastCols = term.cols;
     entry.lastRows = term.rows;
@@ -1113,22 +1153,11 @@ export function TerminalPane(props: {
             <span>
               {tf("{n}줄을 붙여넣어 실행합니다", { n: String(pasteAsk()!.text.split(/\r?\n/).length) })}
             </span>
-            <button
-              class="btn"
-              onClick={() => {
-                const ask = pasteAsk();
-                setPasteAsk(undefined);
-                const e = ask && REGISTRY.get(ask.id);
-                if (e && ask) {
-                  e.term.paste(ask.text);
-                  e.term.focus();
-                }
-              }}
-            >
-              {t("붙여넣기")}
+            <button class="btn" onClick={() => answerPasteAsk(true)}>
+              {t("붙여넣기")} <span class="muted">Enter</span>
             </button>
-            <button class="btn ghost" onClick={() => setPasteAsk(undefined)}>
-              {t("취소")}
+            <button class="btn ghost" onClick={() => answerPasteAsk(false)}>
+              {t("취소")} <span class="muted">Esc</span>
             </button>
           </div>
         </Show>
@@ -1181,6 +1210,12 @@ export function TerminalPane(props: {
               [
                 { label: t("복사"), kbd: keyLabel(IS_MAC ? "Ctrl+C" : "Ctrl+Shift+C"), disabled: !m().hasSel, action: () => menuAction(copySelection) },
                 { label: t("붙여넣기"), kbd: keyLabel(IS_MAC ? "Ctrl+V" : "Ctrl+Shift+V"), action: () => menuAction((term) => void pasteFromClipboard(props.sessionId, term)) },
+                // 글과 그림이 함께 있으면 붙여넣기는 글을 넣는다 (B294) — 그림이 필요할 때 고르는 자리
+                {
+                  label: t("이미지로 붙여넣기"),
+                  action: () =>
+                    menuAction(() => void pasteImage(props.sessionId).then((ok) => ok || notify(t("클립보드에 이미지가 없습니다")))),
+                },
                 { label: t("모두 선택"), action: () => menuAction((term) => term.selectAll()) },
                 {
                   label: revealLabel(),
@@ -1204,7 +1239,7 @@ export function TerminalPane(props: {
               // 보기·이동·세션 — 소유 화면이 얹는다 (danger 항목은 컴포넌트가 마지막으로 모은다)
               ...(props.extraMenu?.() ?? []),
               [
-                { label: t("이미지 붙여넣기 → 파일 저장 후 경로 삽입"), note: true },
+                { label: t("이미지만 있으면 붙여넣기 → 파일 저장 후 경로 삽입"), note: true },
                 { label: tf("경로 더블클릭 → {reveal} (실재하는 경로만)", { reveal: revealLabel() }), note: true },
               ],
             ]}

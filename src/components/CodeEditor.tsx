@@ -4,6 +4,7 @@
 // 테마는 전부 CSS 토큰(var(--eq-*))으로 그려 라이트/다크 전환(M29)을 그대로 따라간다.
 import { createEffect, on, onCleanup, onMount } from "solid-js";
 import { Compartment, EditorState } from "@codemirror/state";
+import type { Text } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { indentWithTab } from "@codemirror/commands";
 import { json } from "@codemirror/lang-json";
@@ -13,6 +14,12 @@ import { HighlightStyle, LanguageDescription, syntaxHighlighting } from "@codemi
 import { tags as t } from "@lezer/highlight";
 import { basicSetup } from "codemirror";
 import { settings } from "../backend/settings";
+
+/** 원문 줄바꿈 (B296) — CodeMirror는 \r\n · \r · \n을 모두 줄 구분으로 읽고 toString()은 늘 \n으로 잇는다.
+ *  그대로 넘기면 CRLF 파일이 글자 하나 고친 저장에 통째로 LF가 됐다. 연 원문의 줄바꿈으로 꺼낸다.
+ *  ponytail: 한 파일 안에 CRLF와 LF가 섞여 있으면 CRLF로 맞춰진다 — 줄마다 기억하려면 원문 줄 표를 들고 다녀야 한다 */
+export const eolOf = (text: string) => (text.includes("\r\n") ? "\r\n" : "\n");
+export const docText = (doc: Text, eol: string) => doc.sliceString(0, doc.length, eol);
 
 /** 산문 파일만 줄바꿈한다 (P86) — 코드는 긴 줄이 접히면 줄 번호와 실제 줄이 어긋나 보인다 */
 const isProse = (name: string) => /\.(md|markdown|mdx|txt)$/i.test(name);
@@ -155,6 +162,7 @@ export function CodeEditor(props: {
 
   onMount(() => {
     const staticLang = langOf(props.fileName);
+    const eol = eolOf(props.value); // 연 순간의 원문 기준 — 이후 props.value는 onChange가 되먹인 값이다
     view = new EditorView({
       parent: host,
       state: EditorState.create({
@@ -182,7 +190,7 @@ export function CodeEditor(props: {
           isProse(props.fileName) ? EditorView.lineWrapping : [], // 임무·역할 문서는 산문이다 — 가로 스크롤보다 줄바꿈
           phraseSlot.of(phrases(settings().language)),
           EditorView.updateListener.of((u) => {
-            if (u.docChanged) props.onChange(u.state.doc.toString());
+            if (u.docChanged) props.onChange(docText(u.state.doc, eol));
           }),
         ],
       }),

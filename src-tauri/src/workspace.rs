@@ -315,6 +315,9 @@ pub fn run_git(args: &[&str], cwd: &str, timeout: Duration, env: &[(&str, &str)]
     cmd.args(["--no-optional-locks", "-c", "core.quotepath=off"])
         .args(args)
         .current_dir(cwd)
+        // B299 — 판정(인증 실패 · 빈 저장소 · 실패 원인 · 안내)은 git 영어 원문을 본다. 메시지 언어만 고정한다.
+        // LC_MESSAGES=C가 기본, 사용자가 LC_ALL을 걸어 두었으면 LANGUAGE가 이긴다. LC_ALL은 훅 출력 인코딩까지 바꿔 쓰지 않는다
+        .envs([("LC_MESSAGES", "C"), ("LANGUAGE", "en")])
         .envs(env.iter().copied())
         // output()의 기본값과 같게 stdin을 막는다 — 상속하면 자격증명 프롬프트가 즉시
         // 실패하지 않고 입력을 기다리며 멈춘다 (상한이 있어도 그 시간을 통째로 쓴다)
@@ -585,6 +588,145 @@ pub fn entry_name(path: &str) -> String {
         .unwrap_or_else(|| "repo".into())
 }
 
+// ── 등록 · 해제 · 되돌리기 · 재지정 · 이름 (B289 · B290 · S23) ──
+// id는 대화 원장 · 스크롤백 · 재개 앵커 · 배치의 키다. 경로를 재지정한 항목은 경로에서 같은 id가 다시
+// 나오지 않으므로, 해제한 항목을 레지스트리 옆에 남겨 [되돌리기]와 같은 폴더 재등록이 옛 id를 되찾게 한다.
+// 경로 비교는 canon_key — 끝 '\' · 구분자 · 대소문자가 달라도 같은 폴더다.
+
+/// 해제 목록에 남길 수 — 되돌리기 · 다시 등록에 쓸 만큼만
+const GONE_KEEP: usize = 20;
+
+fn gone_path(root: &Path) -> PathBuf {
+    root.join("workspaces.gone.json")
+}
+
+fn load_gone(root: &Path) -> Vec<WsEntry> {
+    fs::read_to_string(gone_path(root))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+/// 최선 노력 — 못 남기면 되돌리기가 '되돌릴 등록 정보가 없습니다'로 끝날 뿐 레지스트리는 멀쩡하다
+fn save_gone(root: &Path, gone: &[WsEntry]) {
+    if let Ok(json) = serde_json::to_string_pretty(gone) {
+        let _ = atomic_write(&gone_path(root), json.as_bytes());
+    }
+}
+
+fn taken_by<'a>(list: &'a [WsEntry], path: &str, except: &str) -> Option<&'a WsEntry> {
+    let key = canon_key(path);
+    list.iter().find(|e| e.id != except && canon_key(&e.path) == key)
+}
+
+fn already(e: &WsEntry) -> String {
+    format!("이미 등록된 폴더입니다 — {}", e.name)
+}
+
+/// 등록 (FR-E-01) — 같은 폴더가 있으면 그 항목. 해제해 둔 항목이 있으면 그 id · 이름으로 되살린다
+pub fn register(root: &Path, path: &str) -> Result<WsEntry, String> {
+    let mut list = load_strict(root)?;
+    if let Some(i) = taken_by(&list, path, "").map(|e| e.id.clone()) {
+        let e = list.iter_mut().find(|e| e.id == i).expect("방금 찾았다");
+        e.last_used = now_ms();
+        let e = e.clone();
+        save(root, &list)?;
+        return Ok(e);
+    }
+    let mut gone = load_gone(root);
+    let key = canon_key(path);
+    let revive = gone.iter().rposition(|g| canon_key(&g.path) == key && !list.iter().any(|w| w.id == g.id));
+    let entry = match revive {
+        Some(i) => WsEntry { path: path.to_string(), last_used: now_ms(), ..gone.remove(i) },
+        None => {
+            // 이 경로의 id를 다른 항목이 이미 쓴다 — 그 항목을 재지정해 옮긴 경우다. 둘의 기록이 섞이지 않게 뒤를 붙인다
+            let base = make_id(path);
+            let (mut id, mut n) = (base.clone(), 2);
+            while list.iter().chain(&gone).any(|w| w.id == id) {
+                id = format!("{base}-{n}");
+                n += 1;
+            }
+            WsEntry {
+                id,
+                name: entry_name(path),
+                path: path.to_string(),
+                remote: None,
+                branch: None,
+                last_used: now_ms(),
+                cross_project: true,
+            }
+        }
+    };
+    list.push(entry.clone());
+    save(root, &list)?;
+    if revive.is_some() {
+        save_gone(root, &gone);
+    }
+    Ok(entry)
+}
+
+/// 등록 해제 (FR-E-09) — 레지스트리에서만 지우고, 지운 항목은 해제 목록에 남긴다
+pub fn unregister(root: &Path, id: &str) -> Result<(), String> {
+    let mut list = load_strict(root)?;
+    let Some(i) = list.iter().position(|e| e.id == id) else { return Ok(()) };
+    let e = list.remove(i);
+    save(root, &list)?;
+    let mut gone = load_gone(root);
+    gone.retain(|g| g.id != e.id);
+    gone.push(e);
+    let over = gone.len().saturating_sub(GONE_KEEP);
+    gone.drain(..over);
+    save_gone(root, &gone);
+    Ok(())
+}
+
+/// [되돌리기] — 해제해 둔 항목을 그대로(id · 이름 · 받기 설정) 다시 넣는다. 폴더가 없어졌어도 되돌린다
+pub fn restore(root: &Path, id: &str) -> Result<WsEntry, String> {
+    let mut list = load_strict(root)?;
+    if let Some(e) = list.iter().find(|e| e.id == id) {
+        return Ok(e.clone()); // 그 사이 같은 폴더를 다시 등록해 이미 돌아왔다
+    }
+    let mut gone = load_gone(root);
+    let i = gone.iter().rposition(|g| g.id == id).ok_or("되돌릴 등록 정보가 없습니다")?;
+    if let Some(o) = taken_by(&list, &gone[i].path, "") {
+        return Err(already(o));
+    }
+    let e = gone.remove(i);
+    list.push(e.clone());
+    save(root, &list)?;
+    save_gone(root, &gone);
+    Ok(e)
+}
+
+/// 경로 재지정 (FR-E-08) — id는 그대로다. 다른 항목이 쓰는 폴더는 막는다 — 같은 team.json을 두 탭이 읽는다.
+/// 이름이 폴더 이름 그대로였을 때만 새 폴더 이름으로 바꾼다 — 사람이 정한 이름은 지킨다
+pub fn repath(root: &Path, id: &str, path: &str) -> Result<WsEntry, String> {
+    let mut list = load_strict(root)?;
+    if let Some(o) = taken_by(&list, path, id) {
+        return Err(already(o));
+    }
+    let e = list.iter_mut().find(|e| e.id == id).ok_or("등록 항목 없음")?;
+    if e.name == entry_name(&e.path) {
+        e.name = entry_name(path);
+    }
+    e.path = path.to_string();
+    e.last_used = now_ms();
+    let e = e.clone();
+    save(root, &list)?;
+    Ok(e)
+}
+
+/// 이름 바꾸기 — 등록 정보의 이름만. 폴더는 건드리지 않는다. 비우면 폴더 이름으로 돌아간다
+pub fn rename(root: &Path, id: &str, name: &str) -> Result<WsEntry, String> {
+    let mut list = load_strict(root)?;
+    let e = list.iter_mut().find(|e| e.id == id).ok_or("등록 항목 없음")?;
+    let name = name.trim();
+    e.name = if name.is_empty() { entry_name(&e.path) } else { name.to_string() };
+    let e = e.clone();
+    save(root, &list)?;
+    Ok(e)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -689,6 +831,47 @@ mod tests {
         assert_eq!(fs::read_to_string(&reg).unwrap(), "{broken");
         let _ = fs::remove_dir_all(&dir);
         let _ = fs::remove_dir_all(backup_dir(&dir));
+    }
+
+    /// B289 · B290 · S23 — 재지정 · 해제 · 되돌리기 · 다시 등록 내내 id가 그대로다. 같은 폴더는 한 항목이다
+    #[test]
+    fn registry_keeps_id_through_repath_unregister_restore() {
+        let root = std::env::temp_dir().join(format!("eqmux-wsid-{}", now_ms()));
+        let (a, b) = (root.join("dirs").join("app"), root.join("dirs").join("moved"));
+        fs::create_dir_all(&a).unwrap();
+        fs::create_dir_all(&b).unwrap();
+        let (a, b) = (a.to_string_lossy().into_owned(), b.to_string_lossy().into_owned());
+
+        let w = register(&root, &a).unwrap();
+        assert_eq!(register(&root, &format!("{a}/")).unwrap().id, w.id, "끝 구분자가 달라도 같은 폴더 (B290)");
+        assert_eq!(load_strict(&root).unwrap().len(), 1);
+
+        // 폴더 이름 그대로면 재지정이 이름도 옮긴다
+        assert_eq!(repath(&root, &w.id, &b).unwrap().name, "moved");
+        // 재지정한 항목을 해제 → [되돌리기] — 새 경로의 해시가 아니라 옛 id (B289)
+        unregister(&root, &w.id).unwrap();
+        assert!(load_strict(&root).unwrap().is_empty());
+        assert_eq!(restore(&root, &w.id).unwrap().id, w.id);
+        // 해제 → [폴더 찾기…]로 같은 폴더를 다시 등록해도 옛 id
+        unregister(&root, &w.id).unwrap();
+        assert_eq!(register(&root, &b).unwrap().id, w.id);
+        assert!(restore(&root, &w.id).is_ok(), "이미 돌아온 항목의 되돌리기는 그 항목");
+
+        // 옛 경로를 새로 등록하면 경로에서 나온 id가 겹친다 — 뒤를 붙여 갈라 둔다
+        let other = register(&root, &a).unwrap();
+        assert_ne!(other.id, w.id);
+        // 다른 항목이 쓰는 폴더로는 재지정하지 않는다 (B290)
+        let taken = Some("이미 등록된 폴더입니다 — moved".to_string());
+        assert_eq!(repath(&root, &other.id, &b).err(), taken);
+
+        // 사람이 정한 이름은 재지정이 지키고, 비우면 폴더 이름으로 (S23)
+        assert_eq!(rename(&root, &other.id, "  웹 앱 ").unwrap().name, "웹 앱");
+        unregister(&root, &w.id).unwrap();
+        assert_eq!(repath(&root, &other.id, &b).unwrap().name, "웹 앱");
+        assert_eq!(rename(&root, &other.id, " ").unwrap().name, "moved");
+        assert_eq!(restore(&root, &w.id).err(), taken);
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(backup_dir(&root));
     }
 
     #[test]

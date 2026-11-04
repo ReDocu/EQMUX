@@ -110,3 +110,26 @@ test("경로 묶음 — 명령 줄 상한 안쪽으로 나누고 순서 · 개�
   expect(chunkPaths([])).toEqual([]);
   expect(chunkPaths(["x".repeat(9000)])).toEqual([["x".repeat(9000)]]); // 혼자 넘는 경로도 한 묶음
 });
+
+test("스테이지하지 않을 충돌 파일 — 표식이 남았거나 확인하지 못한 것 (B171 · B297)", async () => {
+  const { heldConflicts } = await import("./gitWrite");
+  const f = (path: string, x: string, y: string, marks?: boolean | null) => ({ path, from: null, x, y, marks });
+  const asked = [f("big.lock", "U", "U"), f("done.txt", "U", "U"), f("gone.txt", "D", "U"), f("locked.txt", "A", "A"), f("plain.txt", " ", "M")];
+  const fresh = [f("big.lock", "U", "U", true), f("done.txt", "U", "U", false), f("gone.txt", "D", "U", false), f("locked.txt", "A", "A", null), f("plain.txt", " ", "M")];
+  expect(heldConflicts(asked, fresh)).toEqual({ marked: ["big.lock"], unknown: ["locked.txt"] });
+  // 상태를 못 읽었으면 충돌 파일은 모두 보류 — 예전엔 못 읽음을 '표식 없음'으로 쳤다
+  expect(heldConflicts(asked, undefined)).toEqual({ marked: [], unknown: ["big.lock", "done.txt", "gone.txt", "locked.txt"] });
+  // 그사이 다른 곳에서 풀었다(목록에서 빠짐 · 충돌 아님) — 막지 않는다
+  expect(heldConflicts([f("big.lock", "U", "U")], [f("big.lock", "M", " ")])).toEqual({ marked: [], unknown: [] });
+  expect(heldConflicts([f("big.lock", "U", "U")], [])).toEqual({ marked: [], unknown: [] });
+});
+
+test("stash 순번은 실행 직전 목록에서 해시로 다시 찾는다 (B298)", async () => {
+  const { stashRefOf } = await import("./gitWrite");
+  const before = [{ name: "stash@{0}: WIP on main: 내 것", hash: "aaa" }];
+  const after = [{ name: "stash@{0}: On main: 에이전트가 방금", hash: "bbb" }, { name: "stash@{1}: WIP on main: 내 것", hash: "aaa" }];
+  expect(stashRefOf(before, "aaa")).toBe("stash@{0}");
+  expect(stashRefOf(after, "aaa")).toBe("stash@{1}"); // 밀린 순번 — 옛 stash@{0}은 남의 것이다
+  expect(stashRefOf(after, "ccc")).toBeUndefined();
+  expect(stashRefOf(undefined, "aaa")).toBeUndefined();
+});

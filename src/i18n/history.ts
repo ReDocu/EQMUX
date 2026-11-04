@@ -17,7 +17,10 @@ export const dict: Record<string, string> = {
   "복사했습니다 — 이 폴더의 터미널에 붙여 넣으세요": "Copied — paste it into a terminal in this folder",
   "슬롯의 마지막 대화가 아니라 앱에서 재개할 수 없습니다 — 명령을 복사해 터미널에서 이어 가세요":
     "Not the slot's latest conversation, so the app can't resume it — copy the command and continue in a terminal",
-  "Codex 대화와 워크트리 세션은 아직 찾지 않습니다": "Codex conversations and worktree sessions aren't searched yet",
+  "Codex 대화는 아직 찾지 않습니다 — 워크트리 세션 대화는 함께 찾습니다":
+    "Codex conversations aren't searched yet — worktree session conversations are included",
+  // ── 0.6.2 QA eqmux-11: S24 ──
+  "워크트리 세션": "Worktree session",
   // 서브에이전트 목록 (SubagentList.tsx)
   "서브에이전트": "Subagents",
   "설명 없음": "No description",

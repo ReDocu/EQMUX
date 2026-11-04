@@ -80,7 +80,8 @@ fn spans(s: &str) -> Vec<(usize, usize)> {
             continue;
         }
         let k = run(b, i, is_key);
-        let word = s[i..k].to_ascii_uppercase();
+        // 하이픈 꼴(x-api-key · --api-key · private-key)도 밑줄 꼴 키워드에 걸리게 (B308)
+        let word = s[i..k].to_ascii_uppercase().replace('-', "_");
         i = k;
         let hits: Vec<&String> = p.keywords.iter().filter(|w| word.contains(w.as_str())).collect();
         if hits.is_empty() {
@@ -95,13 +96,22 @@ fn spans(s: &str) -> Vec<(usize, usize)> {
             continue;
         }
         q = run(b, q + 1, is_space);
-        if q < n && is_quote(b[q]) {
+        // 따옴표로 연 값은 같은 따옴표(또는 줄 끝)까지다 — "my secret pass"를 공백에서 끊지 않는다 (B308)
+        let open = (q < n && is_quote(b[q])).then(|| b[q]);
+        if open.is_some() {
             q += 1;
         }
-        let e = run(b, q, |c| !ends_value(c));
+        let mut e = match open {
+            Some(o) => run(b, q, |c| c != o && c != b'\n' && c != b'\r'),
+            None => run(b, q, |c| !ends_value(c)),
+        };
         // 이름의 키워드가 TOKEN뿐이고 값이 숫자만이면 토큰 수다 — max_tokens=128000 (B196). 비밀번호 숫자는 그대로 가린다
         if e > q && hits.iter().all(|w| *w == "TOKEN") && b[q..e].iter().all(u8::is_ascii_digit) {
             continue;
+        }
+        // 따옴표 없는 값이 , ; &에서 짧게 끊겼으면 공백까지 본다 — DB_PASSWORD=Pa;ss!w0rd (B308)
+        if open.is_none() && e - q < p.min_value {
+            e = run(b, q, |c| !is_ws(c) && !is_quote(c));
         }
         if e - q >= p.min_value {
             out.push((q, e));

@@ -2,7 +2,7 @@
 // 값은 비밀(API 키·토큰)이 많아 기본으로 가린다 — 화면 공유·녹화 중에 그대로 새지 않게. 편집 칸도 같다.
 // 알림·오류에는 키만 쓰고 값은 쓰지 않는다. 변수 하나를 고치면 그 한 줄만 바뀐다(원문 보존).
 // 파일 목록은 SidePanel이 읽는다. 여기는 그리기와 편집 — 저장 뒤에는 onReload로 다시 읽힌다.
-import { createEffect, createMemo, createResource, createSignal, For, lazy, on, onMount, Show } from "solid-js";
+import { createEffect, createMemo, createResource, createSignal, For, lazy, on, onCleanup, onMount, Show } from "solid-js";
 import {
   addToGitignore,
   appendLine,
@@ -22,6 +22,7 @@ import {
   writeEnvText,
 } from "../backend/env";
 import type { EnvFile, EnvVar } from "../backend/env";
+import { setEnvDirty } from "../backend/panels";
 import { clipWriteText } from "../backend/pty";
 import { t, tErr, tf } from "../i18n";
 import { Icon } from "./icons";
@@ -47,6 +48,9 @@ export function EnvPanelTab(props: { files: EnvFile[]; loading?: boolean; wsPath
   // [원문 편집] [취소]도 고친 내용이 있으면 묻는다 (P77)
   const [askDropRaw, setAskDropRaw] = createSignal(false);
   const cancelRaw = () => (raw() && raw()!.text !== raw()!.base ? setAskDropRaw(true) : setRaw(undefined));
+  // 사이드 패널이 본다 (B302) — 고친 원문이 있으면 다른 하위 탭으로 가도 이 탭을 살려 두고, 패널 닫기는 묻는다
+  createEffect(() => setEnvDirty(!!raw() && raw()!.text !== raw()!.base));
+  onCleanup(() => setEnvDirty(false));
   const [savedNote, setSavedNote] = createSignal(false);
   // [값 보기]가 꺼진 채 [원문 편집]을 누르면 먼저 묻는다 (U115) — 원문은 모든 값을 평문으로 펼친다
   const [askRaw, setAskRaw] = createSignal<string>();

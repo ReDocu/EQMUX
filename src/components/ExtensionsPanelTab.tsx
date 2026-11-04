@@ -3,7 +3,7 @@
 // 워크스페이스 범위의 플러그인은 local로 바꾼다(X2 — project는 커밋되어 팀원에게 번진다).
 // 세션별 표는 읽기만 한다(3단계) — 세션별 쓰기(역할 frontmatter extensions)는 4단계다.
 // 바꾼 것은 새로 띄우는 세션부터 먹는다. 자동 재시작은 하지 않는다.
-import { createEffect, createMemo, createResource, createSignal, For, lazy, on, Show } from "solid-js";
+import { createEffect, createMemo, createResource, createSignal, For, lazy, on, onCleanup, Show } from "solid-js";
 import type { JSX } from "solid-js";
 import { agentClis, agentClisReady, refreshAgentClis } from "../backend/agentprobe";
 import {
@@ -24,7 +24,7 @@ import {
 } from "../backend/extensions";
 import type { Cell, ExtScope, McpHealth, PluginRow, SkillRow } from "../backend/extensions";
 import { backend } from "../backend/mock";
-import { fsDelete, fsRead, fsWrite } from "../backend/panels";
+import { fsDelete, fsRead, fsWrite, setSkillDirty, skillDirty } from "../backend/panels";
 import { serverExited, serverTermId } from "../backend/ports";
 import { isTauri, listAlivePty, onPtyOutput, revealPath, writePty } from "../backend/pty";
 import { defaultShell, scopeWorkspace, setPanelTab } from "../state";
@@ -49,8 +49,11 @@ export function ExtensionsPanelTab(props: { kind: "mcp" | "plugins" | "skills" }
       <Show when={props.kind === "plugins"}>
         <PluginsPanelTab />
       </Show>
-      <Show when={props.kind === "skills"}>
-        <SkillsPanelTab />
+      {/* 저장 안 한 스킬 편집이 있으면 숨겨 두고 살린다 (B302) — 내리면 편집이 묻지 않고 사라졌다 */}
+      <Show when={props.kind === "skills" || skillDirty()}>
+        <div style={{ display: props.kind === "skills" ? "contents" : "none" }}>
+          <SkillsPanelTab />
+        </div>
       </Show>
     </>
   );
@@ -474,6 +477,9 @@ function SkillDetail(props: {
   const readOnly = r.scope === "plugin";
   const [file, { refetch }] = createResource(() => fsRead(r.root, r.rel).catch(() => undefined));
   const [editing, setEditing] = createSignal<{ text: string; mtimeMs: number }>();
+  // 사이드 패널이 본다 (B302) — 고친 내용이 있으면 MCP · 다른 패널 탭으로 가도 스킬 탭을 살려 두고, 패널 닫기는 묻는다
+  createEffect(() => setSkillDirty(!!editing() && editing()!.text !== file()?.text));
+  onCleanup(() => setSkillDirty(false));
 
   const save = () => {
     const ed = editing();

@@ -22,7 +22,7 @@ export type View =
   | { kind: "missions"; wsId: string } // 임무 배정 (화면 #8)
   // Git Diff (AXXhV) — wsId 없으면 활성 워크스페이스, ✕/Esc는 back으로 복귀 (U11).
   // commit이 있으면 부모 커밋 ↔ 이 커밋 비교(UI 리파인 §git), 없으면 HEAD ↔ 워크트리
-  | { kind: "gitdiff"; wsId?: string; back?: View; commit?: { hash: string; message: string } }
+  | { kind: "gitdiff"; wsId?: string; back?: View; commit?: { hash: string; message: string; file?: string } } // file — 이 파일로 연다 (U192)
   // git 화면 (§17 W5) — 그래프 · 브랜치 사이드바 · 상세 · 작업 트리. file이 있으면 그 파일의 히스토리 · blame으로 연다
   | { kind: "git"; wsId?: string; back?: View; file?: string }
   | { kind: "history"; wsId?: string; back?: View } // 과거 세션 검색 (§4 W3) — ✕/Esc는 back으로
@@ -366,20 +366,24 @@ export const notePtyShell = (id: string, label: string | undefined): void => {
   if (label) setPtyShells((m) => (m[id] === label ? m : { ...m, [id]: label }));
 };
 
-/** macOS — Rust(list_shells)가 /etc/shells에서 실제로 찾은 셸로 목록을 채운다 (B114).
+/** Rust(list_shells)가 실제로 찾은 셸로 목록을 채운다 — macOS는 /etc/shells (B114), Windows는 설치 여부 (B291).
  *  커맨드가 없거나 실패하면 위 정적 목록으로 남는다. 고른 셸이 목록에 남아 있으면 그 선택을 지킨다 */
 export async function loadShells(): Promise<void> {
-  if (!IS_MAC || !isTauri()) return;
+  if (!isTauri()) return;
   let found: { default: string; shells: { label: string; path: string }[] };
   try {
     found = await invoke("list_shells");
   } catch {
     return;
   }
-  const next: ShellChoice[] = [
-    { ...MAC_SHELLS[0], note: found.default || MAC_SHELLS[0].note },
-    ...found.shells.map((s) => ({ label: s.label, name: s.label, cmd: s.path })),
-  ];
+  // Windows — 설치된 셸만 남긴다 (B291). PowerShell 7은 기본 설치에 없어, 고르면 5.1이 떴다. 이름 · 순서는 정적 목록 그대로
+  const next: ShellChoice[] = IS_MAC
+    ? [
+        { ...MAC_SHELLS[0], note: found.default || MAC_SHELLS[0].note },
+        ...found.shells.map((s) => ({ label: s.label, name: s.label, cmd: s.path })),
+      ]
+    : WINDOWS_SHELLS.filter((s) => found.shells.some((f) => f.path === s.cmd));
+  if (next.length === 0) return;
   const keep = defaultShell().label;
   SHELLS.splice(0, SHELLS.length, ...next);
   setDefaultShell(SHELLS.find((s) => s.label === keep) ?? SHELLS[0]);
@@ -397,18 +401,23 @@ backend.subscribe(() => setTick((t) => t + 1));
  *  닫힌 팀의 세션을 가리킬 수 있다. 그대로 화면만 바꾸면 앱 바에 대응 탭이 없어 활성 탭이
  *  없는 자리에 서게 되므로, 데려가기 전에 그 워크스페이스를 먼저 연다 (B18).
  *  사용자가 누른 점프의 일부이므로 자동 실행이 아니다 — 상한·경로 소실은 openWorkspace가 거른다. */
+/** 닫힌 워크스페이스로 데려가기 전에 연다. 동시 열기 상한이면 openWorkspace는 열지 않고 돌아간다 —
+ *  탭 없는 화면으로 데려가지 않고 이유를 알린 뒤 false (B238). 밖에서 워크스페이스로 데려가는 입구는
+ *  모두 이 판정을 탄다 (B284 — 동시 편집 경고의 [알리기]가 따로 열다 빠졌다). 경로 소실은 지금처럼 둔다.
+ *  notify는 ui.tsx(이 파일을 가져다 쓴다)에 있어 순환을 피하려고 늦게 가져온다 */
+function openOrExplain(workspaceId: string): boolean {
+  backend.openWorkspace(workspaceId);
+  const ws = backend.listWorkspaces().find((w) => w.id === workspaceId);
+  if (!ws || ws.open || ws.pathMissing) return true;
+  const msg = tf("동시에 열 수 있는 워크스페이스는 {n}개입니다 — 하나를 닫고 다시 시도하세요", { n: MAX_OPEN_WORKSPACES });
+  void import("./components/ui").then((m) => m.notify(msg)).catch(() => {});
+  return false;
+}
+
 export function jumpToSession(workspaceId: string, sessionId: string): boolean {
   // 팝업이 미저장 편집으로 닫히기를 거부하면 데려가지 않는다 — 뒤에서만 이동하고 '본 것'만 찍히지 않게 (B72)
   if (!setOverlay(undefined)) return false;
-  backend.openWorkspace(workspaceId);
-  // 동시 열기 상한이면 openWorkspace는 열지 않고 돌아간다 — 탭 없는 화면으로 데려가지 않고 이유를 알린다 (B238).
-  // notify는 ui.tsx(이 파일을 가져다 쓴다)에 있어 순환을 피하려고 늦게 가져온다
-  const ws = backend.listWorkspaces().find((w) => w.id === workspaceId);
-  if (ws && !ws.open && !ws.pathMissing) {
-    const msg = tf("동시에 열 수 있는 워크스페이스는 {n}개입니다 — 하나를 닫고 다시 시도하세요", { n: MAX_OPEN_WORKSPACES });
-    void import("./components/ui").then((m) => m.notify(msg)).catch(() => {});
-    return false;
-  }
+  if (!openOrExplain(workspaceId)) return false;
   setSelectedSession(sessionId);
   backend.markSeen(sessionId);
   setView({ kind: "workspace", id: workspaceId });
@@ -428,7 +437,7 @@ export const [draftRequest, setDraftRequest] = createSignal<
 >(undefined);
 export function openDraft(workspaceId: string, session: string, text: string): void {
   if (!setOverlay(undefined)) return;
-  backend.openWorkspace(workspaceId);
+  if (!openOrExplain(workspaceId)) return;
   setView({ kind: "workspace", id: workspaceId });
   setDraftRequest({ session, type: "ask", text });
   openPanel("conversation");

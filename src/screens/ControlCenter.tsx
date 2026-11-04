@@ -44,7 +44,7 @@ import { gitOverview, pathKeys, worktreeList } from "../backend/git";
 import type { GitOverview, WorktreeInfo } from "../backend/git";
 import { agentClis, agentClisReady, INSTALL_CMD, refreshAgentClis } from "../backend/agentprobe";
 import { autoAssignDefault, refreshMissions } from "../backend/missions";
-import { clipWriteText, isTauri, killPty, onPtyOutput, revealPath, storePurgeScrollback, storeUsageReal, writePty } from "../backend/pty";
+import { clipWriteText, isTauri, killPty, onPtyOutput, pathIsDir, revealPath, storePurgeScrollback, storeUsageReal, writePty } from "../backend/pty";
 import type { StoreUsageReal } from "../backend/pty";
 import { removeRoleFile } from "../backend/roles";
 import { maxSlots, settings, toggleMuted } from "../backend/settings";
@@ -57,6 +57,7 @@ import {
   focusSessionTerminal,
   isRespawning,
   launchAgentInSession,
+  respawnSessionShell,
   roleAgentOf,
   sessionTermSize,
   syncSessionTerminal,
@@ -118,6 +119,11 @@ export function ControlCenter(props: { workspace: Workspace }) {
       .sort((a, b) => a.slot - b.slot);
   });
   const usage = () => backend.storeUsage(props.workspace.name);
+  // 표시 이름은 목록에서 다시 읽는다 — props.workspace는 탭을 연 때의 객체라 이름을 바꿔도 따라오지 않는다 (S23)
+  const wsName = () => {
+    tick();
+    return backend.listWorkspaces().find((w) => w.id === props.workspace.id)?.name ?? props.workspace.name;
+  };
   const persona = (id: string) => backend.listPersonas().find((p) => p.id === id);
   const job = (id: string) => backend.listJobs().find((j) => j.id === id);
   const selected = createMemo(() => sessions().find((s) => s.id === selectedSession()) ?? sessions()[0]);
@@ -681,6 +687,15 @@ export function ControlCenter(props: { workspace: Workspace }) {
     }
     backend.resumeSession(s.id);
   };
+  // 셸 다시 열기 (S25) — 기본 터미널 마법사의 되살리기(B58 · B253)와 같은 길: 같은 슬롯 · 같은 이름 · 같은 셸.
+  // 비우고 새로 만들면 이 기기에 남긴 터미널 이름도 지워졌다. 작업 폴더가 없으면 상태를 바꾸기 전에 멈춘다 (B207과 같은 이유)
+  const reopenShell = async (s: Session) => {
+    setResumeErr(undefined);
+    if (isTauri() && !(await pathIsDir(s.cwd)))
+      return sessionFail(s, tf("작업 폴더가 없습니다: {cwd} — 폴더를 되돌리거나 세션을 다시 만드세요", { cwd: s.cwd }));
+    const r = backend.reviveTerminal(s.id);
+    if (r) void respawnSessionShell(r.id, r.cwd, r.workspaceId, r.shell).catch((err) => notify(tErr(err)));
+  };
 
   const openSessMenu = (e: MouseEvent, s: Session) => {
     e.preventDefault();
@@ -744,7 +759,10 @@ export function ControlCenter(props: { workspace: Workspace }) {
               action: () => void resumeInline(s),
             },
           ]
-        : [{ label: t("역할 지정은 세션 상세에서"), note: true }]),
+        : [
+            ...(s.status === "dead" ? [{ label: t("셸 다시 열기"), action: () => void reopenShell(s) }] : []),
+            { label: t("역할 지정은 세션 상세에서"), note: true },
+          ]),
       // 새로 시작 (요약 이월 · 토큰 #6) — 죽었고 요약이 있을 때만. 이전 대화는 잇지 않는다
       ...(canStartFresh(s)
         ? [
@@ -862,7 +880,24 @@ export function ControlCenter(props: { workspace: Workspace }) {
         </Show>
         <Show
           when={s.resumable}
-          fallback={<span class="pane-dead-note">{t("재개 불가")} — {t("트랜스크립트 없음")}</span>}
+          fallback={
+            // 역할 없는 셸은 재개할 대화가 없다 — '재개 불가' 대신 같은 셸을 다시 연다 (S25)
+            <Show
+              when={!s.personaId}
+              fallback={<span class="pane-dead-note">{t("재개 불가")} — {t("트랜스크립트 없음")}</span>}
+            >
+              <button
+                class="btn pane-dead-resume"
+                title={t("같은 슬롯 · 같은 이름 · 같은 셸로 다시 엽니다")}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void reopenShell(s);
+                }}
+              >
+                ▶ {t("셸 다시 열기")}
+              </button>
+            </Show>
+          }
         >
           <button
             class="btn pane-dead-resume"
@@ -998,9 +1033,9 @@ export function ControlCenter(props: { workspace: Workspace }) {
                 </span>
               </Show>
               <StatusLabel session={s} hideExit />
-              {/* macOS — 맨 셸이면 실제로 뜬 셸 이름을 붙인다. 고른 셸과 뜬 셸이 다르면 여기서 보인다 (B114) */}
-              <Show when={IS_MAC && s.status === "shell" && ptyShells()[s.id]}>
-                {(sh) => <span class="mono muted"> · {sh()}</span>}
+              {/* 맨 셸이면 실제로 뜬 셸 이름을 붙인다 — macOS는 늘 (B114), Windows는 고른 셸이 없어 물러났을 때만 (B291) */}
+              <Show when={s.status === "shell" && (IS_MAC || ptyShells()[s.id] !== s.shell) ? ptyShells()[s.id] : undefined}>
+                {(sh) => <span class="mono muted"> · {sh()}{IS_MAC ? "" : ` (${t("고른 셸 없음")})`}</span>}
               </Show>
             </div>
             {/* 종료된 슬롯은 터미널 대신 다음 행동을 보여준다 — 재개 경로는 그 안에 있다 */}
@@ -1160,7 +1195,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
           대화 버튼은 앱 바 전역 도구 (M1) — 전체 화면에서도 접근된다 */}
       <div class="cc-top">
         <div class="cc-title" title={props.workspace.path}>
-          <h1>{props.workspace.name}</h1>
+          <h1>{wsName()}</h1>
           <span class="mono muted cc-count" title={`${props.workspace.branch ?? "—"} · ${sessions().length}/${maxSlots()}`}>
             {/* 1은 영어 단수라 키를 따로 둔다 — 한국어는 같은 글자 (U29) */}
             {sessions().length === 1 ? t("세션 1개") : tf("세션 {n}개", { n: sessions().length })}
@@ -1472,7 +1507,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
         <div class="terminal-fullscreen">
           <div class="tf-head">
             <span class="mono tf-title">
-              ⛶ {props.workspace.name} <span class="muted">· {tf("세션 {n}/{max} · 터미널 집중", { n: sessions().length, max: maxSlots() })}</span>
+              ⛶ {wsName()} <span class="muted">· {tf("세션 {n}/{max} · 터미널 집중", { n: sessions().length, max: maxSlots() })}</span>
             </span>
             <div style={{ display: "flex", gap: "6px", "align-items": "center" }}>
               <Show when={zoomed()}>

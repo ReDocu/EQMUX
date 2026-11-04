@@ -28,14 +28,9 @@ const LEVELS = ["전체", "INFO", "WARN", "ERROR"] as const;
 const TYPE_LABEL: Record<string, string> = { store: "앱 기록", agent: "에이전트" };
 const typeLabel = (type: string) => TYPE_LABEL[type] ?? type;
 
-// 이벤트 → 로그 행 변환 — 레벨은 내용에서 추정한다 (waiting=warn · dead/비정상 종료=error)
+// 이벤트 → 로그 행 변환 — 레벨은 events.ts가 번역 전 원문으로 정한다 (B309 — 문구로 재면 '종료됨'이 INFO로 빠졌다)
 function toLog(e: FeedEvent): ServerLog {
-  const level: ServerLog["level"] =
-    e.message.startsWith("dead") || /exit [1-9]/.test(e.message)
-      ? "error"
-      : e.message.startsWith("waiting")
-        ? "warn"
-        : "info";
+  const level: ServerLog["level"] = e.level ?? "info";
   const type: ServerLog["type"] = e.kind === "state" ? "agent" : e.kind === "app" ? "세션" : "store";
   const who = e.sessionId ? `${shortId(e.sessionId)} · ` : "";
   return { time: e.time, type, message: `${who}${e.message}`, level };

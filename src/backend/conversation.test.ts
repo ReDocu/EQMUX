@@ -2,7 +2,7 @@
 // 한 줄로 접는가"만 본다: 단건/묶음 접두 · 개행 평탄화 · 상한에서 덩어리 갈리기.
 import { describe, expect, test } from "vitest";
 import { batches, cancelBrief, crossCopy, titlePrefix, consumeTaken, droppedIds, noteTaken, capQueue, deliveredIds, flushInboxOnState, fmt, fmtNotice, goneName, injectedMsgIds, sentState, touchesMission, orphanedInbox, pendingBrief, queueBrief, pendingReason, prependOlder, splitPending, unmanagedAgent } from "./conversation";
-import { typedText } from "./pty";
+import { noteUserInput, typedText } from "./pty";
 import type { ConversationMessage } from "../types";
 
 const msg = (from: string, body: string, type: ConversationMessage["type"] = "ask"): ConversationMessage => ({
@@ -196,6 +196,17 @@ describe("queueBrief (B93)", () => {
     queueBrief("y@w", "[EQ] 임무 배정: C");
     cancelBrief("y@w");
     expect(pendingBrief("y@w")).toBeUndefined();
+  });
+
+  // 0.6.2 QA eqmux-32
+  test("턴 끝(idle)이라도 사람이 치다 만 줄이 있으면 넣지 않고, 줄이 끝난 뒤에 넣는다 (B274)", () => {
+    noteUserInput("t@w", "다음 지시");
+    queueBrief("t@w", "[EQ] 임무 배정: D");
+    flushInboxOnState("t@w", "idle");
+    expect(pendingBrief("t@w")).toBe("[EQ] 임무 배정: D");
+    noteUserInput("t@w", "\r");
+    flushInboxOnState("t@w", "idle");
+    expect(pendingBrief("t@w")).toBeUndefined();
   });
 });
 

@@ -50,7 +50,7 @@ mod transcript;
 mod winstate;
 pub(crate) mod workspace;
 use store::{LineAssembler, Store, StoreMsg};
-use workspace::{WsEntry, WsInfo};
+use workspace::WsInfo;
 
 pub(crate) struct StoreState(pub(crate) Store);
 
@@ -121,6 +121,11 @@ fn size_marker(packed: u32) -> String {
 }
 
 static NEXT_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// 끝난 PTY(세대 gen)가 같은 id의 새 PTY로 이미 바뀌었는가 (B287) — current는 지금 맵에 있는 그 id의 세대
+fn superseded(current: Option<u64>, gen: u64) -> bool {
+    current.is_some_and(|g| g != gen)
+}
 
 /// 기동 경로(셸 스폰·에이전트 기동·재개·재시작)는 한 번에 하나씩 돈다. 메인 스레드에서 돌던
 /// 때는 저절로 한 줄이었고, 같은 id 이중 기동 가드(P-8)와 spawn_pty_session의 재부착 판정이 그 순서에 기댄다.
@@ -279,10 +284,15 @@ fn open_session_log(path: &Path, cap: u64) -> Option<(std::io::BufWriter<std::fs
 
 /// 오래된 세션 로그 정리 — diagnostics.log는 자체 상한이 있어 건드리지 않는다
 fn prune_session_logs(dir: &Path, keep: std::time::Duration) {
+    prune_stale(dir, keep, |name| name != "diagnostics.log" && (name.ends_with(".log") || name.ends_with(".log.old")));
+}
+
+/// dir에서 pick이 고른 파일 중 keep보다 오래 손대지 않은 것을 지운다 — 세션 로그 · 붙여넣은 이미지(S27) 공용
+fn prune_stale(dir: &Path, keep: std::time::Duration, pick: impl Fn(&str) -> bool) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
     for e in entries.flatten() {
         let name = e.file_name().to_string_lossy().into_owned();
-        if name == "diagnostics.log" || !(name.ends_with(".log") || name.ends_with(".log.old")) {
+        if !pick(&name) {
             continue;
         }
         let stale = e
@@ -419,16 +429,33 @@ fn pick_shells(etc_shells: &str, exists: impl Fn(&str) -> bool, canon: impl Fn(&
     out
 }
 
+/// Windows 셸 라벨 (B291) — 실제로 뜬 실행 파일을 프런트 셸 목록(state.ts WINDOWS_SHELLS)의 라벨로 바꾼다.
+/// Git Bash만 파일 이름(bash)과 라벨이 다르다
+#[cfg_attr(not(windows), allow(dead_code))]
+fn win_shell_label(argv0: &str) -> String {
+    let base = argv0.rsplit(['\\', '/']).next().unwrap_or(argv0).to_ascii_lowercase();
+    let stem = base.strip_suffix(".exe").unwrap_or(&base);
+    if stem == "bash" { "git-bash".into() } else { stem.into() }
+}
+
 /// 셸 선택지 (B114) — 프런트의 셸 목록이 Windows 것(pwsh·cmd)뿐이던 자리. 실패하면 프런트가
-/// 정적 목록으로 물러난다. Windows는 지금 후보(shell_candidates) 그대로다
+/// 정적 목록으로 물러난다. Windows는 설치된 것만 준다 (B291) — PowerShell 7은 기본 설치에 없다.
+/// symlink_metadata로 본다 — 스토어판 pwsh는 WindowsApps의 실행 별칭(따라갈 수 없는 재분석 지점)이다
 #[tauri::command]
 fn list_shells() -> ShellList {
     #[cfg(windows)]
     return ShellList {
         default: default_shell_label(),
-        shells: ["pwsh.exe", "powershell.exe", "cmd.exe"]
+        shells: ["pwsh.exe", "powershell.exe", r"C:\Program Files\Git\bin\bash.exe", "cmd.exe"]
             .iter()
-            .map(|s| ShellEntry { label: s.trim_end_matches(".exe").to_string(), path: s.to_string() })
+            .filter(|s| {
+                let p = Path::new(s);
+                if p.is_absolute() {
+                    return p.symlink_metadata().is_ok();
+                }
+                std::env::var_os("PATH").is_some_and(|v| std::env::split_paths(&v).any(|d| d.join(s).symlink_metadata().is_ok()))
+            })
+            .map(|s| ShellEntry { label: win_shell_label(s), path: s.to_string() })
             .collect(),
     };
     #[cfg(not(windows))]
@@ -475,7 +502,7 @@ fn sanitize_pty_env(cmd: &mut CommandBuilder) {
 
 /// 공용 PTY 스폰 — 셸·에이전트가 같은 배관(로그·스토어 스필·수명 관리)을 탄다.
 /// 반환값은 이 PTY의 세대(gen) — 같은 id 재기동 시 이전 스레드의 정리를 무효화한다 — 와 실제 라벨.
-/// label_from_spawn이면(셸 페인, macOS) 라벨을 요청값이 아니라 실제로 뜬 후보의 파일 이름으로 정한다 (B114) —
+/// label_from_spawn이면(셸 페인 — Windows는 B291) 라벨을 요청값이 아니라 실제로 뜬 후보의 파일 이름으로 정한다 (B114) —
 /// 'PowerShell 7'을 골랐는데 pwsh가 없어 zsh로 물러나도 라벨이 pwsh로 남던 자리다
 #[allow(clippy::too_many_arguments)]
 fn spawn_pty_session(
@@ -534,8 +561,9 @@ fn spawn_pty_session(
         Some(base) => base.to_string(),
         None => shell_label,
     };
+    // Windows도 실제로 뜬 셸로 (B291) — PowerShell 7이 없는 PC에서 'pwsh'라고 적힌 5.1이 뜨던 자리
     #[cfg(windows)]
-    let _ = &spawned;
+    let shell_label = if label_from_spawn && !spawned.is_empty() { win_shell_label(&spawned) } else { shell_label };
 
     // FR-C-05 — 세션 트리를 Job Object로 묶는다. 실패해도 세션은 동작한다 (child.kill 폴백).
     let job = job::Job::new_kill_on_close().map(Arc::new);
@@ -765,11 +793,19 @@ fn spawn_pty_session(
                 styled: if sgr_on { styled } else { None },
             });
         });
-        let _ = store_tx.send(StoreMsg::SessionExit { ws: ws.clone(), id: id.clone(), code });
-        let _ = app.emit_to("main", "pty-exit", PtyExit { id: id.clone(), code });
-        // ponytail: 재스폰이 옛 PTY 종료보다 먼저면 새 PTY의 범위가 풀린다 — 알림용 환경변수라 겹쳐도 해는 작다, 문제되면 gen으로 거른다
-        ports::release_range(&id); // 세션별 포트 범위 (§4, W6)
-        agent::on_pty_exit(&app, &id, code, gen); // 에이전트면 dead 전이 (FR-D-50)
+        // 재개·재시작(kill_pty_for_restart)은 옛 PTY를 끝내고 기다리지 않고 같은 id로 새로 띄운다 (B287 · B288).
+        // 그 뒤에 온 옛 종료를 새 세션의 종료로 내면 새 화면에 '프로세스 종료'가 찍히고(pty-exit에는 세대가 없다)
+        // 살아 있는 세션의 exit_code가 덮여 크래시 복구에서 빠진다. 기동 경로는 SPAWN_LOCK 안에서 돌므로
+        // 그 잠금을 쥐고 보면 새 PTY는 다 떴거나(맵에 다른 세대) 실패했다(맵에 없음 — 평소대로 종료를 낸다).
+        // 잠금을 쥔 채 보내야 이 SessionExit가 다음 기동의 SessionStart보다 앞선다
+        let _turn = SPAWN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let current = app.state::<PtyState>().0.lock().ok().and_then(|s| s.get(&id).map(|e| e.gen));
+        if !superseded(current, gen) {
+            let _ = store_tx.send(StoreMsg::SessionExit { ws: ws.clone(), id: id.clone(), code });
+            let _ = app.emit_to("main", "pty-exit", PtyExit { id: id.clone(), code });
+            ports::release_range(&id); // 세션별 포트 범위 (§4, W6) — 새 세대가 쓰는 중이면 두지 않는다
+        }
+        agent::on_pty_exit(&app, &id, code, gen); // 에이전트면 dead 전이 (FR-D-50) — 세대가 다르면 표식만 소비한다
     });
 
     Ok((gen, shell_label))
@@ -1907,7 +1943,7 @@ fn team_load(
     workspace_id: String,
     ws_path: String,
 ) -> Result<Vec<TeamSlotInfo>, String> {
-    let file = team::load(&ws_path);
+    let file = team::load(&ws_path)?; // 해석 실패는 빈 팀이 아니라 오류다 (B275) — 프런트가 알리고 저장도 막힌다
     let db = store::db_path(&store_state.0.root(), &workspace_id);
     let conn = Connection::open_with_flags(&db, OpenFlags::SQLITE_OPEN_READ_ONLY).ok();
     let out = file
@@ -2139,34 +2175,26 @@ fn preset_list(store_state: State<StoreState>) -> Vec<library::PresetInfo> {
 
 /// 배정·해제 (FR-E-53·54) — 역할 파일의 임무 블록을 삽입·교체·삭제한다 (멱등)
 #[tauri::command]
-fn mission_assign(app: AppHandle, ws_path: String, session: String, mission_id: Option<String>) -> Result<(), String> {
+fn mission_assign(app: AppHandle, ws_path: String, root: Option<String>, session: String, mission_id: Option<String>) -> Result<(), String> {
+    // ws_path는 세션 cwd(역할 파일), root는 repo 루트(임무 파일 · 이벤트 워크스페이스) — B277. 없으면 같은 경로
+    let root = root.unwrap_or_else(|| ws_path.clone());
     // C1 — 배정이 실제로 바뀔 때만 기록한다 (같은 임무 재배정은 멱등이라 피드도 조용하다) — W2
     let prev = std::fs::read_to_string(roles::role_path(&ws_path, &session))
         .ok()
         .and_then(|t| roles::fm_value(&roles::split_frontmatter(&t).0, "mission"));
     match mission_id {
         Some(id) => {
-            let m = missions::get(&ws_path, &id).ok_or("임무 파일을 찾을 수 없습니다")?;
-            let name = m.name.clone();
-            let block = roles::MissionBlock {
-                id: m.id,
-                name: m.name,
-                status: m.status,
-                goal: m.goal,
-                outputs: m.outputs,
-                branch: m.branch,
-            };
-            roles::set_mission(&ws_path, &session, Some(&block))?;
-            if prev.as_deref() != Some(block.id.as_str()) {
-                missions::log_event(&app, &ws_path, Some(&session), format!("임무 배정 · {name}"));
+            let (block_id, name) = missions::assign(&root, &ws_path, &session, &id)?;
+            if prev.as_deref() != Some(block_id.as_str()) {
+                missions::log_event(&app, &root, Some(&session), format!("임무 배정 · {name}"));
             }
             Ok(())
         }
         None => {
             roles::set_mission(&ws_path, &session, None)?;
             if let Some(p) = prev {
-                let name = missions::get(&ws_path, &p).map(|m| m.name).unwrap_or(p);
-                missions::log_event(&app, &ws_path, Some(&session), format!("임무 해제 · {name}"));
+                let name = missions::get(&root, &p).map(|m| m.name).unwrap_or(p);
+                missions::log_event(&app, &root, Some(&session), format!("임무 해제 · {name}"));
             }
             Ok(())
         }
@@ -2341,25 +2369,8 @@ async fn ws_register(store_state: State<'_, StoreState>, path: String) -> Result
         if !workspace::is_repo(&path) {
             return Err("NOT_A_REPO".to_string());
         }
-        let mut list = workspace::load_strict(&root)?;
-        if let Some(existing) = list.iter_mut().find(|e| e.path.eq_ignore_ascii_case(&path)) {
-            existing.last_used = workspace::now_ms();
-            let info = workspace::inspect(existing);
-            workspace::save(&root, &list)?;
-            return Ok(info);
-        }
-        let entry = WsEntry {
-            id: workspace::make_id(&path),
-            name: workspace::entry_name(&path),
-            path: path.clone(),
-            remote: None,
-            branch: None,
-            last_used: workspace::now_ms(),
-            cross_project: true,
-        };
-        list.push(entry.clone());
-        workspace::save(&root, &list)?;
-        Ok(workspace::inspect(&entry))
+        // 같은 폴더(canon_key)는 한 항목 · 해제해 둔 항목은 옛 id로 (B289 · B290)
+        workspace::register(&root, &path).map(|e| workspace::inspect(&e))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -2404,16 +2415,28 @@ fn ws_clone_cancel() {
     workspace::CLONE_CANCEL.store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
-/// 등록 해제 (FR-E-09) — 레지스트리에서만 지운다
+/// 등록 해제 (FR-E-09) — 레지스트리에서만 지운다. 지운 항목은 [되돌리기]용으로 남긴다 (B289)
 #[tauri::command]
 fn ws_unregister(store_state: State<StoreState>, id: String) -> Result<(), String> {
-    let root = store_state.0.root();
-    let mut list = workspace::load_strict(&root)?;
-    list.retain(|e| e.id != id);
-    workspace::save(&root, &list)
+    workspace::unregister(&store_state.0.root(), &id)
 }
 
-/// 경로 재지정 (FR-E-08)
+/// 등록 해제 [되돌리기] (B289) — 같은 id로 되살린다(대화 · 스크롤백 · 재개 정보가 그 id 아래 있다)
+#[tauri::command]
+async fn ws_restore(store_state: State<'_, StoreState>, id: String) -> Result<WsInfo, String> {
+    let root = store_state.0.root();
+    tauri::async_runtime::spawn_blocking(move || workspace::restore(&root, &id).map(|e| workspace::inspect(&e)))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// 워크스페이스 이름 바꾸기 (S23) — 등록 정보의 이름만, 폴더는 그대로. 빈 값은 폴더 이름. 바뀐 이름을 돌려준다
+#[tauri::command]
+fn ws_rename(store_state: State<StoreState>, id: String, name: String) -> Result<String, String> {
+    workspace::rename(&store_state.0.root(), &id, &name).map(|e| e.name)
+}
+
+/// 경로 재지정 (FR-E-08) — 다른 항목의 폴더는 막고(B290), 사람이 정한 이름은 지킨다(S23)
 #[tauri::command]
 async fn ws_repath(
     store_state: State<'_, StoreState>,
@@ -2425,14 +2448,7 @@ async fn ws_repath(
         if !Path::new(&path).is_dir() {
             return Err("폴더를 찾을 수 없습니다".to_string());
         }
-        let mut list = workspace::load_strict(&root)?;
-        let entry = list.iter_mut().find(|e| e.id == id).ok_or("등록 항목 없음")?;
-        entry.path = path;
-        entry.name = workspace::entry_name(&entry.path);
-        entry.last_used = workspace::now_ms();
-        let info = workspace::inspect(entry);
-        workspace::save(&root, &list)?;
-        Ok(info)
+        workspace::repath(&root, &id, &path).map(|e| workspace::inspect(&e))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -2612,10 +2628,10 @@ fn kill_all_sessions(app: &AppHandle) {
     }
 }
 
-/// 세션 exit 기록까지 flush하고 클린 종료 표식을 지운다. macOS는 창 자리도 여기서 남긴다 (B141)
+/// 세션 exit 기록까지 flush하고 클린 종료 표식을 지운다. 창 자리도 여기서 남긴다 (B141 · Windows S26)
 fn finish_store_and_flag(app: &AppHandle) {
     let store: State<StoreState> = app.state();
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     if let Some(win) = app.get_webview_window("main") {
         winstate::save(&win, &store.0.root());
     }
@@ -3107,6 +3123,11 @@ pub fn run() {
             }
             #[cfg(windows)]
             quit::install_end_session(app.handle()); // 로그오프·시스템 종료 정리 (§2)
+            // 지난번 창 자리 · 최대화 여부로 (S26) — 저장값이 없으면(첫 기동) 최대화 그대로
+            #[cfg(windows)]
+            if let Some(win) = app.get_webview_window("main") {
+                winstate::restore(&win, &root);
+            }
             // DB 손상 복구 알림 (§1-2) — 쓰기 스레드가 Store::new 직후부터 열 수 있으니 그 전에 단다
             let notify_app = app.handle().clone();
             store::on_recover(move |ws, moved| {
@@ -3131,7 +3152,11 @@ pub fn run() {
             agent::start_registry_watch(app.handle().clone());
             ipc::start_server(app.handle().clone()); // eqmux CLI 파이프 (PRD I)
             diag::start_alive_watch(); // 웹뷰 생사 감시 (BR-18)
-            std::thread::spawn(|| prune_session_logs(&log_dir(), SESSION_LOG_KEEP)); // 시작을 막지 않게
+            std::thread::spawn(|| {
+                // 시작을 막지 않게
+                prune_session_logs(&log_dir(), SESSION_LOG_KEEP);
+                prune_stale(&clip::paste_dir(), clip::PASTE_KEEP, clip::is_paste_file); // S27
+            });
             // 웹뷰 렌더러 크래시 생존 (FR-C-06) — ProcessFailed → Reload. PTY는 Rust가
             // 소유하므로 세션은 죽지 않고, 리로드된 프런트가 pty_list·agent_snapshot으로
             // 재부착한다 (restoreTeams). 실패해도 앱은 정상 — 등록은 최선 노력이다.
@@ -3226,6 +3251,8 @@ pub fn run() {
             ws_clone,
             ws_clone_cancel,
             ws_unregister,
+            ws_restore,
+            ws_rename,
             ws_repath,
             ws_touch,
             clip::clip_read_text,
@@ -3320,6 +3347,23 @@ mod tests {
         pick_shells, take_complete_utf8, window_theme, workspace,
     };
 
+    /// B287 · B288 — 같은 id가 다른 세대로 이미 떠 있을 때만 옛 종료를 삼킨다. 없으면(정상 종료 · 재기동 실패) 낸다
+    #[test]
+    fn old_exit_is_superseded_only_by_newer_gen() {
+        assert!(super::superseded(Some(8), 7));
+        assert!(!super::superseded(Some(7), 7));
+        assert!(!super::superseded(None, 7));
+    }
+
+    /// B291 — Windows는 실제로 뜬 실행 파일을 프런트 셸 라벨로 바꾼다
+    #[test]
+    fn windows_shell_label_from_spawned_exe() {
+        assert_eq!(super::win_shell_label("powershell.exe"), "powershell");
+        assert_eq!(super::win_shell_label("pwsh.exe"), "pwsh");
+        assert_eq!(super::win_shell_label("CMD.EXE"), "cmd");
+        assert_eq!(super::win_shell_label(r"C:\Program Files\Git\bin\bash.exe"), "git-bash");
+    }
+
     /// B114 — /etc/shells에서 고를 셸만, 없는 것·같은 실체는 빼고, 이름이 겹치면 폴더로 가른다
     #[test]
     fn shell_list_from_etc_shells() {
@@ -3370,6 +3414,23 @@ mod tests {
         assert!(dir.join("diagnostics.log").exists() && dir.join("note.txt").exists());
         prune_session_logs(&dir, std::time::Duration::from_secs(3600)); // 새 파일은 남는다
         assert!(dir.join("diagnostics.log").exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// S27 — 붙여넣은 이미지 폴더는 paste-*.png만 기간이 지나면 지운다
+    #[test]
+    fn stale_pastes_are_pruned() {
+        let dir = std::env::temp_dir().join(format!("eqmux-pastes-test-{}", workspace::now_ms()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for n in ["paste-1.png", "other.png", "paste-2.txt"] {
+            std::fs::write(dir.join(n), b"x").unwrap();
+        }
+        super::prune_stale(&dir, super::clip::PASTE_KEEP, super::clip::is_paste_file);
+        assert!(dir.join("paste-1.png").exists(), "기간 안이면 남긴다 — 에이전트가 아직 읽는다");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        super::prune_stale(&dir, std::time::Duration::from_millis(1), super::clip::is_paste_file);
+        assert!(!dir.join("paste-1.png").exists());
+        assert!(dir.join("other.png").exists() && dir.join("paste-2.txt").exists());
         std::fs::remove_dir_all(&dir).ok();
     }
 
