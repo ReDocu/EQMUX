@@ -1,29 +1,30 @@
 # EQMUX 스크린샷 인덱스
 
-> 촬영 2026-10-19 · 버전 0.5.1 · 해상도 1920×1080 @2x (3840×2160 PNG)
+> 촬영 2026-11-13 · 버전 0.6.3 · 해상도 1920×1080 @2x (3840×2160 PNG)
 >
 > 모든 화면은 **데모 데이터**(Academy 팀 시나리오)로 렌더링한 것입니다. 문서·웹사이트에 실을 때는
 > "화면은 데모 데이터입니다" 부기를 유지하세요.
 
-## `features/` — 기능별 화면 (33장 + 없어진 화면 1장)
+## `features/` — 기능별 화면 (36장 + 없어진 화면 1장)
 
-기능 명세서([eqmux-feature-spec.md](../eqmux-feature-spec.md))의 절 순서와 맞춰 정렬했습니다. 30~34는 0.5에서 새로 찍었습니다.
+기능 명세서([eqmux-feature-spec.md](../eqmux-feature-spec.md))의 절 순서와 맞춰 정렬했습니다. 30~34는 0.5에서, 35~37은 0.6에서 새로 찍었습니다.
 
 ### 연결 · 온보딩
 
 | 파일 | 화면 | 담긴 기능 |
 |---|---|---|
 | `01-workspace-connection.png` | 워크스페이스 열기 · 관리 | 열려 있지 않음 / 열림 그룹 · 경로 소실 재지정 · 폴더 찾기 · clone · 탐색기에서 열기 · 등록 해제 (전체 화면 팝업) |
-| `02-launch-mode.png` | 실행 방식 선택 | 워크스페이스를 연 뒤 기본 터미널 / 역할 팀 갈림길 · 단계 표시 |
+| `02-launch-mode.png` | 실행 방식 선택 | 워크스페이스를 연 뒤 빠른 시작(리드 + 개발 두 세션) / 기본 터미널 / 역할 팀 갈림길 · 단계 표시 |
 | `03-terminal-setup.png` | 기본 터미널 구성 (Atlas) | 슬롯별 셸·브랜치·작업 폴더 · 사용 중 슬롯 표시 · 열기 전에는 아무것도 실행하지 않음 |
 
 ### 관제
 
 | 파일 | 화면 | 담긴 기능 |
 |---|---|---|
-| `04-dashboard.png` | 관제 대시보드 | 요약 타일 6종 · 워크스페이스×세션 카드 · 승인 대기·종료·✓ 완료 보고 칩 · 엔진 배지(Claude Code·Codex) · 기다리는 에이전트 · 이벤트 · 닫힌 워크스페이스 행 |
+| `04-dashboard.png` | 관제 대시보드 | 요약 타일 7종(오늘 비용 포함) · 워크스페이스×세션 카드 · 승인 대기·종료·✓ 완료 보고 칩 · 엔진 배지(Claude Code·Codex) · 승인함([허용] · [거부], 0.6) · 이벤트 · 닫힌 워크스페이스 행 |
 | `05-session-detail.png` | 세션 상세 | 승인 대기 배너 · 상태/임무/역할/메모리/재개/격리/cwd/알림 · 세션 이름·직함 · 예상 실행 플래그 · 슬롯 권한 |
 | `30-notification-center.png` | 알림 센터 (0.5) | 앱 바 벨·미확인 수 · 다음 미확인으로(Ctrl+Shift+U) · 확인 표시 지우기 · 완료·메시지·승인 대기·종료·턴 끝남 항목 · 같은 세션 묶음 ×N |
+| `37-jump-palette.png` | 건너뛰기 팔레트 (0.6) | `Ctrl+Shift+K` · 세션 · 워크스페이스 · 임무 · 화면 · 패널 탭으로 바로 가기 |
 
 ### 터미널 워크스페이스
 
@@ -51,11 +52,12 @@
 | 파일 | 화면 | 담긴 기능 |
 |---|---|---|
 | `13-missions.png` | 임무 배정 | 임무 탐색기 팝업의 임무 탭 · 상태 단계 · 목표·브랜치·산출물 체크 · 세션 배정 |
-| `14-mission-explorer.png` | 임무 · 파일 탐색기 | 파일 트리 + 임무 파일 구조화 뷰(frontmatter·목표·산출물) · `.eqmux` watch |
+| `14-mission-explorer.png` | 코드 › 파일 (임무 파일) | 사이드 패널 파일 트리 + 임무 파일 구조화 뷰(frontmatter·목표·산출물). 0.6에서 탐색기가 팝업에서 사이드 패널로 옮겨 왔습니다 |
+| `36-mission-review.png` | 임무 검토 (0.6) | 목표 · 산출물 · 완료 보고 · 담당 세션이 고친 파일 · 임무 시작점 기준 diff · [되돌려 보내기] · [승인] |
 
 ### 사이드 패널
 
-0.5부터 패널은 그룹 4개(대화 · 코드 · 실행 · 브라우저)와 그 아래 하위 탭으로 나뉩니다.
+0.5부터 패널은 그룹 4개(대화 · 코드 · 실행 · 브라우저)와 그 아래 하위 탭으로 나뉩니다. 0.6에서 코드 그룹이 [git | 파일 | 문서]가 됐고 확장 그룹(MCP · 플러그인 · 스킬)이 생겼습니다. 확장 그룹은 브라우저 dev에 데이터가 없어 찍지 않았습니다.
 
 | 파일 | 화면 | 담긴 기능 |
 |---|---|---|
@@ -73,6 +75,7 @@
 |---|---|---|
 | `20-git-diff.png` | Git Diff (워크트리) | 변경 파일 트리(A/M/D) · HEAD ↔ 워크트리 나란히 비교 · 읽기 전용 |
 | `28-git-commit-diff.png` | Git Diff (커밋) | 부모 커밋 ↔ 선택 커밋 비교 |
+| `35-git-screen.png` | git 화면 (0.6) | 브랜치 그래프 · 로컬/원격/태그/stash 사이드바 · 커밋 상세와 바뀐 파일 · 커밋별 세션 배지 · 스테이지 안 됨/스테이지됨 · 커밋 칸 · Fetch/Pull/Push |
 | `21-transcript.png` | 트랜스크립트 | 턴 단위 열람 · 턴 개요 · 검색 · 세션 저장 · 페인으로 점프 · 입력은 PTY 직행 |
 | `27-worktree-create.png` | ~~워크트리 생성~~ — **없어진 화면** | 0.2.0 촬영본을 그대로 둡니다. 레일의 워크트리 생성 팝오버는 3a33432에서 빠졌고, 0.5에서는 세션 추가 때 워크트리 격리 체크박스(옵트인)와 레일 표시(`34-rail-branches.png`)로 바뀌었습니다 |
 
@@ -99,7 +102,7 @@ README가 참조하는 고정 파일명입니다. 파일명을 바꾸면 README 
 
 ## `promo/` — 홍보 조판 이미지 (3장)
 
-스크린샷에 태그라인·프레임을 얹은 마케팅 컷입니다. 0.5.1 화면(`04-dashboard`·`06-terminal-grid`)으로 다시 조판했고 문구는 그대로입니다.
+스크린샷에 태그라인·프레임을 얹은 마케팅 컷입니다. 0.5.1 화면(`04-dashboard`·`06-terminal-grid`)으로 다시 조판했고 문구는 그대로입니다. 0.6.3 재촬영(2026-11-13) 때는 다시 조판하지 않아 0.5.1 화면 그대로입니다.
 
 | 파일 | 크기 | 용도 |
 |---|---|---|
@@ -109,15 +112,21 @@ README가 참조하는 고정 파일명입니다. 파일명을 바꾸면 README 
 
 ## 재촬영 방법
 
-Tauri 창이 아니라 **Vite dev 서버 + headless Chrome(CDP)** 으로 촬영했습니다.
+Tauri 창이 아니라 **Vite dev 서버 + headless Chrome(CDP)** 으로 찍습니다. 0.6.3부터는 [`shoot.mjs`](shoot.mjs) 하나로 전부 다시 찍습니다(의존성 없음, Node 22 이상).
 
 1. `npm run dev` (포트 1420)
-2. headless Chrome을 `--disable-webgl`로 실행 — xterm의 WebGL 렌더러는 headless 캡처에 담기지 않으므로 DOM 렌더러 폴백을 태워야 터미널 텍스트가 찍힙니다
-3. 페이지에서 `await import("/src/state.ts")` 로 앱과 같은 상태 모듈 인스턴스를 잡고 `setView` · `setOverlay` · `openPanel` 로 화면을 직접 전환. 소스를 고친 뒤에는 Vite가 `?t=` 붙은 URL로 모듈을 다시 실으므로, `performance.getEntriesByType("resource")`에서 실제 URL을 찾아 import해야 같은 인스턴스가 잡힙니다
-4. `Page.captureScreenshot` (deviceScaleFactor 2). 화면마다 페이지를 새로 띄워 상태를 리셋합니다
+2. headless Chrome을 띄웁니다: `chrome --headless=new --remote-debugging-port=9333 --disable-webgl --disable-gpu --hide-scrollbars --window-size=1920,1080 --user-data-dir=<임시 폴더> about:blank`. `--disable-webgl`이 있어야 합니다. xterm의 WebGL 렌더러는 headless 캡처에 담기지 않아, DOM 렌더러 폴백을 태워야 터미널 글자가 찍힙니다
+3. `node docs/screenshots/shoot.mjs` — `features/` · `readme/`에 바로 씁니다. 몇 장만 찍으려면 이름 일부를 줍니다(`shoot.mjs 35- 04-`)
+
+스크립트가 하는 일:
+
+- 화면마다 새 탭을 띄워 상태를 리셋하고, 페이지에서 앱과 같은 상태 모듈(`/src/state.ts`)을 잡아 `setView` · `setOverlay` · `openPanel`로 화면을 바꿉니다. 소스를 고친 뒤에는 Vite가 `?t=` 붙은 URL로 모듈을 다시 실으므로, `performance.getEntriesByType("resource")`에서 실제 URL을 찾아 import합니다
+- 설정(첫 실행 고지 닫기 · 라이트 테마 · 영어)은 `updateSettings`로 넣습니다
+- 손이 가는 화면: 01은 Academy 행 선택 · 04 · 29는 승인 대기 시간을 3분으로 줄여 [허용] · [거부]가 보이게 · 12는 직무 "리드" 선택 · 14는 `auth-refactor.md` 선택 · 25 · 26 · 31은 페인 우클릭 메뉴(검색 · 줌) · 30은 벨 클릭 · 32는 대화 입력칸에 `@` · 35는 세 번째 커밋 행 클릭
+- `34-rail-branches`는 `16-panel-git`과 같은 화면이고, `readme/` 4장(dashboard · workspace · conversation · gitdiff)은 `features/` 04 · 06 · 15 · 20의 사본입니다
 
 데모 데이터는 브라우저 dev에서만 쓰입니다(Tauri는 시드를 비우고 실측만 씁니다):
 
-- `src/backend/mock.ts` — 세션·임무·메시지(완료 보고·프로젝트 간 메시지 포함)·워크트리(`MOCK_WORKTREES`)·환경변수(`MOCK_ENV`)
+- `src/backend/mock.ts` — 세션·임무·메시지(완료 보고·프로젝트 간 메시지 포함)·워크트리(`MOCK_WORKTREES`)·환경변수(`MOCK_ENV`)·승인함(`pendingTool`)
 - `src/backend/attention.ts` — 알림 센터 항목(`demoNotify`)
-- 손으로 거친 화면: 01은 Academy 행 선택 · 03은 빈 슬롯이 있는 Atlas · 12는 직무 "리드" 선택 · 14는 `auth-refactor.md` 선택 · 25·26·31은 페인 우클릭 메뉴(검색·줌) · 30은 벨 클릭 · 32는 대화 입력칸에 `@`
+- git 화면(35)은 브라우저 dev에 실측이 없습니다. `shoot.mjs`가 이 화면을 찍는 동안만 Tauri `invoke`를 흉내 내어(`FAKE_GIT`) 데모 저장소의 로그 · 브랜치 · 작업 트리를 돌려줍니다. 앱 소스에는 넣지 않았습니다
