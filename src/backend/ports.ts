@@ -7,10 +7,11 @@
 //
 // 관측 전용이라는 포트 패널의 원칙은 그대로다 (PRD H): 프로세스 종료도, 자동 열기도 없다.
 // 새 포트는 뱃지로 알리기만 하고 여는 것은 언제나 사용자의 클릭이다 (PRD §2 — 자동 실행 경로 없음).
+import { invoke } from "@tauri-apps/api/core";
 import { createSignal } from "solid-js";
 import { portsSnapshot } from "./panels";
 import type { PortRow } from "./panels";
-import { forgetAgent, isTauri, killPty, onPtyExit, setUserInputHook } from "./pty";
+import { forgetAgent, isTauri, killPty, noteUserInput, onPtyExit, setUserInputHook, writePty } from "./pty";
 
 /** 최초 관측 뒤 이만큼은 NEW로 표시한다 — 사용자가 눈으로 집어내는 창.
  *  경과 판정은 실측 시점에만 다시 계산된다 (정밀할 이유가 없다) */
@@ -92,7 +93,11 @@ export function feedLine(st: LineState, data: string): { st: LineState; commit?:
       buf = "";
       broken = false;
     } else if (ch === "\x7f" || ch === "\b") buf = buf.slice(0, -1);
-    else if (ch === "\x1b" || ch === "\t" || ch === "\x03" || ch === "\x15") broken = true;
+    else if (ch === "\x03") {
+      // Ctrl+C — 셸은 치던 줄을 버리고 새 프롬프트를 낸다. 다음 줄은 처음부터 믿는다 (B181: 멈춘 뒤 [실행])
+      buf = "";
+      broken = false;
+    } else if (ch === "\x1b" || ch === "\t" || ch === "\x15") broken = true;
     else if (ch >= " ") buf += ch;
   }
   return { st: { buf, broken }, commit };
@@ -111,11 +116,17 @@ setUserInputHook((id, data) => {
   if (!isServerTermId(id)) return;
   const r = feedLine(lineState.get(id) ?? { buf: "", broken: false }, data);
   lineState.set(id, r.st);
-  if (r.commit) {
-    candidates.set(id.slice(id.indexOf("@") + 1), r.commit);
-    scheduleServerProbe();
-  }
+  if (r.commit) candidates.set(id.slice(id.indexOf("@") + 1), r.commit);
+  // Ctrl+C로 서버를 멈춘 것도 본다 (B181) — 안 보면 [실행]·저장 명령이 '돌고 있음'으로 꺼진 채 남는다
+  if (r.commit || data.includes("\x03")) scheduleServerProbe();
 });
+
+/** 버튼이 서버 셸에 쓰는 입력 ([실행] · 저장 명령) — 사람이 친 것과 같은 길(줄 상태 · 후보 · 실측 예약)을 지난다 (B181).
+ *  writePty만 쓰면 훅을 건너뛰어, 버튼으로 띄운 서버가 '돌고 있음'에 잡히지 않았다 */
+export function typeServer(id: string, data: string): void {
+  writePty(id, data);
+  noteUserInput(id, data);
+}
 
 /** 서버 셸에 명령이 들어가면 몇 초 뒤 실측한다 (B145·U91) — 주기 폴링은 여전히 없다.
  *  수동 실측으로 바뀐 뒤 서버 명령 확정(B77)·[실행]·'실행 중 :포트'가 [다시 실측]을 눌러야만 움직였다.
@@ -333,4 +344,80 @@ export function startPortWatch(): void {
   if (started || !isTauri()) return;
   started = true;
   void poll();
+}
+
+// ── 저장 명령 (§3 D2 · 계약 C7) — `.eqmux/commands.json`(커밋 대상)에 적은 명령을 서버 탭에서 사람이 눌러 친다 ──
+// 형식: { "version": 1, "commands": [{ "name": "dev", "run": "npm run dev", "kind": "server" }, …] }
+//  - name: 버튼 글자 (40자까지). run: 서버 셸에 그대로 치는 한 줄. kind: "server" | "test" | "other" (없으면 other).
+//  - 클론한 저장소의 파일이라 믿지 않는다: 자동 실행 경로는 없고, 버튼은 run 원문을 셸 입력줄에 채우기만 한다 —
+//    Enter는 사람이 누른다 (U145). 실제로 무엇이 들어가는지 셸 화면에서 보고 나서 친다.
+//    줄바꿈 · 제어문자가 든 run은 버린다 — 한 번 눌러 여러 명령이 들어가지 않게 (B251).
+// §13-3 [테스트 실행]은 kind "test"를 고른다.
+
+export const COMMANDS_FILE = ".eqmux/commands.json";
+
+export interface SavedCommand {
+  name: string;
+  run: string;
+  kind: "server" | "test" | "other";
+}
+
+/** 원문 → 쓸 수 있는 명령 + 버린 항목 수. JSON 자체가 깨졌으면 error */
+export function parseCommands(text: string): { commands: SavedCommand[]; skipped: number; error?: string } {
+  let doc: unknown;
+  try {
+    doc = JSON.parse(text.replace(/^﻿/, "")); // 메모장 · PowerShell 5.1 UTF8은 BOM을 붙인다 (B191)
+  } catch (e) {
+    return { commands: [], skipped: 0, error: String(e) };
+  }
+  const list = (doc as { commands?: unknown })?.commands;
+  if (!Array.isArray(list)) return { commands: [], skipped: 0, error: "commands 배열이 없습니다" };
+  const commands: SavedCommand[] = [];
+  for (const c of list as Record<string, unknown>[]) {
+    const name = typeof c?.name === "string" ? c.name.trim() : "";
+    const run = typeof c?.run === "string" ? c.run.trim() : "";
+    if (!usableCommand(name, run)) continue;
+    const kind = c.kind === "server" || c.kind === "test" ? c.kind : "other";
+    commands.push({ name, run, kind });
+  }
+  return { commands, skipped: list.length - commands.length };
+}
+
+// 줄바꿈뿐 아니라 C0 제어문자 · DEL도 버린다 (B251) — \x0f(Ctrl+O) 같은 키가 셸을 움직여, 버튼 한 번에 실행될 수 있다
+const usableCommand = (name: string, run: string) =>
+  !!name && name.length <= 40 && !!run && !/[\x00-\x1f\x7f]/.test(run);
+
+/** 사람이 쓴 commands.json에 한 항목을 더한 새 원문 (P63) — BOM · 줄끝(CRLF) · 들여쓰기 · 끝 줄바꿈은 원래대로.
+ *  JSON으로 못 읽거나 commands 배열이 없으면 고치지 않고 error. 같은 run이 이미 있으면 더하지 않는다 */
+export function appendCommand(text: string, entry: SavedCommand): { text: string } | { error: string } {
+  const name = entry.name.trim();
+  const run = entry.run.trim();
+  if (!usableCommand(name, run)) return { error: "이름은 1~40자, 명령은 한 줄이어야 합니다" };
+  const bom = text.startsWith("﻿") ? "﻿" : "";
+  let doc: { commands?: unknown };
+  try {
+    doc = JSON.parse(text.slice(bom.length));
+  } catch {
+    return { error: "JSON으로 읽을 수 없어 고치지 않았습니다 — 파일 탭에서 먼저 고치세요" };
+  }
+  if (!Array.isArray(doc?.commands)) return { error: "commands 배열이 없습니다" };
+  if (doc.commands.some((c) => c?.run?.trim?.() === run)) return { error: "이미 저장된 명령입니다" };
+  doc.commands.push({ name, run, kind: entry.kind });
+  const indent = /\n([ \t]+)\S/.exec(text)?.[1] ?? "  ";
+  const eol = text.includes("\r\n") ? "\r\n" : "\n";
+  const tail = /\r?\n\s*$/.test(text) ? eol : "";
+  return { text: bom + JSON.stringify(doc, null, indent).replace(/\n/g, eol) + tail };
+}
+
+// ── 세션별 포트 범위 (§4) — Rust ports.rs가 스폰 때 나눠 주고 EQMUX_PORT_BASE·END로 심는다 ──
+
+export interface PortRange {
+  session: string;
+  base: number;
+  end: number;
+}
+
+export async function portRanges(): Promise<PortRange[]> {
+  if (!isTauri()) return [];
+  return invoke<PortRange[]>("port_ranges").catch(() => []);
 }

@@ -195,3 +195,41 @@ export async function listPresets(): Promise<CastingPreset[]> {
   if (!isTauri()) return [];
   return invoke<CastingPreset[]>("preset_list").catch(() => []);
 }
+
+/** 초상을 둘 폴더(앱 데이터 personas/)를 탐색기로 연다 (0.6 QA P66) — 실패면 사유, 성공이면 null */
+export async function revealPersonasDir(): Promise<string | null> {
+  if (!isTauri()) return null;
+  return invoke("library_reveal_personas").then(
+    () => null,
+    (e) => String(e),
+  );
+}
+
+/** [초상 고르기…] · [지우기] (0.6 QA P66) — 선택 창에서 png를 골라 personas/<id>.png로 복사하거나 지운다.
+ *  실패면 사유, 성공 · 취소면 null. 뒤에 목록을 다시 읽어 portraitMtimeMs가 바뀌면 아바타가 새로 그려진다 */
+export async function setPortrait(id: string, clear = false): Promise<string | null> {
+  if (!isTauri()) return null;
+  const err = await invoke(clear ? "library_portrait_clear" : "library_portrait_pick", { id }).then(
+    () => null,
+    (e) => t(String(e)),
+  );
+  await refreshLibrary();
+  return err;
+}
+
+/** 초상 이미지 (0.6 §15-4) — personas/<id>.png를 Blob URL로. 키가 id+mtime이라 파일을 바꾸면 새로 읽는다.
+ *  없거나 브라우저 dev면 undefined (이니셜). ponytail: 지난 mtime의 URL은 해제하지 않는다 — 초상 수만큼만 남는다 */
+const portraits = new Map<string, Promise<string | undefined>>();
+export function portraitUrl(p: Pick<Persona, "id" | "portraitMtimeMs">): Promise<string | undefined> {
+  if (!p.portraitMtimeMs || !isTauri()) return Promise.resolve(undefined);
+  const key = `${p.id}:${p.portraitMtimeMs}`;
+  let v = portraits.get(key);
+  if (!v) {
+    v = invoke<ArrayBuffer>("library_portrait", { id: p.id }).then(
+      (b) => URL.createObjectURL(new Blob([b], { type: "image/png" })),
+      () => undefined,
+    );
+    portraits.set(key, v);
+  }
+  return v;
+}

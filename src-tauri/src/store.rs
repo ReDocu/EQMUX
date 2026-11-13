@@ -23,6 +23,10 @@ pub enum StoreMsg {
     ForgetAgentSession { ws: String, id: String },
     /// 마지막 한 줄 요약 (M35) — Stop 훅이 트랜스크립트에서 뽑아 보낸다. 세션당 덮어쓴다
     Recap { ws: String, id: String, text: String },
+    /// 편집 도구로 고친 파일 (§13-1 · C4) — 훅이 보낸다. 배치에 실려 쓴다
+    Touch { ws: String, session: String, path: String, tool: String, ts: i64 },
+    /// 비용 증분 (§13-6, W2) — 양수만 온다. mission None = 임무 밖
+    Cost { ws: String, session: String, mission: Option<String>, ts: i64, usd: f64 },
     /// 종료 flush (FR-C-62②) — 대기 배치를 즉시 커밋하고 ack를 보낸다
     Flush(Sender<()>),
 }
@@ -106,6 +110,58 @@ CREATE INDEX IF NOT EXISTS message_sender_kind ON message(sender, kind);
 CREATE INDEX IF NOT EXISTS message_unread ON message(id) WHERE read = 0;
 ";
 
+/// 스키마 이전 (§1-2) — MIGRATIONS[i]는 버전 i+1 → i+2. 새 DB도 SCHEMA(버전 1) 뒤에 여기를 차례로 탄다.
+/// 항목은 뒤에 덧붙이기만 한다 — 이미 나간 항목을 고치면 그 버전을 지난 DB에는 반영되지 않는다.
+/// 그 전부터 있던 ALTER 열 추가(open_db)는 버전 1 DB의 들쭉날쭉한 모양을 메우는 것이라 그대로 둔다
+const MIGRATIONS: &[&str] = &[
+    // 2 — 편집 기록 (§13-1 · C4). DB가 워크스페이스별이라 workspace 열은 두지 않는다
+    "CREATE TABLE IF NOT EXISTS file_touch (
+       session TEXT NOT NULL,
+       path TEXT NOT NULL,
+       tool TEXT NOT NULL,
+       ts INTEGER NOT NULL
+     );
+     CREATE INDEX IF NOT EXISTS file_touch_ts ON file_touch(ts);
+     CREATE INDEX IF NOT EXISTS file_touch_session ON file_touch(session, ts);",
+    // 3 — 회신 연결 (§4 `eqmux send --re <id>` · `--wait`, W3). 원 메시지의 원장 id, 회신이 아니면 NULL
+    "ALTER TABLE message ADD COLUMN re INTEGER;
+     CREATE INDEX IF NOT EXISTS message_re ON message(re);",
+    // 4 — 임무별 비용 (§13-6, W2). 증분 한 건 = 한 행(대략 1센트마다), mission NULL = 임무 밖
+    "CREATE TABLE IF NOT EXISTS cost (
+       session TEXT NOT NULL,
+       mission TEXT,
+       ts INTEGER NOT NULL,
+       usd REAL NOT NULL
+     );
+     CREATE INDEX IF NOT EXISTS cost_ts ON cost(ts);",
+    // 5 — escalate 심각도 (§4 `eqmux send --type escalate --severity high`, W3). "high"만 적고 normal은 NULL
+    "ALTER TABLE message ADD COLUMN severity TEXT;",
+];
+
+/// 버전을 하나씩 올린다 — 단계마다 트랜잭션이라 중간에 실패해도 그 앞 버전에 멈춘다.
+/// 앱보다 새 버전의 DB(내려 깐 경우)는 건드리지 않는다
+fn migrate(conn: &Connection) -> rusqlite::Result<()> {
+    let current: i64 = conn
+        .query_row("SELECT value FROM meta WHERE key = 'schema_version'", [], |r| r.get::<_, String>(0))
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    for (i, sql) in MIGRATIONS.iter().enumerate() {
+        let to = i as i64 + 2;
+        if current >= to {
+            continue;
+        }
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(sql)?;
+        tx.execute(
+            "INSERT OR REPLACE INTO meta VALUES ('schema_version', ?1)",
+            params![to.to_string()],
+        )?;
+        tx.commit()?;
+    }
+    Ok(())
+}
+
 const SCROLLBACK_CAP_PER_SESSION: i64 = 1_000; // FR-C-50 — 0.3.7에서 10만 → 1,000줄
 const CAP_CHECK_EVERY: i64 = 200; // 상한의 1/5마다 점검 — 실보관량이 상한을 크게 넘지 않게
 const RETENTION_DAYS_MS: i64 = 30 * 86_400_000;
@@ -153,12 +209,63 @@ pub fn db_path(root: &Path, ws: &str) -> PathBuf {
 /// ponytail: 실행 중에 session.db가 지워지면(지금은 그런 경로가 없다) 다시 맞추지 않는다
 static MIGRATED: std::sync::Mutex<Option<std::collections::HashSet<PathBuf>>> = std::sync::Mutex::new(None);
 
+/// DB를 손상으로 옮겼을 때 사람에게 알리는 자리 (§1-2) — setup이 OS 알림을 단다. (워크스페이스, 옮긴 파일)
+type RecoverHook = Box<dyn Fn(&str, &Path) + Send + Sync>;
+static ON_RECOVER: std::sync::OnceLock<RecoverHook> = std::sync::OnceLock::new();
+
+pub(crate) fn on_recover(f: impl Fn(&str, &Path) + Send + Sync + 'static) {
+    let _ = ON_RECOVER.set(Box::new(f));
+}
+
+fn is_corrupt(e: &rusqlite::Error) -> bool {
+    matches!(
+        e.sqlite_error_code(),
+        Some(rusqlite::ErrorCode::NotADatabase | rusqlite::ErrorCode::DatabaseCorrupt)
+    )
+}
+
+/// 손상된 DB를 `session.db.corrupt-<ts>`(+ -wal · -shm)로 옮긴다 — 지우지 않는다. 옮긴 본체 경로를 돌려준다.
+/// 옛 WAL이 새 DB 옆에 남으면 새 DB에 재생되므로, WAL을 치우지 못하면 본체를 되돌리고 실패로 본다
+fn quarantine(path: &Path) -> Option<PathBuf> {
+    let base = path.display().to_string();
+    let moved = PathBuf::from(format!("{base}.corrupt-{}", now_ms()));
+    std::fs::rename(path, &moved).ok()?;
+    for suffix in ["-wal", "-shm"] {
+        let side = PathBuf::from(format!("{base}{suffix}"));
+        if side.exists()
+            && std::fs::rename(&side, format!("{}{suffix}", moved.display())).is_err()
+            && std::fs::remove_file(&side).is_err()
+        {
+            let _ = std::fs::rename(&moved, path);
+            return None;
+        }
+    }
+    Some(moved)
+}
+
 /// 쓰기 열림 — 스키마 보장까지만 하는 가벼운 열기. 메시지 버스(messages.rs)도 이 경로로 연다.
+/// 손상(§1-2): 스키마를 맞추다 "DB가 아니다/손상"이 나면 파일을 옮기고 새로 만든 뒤 알린다.
+/// ponytail: 머리·스키마 쪽 손상만 잡는다 — 깊은 페이지 손상은 그 줄을 읽을 때 오류로 나며, quick_check는 큰 DB에서 느려 열 때 돌리지 않는다
 pub(crate) fn open_db(root: &Path, ws: &str) -> rusqlite::Result<Connection> {
     let path = db_path(root, ws);
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
+    match open_path(&path) {
+        Err(e) if is_corrupt(&e) => {
+            let Some(moved) = quarantine(&path) else { return Err(e) };
+            crate::diag::write(&format!("store: 손상된 DB를 옮기고 새로 만듦 {} ({e})", moved.display()));
+            if let Some(f) = ON_RECOVER.get() {
+                f(ws, &moved);
+            }
+            open_path(&path)
+        }
+        r => r,
+    }
+}
+
+fn open_path(path: &Path) -> rusqlite::Result<Connection> {
+    let path = path.to_path_buf();
     let conn = Connection::open(&path)?;
     let _ = conn.pragma_update(None, "journal_mode", "WAL");
     let _ = conn.pragma_update(None, "synchronous", "NORMAL");
@@ -175,8 +282,8 @@ pub(crate) fn open_db(root: &Path, ws: &str) -> rusqlite::Result<Connection> {
     // 세션당 한 행이라 event 테이블처럼 턴마다 자라지 않는다
     let _ = conn.execute("ALTER TABLE session ADD COLUMN last_recap TEXT", []);
     let _ = conn.execute("ALTER TABLE session ADD COLUMN last_recap_at INTEGER", []);
-    // 메시지 0.5 열 (W2) — 완료 보고 · --file 첨부 · 다른 프로젝트 발신. 결정 1b로 버전 업 땐
-    // session.db를 새로 만들지만, 같은 버전 안에서 열린 DB도 깨지지 않게 한 번 더 보장한다
+    // 메시지 0.5 열 (W2) — 완료 보고 · --file 첨부 · 다른 프로젝트 발신. 0.5까지는 버전 업 때
+    // session.db를 새로 만들었고(결정 1b, 0.6에서 폐기), 이 열들은 그 전 DB를 메우던 것이라 그대로 둔다
     // sender_name·recipient_name (W1) — 보낸 때의 세션 이름. 세션이 사라져도 대화에 이름이 남는다
     for col in [
         "done INTEGER NOT NULL DEFAULT 0",
@@ -192,6 +299,12 @@ pub(crate) fn open_db(root: &Path, ws: &str) -> rusqlite::Result<Connection> {
     let _ = conn.execute_batch(
         "CREATE VIRTUAL TABLE IF NOT EXISTS scrollback_fts USING fts5(text, session_id UNINDEXED, seq UNINDEXED, ts UNINDEXED)",
     );
+    // 이전 실패로 DB 전체를 못 쓰게 하지 않는다 — 단계마다 트랜잭션이라 실패한 단계 앞 버전에 멈추고
+    // 그 뒤 기능만 빠진다. 기억(MIGRATED)에 넣지 않으므로 다음 열기에 다시 시도한다
+    if let Err(e) = migrate(&conn) {
+        crate::diag::write(&format!("store: 스키마 이전 실패 {}: {e}", path.display()));
+        return Ok(conn);
+    }
     if let Ok(mut m) = MIGRATED.lock() {
         m.get_or_insert_with(Default::default).insert(path);
     }
@@ -234,6 +347,8 @@ fn maintain(conn: &Connection) {
     // 이벤트 피드도 같은 30일 (최적화 B5) — 상태 전이마다 쌓여 지우는 길이 없었다.
     // 세션 상세가 세션별로 최신순 조회하므로 (session_id, id) 인덱스를 둔다 (SCHEMA)
     let _ = conn.execute("DELETE FROM event WHERE ts < ?1", params![cutoff]);
+    let _ = conn.execute("DELETE FROM file_touch WHERE ts < ?1", params![cutoff]);
+    let _ = conn.execute("DELETE FROM cost WHERE ts < ?1", params![cutoff]);
     // 세션당 상한도 열 때 한 번 적용한다 — 상한을 낮춘 뒤 처음 여는 DB에는 옛 상한으로 쌓인
     // 줄이 남아 있고, 그 세션이 다시 살아나지 않으면 적재 경로의 정리는 영영 돌지 않는다.
     // 검색이 최신 SCROLLBACK_CAP_PER_SESSION줄만 보게 하려면 여는 김에 여기서 끊어 준다.
@@ -258,6 +373,87 @@ fn trim_to_cap(conn: &Connection) {
         }
         drop_lines(conn, &id, floor);
     }
+}
+
+/// 전역 보존 상한 (§1-2) — 모든 워크스페이스 session.db를 합쳐 이 크기를 넘지 않게 한다
+const GLOBAL_CAP_BYTES: u64 = 2 << 30;
+/// 전역 상한 정리 한 번에 쓰기 스레드를 쥐는 최대 시간
+const CAP_BUDGET: Duration = Duration::from_secs(2);
+
+/// DB가 실제로 쓰는 바이트 — 지운 페이지는 freelist로 가서 다음 쓰기가 재사용한다.
+/// VACUUM으로 파일을 줄이지 않는다: scrollback은 INTEGER PRIMARY KEY가 없어 VACUUM이 rowid를 다시 매기고,
+/// 그러면 같은 rowid로 묶인 FTS 색인이 어긋난다 (drop_lines). 그래서 "더 자라지 않게"가 상한의 뜻이다
+fn used_bytes(conn: &Connection) -> u64 {
+    let q = |p: &str| conn.query_row(&format!("PRAGMA {p}"), [], |r| r.get::<_, i64>(0)).unwrap_or(0);
+    ((q("page_count") - q("freelist_count")).max(0) * q("page_size")) as u64
+}
+
+/// 합계가 cap을 넘으면 모든 DB를 통틀어 가장 오래된 스크롤백 줄부터 지운다. 지운 줄 수를 돌려준다.
+/// 메시지 원장·세션·이벤트·재개 앵커·편집 기록은 건드리지 않는다 — 크기의 대부분은 스크롤백이고,
+/// 원장을 지울지는 제품 결정이다(목록 §5 메시지 보존 기간). 스크롤백을 다 비워도 넘으면 진단에 남기고 멈춘다.
+/// budget을 넘기면 멈추고 (지운 줄, true)를 돌려준다 — 쓰기 스레드에서 돌므로 오래 쥐면 큐(50k)가 차서
+/// PTY 리더가 막힌다. 나머지는 run이 다음 쉬는 틈마다 이어서 한다. 지우기는 문장마다 자동 커밋이라 중간에 앱이 꺼져도 안전하다
+pub(crate) fn enforce_global_cap(root: &Path, cap: u64, budget: Duration) -> (u64, bool) {
+    let started = std::time::Instant::now();
+    let Ok(entries) = std::fs::read_dir(root.join("workspaces")) else { return (0, false) };
+    let dirs: Vec<String> = entries
+        .flatten()
+        .filter(|e| e.path().join("session.db").exists())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    // 싼 사전 판정 — 파일 크기 합(≥ 실사용)이 상한 안이면 DB를 열지 않는다
+    let file_total: u64 = dirs
+        .iter()
+        .flat_map(|d| ["session.db", "session.db-wal"].map(|f| root.join("workspaces").join(d).join(f)))
+        .filter_map(|p| std::fs::metadata(p).ok())
+        .map(|m| m.len())
+        .sum();
+    if file_total <= cap {
+        return (0, false);
+    }
+    // 디렉터리 이름은 이미 sanitize된 것이라 open_db가 같은 경로로 연다
+    let conns: Vec<Connection> = dirs.iter().filter_map(|d| open_db(root, d).ok()).collect();
+    let oldest = |c: &Connection| -> Option<i64> {
+        c.query_row("SELECT MIN(ts) FROM scrollback", [], |r| r.get::<_, Option<i64>>(0)).ok().flatten()
+    };
+    let mut dropped = 0u64;
+    let mut more = false;
+    for _ in 0..10_000 {
+        let total: u64 = conns.iter().map(used_bytes).sum();
+        if total <= cap {
+            break;
+        }
+        if started.elapsed() > budget {
+            more = true;
+            break;
+        }
+        let mut by_age: Vec<(i64, &Connection)> = conns.iter().filter_map(|c| oldest(c).map(|t| (t, c))).collect();
+        by_age.sort_by_key(|(t, _)| *t);
+        let Some(&(_, conn)) = by_age.first() else { break };
+        // 다음으로 오래된 DB의 첫 줄보다 새 줄은 이번 차례에 지우지 않는다 — 전역으로 오래된 순을 지킨다
+        let next = by_age.get(1).map(|(t, _)| *t).unwrap_or(i64::MAX);
+        let rows: i64 = conn.query_row("SELECT COUNT(*) FROM scrollback", [], |r| r.get(0)).unwrap_or(1).max(1);
+        let per_row = (used_bytes(conn) / rows as u64).max(1);
+        let k = ((total - cap) / per_row + 1).clamp(100, 50_000) as i64;
+        let pick = "SELECT rowid FROM scrollback WHERE ts <= ?1 ORDER BY ts, rowid LIMIT ?2";
+        let _ = conn.execute(&format!("DELETE FROM scrollback_fts WHERE rowid IN ({pick})"), params![next, k]);
+        let n = conn
+            .execute(&format!("DELETE FROM scrollback WHERE rowid IN ({pick})"), params![next, k])
+            .unwrap_or(0);
+        if n == 0 {
+            break;
+        }
+        dropped += n as u64;
+    }
+    let total: u64 = conns.iter().map(used_bytes).sum();
+    if more {
+        crate::diag::write(&format!("store: 전역 상한 정리 {dropped}줄 — 시간 예산을 넘어 다음 틈에 잇는다"));
+    } else if total > cap {
+        crate::diag::write(&format!("store: 전역 상한 {cap}바이트를 스크롤백 정리만으로 맞추지 못함 (지금 {total})"));
+    } else if dropped > 0 {
+        crate::diag::write(&format!("store: 전역 상한으로 오래된 스크롤백 {dropped}줄 정리"));
+    }
+    (dropped, more)
 }
 
 /// 세션의 seq 이하 줄을 본문·색인에서 함께 지운다. FTS 행의 rowid는 scrollback 행의 rowid와 같게
@@ -294,6 +490,99 @@ impl Store {
     pub fn root(&self) -> PathBuf {
         self.root.clone()
     }
+
+    /// 편집 기록 한 건 (C4) — 쓰기 스레드의 배치로 넘긴다. 훅 경로를 DB 잠금에 묶지 않는다
+    pub fn touch_file(&self, ws: &str, session: &str, path: &str, tool: &str, ts: i64) {
+        let _ = self.tx.send(StoreMsg::Touch {
+            ws: ws.into(),
+            session: session.into(),
+            path: path.into(),
+            tool: tool.into(),
+            ts,
+        });
+    }
+
+    /// 비용 증분 한 건 (§13-6) — touch_file과 같이 쓰기 스레드 배치로 넘긴다
+    pub fn cost_delta(&self, ws: &str, session: &str, mission: Option<&str>, ts: i64, usd: f64) {
+        let _ = self.tx.send(StoreMsg::Cost {
+            ws: ws.into(),
+            session: session.into(),
+            mission: mission.map(Into::into),
+            ts,
+            usd,
+        });
+    }
+}
+
+/// 임무별 비용 합 (§13-6) — mission None = 임무 밖
+#[derive(serde::Serialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MissionCost {
+    pub mission: Option<String>,
+    pub usd: f64,
+}
+
+/// since_ms 이후 비용을 임무별로 합친다. DB·테이블이 없으면 빈 목록
+pub fn cost_by_mission(root: &Path, ws: &str, since_ms: i64) -> Vec<MissionCost> {
+    let path = db_path(root, ws);
+    if !path.exists() {
+        return Vec::new();
+    }
+    let Ok(conn) = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY) else {
+        return Vec::new();
+    };
+    let _ = conn.busy_timeout(Duration::from_secs(2));
+    let Ok(mut stmt) = conn.prepare("SELECT mission, SUM(usd) FROM cost WHERE ts >= ?1 GROUP BY mission ORDER BY mission") else {
+        return Vec::new();
+    };
+    let rows = stmt.query_map(params![since_ms], |r| Ok(MissionCost { mission: r.get(0)?, usd: r.get(1)? }));
+    rows.map(|it| it.flatten().collect()).unwrap_or_default()
+}
+
+/// 편집 기록 행 (C4)
+#[allow(dead_code)]
+#[derive(serde::Serialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Touch {
+    pub session: String,
+    pub path: String,
+    pub tool: String,
+    pub ts: i64,
+}
+
+#[allow(dead_code)] // 읽는 쪽은 §13-3·13-5(2라운드) — W2가 쓰기만 먼저 붙였다
+fn read_touches(root: &Path, ws: &str, session: Option<&str>, since_ms: i64) -> Vec<Touch> {
+    let path = db_path(root, ws);
+    if !path.exists() {
+        return Vec::new();
+    }
+    let Ok(conn) = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY) else {
+        return Vec::new();
+    };
+    let _ = conn.busy_timeout(Duration::from_secs(2));
+    // 이전 전 DB(테이블 없음)면 prepare가 실패한다 — 기록 없음으로 본다
+    let Ok(mut stmt) = conn.prepare(
+        "SELECT session, path, tool, ts FROM file_touch
+         WHERE ts >= ?1 AND (?2 IS NULL OR session = ?2) ORDER BY ts ASC",
+    ) else {
+        return Vec::new();
+    };
+    let rows = stmt.query_map(params![since_ms, session], |r| {
+        Ok(Touch { session: r.get(0)?, path: r.get(1)?, tool: r.get(2)?, ts: r.get(3)? })
+    });
+    rows.map(|it| it.flatten().collect()).unwrap_or_default()
+}
+
+/// 워크스페이스의 since_ms 이후 편집 기록, 오래된 순 (C4)
+#[allow(dead_code)]
+pub fn recent_touches(root: &Path, ws: &str, since_ms: i64) -> Vec<Touch> {
+    read_touches(root, ws, None, since_ms)
+}
+
+/// 한 세션의 since_ms 이후 편집 기록, 오래된 순 (C4 — 임무 검토 필터 §13-3)
+#[allow(dead_code)]
+pub fn touches_for(root: &Path, ws: &str, session: &str, since_ms: i64) -> Vec<Touch> {
+    read_touches(root, ws, Some(session), since_ms)
 }
 
 struct SessionCursor {
@@ -310,6 +599,8 @@ fn run(root: PathBuf, rx: Receiver<StoreMsg>) {
     // 넘는 순간부터 줄 하나마다 flush(= DB 열기 재시도)가 돈다
     let mut fresh = 0usize;
     let mut last_maintain = std::time::Instant::now(); // 첫 열기(open_writer)가 이미 한 번 돈다
+    // 기동 때 한 번 — 상한 안이면 파일 크기만 보고 끝난다. 한 번에 CAP_BUDGET까지만, 남으면 쉬는 틈마다 잇는다
+    let mut cap_more = enforce_global_cap(&root, GLOBAL_CAP_BYTES, CAP_BUDGET).1;
 
     loop {
         match rx.recv_timeout(Duration::from_millis(100)) {
@@ -333,6 +624,10 @@ fn run(root: PathBuf, rx: Receiver<StoreMsg>) {
                     for conn in dbs.values() {
                         maintain(conn);
                     }
+                    cap_more = true;
+                }
+                if cap_more {
+                    cap_more = enforce_global_cap(&root, GLOBAL_CAP_BYTES, CAP_BUDGET).1;
                 }
             }
             Err(RecvTimeoutError::Disconnected) => {
@@ -355,7 +650,9 @@ fn ws_of(msg: &StoreMsg) -> &str {
         | StoreMsg::Event { ws, .. }
         | StoreMsg::AgentSession { ws, .. }
         | StoreMsg::ForgetAgentSession { ws, .. }
-        | StoreMsg::Recap { ws, .. } => ws,
+        | StoreMsg::Recap { ws, .. }
+        | StoreMsg::Touch { ws, .. }
+        | StoreMsg::Cost { ws, .. } => ws,
         StoreMsg::Flush(_) => "default", // 도달 불가 — run 루프가 pending에 넣지 않는다
     }
 }
@@ -482,6 +779,18 @@ fn flush(
                     // 앵커만 지운다 — 스크롤백·이벤트는 보존 정책(30일)이 따로 관장한다
                     let _ = tx.execute("DELETE FROM agent_session WHERE session_id = ?1", params![id]);
                 }
+                StoreMsg::Touch { session, path, tool, ts, .. } => {
+                    let _ = tx.execute(
+                        "INSERT INTO file_touch (session, path, tool, ts) VALUES (?1, ?2, ?3, ?4)",
+                        params![session, path, tool, ts],
+                    );
+                }
+                StoreMsg::Cost { session, mission, ts, usd, .. } => {
+                    let _ = tx.execute(
+                        "INSERT INTO cost (session, mission, ts, usd) VALUES (?1, ?2, ?3, ?4)",
+                        params![session, mission, ts, usd],
+                    );
+                }
                 StoreMsg::Flush(_) => {} // pending에 들어오지 않는다 (run 루프에서 즉시 처리)
             }
         }
@@ -520,10 +829,11 @@ pub struct SearchHit {
     pub text: String,
 }
 
-/// FTS5 질의 정제 — 토큰마다 큰따옴표로 감싸 연산자·따옴표로 인한 구문 오류를 막는다 (AND 의미)
+/// FTS5 질의 정제 — 토큰마다 큰따옴표로 감싸 연산자·따옴표로 인한 구문 오류를 막는다 (AND 의미).
+/// 토큰마다 접두 일치(`*`)다 — unicode61은 '에이전트가'를 한 토큰으로 두므로 '에이전트'로 찾으려면 접두여야 한다 (U182)
 pub fn fts_escape(q: &str) -> String {
     q.split_whitespace()
-        .map(|t| format!("\"{}\"", t.replace('"', "")))
+        .map(|t| format!("\"{}\"*", t.replace('"', "")))
         .collect::<Vec<_>>()
         .join(" ")
 }
@@ -565,9 +875,11 @@ pub fn search(
             &[&fts, &limit],
         ),
     };
+    // 0건도 LIKE로 한 번 더 — 접두로도 못 찾는 낱말 가운데 일치('build' → 'rebuild')를 놓치지 않게 (U182).
+    // ponytail: FTS가 몇 건이라도 찾으면 가운데 일치는 더하지 않는다 — 다 잡으려면 tokenize='trigram' 표로 옮긴다
     match via_fts {
-        Ok(hits) => Ok(hits),
-        Err(_) => {
+        Ok(hits) if !hits.is_empty() => Ok(hits),
+        _ => {
             let pat = format!("%{}%", query.trim());
             match session {
                 Some(s) => run(
@@ -714,191 +1026,179 @@ pub fn is_tui_noise(line: &str) -> bool {
     total > 0 && boxy * 2 >= total
 }
 
-/// VT 시퀀스를 걸러 확정된 줄만 뽑아내는 조립기 (FR-C-11).
-/// CSI·OSC·단축 ESC를 제거하고, \r 덮어쓰기(진행 표시줄)는 마지막 내용만 남긴다.
-/// SGR(CSI …m)만은 병렬 빌더에 보존해 색 복원용 styled 줄을 함께 낸다 (FR-C-15, M32) —
-/// emit은 (평문, styled)를 받고 SGR이 없던 줄의 styled는 None이다.
-/// 완전한 VT 파서(PRD A)가 오면 그 확정 줄로 교체한다.
+/// PTY 출력에서 확정된 줄만 뽑아내는 조립기 (FR-C-11).
+/// 가상 화면(vt100)을 PTY와 같은 크기로 돌리고, **화면 위로 밀려난 줄만** 확정한다.
+/// TUI(Ink 기반 에이전트 CLI)가 커서를 올려 제자리에서 다시 그리는 스피너·입력창은
+/// 화면 안에서만 바뀌므로 저장되지 않고, 밀려난 줄은 이미 다 그려진 최종 모습이다.
+/// 줄 단위로 VT를 근사하던 옛 조립기는 그 프레임을 줄마다 저장해 재생을 오염시켰다.
+/// 감싼 줄(wrap)은 한 논리 줄로 붙인다. 대체 화면(vim 등 전체 화면 앱)은 저장하지 않는다.
+/// SGR만 보존한 styled 줄을 함께 낸다 (FR-C-15, M32) — 색이 없던 줄의 styled는 None이다.
+/// ponytail: 세션마다 화면 한 장(행×열 셀)을 더 든다. 크래시로 끝나면 화면에 남아 있던 줄은 잃는다.
+/// 위쪽 고정 스크롤 영역(ESC[2;Nr) 안에서 밀려난 행, Windows에서 폭을 줄일 때 ConPTY가 다시 감싸며
+/// 제 스크롤백으로 넘긴 행도 잃는다 — 정확히 하려면 리플로우하는 화면 모델이 필요하다.
+/// 유닉스에서는 대체 화면에 있는 동안 폭을 줄이면 주 화면 행이 잘리고, 읽기 경계에서 쪼개진
+/// ESC[2J는 앞선 밀어내기를 놓친다. 2칸 글자 감쌈 판정(wide_wrap)은 폭이 정확히 cols-1인 줄 다음
+/// 줄이 2칸 글자로 시작하면 두 줄을 잘못 붙인다
 pub struct LineAssembler {
-    /// 색(SGR) 보존본을 만드는가 — 설정 sgrStore가 꺼져 있으면 styled를 쌓지 않는다 (CPU·RAM C9)
+    /// 색(SGR) 보존본을 내는가 — 설정 sgrStore가 꺼져 있으면 styled는 None (CPU·RAM C9)
     sgr: bool,
-    partial: String,
-    /// SGR 보존 빌더 — 문자와 SGR 시퀀스를 순서대로 쌓는다. 백스페이스는 마지막 문자만 지운다
-    styled: Vec<StyledChunk>,
-    has_sgr: bool,
-    esc: EscState,
-    csi_buf: String,
-    cr: bool,
+    /// 호스트가 리사이즈·화면 지우기 뒤에 화면을 다시 그려 주는가 — Windows ConPTY는 그렇다.
+    /// 아니면(유닉스 PTY) 폭을 줄이거나 ESC[2J로 지우기 전에 화면을 먼저 밀어내야 줄을 잃지 않는다
+    host_repaints: bool,
+    parser: vt100::Parser<Spill>,
 }
 
-enum StyledChunk {
-    Sgr(String),
-    Ch(char),
+/// 화면 위로 밀려난 행을 논리 줄로 모은다
+#[derive(Default)]
+struct Spill {
+    cols: usize,
+    /// 감쌈 판정용으로만 이어 쓰는 상태 — 앞 행이 감싸지 않았으면 다음 쓰기가 '\n'으로 시작한다
+    wrap: vt100::capture::BasicFormattedCaptureState,
+    line: String,
+    line_plain: usize,
+    /// 앞 행의 표시 폭 — 2칸 글자가 끝 1칸에 안 들어가 넘어간 행은 vt100이 wrapped로 표시하지 않는다
+    prev_width: usize,
+    done: Vec<String>,
+    /// 최근에 밀려난 행의 평문 (화면 높이만큼) — 높이를 키우면 ConPTY가 이 행들을 화면으로 되살려
+    /// 다시 그리므로, 그 행들이 또 밀려날 때 알아보고 건너뛴다
+    recent: std::collections::VecDeque<String>,
+    replay: std::collections::VecDeque<String>,
 }
 
-enum EscState {
-    None,
-    Esc,
-    Csi,
-    Osc,
-    OscEsc,
+fn row_plain(formatted: &str) -> String {
+    let p: String = vt100::capture::basic_formatted_to_plain(formatted).collect();
+    p.trim_end().to_string()
 }
 
-/// 이 CSI가 지금까지 쌓은 줄을 무효로 만드는가 — TUI(Ink 기반 에이전트 CLI)는 \r가 아니라
-/// 이것들로 제자리 갱신을 한다. 그래서 \r만 보던 조립기는 매 프레임을 이어 붙였다.
-///
-/// 파라미터를 봐야 한다. ESC[K(=0K)는 커서 *뒤*를 지우는 것이라 append-only 조립기에겐
-/// 아무 일도 아닌데(줄 끝 정리로 흔히 붙는다), ESC[2K는 줄 전체를 지운다.
-/// 둘을 같게 다루면 멀쩡한 줄이 통째로 사라진다.
-///
-/// ponytail: 열 위치를 세지 않는 근사다. ESC[10G처럼 1열이 아닌 곳으로 가는 복귀나
-/// 여러 줄을 거슬러 올라가는 프레임(ESC[3A)은 그 줄을 버리는 것으로 갈음한다 —
-/// 정확히 하려면 화면 모델이 필요하고, 그건 PRD A의 완전한 VT 파서 몫이다.
-fn csi_rewrites_line(final_byte: char, params: &str) -> bool {
-    // 사설 시퀀스(ESC[?25l 등)는 건드리지 않는다 — 숫자와 ;만 있는 표준형만 본다
-    if params.chars().any(|c| !c.is_ascii_digit() && c != ';') {
-        return false;
+impl Spill {
+    fn end_line(&mut self) {
+        self.done.push(std::mem::take(&mut self.line));
+        self.line_plain = 0;
     }
-    let first = params.split(';').next().unwrap_or("").parse::<u32>().unwrap_or(0);
-    match final_byte {
-        'K' | 'J' => first >= 1,             // 1=커서 앞, 2=전체. 0(기본)은 커서 뒤라 무의미
-        'G' | '`' => first <= 1,             // 1열 복귀 = 덮어쓰기 시작, \r와 같은 뜻
-        'H' | 'f' | 'A' | 'B' | 'd' => true, // 다른 자리로 이동 — 이 줄은 여기서 끝났다
-        _ => false,
+}
+
+impl vt100::Callbacks for Spill {
+    fn on_scroll(&mut self, row: vt100::capture::RowContents<'_>, alternate_screen: bool) {
+        if alternate_screen {
+            return;
+        }
+        // 행마다 새 상태로 쓴다 — 줄이 앞 줄의 색을 물려받지 않고 제 SGR로 시작하게
+        let mut fresh = String::new();
+        let _ = row.write_formatted_basic(&mut fresh, &mut Default::default());
+        let plain = row_plain(&fresh);
+        if let Some(expected) = self.replay.front() {
+            if *expected == plain {
+                self.replay.pop_front(); // 이미 낸 행이 되살아났다가 다시 밀려났다 — 감쌈 상태도 건드리지 않는다
+                return;
+            }
+            self.replay.clear();
+        }
+        let mut probe = String::new();
+        let _ = row.write_formatted_basic(&mut probe, &mut self.wrap);
+        let wide_wrap = self.prev_width + 1 == self.cols
+            && plain.chars().next().is_some_and(|c| unicode_width::UnicodeWidthChar::width(c) == Some(2));
+        if probe.starts_with('\n') && !wide_wrap {
+            self.end_line();
+        } else if self.line.contains('\u{1b}') {
+            self.line.push_str("\u{1b}[0m"); // 이어 붙이는 행 사이 — 앞 행의 색이 다음 행 기본색 칸으로 번지지 않게
+        }
+        self.line.push_str(&fresh);
+        self.line_plain += plain.len();
+        self.prev_width = unicode_width::UnicodeWidthStr::width(plain.as_str());
+        self.recent.push_back(plain);
+        if self.recent.len() > 512 {
+            self.recent.pop_front();
+        }
+        if self.line_plain > 4000 {
+            self.end_line();
+        }
     }
+}
+
+fn dim(n: u16) -> std::num::NonZeroU16 {
+    std::num::NonZeroU16::new(n.max(1)).unwrap_or(std::num::NonZeroU16::MIN)
 }
 
 impl LineAssembler {
-    #[cfg(test)]
-    pub fn new() -> Self {
-        Self::with_sgr(true)
-    }
-
-    pub fn with_sgr(sgr: bool) -> Self {
+    pub fn new(rows: u16, cols: u16, sgr: bool) -> Self {
+        // 스크롤백 0 — 밀려난 행은 on_scroll로 곧장 나간다. 보관은 스토어 몫이다
+        let spill = Spill { cols: cols.max(1) as usize, ..Default::default() };
         LineAssembler {
             sgr,
-            partial: String::new(),
-            styled: Vec::new(),
-            has_sgr: false,
-            esc: EscState::None,
-            csi_buf: String::new(),
-            cr: false,
+            host_repaints: cfg!(windows),
+            parser: vt100::Parser::new_with_callbacks(dim(rows), dim(cols), 0, spill),
         }
     }
 
-    /// 현재 줄 확정 — force가 아니면 공백뿐인 줄은 버린다
-    fn emit_line(&mut self, force: bool, emit: &mut impl FnMut(String, Option<String>)) {
-        let line = std::mem::take(&mut self.partial);
-        let styled = if self.has_sgr {
-            let mut s = String::new();
-            for c in self.styled.drain(..) {
-                match c {
-                    StyledChunk::Sgr(x) => s.push_str(&x),
-                    StyledChunk::Ch(ch) => s.push(ch),
-                }
+    /// PTY 리사이즈를 따른다 — 크기가 어긋나면 감쌈·스크롤 위치가 실제 화면과 달라진다
+    pub fn resize(&mut self, rows: u16, cols: u16) {
+        let (old_rows, old_cols) = self.parser.screen().size();
+        if !self.host_repaints && cols < old_cols.get() && !self.parser.screen().alternate_screen() {
+            // vt100은 폭을 줄이면 행을 잘라 버린다 — 자르기 전에 커서 위 행만 낸다.
+            // 커서 행부터는 셸 입력·TUI가 이어 그리는 자리라 남긴다 (프레임·반쪽 입력이 줄로 굳지 않게)
+            let (r, c) = self.parser.screen().cursor_position();
+            self.scroll_off(r as usize, Some((0, c)));
+        }
+        let grow = rows.saturating_sub(old_rows.get()) as usize;
+        let cb = self.parser.callbacks_mut();
+        cb.cols = cols.max(1) as usize;
+        // 아직 다 소비되지 않은 되살림이 있으면 그 앞으로 늘린다 — 창을 끌면 키우기가 연달아 온다
+        let n = (cb.replay.len() + grow).min(cb.recent.len());
+        cb.replay = cb.recent.iter().skip(cb.recent.len() - n).cloned().collect();
+        self.parser.set_size(dim(rows), dim(cols));
+    }
+
+    /// 맨 위 k행을 위로 밀어낸다. `back`이 있으면 커서를 그 자리(0부터)로 되돌린다 — 이어지는
+    /// 출력이 같은 자리에 그려지게. DECSC(ESC7)는 쓰지 않는다: 저장 슬롯이 하나라 앱이 저장한 자리를 덮는다
+    fn scroll_off(&mut self, k: usize, back: Option<(u16, u16)>) {
+        let rows = self.parser.screen().size().0.get();
+        let mut seq = format!("\u{1b}[{rows};1H{}", "\n".repeat(k));
+        if let Some((r, c)) = back {
+            seq += &format!("\u{1b}[{};{}H", r + 1, c + 1);
+        }
+        self.parser.process(seq.as_bytes());
+    }
+
+    fn screen_rows(&self) -> usize {
+        self.parser.screen().size().0.get() as usize
+    }
+
+    fn drain(&mut self, emit: &mut impl FnMut(String, Option<String>)) {
+        for l in self.parser.callbacks_mut().done.drain(..) {
+            let plain = row_plain(&l);
+            if plain.is_empty() {
+                continue;
             }
-            s.push_str("\u{1b}[0m"); // 줄 경계에서 속성 리셋 — 다음 줄로 색이 새지 않게
-            Some(s)
-        } else {
-            self.styled.clear();
-            None
-        };
-        self.has_sgr = false;
-        if force || !line.trim().is_empty() {
-            emit(line, styled);
+            let styled = (self.sgr && l.contains('\u{1b}')).then(|| l + "\u{1b}[0m");
+            emit(plain, styled);
         }
     }
 
     pub fn push(&mut self, data: &str, mut emit: impl FnMut(String, Option<String>)) {
-        for c in data.chars() {
-            match self.esc {
-                EscState::None => {
-                    if self.cr && c != '\n' {
-                        // \r 단독 = 줄 덮어쓰기 — styled도 함께 버린다
-                        self.partial.clear();
-                        self.styled.clear();
-                        self.has_sgr = false;
-                    }
-                    self.cr = false;
-                    match c {
-                        '\u{1b}' => self.esc = EscState::Esc,
-                        '\n' => self.emit_line(false, &mut emit),
-                        '\r' => self.cr = true,
-                        '\u{8}' => {
-                            if self.partial.pop().is_some() {
-                                if let Some(pos) =
-                                    self.styled.iter().rposition(|x| matches!(x, StyledChunk::Ch(_)))
-                                {
-                                    self.styled.remove(pos);
-                                }
-                            }
-                        }
-                        '\t' => {
-                            self.partial.push('\t');
-                            if self.sgr {
-                                self.styled.push(StyledChunk::Ch('\t'));
-                            }
-                        }
-                        c if c.is_control() => {}
-                        c => {
-                            self.partial.push(c);
-                            if self.sgr {
-                                self.styled.push(StyledChunk::Ch(c));
-                            }
-                        }
-                    }
+        let mut rest = data;
+        if !self.host_repaints {
+            // 화면 지우기(clear·cls) — 아무도 다시 그려 주지 않으니 지우기 전에 밀어내 둔다
+            while let Some(i) = rest.find("\u{1b}[2J") {
+                self.parser.process(&rest.as_bytes()[..i]);
+                if !self.parser.screen().alternate_screen() {
+                    let at = self.parser.screen().cursor_position();
+                    self.scroll_off(self.screen_rows(), Some(at));
                 }
-                EscState::Esc => match c {
-                    '[' => {
-                        self.esc = EscState::Csi;
-                        self.csi_buf.clear();
-                    }
-                    ']' => self.esc = EscState::Osc,
-                    _ => self.esc = EscState::None,
-                },
-                EscState::Csi => {
-                    if ('\u{40}'..='\u{7e}').contains(&c) {
-                        // SGR(final 'm')만 보존한다 — 색 복원과 무관한 나머지는 버린다.
-                        // 단 "버린다"와 "무시한다"는 다르다 — 제자리 갱신 시퀀스를 그냥 무시하면
-                        // 프레임이 줄에 계속 쌓인다 (스피너 300프레임 = 한 줄 6.5KB).
-                        if c == 'm' {
-                            if self.sgr {
-                                self.styled
-                                    .push(StyledChunk::Sgr(format!("\u{1b}[{}m", self.csi_buf)));
-                                self.has_sgr = true;
-                            }
-                        } else if csi_rewrites_line(c, &self.csi_buf) {
-                            self.partial.clear();
-                            self.styled.clear();
-                            self.has_sgr = false;
-                        }
-                        self.csi_buf.clear();
-                        self.esc = EscState::None;
-                    } else {
-                        self.csi_buf.push(c);
-                    }
-                }
-                EscState::Osc => match c {
-                    '\u{7}' => self.esc = EscState::None,
-                    '\u{1b}' => self.esc = EscState::OscEsc,
-                    _ => {}
-                },
-                EscState::OscEsc => self.esc = EscState::None,
+                self.parser.process(b"\x1b[2J");
+                rest = &rest[i + 4..];
             }
         }
-        if self.partial.len() > 4000 {
-            self.emit_line(true, &mut emit);
-        }
+        self.parser.process(rest.as_bytes());
+        self.drain(&mut emit);
     }
 
+    /// 세션 끝 — 화면에 남은 줄을 마저 확정한다
     pub fn finish(&mut self, mut emit: impl FnMut(String, Option<String>)) {
-        if !self.partial.trim().is_empty() {
-            self.emit_line(true, &mut emit);
-        } else {
-            self.partial.clear();
-            self.styled.clear();
-            self.has_sgr = false;
-        }
+        // 주 화면으로 돌아가 여백을 풀고 화면 높이만큼 밀어낸다
+        self.parser.process(b"\x1b[?1049l\x1b[r");
+        self.scroll_off(self.screen_rows(), None);
+        self.parser.callbacks_mut().end_line();
+        self.drain(&mut emit);
     }
 }
 
@@ -926,21 +1226,33 @@ mod tests {
 
     #[test]
     fn fts_query_is_escaped_per_token() {
-        assert_eq!(fts_escape(r#"foo "bar" NEAR"#), r#""foo" "bar" "NEAR""#);
+        assert_eq!(fts_escape(r#"foo "bar" NEAR"#), r#""foo"* "bar"* "NEAR"*"#);
     }
 
-    /// SGR 보존 (FR-C-15, M32) — 색 시퀀스만 styled에 남고 평문은 그대로,
-    /// 색 없는 줄은 styled가 None, 커서 이동류(CSI K 등)는 보존하지 않는다
+    /// U182 — 조사가 붙은 낱말은 접두로, 낱말 가운데 일치는 0건 뒤 LIKE로 찾는다
     #[test]
-    fn assembler_without_sgr_keeps_text_and_skips_styled() {
-        // C9 — 색 저장이 꺼져 있으면 평문은 같고 색 사본은 만들지 않는다
-        let input = "\u{1b}[31mred\u{1b}[0m pl\u{8}lain\n\u{1b}[2Kmoved\n";
-        let (mut on, mut off) = (Vec::new(), Vec::new());
-        LineAssembler::new().push(input, |t, s| on.push((t, s)));
-        LineAssembler::with_sgr(false).push(input, |t, s| off.push((t, s)));
-        let text = |v: &Vec<(String, Option<String>)>| v.iter().map(|x| x.0.clone()).collect::<Vec<_>>();
-        assert_eq!(text(&on), text(&off));
-        assert!(on[0].1.is_some() && off.iter().all(|x| x.1.is_none()));
+    fn search_finds_prefix_and_infix() {
+        let dir = std::env::temp_dir().join(format!("eqmux-u182-{}", crate::workspace::now_ms()));
+        std::fs::create_dir_all(&dir).unwrap();
+        {
+            let conn = open_db(&dir, "ws").unwrap();
+            for (i, text) in [(1i64, "에이전트가 끝났다"), (2, "npm run rebuild")] {
+                conn.execute(
+                    "INSERT INTO scrollback (session_id, seq, ts, text) VALUES ('s1', ?1, ?1, ?2)",
+                    params![i, text],
+                )
+                .unwrap();
+                let _ = conn.execute(
+                    "INSERT INTO scrollback_fts (text, session_id, seq, ts) VALUES (?2, 's1', ?1, ?1)",
+                    params![i, text],
+                );
+            }
+        }
+        let hit = |q: &str| search(&dir, "ws", q, None, 10).unwrap().iter().map(|h| h.seq).collect::<Vec<_>>();
+        assert_eq!(hit("에이전트"), [1], "조사가 붙어도 찾는다");
+        assert_eq!(hit("build"), [2], "낱말 가운데 일치");
+        assert!(hit("없는말").is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// M7 — 모두 읽음과 '내 마지막 완료 보고' 하위 쿼리가 원장 전체가 아니라 인덱스를 탄다
@@ -976,34 +1288,115 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// §1-2 · C4 — 버전 1 DB가 열리며 최신 버전으로 올라가고, 편집 기록이 쓰기 스레드를 거쳐 조회된다
     #[test]
-    fn assembler_preserves_sgr_only() {
-        let mut a = LineAssembler::new();
-        let mut out: Vec<(String, Option<String>)> = Vec::new();
-        a.push(
-            "\u{1b}[31mred\u{1b}[0m plain\n\u{1b}[2Kmoved\nno color\n",
-            |t, s| out.push((t, s)),
+    fn v1_db_migrates_and_touches_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("eqmux-touch-{}", crate::workspace::now_ms()));
+        {
+            let path = db_path(&dir, "ws");
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT); INSERT INTO meta VALUES ('schema_version', '1');")
+                .unwrap();
+        }
+        assert!(recent_touches(&dir, "ws", 0).is_empty(), "이전 전 DB는 기록 없음");
+        let store = Store::new(dir.clone());
+        store.touch_file("ws", "kai@ws", "src/x.ts", "Edit", 100);
+        store.touch_file("ws", "rin@ws", "src/x.ts", "Write", 200);
+        store.touch_file("ws", "kai@ws", "src/y.ts", "Edit", 300);
+        let (ack, done) = std::sync::mpsc::channel();
+        store.sender().send(StoreMsg::Flush(ack)).unwrap();
+        done.recv_timeout(Duration::from_secs(10)).unwrap();
+
+        let v: String = Connection::open(db_path(&dir, "ws"))
+            .unwrap()
+            .query_row("SELECT value FROM meta WHERE key = 'schema_version'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, (MIGRATIONS.len() + 1).to_string());
+        let all = recent_touches(&dir, "ws", 150);
+        assert_eq!(all.iter().map(|t| t.ts).collect::<Vec<_>>(), [200, 300]);
+        let kai = touches_for(&dir, "ws", "kai@ws", 0);
+        assert_eq!(kai.iter().map(|t| t.path.as_str()).collect::<Vec<_>>(), ["src/x.ts", "src/y.ts"]);
+
+        // §13-6 — 비용 증분이 임무별로 합쳐진다 (since 이전은 빠진다)
+        assert!(cost_by_mission(&dir, "nows", 0).is_empty());
+        store.cost_delta("ws", "kai@ws", Some("m1"), 100, 0.25);
+        store.cost_delta("ws", "kai@ws", Some("m1"), 200, 0.5);
+        store.cost_delta("ws", "rin@ws", None, 300, 0.125);
+        store.cost_delta("ws", "rin@ws", Some("m1"), 50, 9.0);
+        let (ack, done) = std::sync::mpsc::channel();
+        store.sender().send(StoreMsg::Flush(ack)).unwrap();
+        done.recv_timeout(Duration::from_secs(10)).unwrap();
+        assert_eq!(
+            cost_by_mission(&dir, "ws", 100),
+            [MissionCost { mission: None, usd: 0.125 }, MissionCost { mission: Some("m1".into()), usd: 0.75 }]
         );
-        assert_eq!(out.len(), 3);
-        assert_eq!(out[0].0, "red plain");
-        assert_eq!(out[0].1.as_deref(), Some("\u{1b}[31mred\u{1b}[0m plain\u{1b}[0m"));
-        assert_eq!(out[1].0, "moved"); // CSI 2K는 버려진다
-        assert!(out[1].1.is_none());
-        assert!(out[2].1.is_none());
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
-        // \r 덮어쓰기 — styled도 함께 버려 마지막 내용만 남는다
-        let mut b = LineAssembler::new();
-        let mut out2: Vec<(String, Option<String>)> = Vec::new();
-        b.push("\u{1b}[32mold\rnew\u{1b}[33m!\n", |t, s| out2.push((t, s)));
-        assert_eq!(out2[0].0, "new!");
-        assert_eq!(out2[0].1.as_deref(), Some("new\u{1b}[33m!\u{1b}[0m"));
+    /// §1-2 — DB가 아닌 파일(손상)이면 옆으로 옮기고 새로 만든다. 옛 WAL은 새 DB에 붙지 않는다
+    #[test]
+    fn corrupt_db_is_moved_aside_and_recreated() {
+        let dir = std::env::temp_dir().join(format!("eqmux-corrupt-{}", crate::workspace::now_ms()));
+        let path = db_path(&dir, "ws");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, vec![b'x'; 8192]).unwrap();
+        std::fs::write(format!("{}-wal", path.display()), b"stale").unwrap();
 
-        // 백스페이스 — 평문·styled 양쪽에서 마지막 문자만 지운다 (SGR은 남는다)
-        let mut c = LineAssembler::new();
-        let mut out3: Vec<(String, Option<String>)> = Vec::new();
-        c.push("\u{1b}[31mabc\u{8}\n", |t, s| out3.push((t, s)));
-        assert_eq!(out3[0].0, "ab");
-        assert_eq!(out3[0].1.as_deref(), Some("\u{1b}[31mab\u{1b}[0m"));
+        let conn = open_db(&dir, "ws").expect("새로 만들어 열린다");
+        conn.execute("INSERT INTO meta VALUES ('k', 'v')", []).unwrap();
+        let names: Vec<String> = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(names.iter().any(|n| n.starts_with("session.db.corrupt-") && !n.ends_with("-wal")), "{names:?}");
+        // 옛 WAL은 옮겨지거나(quarantine) 열기 실패 때 SQLite가 버린다 — 어느 쪽이든 새 DB의 WAL이 아니다
+        let wal = std::fs::read(format!("{}-wal", path.display())).unwrap_or_default();
+        assert_ne!(wal, b"stale", "옛 WAL이 새 DB 옆에 남으면 안 된다");
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// §1-2 — 합계가 상한을 넘으면 모든 DB를 통틀어 오래된 스크롤백부터 지우고, 원장은 남긴다
+    #[test]
+    fn global_cap_drops_oldest_scrollback_across_workspaces() {
+        let dir = std::env::temp_dir().join(format!("eqmux-gcap-{}", crate::workspace::now_ms()));
+        let fill = |ws: &str, ts: i64| {
+            let conn = open_db(&dir, ws).unwrap();
+            let text = "y".repeat(1000);
+            for i in 1..=800i64 {
+                conn.execute(
+                    "INSERT INTO scrollback (session_id, seq, ts, text) VALUES ('s', ?1, ?2, ?3)",
+                    params![i, ts + i, text],
+                )
+                .unwrap();
+            }
+            conn.execute(
+                "INSERT INTO message (ts, sender, recipient, kind, body) VALUES (1, 'a', 'b', 'ask', 'keep')",
+                [],
+            )
+            .unwrap();
+            conn
+        };
+        let (old, new) = (fill("old", 1_000), fill("new", 1_000_000));
+        let total = used_bytes(&old) + used_bytes(&new);
+        drop((old, new));
+        let cap = total - 300_000;
+
+        assert_eq!(enforce_global_cap(&dir, cap, Duration::ZERO), (0, true), "예산이 없으면 지우지 않고 다음으로 미룬다");
+        assert!(enforce_global_cap(&dir, cap, Duration::MAX).0 > 0);
+        let count = |ws: &str, sql: &str| -> i64 {
+            Connection::open(db_path(&dir, ws)).unwrap().query_row(sql, [], |r| r.get(0)).unwrap()
+        };
+        assert!(count("old", "SELECT COUNT(*) FROM scrollback") < 800, "오래된 쪽이 먼저 줄어든다");
+        assert_eq!(count("new", "SELECT COUNT(*) FROM scrollback"), 800, "새 쪽은 그대로");
+        assert_eq!(count("old", "SELECT COUNT(*) FROM message"), 1, "원장은 지우지 않는다");
+        let after: u64 = ["old", "new"].iter().map(|w| used_bytes(&open_db(&dir, w).unwrap())).sum();
+        assert!(after <= cap, "{after} > {cap}");
+        assert_eq!(enforce_global_cap(&dir, u64::MAX, Duration::MAX), (0, false), "상한 안이면 아무것도 안 한다");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 한 줄 요약 저장 왕복 (M35) — 이 기능의 목적이 "앱을 껐다 켜도 남는 것"이므로
@@ -1244,44 +1637,198 @@ mod tests {
 mod accum_tests {
     use super::*;
 
-    /// 한 줄을 제자리에서 다시 그리는 TUI 프레임 n개를 만든다.
-    /// Ink(에이전트 CLI)가 실제로 쓰는 방식 — \r가 아니라 CSI로 지우고 열을 되돌린다.
-    fn repaint(frames: &[&str]) -> String {
-        frames.iter().map(|f| format!("\u{1b}[2K\u{1b}[G{f}")).collect::<String>() + "\n"
-    }
-
-    #[test]
-    fn csi_repaint_collapses_to_last_frame() {
-        let mut a = LineAssembler::new();
+    fn run(rows: u16, cols: u16, sgr: bool, input: &str) -> Vec<(String, Option<String>)> {
+        let mut a = LineAssembler::new(rows, cols, sgr);
         let mut out = Vec::new();
-        a.push(&repaint(&["Swooping… 1s", "Swooping… 2s", "Swooping… 3s"]), |l, _| out.push(l));
-        // 제자리 갱신은 마지막 프레임 하나여야 한다 — 이어 붙이면 스피너가 줄에 쌓인다
-        assert_eq!(out, vec!["Swooping… 3s".to_string()]);
+        a.push(input, |t, s| out.push((t, s)));
+        a.finish(|t, s| out.push((t, s)));
+        out
     }
 
-    #[test]
-    fn long_spinner_run_does_not_inflate_the_line() {
-        let frames: Vec<String> = (0..300).map(|i| format!("still thinking · {i}s")).collect();
-        let refs: Vec<&str> = frames.iter().map(|s| s.as_str()).collect();
-        let mut a = LineAssembler::new();
-        let (mut lines, mut styled_bytes) = (0usize, 0usize);
-        a.push(&repaint(&refs), |l, s| {
-            lines += 1;
-            styled_bytes += l.len() + s.map(|x| x.len()).unwrap_or(0);
-        });
-        // 300프레임이 한 줄로 뭉치면 4,000자 강제 flush에 걸려 여러 줄로 쏟아진다
-        assert_eq!(lines, 1, "프레임이 줄에 누적됐다 (줄 {lines}개, {styled_bytes}바이트)");
-        assert!(styled_bytes < 200, "줄 하나가 {styled_bytes}바이트 — 프레임 잔해가 남았다");
+    fn texts(v: &[(String, Option<String>)]) -> Vec<String> {
+        v.iter().map(|x| x.0.clone()).collect()
     }
 
-    /// 위험한 쪽 — ESC[K(=0K)는 "커서 뒤를 지워라"라서 줄 끝 정리로 흔히 붙는다.
-    /// 이걸 2K처럼 다루면 멀쩡한 출력이 통째로 사라진다. 누적을 잡으려다 로그를 지우는 셈
+    /// Ink(Claude Code)가 실제로 하는 방식 — 이전 출력을 줄마다 2K·1A로 지우고 다시 쓴다.
+    /// 스피너 프레임이 줄로 남으면 재생에 "Puzzling… 1s · 2s · 3s"가 쌓인다 (QA 4차 스크린샷)
     #[test]
-    fn erase_to_end_of_line_keeps_the_line() {
-        let mut a = LineAssembler::new();
+    fn ink_repaint_keeps_history_and_only_last_frame() {
+        let mut s = String::from("h1\r\nh2\r\nh3\r\nh4\r\nh5\r\nh6\r\nspin 1s\r\n> ");
+        for i in 2..=50 {
+            s += &format!("\u{1b}[2K\u{1b}[1A\u{1b}[2K\u{1b}[Gspin {i}s\r\n> ");
+        }
+        let out = texts(&run(4, 40, true, &s));
+        assert_eq!(&out[..6], ["h1", "h2", "h3", "h4", "h5", "h6"]);
+        let spins: Vec<_> = out.iter().filter(|l| l.contains("spin")).collect();
+        assert_eq!(spins, ["spin 50s"], "중간 프레임이 남았다: {out:?}");
+    }
+
+    /// 커서 이동·\r 덮어쓰기는 실제 터미널이 보여주는 모양 그대로 — 조각이 이어 붙지 않는다
+    #[test]
+    fn cursor_moves_land_where_the_terminal_shows_them() {
+        let out = texts(&run(3, 40, true, "abc\u{1b}[5Cxyz\r\nold text\rnew\r\n"));
+        assert_eq!(out, ["abc     xyz", "new text"]);
+    }
+
+    /// SGR 보존 (FR-C-15, M32) — 색 있는 줄만 styled, 꺼져 있으면(C9) 평문은 같고 styled 없음
+    #[test]
+    fn sgr_is_kept_only_when_present_and_enabled() {
+        let input = "\u{1b}[31mred\u{1b}[0m plain\r\nno color\r\n";
+        let on = run(3, 40, true, input);
+        assert_eq!(texts(&on), ["red plain", "no color"]);
+        let styled = on[0].1.as_deref().unwrap();
+        assert!(styled.contains("\u{1b}[31mred") && styled.ends_with("\u{1b}[0m"), "{styled:?}");
+        assert!(on[1].1.is_none());
+        let off = run(3, 40, false, input);
+        assert_eq!(texts(&off), texts(&on));
+        assert!(off.iter().all(|x| x.1.is_none()));
+    }
+
+    /// 감싼 줄은 한 논리 줄 — 한글(2칸)이 열 끝에서 넘어가도 그대로 붙는다
+    #[test]
+    fn wrapped_rows_join_into_one_line() {
+        assert_eq!(texts(&run(3, 10, true, "0123456789ABCDE\r\n한글한글한글\r\n")), ["0123456789ABCDE", "한글한글한글"]);
+    }
+
+    /// 리사이즈로 화면이 줄어도 줄을 잃거나 두 번 내지 않는다
+    #[test]
+    fn shrinking_keeps_every_line_once() {
+        let mut a = LineAssembler::new(3, 20, true);
         let mut out = Vec::new();
-        a.push("hello\u{1b}[K\n\u{1b}[?25lworld\u{1b}[0K\n", |l, _| out.push(l));
-        assert_eq!(out, vec!["hello".to_string(), "world".to_string()]);
+        a.push("a\r\nb\r\nc", |t, _| out.push(t));
+        a.resize(2, 20);
+        a.push("\r\nd", |t, _| out.push(t));
+        a.finish(|t, _| out.push(t));
+        assert_eq!(out, ["a", "b", "c", "d"]);
+    }
+
+    /// 전체 화면 앱(대체 화면)의 내용은 스크롤백이 아니다
+    #[test]
+    fn alternate_screen_is_not_stored() {
+        let s = format!("before\r\n\u{1b}[?1049h{}\u{1b}[?1049lafter\r\n", "vim line\r\n".repeat(10));
+        assert_eq!(texts(&run(3, 20, true, &s)), ["before", "after"]);
+    }
+
+    /// 높이를 키우면 ConPTY가 이미 밀려난 행을 화면으로 되살려 ESC[H부터 다시 그린다 (실제 로그 모양).
+    /// 그 행들이 또 밀려날 때 두 번 저장하면 안 된다 (리뷰 3)
+    #[test]
+    fn growing_height_does_not_duplicate_conpty_repaint() {
+        let mut a = LineAssembler::new(4, 40, true);
+        a.host_repaints = true;
+        let mut out = Vec::new();
+        a.push("l1\r\nl2\r\nl3\r\nl4\r\nl5\r\nPS> ", |t, _| out.push(t));
+        a.resize(6, 40);
+        a.push("\u{1b}[Hl1\u{1b}[K\r\nl2\u{1b}[K\r\nl3\u{1b}[K\r\nl4\u{1b}[K\r\nl5\u{1b}[K\r\nPS> ", |t, _| out.push(t));
+        a.push("ls\r\nout\r\n", |t, _| out.push(t));
+        a.finish(|t, _| out.push(t));
+        assert_eq!(out, ["l1", "l2", "l3", "l4", "l5", "PS> ls", "out"]);
+    }
+
+    /// 2칸 글자가 끝 1칸에 안 들어가 넘어간 행도 한 줄이다 — vt100은 이때 wrapped를 세우지 않는다 (리뷰 6)
+    #[test]
+    fn wide_char_wrap_at_odd_width_stays_one_line() {
+        assert_eq!(texts(&run(3, 9, true, "한글한글한글\r\n다음\r\n")), ["한글한글한글", "다음"]);
+    }
+
+    /// 감싼 행을 이어 붙일 때 앞 행의 색이 다음 행으로 번지지 않는다 (리뷰 7)
+    #[test]
+    fn color_does_not_bleed_across_joined_rows() {
+        let out = run(3, 10, true, "\u{1b}[31m0123456789\u{1b}[0mabc\r\n");
+        let styled = out[0].1.as_deref().unwrap();
+        let abc = styled.rfind("abc").unwrap();
+        let last_red = styled.rfind("\u{1b}[31m").unwrap();
+        assert!(styled[last_red..abc].contains("\u{1b}[0m") || styled[last_red..abc].contains("\u{1b}[m"), "{styled:?}");
+    }
+
+    /// 유닉스 PTY는 지운 화면을 아무도 다시 그려 주지 않는다 — clear 앞의 줄을 잃지 않는다 (리뷰 5)
+    #[test]
+    fn clear_screen_keeps_lines_without_host_repaint() {
+        let mut a = LineAssembler::new(5, 20, true);
+        a.host_repaints = false;
+        let mut out = Vec::new();
+        a.push("a\r\nb\r\nc\r\n\u{1b}[H\u{1b}[2Jafter\r\n", |t, _| out.push(t));
+        a.finish(|t, _| out.push(t));
+        assert_eq!(out, ["a", "b", "c", "after"]);
+    }
+
+    /// 유닉스 PTY에서 폭을 줄여도 화면의 줄이 잘리지 않는다 (리뷰 4)
+    #[test]
+    fn narrowing_keeps_full_lines_without_host_repaint() {
+        let mut a = LineAssembler::new(5, 40, true);
+        a.host_repaints = false;
+        let mut out = Vec::new();
+        a.push("this is a fairly long line of output\r\n", |t, _| out.push(t));
+        a.resize(5, 10);
+        a.push("x\r\n", |t, _| out.push(t));
+        a.finish(|t, _| out.push(t));
+        assert_eq!(out, ["this is a fairly long line of output", "x"]);
+    }
+
+    /// 평문 끝 공백은 저장하지 않고 (리뷰 12), 4000자 강제 방출은 평문 길이 기준이다 (리뷰 11)
+    #[test]
+    fn trailing_spaces_trimmed_and_cap_counts_plain_text() {
+        assert_eq!(texts(&run(3, 40, true, "pad      \r\n")), ["pad"]);
+        let colorful: String = (0..1000).map(|i| format!("\u{1b}[3{}mx", i % 7 + 1)).collect();
+        let out = run(3, 80, true, &(colorful + "\r\n"));
+        assert_eq!(out.len(), 1, "평문 1000자가 {}줄로 쪼개졌다", out.len());
+        assert_eq!(out[0].0.len(), 1000);
+    }
+
+    /// 창을 끌면 키우기가 스크롤 없이 연달아 온다 — 두 번째 되살림도 중복되지 않는다 (재검증 A)
+    #[test]
+    fn stepwise_growing_does_not_duplicate() {
+        let mut a = LineAssembler::new(4, 40, true);
+        a.host_repaints = true;
+        let mut out = Vec::new();
+        a.push("l1\r\nl2\r\nl3\r\nl4\r\nl5\r\nl6\r\nl7\r\nl8\r\nl9\r\nPS> ", |t, _| out.push(t));
+        let repaint = |from: usize| {
+            let mut s = String::from("\u{1b}[H");
+            for i in from..=9 {
+                s += &format!("l{i}\u{1b}[K\r\n");
+            }
+            s + "PS> "
+        };
+        a.resize(6, 40);
+        a.push(&repaint(5), |t, _| out.push(t));
+        a.resize(8, 40);
+        a.push(&repaint(3), |t, _| out.push(t));
+        a.push("ls\r\n".repeat(8).as_str(), |t, _| out.push(t));
+        a.finish(|t, _| out.push(t));
+        let want: Vec<String> = (1..=9).map(|i| format!("l{i}")).chain(["PS> ls".into()]).collect();
+        assert_eq!(out[..10], want[..], "{out:?}");
+    }
+
+    /// 유닉스에서 폭을 줄일 때 커서 행(입력 중인 프롬프트)은 밀어내지 않는다 — 반쪽으로 갈라지지 않게 (재검증 B)
+    #[test]
+    fn narrowing_mid_prompt_keeps_the_prompt_whole() {
+        let mut a = LineAssembler::new(5, 30, true);
+        a.host_repaints = false;
+        let mut out = Vec::new();
+        a.push("done\r\n$ ", |t, _| out.push(t));
+        a.resize(5, 20);
+        a.push("ls -la\r\n", |t, _| out.push(t));
+        a.finish(|t, _| out.push(t));
+        assert_eq!(out, ["done", "$ ls -la"]);
+    }
+
+    /// 밀어내기가 앱이 ESC7로 저장해 둔 커서 슬롯을 덮지 않는다 (재검증 C) — 예전엔 ESC8이 우리 자리
+    /// (status 뒤)로 가서 "status body1"이 됐다. 밀어낸 만큼 행은 어긋나지만(열 3은 앱 것) 줄은 잃지 않는다
+    #[test]
+    fn scroll_off_keeps_the_apps_saved_cursor() {
+        let mut a = LineAssembler::new(6, 30, true);
+        a.host_repaints = false;
+        let mut out = Vec::new();
+        a.push("top\r\nmid\u{1b}7\r\n\r\nstatus", |t, _| out.push(t));
+        a.resize(6, 20);
+        a.push("\u{1b}8 body1\r\n", |t, _| out.push(t));
+        a.finish(|t, _| out.push(t));
+        assert_eq!(out, ["top", "mid", "status", "    body1"]);
+    }
+
+    /// 색 없는 감싼 줄은 styled가 None이다 — 이음 리셋은 색이 있을 때만 (재검증 E)
+    #[test]
+    fn plain_wrapped_line_has_no_styled_copy() {
+        let out = run(3, 6, true, "hello world\r\n");
+        assert_eq!(out, [("hello world".to_string(), None)]);
     }
 }
-

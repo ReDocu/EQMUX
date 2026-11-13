@@ -4,15 +4,32 @@
 
 **하나의 git 저장소를 AI 에이전트 팀이 함께 작업하고, 사람이 그것을 관제하는 데스크톱 앱.**
 
-EQMUX는 터미널 멀티플렉서(MUX)에 에이전트 팀 관제를 얹은 Windows 데스크톱 앱입니다.
+> **베타입니다.** 1.0 전이라 화면과 파일 형식이 바뀔 수 있습니다.
+>
+> **설치 경고 넘기기** — Windows: 코드 서명 전이라 SmartScreen이 "Windows의 PC 보호"를 띄웁니다. [추가 정보] → [실행]을 누릅니다. macOS: ad-hoc 서명이라 처음 열 때 Gatekeeper가 막습니다. Finder에서 앱을 우클릭 → [열기]를 누르거나, 시스템 설정 › 개인정보 보호 및 보안에서 [그래도 열기]를 누릅니다.
+>
+> **앱이 쓰는 곳 · 쓰지 않는 곳** — 앱 데이터 폴더, `~/.eqmux/logs`(세션 터미널 출력 · 진단 로그 — 토큰이 평문으로 남을 수 있어 설정 › 저장소에서 끌 수 있습니다), 워크스페이스의 `.eqmux/`에 씁니다. 엔진 설정(`~/.claude`, `~/.codex`)과 저장소의 `.claude/`·`.codex/`는 스스로 고치지 않습니다 — 확장 탭에서 사람이 누를 때만 `~/.claude/skills` · `~/.claude/settings.json` · `<저장소>/.claude/skills` · `<저장소>/.claude/settings.local.json`에 씁니다. 앱은 스스로 네트워크로 아무것도 보내지 않습니다. 자세히는 [CODE_SIGNING_POLICY.md](CODE_SIGNING_POLICY.md).
+
+EQMUX는 터미널 멀티플렉서(MUX)에 에이전트 팀 관제를 얹은 Windows · macOS 데스크톱 앱입니다.
 워크스페이스(= git repo 1개 = 팀 1개 = 탭 1개)마다 Claude Code · Codex 세션을 기본 4개(설정에서 6·8까지)
 병렬로 띄우고, 관제 대시보드에서 상태를 보고, 임무를 배정하고, 필요할 때 개입합니다.
 
 ![관제 대시보드](docs/screenshots/readme/dashboard.png)
 
+## 빠른 시작
+
+1. **받기** — [Releases](https://github.com/ReDocu/EQMUX/releases)에서 OS에 맞는 파일을 받습니다.
+   - Windows 10/11: 포터블 `EQMUX_<버전>_x64_portable.zip`(압축을 풀고 `EQMUX\eqmux.exe` 실행, 관리자 권한 필요 없음). 1.0 전에는 설치 파일을 내지 않습니다
+   - macOS 11+: `EQMUX_<버전>_universal.dmg`
+   - 처음 열 때 뜨는 경고는 위 **설치 경고 넘기기**를 따릅니다.
+2. **에이전트 CLI 준비** — [Claude Code](https://claude.com/claude-code)를 설치하고 터미널에서 한 번 로그인해 둡니다(Codex CLI는 선택). EQMUX는 API 키를 갖지 않고 이 CLI를 띄울 뿐입니다. Node.js · Rust는 필요 없습니다(소스에서 빌드할 때만 씁니다).
+3. **켜고 시작하기** — 탭 줄의 `+` → `폴더 찾기…`로 git 저장소 폴더를 고릅니다 → 실행 방식에서 **빠른 시작** → `2세션으로 시작 → 워크스페이스`.
+
+자세한 사용법은 [사용 설명서](docs/site/docs.md)에 있습니다.
+
 ## 핵심 원칙
 
-- **관제가 핵심이다.** 대시보드에서 팀 상태(busy / waiting / dead)를 보고, 임무를 배정하고, 개입한다.
+- **관제가 핵심이다.** 대시보드에서 팀 상태(작업 중 · 응답 대기 · 종료됨)를 보고, 임무를 배정하고, 개입한다.
 - **터미널 페인이 작업 공간이다.** 실제 일은 각 페인의 에이전트 CLI(Claude Code)가 한다.
 - **앱은 API 키를 보유하지 않는다.** 자체 AI 루프 없이 외부 CLI를 실행할 뿐이다.
 - **파일이 원본이다.** 팀·역할·임무의 원본은 `.eqmux/` 아래 파일이고, DB는 캐시다. 불일치 시 파일이 이긴다.
@@ -35,17 +52,30 @@ EQMUX는 터미널 멀티플렉서(MUX)에 에이전트 팀 관제를 얹은 Win
 
 ## 주요 기능
 
-- **관제 대시보드** — 워크스페이스×세션 그리드, 주의 필요 순 정렬, waiting/dead 우선 표시, 상태 전이·임무 이벤트 피드, OS 알림 + 앱 안 알림 센터 (서브에이전트 수는 피드가 아니라 세션 상세·busy 카드에 표시)
+- **관제 대시보드** — 워크스페이스×세션 그리드, 주의 필요 순 정렬, waiting/dead 우선 표시, 승인함(`허용` · `거부`), 자리 비운 사이 요약, 상태 전이·임무 이벤트 피드, OS 알림 + 앱 안 알림 센터 (서브에이전트 수는 피드가 아니라 세션 상세·busy 카드에 표시)
 - **터미널 워크스페이스** — ConPTY + xterm.js, 페인 배치 6종 + 분할선 드래그 + 줌, 터미널 내 검색(Ctrl+F), 링크 감지, 클립보드·드래그 앤 드롭
 - **에이전트 런타임** — Claude Code · Codex 세션 관리 기동(역할·권한 플래그·훅·재개가 붙는다), 레지스트리 watch + 훅 기반 상태 감지, 재개(resume)·권한 재시작, degraded 관측 저하 표시
-- **팀·역할·임무** — 편성 프리셋, 직무/페르소나 라이브러리(전역 + 워크스페이스 오버라이드), 역할 파일 frontmatter가 실행 권한을 결정, 세션별 git 워크트리 격리 옵트인
+- **팀·역할·임무** — 편성 프리셋, 직무/페르소나 라이브러리(전역 + 워크스페이스 오버라이드), 역할 파일 frontmatter가 실행 권한을 결정
 - **세션 영속성** — SQLite(WAL) 스크롤백 저장, 재시작 시 마지막 500줄 재생(SGR 색 보존) + 명시적 재개, FTS 전문 검색, Job Object로 자식 프로세스 트리 정리, 웹뷰 크래시 생존
 - **메시지 버스** — 에이전트 간 강제 타입 메시지(ask / handoff / report / review / escalate), 상태 기반 전달(유휴면 즉시, 작업 중이면 턴 종료 시), 사람도 `@세션`·`@all`로 참여, 열린 다른 프로젝트의 세션에도 이름으로 전달, 대화 원장 전체를 Markdown 파일로 저장
-- **개발 도구 패널** — 대화·코드(git·문서)·실행(서버·포트)·브라우저 4그룹. git(상태·워크트리·체크아웃)·탐색기(파일 CRUD)·로그·diff 뷰어, 임의 http/https 주소를 여는 브라우저 패널
+- **개발 도구 패널** — 대화·코드(git·문서)·실행(서버·포트)·브라우저 4그룹. git(상태·브랜치·스테이징·커밋)·탐색기(파일 CRUD)·확장(스킬·플러그인)·환경변수·로그·diff 뷰어, 임의 http/https 주소를 여는 브라우저 패널
 - **트랜스크립트 뷰** — Claude Code JSONL 로그를 턴 단위로 열람(참조만), 도구 호출 접기, 스크롤백 폴백
 - **외부 인터페이스** — `eqmux send · report · who · browser · ping` CLI + 명명 파이프, statusLine 비용 수집. Claude Code와 Codex가 같은 버스로 서로 대화한다
 - **브라우저 조종** — 에이전트가 `eqmux browser open · snapshot · click · type · get-text · eval`로 브라우저 패널을 몬다. 보이지 않는 창이 아니라 **사람이 보고 있는 그 패널**이 움직인다
 - **설정·테마** — 다크/라이트/시스템 테마, 알림 라우팅, 세션 슬롯 수(4·6·8), 재생 줄 수 등 settings.json 실저장
+
+## 0.6에서 달라진 것
+
+- **빠른 시작** — 폴더만 고르면 리드 · 개발 Claude Code 2세션으로 바로 시작합니다. 마법사 단계 줄이 지금 위치와 도착지를 보입니다
+- **승인함** — 도구 사용 승인을 기다리는 세션이 관제 대시보드에 모이고, 원문을 읽은 뒤 `허용` · `거부`를 누릅니다. 페인의 승인 창과 먼저 답한 쪽이 이깁니다
+- **자리 비운 사이** — 1분 넘게 떠나 있다 돌아오면 그사이 바뀐 상태 · 메시지 · 비용 · 완료 보고를 한 카드로 보입니다
+- **임무 검토** — 완료 보고가 오면 목표 · 산출물 · 담당 세션이 고친 파일 · 시작점부터의 diff · 테스트 실행을 한 화면에서 보고 `승인` · `되돌려 보내기`를 누릅니다. 선행 임무 · 임무별 비용도 붙었습니다
+- **동시 편집 · 담당 밖 편집 경고** — 두 세션이 같은 파일을 고치거나 직함의 담당 경로 밖을 고치면 페인 머리와 알림 센터에 알립니다. 막지는 않습니다
+- **git 화면** — 파일 · 덩어리 스테이징, 커밋 · amend, push · pull, merge · rebase, 충돌 해결까지 합니다. 되돌리기 어려운 작업은 확인창을 거칩니다
+- **하루 비용 예산** — 모든 워크스페이스의 오늘 비용이 예산을 넘으면 하루 한 번 알립니다. 세션은 멈추지 않습니다
+- **확장 · 환경변수 탭** — 스킬 · 플러그인을 전체 / 이 저장소로 나눠 보고 켜고 끕니다. `.env` 파일을 앱 안에서 고칩니다
+- **과거 세션 검색 · 건너뛰기 팔레트** — 지난 대화를 찾아 열고, `Ctrl+Shift+K`로 세션 · 워크스페이스 · 임무 · 화면으로 바로 갑니다
+- **첫 실행 고지** — 앱이 쓰는 곳 · 쓰지 않는 곳과 다른 도구의 전역 지시 · 훅을 처음 한 번 보입니다. 설정 › 정보에서 다시 보고 진단 정보를 복사합니다
 
 ## 0.5에서 달라진 것
 
@@ -73,7 +103,7 @@ EQMUX는 터미널 멀티플렉서(MUX)에 에이전트 팀 관제를 얹은 Win
 ![대화 패널](docs/screenshots/readme/conversation.png)
 
 **Git Diff & 에디터** — 에이전트가 만든 변경을 커밋 시점과 워크트리로 나눠 검토합니다.
-읽기 전용이 기본이고, 스테이지·커밋은 터미널에서 수행합니다.
+git 화면에서 스테이지 · 커밋 · push까지 하고, 위험한 작업은 확인창을 거칩니다.
 
 ![Git Diff & 에디터](docs/screenshots/readme/gitdiff.png)
 
@@ -90,13 +120,15 @@ EQMUX는 터미널 멀티플렉서(MUX)에 에이전트 팀 관제를 얹은 Win
 | 프런트엔드 | [SolidJS](https://solidjs.com) + TypeScript + Vite |
 | 터미널 | ConPTY ([portable-pty](https://crates.io/crates/portable-pty)) + [xterm.js](https://xtermjs.org) |
 | 저장소 | SQLite (rusqlite, WAL) — 세션·스크롤백·이벤트 / JSON — 설정·레이아웃 / 파일 — 팀·역할·임무 |
-| 플랫폼 | **Windows 우선** (WebView2 · Job Object · NSIS 인스톨러) |
+| 플랫폼 | Windows (WebView2 · Job Object · 포터블 zip) · macOS 11+ (universal dmg) |
 
-## 시작하기
+## 소스에서 빌드
+
+받아서 쓰기만 한다면 위 [빠른 시작](#빠른-시작)으로 충분합니다. 이 절은 개발자용입니다.
 
 ### 요구 사항
 
-- Windows 10/11 (WebView2)
+- Windows 10/11 (WebView2) 또는 macOS 11+
 - [Node.js](https://nodejs.org) 18+
 - [Rust](https://rustup.rs) (stable)
 - [Claude Code CLI](https://claude.com/claude-code) — 에이전트 세션 실행에 필요 (Codex CLI는 선택)
@@ -111,7 +143,7 @@ npm run tauri dev     # Tauri 개발 모드 (Vite + Rust)
 ### 빌드
 
 ```powershell
-npm run tauri build   # NSIS 인스톨러 산출 (EQMUX_x64-setup.exe)
+npm run tauri build -- --no-bundle   # src-tauri/target/release/eqmux.exe (설치 파일은 1.0 전에는 만들지 않는다)
 ```
 
 프런트엔드만 검사하려면 `npm run build`(tsc --noEmit + vite build).
@@ -144,13 +176,12 @@ npm run tauri build   # NSIS 인스톨러 산출 (EQMUX_x64-setup.exe)
 | `team.md` | 에이전트가 읽는 파생 표 (커밋 대상) |
 | `roles/<세션>.md` | 세션별 역할 합성 결과 — frontmatter `permissions`가 실행 플래그를 결정 (gitignore) |
 | `missions/*.md` | 임무 정의 (브랜치 + 목표) |
-| `worktrees/<세션>/` | 세션 격리 옵트인 시 git 워크트리 |
 
 사용자의 `CLAUDE.md`는 수정하지 않습니다 — 역할은 세션 시작 안내문(Claude Code는 `--append-system-prompt`, Codex는 `developer_instructions`)의 역할 파일 포인터와 SessionStart 훅으로만 전달됩니다.
 
 ## 문의 · 피드백
 
-버그 신고와 개선 제안을 받고 있습니다. 아직 1.0 이전이라 어떤 이야기든 도움이 됩니다.
+버그 신고와 개선 제안은 [GitHub Issues](https://github.com/ReDocu/EQMUX/issues)에 남겨 주세요(설정 › 진단 정보 복사 결과를 붙이면 빠릅니다). 보안 문제는 [SECURITY.md](SECURITY.md)를 따릅니다. 기여 방법은 [CONTRIBUTING.md](CONTRIBUTING.md). 아직 1.0 이전이라 어떤 이야기든 도움이 됩니다.
 
 - [한글 문의 폼](https://docs.google.com/forms/d/e/1FAIpQLScn7JEfOpWv1W7FPJwDIFluvRkK_y6_dpOPCe6E-opf-YHHKw/viewform)
 - [English feedback form](https://docs.google.com/forms/d/e/1FAIpQLSdGjEUhbjNoMhi3BiYAeTRnTOPoxqKNKsN4_m0_6Ta_6KcMNw/viewform)

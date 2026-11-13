@@ -18,8 +18,8 @@ export function segKeyIndex(key: string, n: number, i: number): number | undefin
   return undefined;
 }
 
-/** 화면을 옮기는 전역 단축키 — Ctrl+Shift+U(다음 미확인) · D(관제 토글) · B(패널) · L(배치). macOS는 ⌘⇧ (U67) */
-const NAV_KEYS = new Set(["u", "d", "b", "l"]);
+/** 화면을 옮기는 전역 단축키 — Ctrl+Shift+U(다음 미확인) · D(관제 토글) · B(패널) · L(배치) · K(건너뛰기, §4 W3). macOS는 ⌘⇧ (U67) */
+const NAV_KEYS = new Set(["u", "d", "b", "l", "k"]);
 
 /** 화면 이동 단축키의 수정자인가 — 주 수정자(macOS ⌘ · 그 밖 Ctrl) + Shift, Alt 없이 */
 export function isNavChord(

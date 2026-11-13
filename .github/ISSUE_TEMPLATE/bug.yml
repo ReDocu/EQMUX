@@ -1,0 +1,21 @@
+name: Bug report / 버그 신고
+description: Something does not work / 동작하지 않는 것
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened / 무슨 일이 있었나
+      description: What you did, what you expected, what happened instead.
+    validations: { required: true }
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce / 재현 순서
+  - type: textarea
+    id: diag
+    attributes:
+      label: Diagnostics / 진단 정보
+      description: Settings › Copy diagnostics (설정 › 진단 정보 복사). User names and tokens are masked.
+      render: text
+    validations: { required: true }

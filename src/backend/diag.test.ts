@@ -1,7 +1,7 @@
 // 진단 드리프트 판정 테스트 — 이 계산이 틀리면 로그가 거짓말을 한다.
 // 없는 어긋남을 신고하면 엉뚱한 원인을 쫓게 되고, 있는 어긋남을 놓치면 계측을 넣은 의미가 없다.
 import { describe, expect, test } from "vitest";
-import { computeDrift } from "./diag";
+import { computeDrift, foreignSummary } from "./diag";
 import type { DiagGeometry, DiagRect } from "./diag";
 
 const geo = (over: Partial<DiagGeometry>): DiagGeometry => ({
@@ -108,5 +108,22 @@ describe("computeDrift — 경계", () => {
     const g = geo({ browser: { x: 601, y: 100, w: 400, h: 600 } });
 
     expect(computeDrift(PANEL, g)!.off).toBe(1); // 임계값 3px 아래
+  });
+});
+
+describe("다른 도구 전역 지시 요약 (§14)", () => {
+  test("도구별로 파일을 모으고 훅 수를 더한다", () => {
+    expect(
+      foreignSummary([
+        { tool: "wmux", file: "~/.claude/CLAUDE.md", kind: "block", count: 1 },
+        { tool: "wmux", file: "~/.claude/settings.json", kind: "hook", count: 10 },
+        { tool: "cmux", file: "~/.codex/AGENTS.md", kind: "sentence", count: 2 },
+      ]),
+    ).toEqual([
+      { tool: "wmux", files: ["~/.claude/CLAUDE.md", "~/.claude/settings.json"], hooks: 10, directive: true },
+      { tool: "cmux", files: ["~/.codex/AGENTS.md"], hooks: 0, directive: true },
+    ]);
+    // 훅만 있으면 '덮어 두었다'고 말하면 안 된다 (U128)
+    expect(foreignSummary([{ tool: "hx", file: "~/.claude/settings.json", kind: "hook", count: 3 }])[0].directive).toBe(false);
   });
 });

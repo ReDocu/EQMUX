@@ -11,11 +11,13 @@ import { nudgeRoleReload, nudgeTeamReload, removeRoleFile, saveRoleFile } from "
 import { isTauri, killPty, openLogDir, storeUsageReal } from "../backend/pty";
 import { sessionTermSize } from "../components/TerminalPane";
 import { settings, toggleMuted } from "../backend/settings";
-import { t, tf } from "../i18n";
-import { jumpToSession } from "../state";
+import { t, tErr, tf } from "../i18n";
+import { jumpToSession, ptyShells } from "../state";
 import { Eyebrow, FieldHint, Identity, KV, StatusLabel, StopConfirm } from "../components/ui";
+import { SubagentList } from "../components/SubagentList"; // §4 서브에이전트 목록 (W3)
 import type { AgentCliId, Permissions, Session } from "../types";
-import { AGENT_CLI_LABEL, agentAttached, agentFlagsToString, cleanTitle, cliOf, effectiveTitle, engineSwitched, paneNo, SESSION_NAME_MAX, sessionName, statusText, TITLE_MAX, translatePermissions } from "../types";
+import { AGENT_CLI_LABEL, agentAttached, agentFlagsToString, cleanTitle, cliOf, effectiveTitle, engineSwitched, paneNo, runCliOf, SESSION_NAME_MAX, sessionName, statusText, TITLE_MAX, translatePermissions } from "../types";
+import { jobName, reasonText } from "../labels";
 import { isSubmitEnter } from "../platform"; // 한글 조합 중 Enter는 제출이 아니다 (B130)
 
 const PERM_KEYS: (keyof Permissions)[] = ["write", "commit", "push"];
@@ -195,7 +197,8 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
     setActionErr(undefined);
     if (isTauri() && s().personaId) {
       const p = effPerms();
-      if (!p) return;
+      // 말없이 멈추지 않는다 — 관제 우클릭 재개와 같은 문구 (B232)
+      if (!p) return setActionErr(t("직무 권한을 찾을 수 없습니다 — 역할을 다시 지정하세요"));
       const size = sessionTermSize(s().id);
       try {
         await resumeAgent(
@@ -222,9 +225,11 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
     const fresh = engineSwitched(s()); // restartAgent가 spawnCli를 새 엔진으로 덮기 전에 읽는다 (B82)
     if (isTauri() && s().personaId) {
       const p = effPerms();
+      // 권한이 없으면 재시작하지 않았다 — '재시작됨'으로 상태를 바꾸지 않는다 (B232)
+      if (!p) return setActionErr(t("직무 권한을 찾을 수 없습니다 — 역할을 다시 지정하세요"));
       const size = sessionTermSize(s().id);
       try {
-        if (p) await restartAgent(s().id, p, size.cols, size.rows, cliOf(s()));
+        await restartAgent(s().id, p, size.cols, size.rows, cliOf(s()));
       } catch (err) {
         setActionErr(String(err));
         return;
@@ -239,7 +244,7 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
       <div class="detail-top">
       <div class="detail-head sd-head">
         <div style={{ "min-width": 0 }}>
-          <div class="sd-id" title={job()?.name ?? t("셸")}>
+          <div class="sd-id" title={jobName(job(), t("셸"))}>
             <Identity
               slot={s().slot}
               no={paneNo(s())}
@@ -250,10 +255,10 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
             />
           </div>
           {/* BR-07 — 엔진 이름은 슬롯 엔진에서, 미기동 판정은 세션 상태로. 버전은 있을 때만 */}
-          <div class="mono muted sd-agent">
-            <Show when={agentAttached(s())} fallback={`${t("에이전트 미기동")} · ${s().id}`}>
+          <div class="mono muted sd-agent" title={s().id}>
+            <Show when={agentAttached(s())} fallback={t("에이전트 미기동")}>
               {s().personaId ? AGENT_CLI_LABEL[cliOf(s())] : (s().agent ?? t("에이전트"))}
-              <Show when={s().agentVersion}> {s().agentVersion}</Show> · {t("기동됨")} · {s().id}
+              <Show when={s().agentVersion}> {s().agentVersion}</Show> · {t("기동됨")}
             </Show>
           </div>
         </div>
@@ -279,16 +284,17 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
         <summary>{t("개요")}</summary>
         <div class="card inset" style={{ padding: "4px 10px" }}>
           <KV k={t("상태")} v={statusText(s().status)} vClass={s().status === "waiting" ? "st-waiting" : ""} />
+          <Show when={s().stateReason}>{(r) => <KV k={t("판정 근거")} v={reasonText(r())} vClass="mono" />}</Show>
           {/* 낮은 신뢰 (FR-G-27) — 정확한 척하지 않는다 */}
           <Show when={s().degraded}>
             <KV k={t("관측")} v={t("저하 — 레지스트리 접근 불가 · 훅 + 프로세스 생존으로 유지")} vClass="st-waiting" />
           </Show>
           <KV k={t("임무")} v={mission()?.name ?? t("미배정")} />
-          <KV k={t("역할")} v={`${persona()?.name ?? "—"} · ${job()?.name ?? "—"}`} />
-          <KV k={t("서브에이전트")} v={String(s().subagents)} />
-          <KV k={t("활동 (훅 2차)")} v={s().activity ?? "—"} />
+          <KV k={t("역할")} v={`${persona()?.name ?? "—"} · ${jobName(job())}`} />
+          <KV k={t("지금 도는 서브에이전트")} v={String(s().subagents)} />
+          <KV k={t("활동")} v={s().activity ?? "—"} />
           <KV
-            k={t("비용 (statusLine)")}
+            k={t("비용")}
             v={s().costUsd !== undefined ? `$${s().costUsd!.toFixed(2)} ${t("누적")}` : t("— (보고 전)")}
           />
           <KV
@@ -301,10 +307,11 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
           />
           <KV
             k={t("재개")}
-            v={s().resumable ? `${t("가능")} · ${t(s().resumeReason ?? "")}` : `${t("불가")} · ${t(s().resumeReason ?? "transcript 없음")}`}
+            v={s().resumable ? `${t("가능")} · ${t(s().resumeReason ?? "")}` : `${t("불가")} · ${t(s().resumeReason ?? "대화 기록 없음")}`}
           />
           <Show when={s().pid}>
-            <KV k={t("PID · 셸")} v={`${s().pid} · ${s().shell}`} />
+            {/* 실제로 뜬 셸 (B291) — 고른 셸이 없어 물러났으면 고른 라벨이 아니라 뜬 셸이다 */}
+            <KV k={t("PID · 셸")} v={`${s().pid} · ${ptyShells()[s().id] ?? s().shell}`} />
           </Show>
           <Show when={s().personaId}>
             <KV
@@ -318,7 +325,7 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
               }
             />
           </Show>
-          <KV k="cwd" v={s().cwd} />
+          <KV k={t("작업 폴더")} v={s().cwd} />
           <KV
             k={t("알림")}
             v={
@@ -356,8 +363,8 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
         error={nameErr() && t(nameErr()!)}
         hint={tf(
           persona()
-            ? "비우면 페르소나 이름({name})으로 돌아간다 · 공백·@·줄바꿈 불가 · claude --name과 @멘션에 쓴다"
-            : "비우면 자동 이름({name})으로 돌아간다 · 공백·@·줄바꿈 불가 · @멘션에 쓴다",
+            ? "비우면 페르소나 이름({name})으로 돌아갑니다 · 공백·@·줄바꿈 불가 · claude --name과 @멘션에 씁니다"
+            : "비우면 자동 이름({name})으로 돌아갑니다 · 공백·@·줄바꿈 불가 · @멘션에 씁니다",
           { name: persona()?.name ?? backend.autoSessionName(s().workspaceId, s().slot, s().id) },
         )}
         count={nameDraft().length}
@@ -393,7 +400,7 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
           </button>
         </div>
         <FieldHint
-          hint={t("비어 있으면 페르소나 직함을 물려받는다 · 덮어쓰면 team.json 슬롯 title에만 남는다")}
+          hint={t("비어 있으면 페르소나 직함을 물려받습니다 · 덮어쓰면 이 슬롯에만 남습니다")}
           count={titleDraft().length}
           max={TITLE_MAX}
         />
@@ -405,7 +412,7 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
         <Show when={s().personaId}>
           <div class="muted mono" style={{ "font-size": "10px", margin: "2px 0 4px" }}>
             {/* 플래그를 낸 엔진 (B82) — 슬롯 엔진을 바꿔도 재시작 전까지 도는 것은 이쪽이다 */}
-            {t("엔진")} · {AGENT_CLI_LABEL[s().spawnCli ?? cliOf(s())]}
+            {t("엔진")} · {AGENT_CLI_LABEL[runCliOf(s())]}
             <Show when={engineSwitched(s())}>
               {" "}· {tf("슬롯 엔진 {cli} — 재시작 때 적용", { cli: AGENT_CLI_LABEL[cliOf(s())] })}
             </Show>
@@ -485,7 +492,7 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
               title={
                 engineSwitched(s())
                   ? t("엔진 사이에는 대화를 이을 수 없습니다 — 새 엔진으로 새 대화를 시작합니다")
-                  : t("재개 기반 재시작 — 대화를 잃지 않는다")
+                  : t("이어서 다시 시작 — 대화를 잃지 않습니다")
               }
               onClick={() => void doRestart()}
             >
@@ -519,7 +526,7 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
                 style={{ "font-size": "11px", "white-space": "nowrap" }}
                 title={t("페르소나의 저장 직무 (미지정이면 기본값) — 라이브러리의 페르소나 편집에서 바꿉니다")}
               >
-                {t("직무")} {backend.listJobs().find((j) => j.id === pendJob())?.name ?? "—"}
+                {t("직무")} {jobName(backend.listJobs().find((j) => j.id === pendJob()))}
               </span>
               <button class="btn primary" disabled={!pendPersona() || !pendJob()} onClick={applyRole}>
                 {t("역할 부여")}
@@ -538,7 +545,7 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
               <For each={availablePersonas()}>{(p) => <option value={p.id} selected={p.id === pendPersona()}>{p.name}</option>}</For>
             </select>
             <select value={pendJob()} onChange={(e) => setPendJob(e.currentTarget.value)}>
-              <For each={backend.listJobs()}>{(j) => <option value={j.id} selected={j.id === pendJob()}>{j.name}</option>}</For>
+              <For each={backend.listJobs()}>{(j) => <option value={j.id} selected={j.id === pendJob()}>{jobName(j)}</option>}</For>
             </select>
             <button class="btn primary" disabled={!roleChanged()} onClick={applyRole}>
               {t("적용")}
@@ -618,11 +625,12 @@ export function SessionDetailPanel(props: { session: Session; onClose?: () => vo
             </div>
           </div>
         </Show>
+        <SubagentList session={s()} />
       </details>
 
       <Show when={actionErr()}>
         <div class="card conn-error mono" style={{ "margin-top": "8px" }}>
-          {actionErr()}
+          {tErr(actionErr())}
         </div>
       </Show>
 

@@ -41,6 +41,12 @@ pub struct MsgRow {
     pub from_name: Option<String>,
     #[serde(rename = "toName", skip_serializing_if = "Option::is_none")]
     pub to_name: Option<String>,
+    /// 회신 연결 (§4 `--re`) — 이 메시지가 답하는 원장 id
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub re: Option<i64>,
+    /// escalate 심각도 (§4 `--severity high`) — "high"만 적는다. normal · 다른 타입은 None
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub severity: Option<String>,
 }
 
 /// 원장 행의 0.5 부가 정보 — 없으면 0.4.2 메시지와 같다
@@ -52,6 +58,8 @@ pub struct Extra {
     /// 이름을 직접 줄 때만 (테스트) — 없으면 send_with가 C4 디렉터리에서 찾는다
     pub from_name: Option<String>,
     pub to_name: Option<String>,
+    pub re: Option<i64>,
+    pub severity: Option<String>,
 }
 
 /// M2 — 자유 텍스트 금지. 타입은 5종뿐이고 본문은 비어 있을 수 없다.
@@ -75,6 +83,17 @@ pub fn check_len(from: &str, body: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// escalate 심각도 (§4) — `--severity high|normal`, 기본 normal. 원장에는 high만 남긴다(None = normal).
+/// high는 escalate에만 — 다른 타입에 붙이면 알림만 시끄러워지고 뜻이 없다
+pub fn severity(kind: &str, raw: Option<&str>) -> Result<Option<String>, String> {
+    match raw.map(str::trim) {
+        None | Some("normal") => Ok(None),
+        Some("high") if kind == "escalate" => Ok(Some("high".into())),
+        Some("high") => Err("SEVERITY_ESCALATE_ONLY".into()),
+        Some(_) => Err("BAD_SEVERITY".into()),
+    }
+}
+
 /// --file 경로 검사 — 세션 작업 폴더(저장소) 안의 실재 파일만. 심볼릭 링크·`..`는 정규화로 푼다
 pub fn attach_file(repo: &str, path: &str) -> Result<FileRef, String> {
     let canon = |p: &str| std::fs::canonicalize(p).map_err(|_| "FILE_NOT_FOUND".to_string());
@@ -86,9 +105,9 @@ pub fn attach_file(repo: &str, path: &str) -> Result<FileRef, String> {
     if !meta.is_file() {
         return Err("FILE_NOT_FOUND".into());
     }
-    // canonicalize는 Windows에서 \\?\ 접두를 붙인다 — 사람·에이전트가 여는 경로로 돌려 놓는다
-    let shown = file.to_string_lossy();
-    let shown = shown.strip_prefix(r"\\?\").unwrap_or(&shown).to_string();
+    // canonicalize는 Windows에서 \\?\ 접두를 붙인다 — 사람·에이전트가 여는 경로로 돌려 놓는다.
+    // 공유 폴더 · 네트워크 드라이브는 \\?\UNC\srv\share라 접두만 떼면 'UNC\srv…'가 남는다 (B283)
+    let shown = crate::agent::strip_verbatim(&file.to_string_lossy());
     Ok(FileRef { path: shown, size: meta.len() })
 }
 
@@ -128,7 +147,7 @@ pub fn send_with(
     validate(kind, body)?;
     check_len(from, body)?;
     let conn = crate::store::open_db(root, ws).map_err(|e| e.to_string())?;
-    let now = crate::workspace::now_ms() as i64;
+    let now = crate::workspace::now_ms();
     let body = body.trim();
     let read = from == "나";
     let (fpath, fsize) = match &extra.file {
@@ -138,12 +157,22 @@ pub fn send_with(
     // 보낸 때의 이름을 원장에 남긴다 — "나"·"@all"은 디렉터리에 없어 비고, 화면이 원문을 쓴다
     let from_name = extra.from_name.clone().or_else(|| crate::ipc::session_name(from));
     let to_name = extra.to_name.clone().or_else(|| crate::ipc::session_name(to));
-    conn.execute(
-        "INSERT INTO message (ts, sender, recipient, kind, body, read, done, file_path, file_size, project, sender_name, recipient_name)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-        params![now, from, to, kind, body, read as i64, extra.done as i64, fpath, fsize, extra.project, from_name, to_name],
-    )
-    .map_err(|e| e.to_string())?;
+    // 뒤에 더한 열(re v3 · severity v5)이 없는 DB(이전이 중간에 멈춤)에서는 그 값만 빠지고 메시지는 간다
+    let re = extra.re.filter(|_| opt_col(&conn, "re") != "NULL");
+    let severity = extra.severity.clone().filter(|_| opt_col(&conn, "severity") != "NULL");
+    let mut names = String::from("ts, sender, recipient, kind, body, read, done, file_path, file_size, project, sender_name, recipient_name");
+    let mut args: Vec<&dyn rusqlite::ToSql> = vec![&now, &from, &to, &kind, &body, &read, &extra.done, &fpath, &fsize, &extra.project, &from_name, &to_name];
+    if re.is_some() {
+        names.push_str(", re");
+        args.push(&re);
+    }
+    if severity.is_some() {
+        names.push_str(", severity");
+        args.push(&severity);
+    }
+    let marks: Vec<String> = (1..=args.len()).map(|i| format!("?{i}")).collect();
+    let sql = format!("INSERT INTO message ({names}) VALUES ({})", marks.join(", "));
+    conn.execute(&sql, args.as_slice()).map_err(|e| e.to_string())?;
     Ok(MsgRow {
         id: conn.last_insert_rowid(),
         ts: now,
@@ -157,6 +186,8 @@ pub fn send_with(
         project: extra.project.clone(),
         from_name,
         to_name,
+        re,
+        severity,
     })
 }
 
@@ -214,35 +245,98 @@ pub fn list(
     }
     let conn = crate::store::open_db(root, ws).map_err(|e| e.to_string())?;
     let mut stmt = conn
-        .prepare(
-            "SELECT id, ts, sender, recipient, kind, body, read, done, file_path, file_size, project, sender_name, recipient_name FROM
-               (SELECT * FROM message WHERE id < ?1 ORDER BY id DESC LIMIT ?2)
-             ORDER BY id ASC",
-        )
+        .prepare(&format!(
+            "SELECT {} FROM (SELECT * FROM message WHERE id < ?1 ORDER BY id DESC LIMIT ?2) ORDER BY id ASC",
+            cols(&conn)
+        ))
         .map_err(|e| e.to_string())?;
     let rows = stmt
-        .query_map(params![before_id.unwrap_or(i64::MAX), limit.min(500) as i64], |r| {
-            let file = r.get::<_, Option<String>>(8)?.map(|path| FileRef {
-                path,
-                size: r.get::<_, Option<i64>>(9).ok().flatten().unwrap_or(0) as u64,
-            });
-            Ok(MsgRow {
-                id: r.get(0)?,
-                ts: r.get(1)?,
-                from: r.get(2)?,
-                to: r.get(3)?,
-                kind: r.get(4)?,
-                body: r.get(5)?,
-                read: r.get::<_, i64>(6)? != 0,
-                done: r.get::<_, i64>(7)? != 0,
-                file,
-                project: r.get(10)?,
-                from_name: r.get(11)?,
-                to_name: r.get(12)?,
-            })
-        })
+        .query_map(params![before_id.unwrap_or(i64::MAX), limit.min(500) as i64], row)
         .map_err(|e| e.to_string())?;
     Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+/// 뒤에 더한 열 (re 스키마 v3 · severity v5) — 이전이 중간에서 멈춘 DB에는 없다. 그때는 NULL로 읽어 버스는 계속 돈다
+fn opt_col(conn: &rusqlite::Connection, col: &'static str) -> &'static str {
+    if conn.prepare(&format!("SELECT {col} FROM message LIMIT 0")).is_ok() {
+        col
+    } else {
+        "NULL"
+    }
+}
+
+fn re_col(conn: &rusqlite::Connection) -> &'static str {
+    opt_col(conn, "re")
+}
+
+fn cols(conn: &rusqlite::Connection) -> String {
+    format!(
+        "id, ts, sender, recipient, kind, body, read, done, file_path, file_size, project, sender_name, recipient_name, {}, {}",
+        re_col(conn),
+        opt_col(conn, "severity")
+    )
+}
+
+fn row(r: &rusqlite::Row) -> rusqlite::Result<MsgRow> {
+    let file = r.get::<_, Option<String>>(8)?.map(|path| FileRef {
+        path,
+        size: r.get::<_, Option<i64>>(9).ok().flatten().unwrap_or(0) as u64,
+    });
+    Ok(MsgRow {
+        id: r.get(0)?,
+        ts: r.get(1)?,
+        from: r.get(2)?,
+        to: r.get(3)?,
+        kind: r.get(4)?,
+        body: r.get(5)?,
+        read: r.get::<_, i64>(6)? != 0,
+        done: r.get::<_, i64>(7)? != 0,
+        file,
+        project: r.get(10)?,
+        from_name: r.get(11)?,
+        to_name: r.get(12)?,
+        re: r.get(13)?,
+        severity: r.get(14)?,
+    })
+}
+
+fn one(root: &Path, ws: &str, sql_where: &str, args: impl rusqlite::Params) -> Result<Option<MsgRow>, String> {
+    if !crate::store::db_path(root, ws).exists() {
+        return Ok(None);
+    }
+    let conn = crate::store::open_db(root, ws).map_err(|e| e.to_string())?;
+    let sql_where = sql_where.replace("{re}", re_col(&conn));
+    let mut stmt = conn.prepare(&format!("SELECT {} FROM message WHERE {sql_where} ORDER BY id LIMIT 1", cols(&conn))).map_err(|e| e.to_string())?;
+    let mut rows = stmt.query_map(args, row).map_err(|e| e.to_string())?;
+    rows.next().transpose().map_err(|e| e.to_string())
+}
+
+/// 원장 id로 한 건 (§4 `--re` 검증 · 회신 받는 사람)
+pub fn get(root: &Path, ws: &str, id: i64) -> Result<Option<MsgRow>, String> {
+    one(root, ws, "id = ?1", params![id])
+}
+
+/// 다른 원장에 적힌 같은 메시지 (B173) — 프로젝트 간 발신은 두 원장에 한 줄씩 적는다. `--re`를 받는 쪽
+/// 원장 id로 옮길 때 쓴다. 두 줄은 같은 발신에서 거의 같은 시각에 적히므로 ±5초 안의 첫 줄을 고른다
+pub fn twin(root: &Path, ws: &str, orig: &MsgRow) -> Result<Option<MsgRow>, String> {
+    one(
+        root,
+        ws,
+        "sender = ?1 AND recipient = ?2 AND kind = ?3 AND body = ?4 AND ts BETWEEN ?5 - 5000 AND ?5 + 5000",
+        params![orig.from, orig.to, orig.kind, orig.body, orig.ts],
+    )
+}
+
+/// `send --wait` (§4) — 내가 보낸 `id`에 온 첫 회신. `--re id`로 이은 것, 또는 그 메시지를 받은 사람이
+/// 그 뒤 나에게 낸 report --done (회신 고리를 쓰지 않아도 완료 보고는 맡긴 쪽에 자동으로 온다)
+pub fn reply_to(root: &Path, ws: &str, me: &str, id: i64) -> Result<Option<MsgRow>, String> {
+    one(
+        root,
+        ws,
+        "id > ?1 AND recipient = ?2 AND ({re} = ?1 OR (kind = 'report' AND done = 1 AND sender =
+           (SELECT recipient FROM message WHERE id = ?1 AND sender = ?2)))",
+        params![id, me],
+    )
 }
 
 /// ms 에포크 → 로컬 시각 문자열. 깨진 값이면 원본 숫자를 그대로 둔다 (원장을 각색하지 않는다).
@@ -352,6 +446,81 @@ mod tests {
         assert_eq!(attach_file(&r, &repo.join("none.md").to_string_lossy()), Err("FILE_NOT_FOUND".into()));
         assert_eq!(attach_file(&r, &r), Err("FILE_NOT_FOUND".into())); // 폴더는 첨부가 아니다
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// §4 `--re` · `--wait` — re 왕복, 회신은 re로 이은 것 또는 받은 사람의 report --done만
+    #[test]
+    fn reply_to_matches_re_or_done_report_from_recipient() {
+        let dir = std::env::temp_dir().join(format!("eqmux-re-{}", crate::workspace::now_ms()));
+        let me = "kai@ws1";
+        assert!(reply_to(&dir, "ws1", me, 1).unwrap().is_none()); // DB 없음
+        let ask = send(&dir, "ws1", me, "lin@ws1", "ask", "스키마?").unwrap();
+        assert_eq!(get(&dir, "ws1", ask.id).unwrap().unwrap().to, "lin@ws1");
+        assert!(get(&dir, "ws1", 999).unwrap().is_none());
+        // 다른 사람의 완료 보고 · 받은 사람의 진척 보고 · 남에게 간 회신은 회신이 아니다
+        send_with(&dir, "ws1", "noel@ws1", me, "report", "남의 완료", &Extra { done: true, ..Default::default() }).unwrap();
+        send(&dir, "ws1", "lin@ws1", me, "report", "절반").unwrap();
+        send_with(&dir, "ws1", "lin@ws1", "noel@ws1", "report", "남에게", &Extra { re: Some(ask.id), ..Default::default() }).unwrap();
+        assert!(reply_to(&dir, "ws1", me, ask.id).unwrap().is_none());
+        let r = send_with(&dir, "ws1", "lin@ws1", me, "report", "답", &Extra { re: Some(ask.id), ..Default::default() }).unwrap();
+        assert_eq!(reply_to(&dir, "ws1", me, ask.id).unwrap().unwrap().id, r.id);
+        assert_eq!(list(&dir, "ws1", None, 50).unwrap().last().unwrap().re, Some(ask.id)); // 원장 왕복
+        // --re 없이도 받은 사람의 report --done이면 회신이다
+        let ask2 = send(&dir, "ws1", me, "lin@ws1", "handoff", "로그인").unwrap();
+        let d = send_with(&dir, "ws1", "lin@ws1", me, "report", "완료", &Extra { done: true, ..Default::default() }).unwrap();
+        assert_eq!(reply_to(&dir, "ws1", me, ask2.id).unwrap().unwrap().id, d.id);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// B173 — 프로젝트 간 질문은 두 원장에 적힌다. 받는 쪽(ws2)에서 단 `--re`를 보낸 쪽(ws1) 원장 id로 옮긴다
+    #[test]
+    fn twin_finds_the_same_message_in_the_other_ledger() {
+        let dir = std::env::temp_dir().join(format!("eqmux-twin-{}", crate::workspace::now_ms()));
+        let (a, c) = ("kai@ws1", "lin@ws2");
+        send(&dir, "ws1", a, c, "ask", "다른 질문").unwrap(); // 본문이 다르면 짝이 아니다
+        let mine = send(&dir, "ws1", a, c, "ask", "스키마?").unwrap();
+        let theirs = send(&dir, "ws2", a, c, "ask", "스키마?").unwrap();
+        assert_eq!(twin(&dir, "ws1", &theirs).unwrap().unwrap().id, mine.id);
+        let r = send_with(&dir, "ws1", c, a, "report", "답", &Extra { re: Some(mine.id), ..Default::default() }).unwrap();
+        assert_eq!(reply_to(&dir, "ws1", a, mine.id).unwrap().unwrap().id, r.id);
+        assert!(twin(&dir, "ws3", &theirs).unwrap().is_none()); // 원장 없음
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 이전이 v2에서 멈춰 re 열이 없는 DB — 회신 연결만 빠지고 버스(보내기·목록·--wait 완료 보고)는 돈다
+    #[test]
+    fn bus_runs_without_re_column() {
+        let dir = std::env::temp_dir().join(format!("eqmux-nore-{}", crate::workspace::now_ms()));
+        let me = "kai@ws1";
+        let ask = send(&dir, "ws1", me, "lin@ws1", "ask", "스키마?").unwrap();
+        crate::store::open_db(&dir, "ws1")
+            .unwrap()
+            .execute_batch("DROP INDEX IF EXISTS message_re; ALTER TABLE message DROP COLUMN re;")
+            .unwrap();
+        let r = send_with(&dir, "ws1", "lin@ws1", me, "report", "답", &Extra { re: Some(ask.id), done: true, ..Default::default() }).unwrap();
+        assert_eq!(r.re, None);
+        assert_eq!(list(&dir, "ws1", None, 50).unwrap().len(), 2);
+        assert_eq!(reply_to(&dir, "ws1", me, ask.id).unwrap().unwrap().id, r.id); // 완료 보고로 잡힌다
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// §4 escalate 심각도 — high만 원장에 남아 다시 읽힌다. high는 escalate에만, 값은 high|normal
+    #[test]
+    fn escalate_severity_roundtrip() {
+        assert_eq!(severity("escalate", None), Ok(None));
+        assert_eq!(severity("escalate", Some("normal")), Ok(None));
+        assert_eq!(severity("escalate", Some("high")), Ok(Some("high".into())));
+        assert_eq!(severity("ask", Some("high")), Err("SEVERITY_ESCALATE_ONLY".into()));
+        assert_eq!(severity("escalate", Some("urgent")), Err("BAD_SEVERITY".into()));
+        let dir = std::env::temp_dir().join(format!("eqmux-sev-{}", crate::workspace::now_ms()));
+        let hi = Extra { severity: Some("high".into()), ..Default::default() };
+        let r = send_with(&dir, "ws1", "kai@ws1", "나", "escalate", "배포 키가 없다", &hi).unwrap();
+        assert_eq!(r.severity.as_deref(), Some("high"));
+        send(&dir, "ws1", "kai@ws1", "나", "escalate", "보통").unwrap();
+        let rows = list(&dir, "ws1", None, 50).unwrap();
+        let sev: Vec<_> = rows.iter().map(|m| (m.body.as_str(), m.severity.as_deref())).collect();
+        assert!(sev.contains(&("배포 키가 없다", Some("high"))) && sev.contains(&("보통", None)), "{sev:?}");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// 열린 handoff·ask — 보고 뒤에는 닫히고, @all·"나"는 회신 대상이 아니다

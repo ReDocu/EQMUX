@@ -14,6 +14,7 @@ import { refreshMissions } from "./missions";
 import { isTauri } from "./pty";
 import { flushTeamNow, restoreTeams } from "./team";
 import { setView, view } from "../state";
+import { t, tf } from "../i18n";
 import type { Workspace } from "../types";
 
 export interface WsEntry {
@@ -48,7 +49,7 @@ export async function setCrossProject(id: string, on: boolean): Promise<void> {
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
-function toWorkspace(w: WsInfo): Workspace {
+export function toWorkspace(w: WsInfo): Workspace {
   const t = w.entry.last_used ? new Date(w.entry.last_used) : undefined;
   return {
     id: w.entry.id,
@@ -63,6 +64,7 @@ function toWorkspace(w: WsInfo): Workspace {
         : `${w.entry.branch ?? "(브랜치 없음)"} · 실측`,
     open: false,
     pathMissing: !w.exists || !w.is_repo,
+    notRepo: w.exists && !w.is_repo, // 폴더는 있다 — 재지정만이 아니라 git init도 권한다 (0.6 QA P80)
     teamFile: ".eqmux/team.json",
     lastUsed: t
       ? `${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())} ${pad(t.getHours())}:${pad(t.getMinutes())}`
@@ -129,8 +131,74 @@ export function cloneRepo(url: string, parent: string): Promise<string> {
   return invoke<string>("ws_clone", { url, parent });
 }
 
+/** 진행 중 clone 취소 (P72) — cloneRepo가 CLONE_CANCELLED|<남은 경로>로 끝난다 */
+export function cancelClone(): void {
+  void invoke("ws_clone_cancel").catch(() => {});
+}
+
+// git clone --progress 단계 이름 → 화면 문구 (P72). 모르는 단계 · 진행률 없는 줄은 원문 그대로
+const CLONE_STAGE: Record<string, string> = {
+  "Enumerating objects": "원격 객체 세는 중",
+  "Counting objects": "원격 객체 세는 중",
+  "Compressing objects": "원격 압축 중",
+  "Receiving objects": "객체 받는 중",
+  "Resolving deltas": "델타 정리 중",
+  "Updating files": "파일 풀어놓는 중",
+};
+
+/** clone-progress 이벤트 한 줄 → '객체 받는 중 42%' (P72) */
+export function cloneProgressText(line: string): string {
+  const m = /^(?:remote: )?([A-Za-z ]+):\s+(\d+)%/.exec(line.trim());
+  const stage = m && CLONE_STAGE[m[1]];
+  return stage ? `${t(stage)} ${m[2]}%` : line.trim();
+}
+
+/** 취소 · 상한으로 끝난 clone의 오류 → 사람 문구 (P72). 받다 만 폴더를 지웠는지 함께 말한다. 그 밖의 실패는 undefined */
+export function cloneStopText(err: string): { text: string; clean: boolean } | undefined {
+  const m = /^CLONE_(CANCELLED|TIMEOUT)\|(.*)$/s.exec(err);
+  if (!m) return undefined;
+  const head = m[1] === "CANCELLED" ? t("clone을 취소했습니다") : t("clone이 60분 안에 끝나지 않아 멈췄습니다");
+  const tail = m[2] ? tf("받다 만 폴더가 남았습니다 — {path}", { path: m[2] }) : t("받다 만 폴더를 지웠습니다");
+  return { text: `${head} — ${tail}`, clean: !m[2] };
+}
+
 export function unregisterWorkspace(id: string): Promise<void> {
   return invoke("ws_unregister", { id });
+}
+
+/** 등록 해제 [되돌리기] (B289) — 같은 id로 되살린다. 경로로 다시 등록하면 재지정한 항목은 다른 id가 됐다 */
+export function restoreWorkspace(id: string): Promise<WsInfo> {
+  return invoke<WsInfo>("ws_restore", { id });
+}
+
+/** 비워 두면 돌아갈 이름 — 경로의 마지막 폴더 (Rust entry_name과 같은 규칙) */
+export const folderName = (path: string): string => path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+
+/** 탭 이름 (U178) — 열린 탭끼리 이름이 겹치면 부모 폴더 이름을 덧붙인다(qa-repo · 8eb05fc9…).
+ *  사람이 바꾼 이름(S23)도 같은 규칙이다. 긴 부모 이름은 앞 8글자만 — 전체 경로는 탭 툴팁이 보인다.
+ *  ponytail: 부모 폴더 이름까지 같으면 그대로 겹친다 — 그때는 툴팁의 경로로 가른다 */
+export function tabLabels(list: readonly Pick<Workspace, "id" | "name" | "path">[]): Map<string, string> {
+  const count = new Map<string, number>();
+  for (const w of list) count.set(w.name, (count.get(w.name) ?? 0) + 1);
+  return new Map(
+    list.map((w) => {
+      const parent = w.path.split(/[\\/]/).filter(Boolean).at(-2);
+      if (count.get(w.name)! < 2 || !parent) return [w.id, w.name];
+      return [w.id, `${w.name} · ${parent.length > 10 ? `${parent.slice(0, 8)}…` : parent}`];
+    }),
+  );
+}
+
+/** 저장하면 붙을 이름 (S23) — 앞뒤 공백을 떼고, 비면 폴더 이름 */
+export const wsNameAfter = (draft: string, path: string): string => draft.trim() || folderName(path);
+
+/** 워크스페이스 이름 바꾸기 (S23) — 등록 정보의 이름만, 폴더는 그대로. 이미 있는 세션 이름은 그대로 두고
+ *  새 세션 자동 이름(projectStem)과 다른 프로젝트 주소(projectLabels)가 새 이름을 쓴다. 실패는 던진다 */
+export async function renameWorkspace(id: string, draft: string): Promise<void> {
+  const ws = backend.listWorkspaces().find((w) => w.id === id);
+  if (!ws) return;
+  const name = isTauri() ? await invoke<string>("ws_rename", { id, name: draft }) : wsNameAfter(draft, ws.path);
+  backend.renameWorkspace(id, name);
 }
 
 export function repathWorkspace(id: string, path: string): Promise<WsInfo> {

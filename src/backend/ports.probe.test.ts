@@ -6,7 +6,7 @@ const snapshot = vi.fn(async () => []);
 vi.mock("./panels", () => ({ portsSnapshot: () => snapshot() }));
 vi.mock("./pty", async (orig) => ({ ...(await orig<typeof import("./pty")>()), isTauri: () => true }));
 
-const { SERVER_PROBE_DELAYS_MS, serverTermId, startPortWatch } = await import("./ports");
+const { SERVER_PROBE_DELAYS_MS, serverTermId, startPortWatch, typeServer } = await import("./ports");
 const { noteUserInput } = await import("./pty");
 
 describe("서버 명령 뒤 자동 실측", () => {
@@ -37,6 +37,22 @@ describe("서버 명령 뒤 자동 실측", () => {
     noteUserInput(serverTermId("ws1"), "npm run dev\r");
     await vi.advanceTimersByTimeAsync(SERVER_PROBE_DELAYS_MS[1] + 1_000);
     expect(snapshot).toHaveBeenCalledTimes(2);
+  });
+
+  test("버튼 입력(typeServer)과 Ctrl+C도 실측을 예약한다 (B181) — 채우기만 한 줄은 사람의 Enter에서", async () => {
+    await vi.runAllTimersAsync();
+    snapshot.mockClear();
+    typeServer(serverTermId("ws1"), "npm run dev"); // 저장 명령 — 입력줄에 채우기만
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(snapshot).not.toHaveBeenCalled();
+    noteUserInput(serverTermId("ws1"), "\r"); // 사람이 Enter
+    await vi.advanceTimersByTimeAsync(SERVER_PROBE_DELAYS_MS[0]);
+    expect(snapshot).toHaveBeenCalledTimes(1);
+    await vi.runAllTimersAsync();
+    snapshot.mockClear();
+    noteUserInput(serverTermId("ws1"), "\x03");
+    await vi.advanceTimersByTimeAsync(SERVER_PROBE_DELAYS_MS[0]);
+    expect(snapshot).toHaveBeenCalledTimes(1);
   });
 
   test("서버 셸이 아닌 페인·Enter 없는 입력은 실측을 부르지 않는다", async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { findPathLinks, pathChunkAt } from "./termPaths";
+import { findPathLinks, pathChunkAt, quotePath } from "./termPaths";
 
 describe("경로 링크 (M30·B129)", () => {
   test("Windows 드라이브 문자·UNC·따옴표 경로는 그대로 잡는다", () => {
@@ -39,5 +39,20 @@ describe("더블클릭 경로 덩어리 (M30·B129)", () => {
   test("상대 경로는 공백으로 끊은 낱말 하나다", () => {
     const line = "edit src/app.ts please";
     expect(pathChunkAt(line, line.indexOf("app"))).toBe("src/app.ts");
+  });
+});
+
+describe("끌어다 놓은 경로 감싸기 (B293)", () => {
+  test("PowerShell은 작은따옴표 — $ · `가 풀리지 않고, 작은따옴표는 겹친다", () => {
+    expect(quotePath(String.raw`C:\a\~$보고서.docx`, "pwsh")).toBe(String.raw`'C:\a\~$보고서.docx'`);
+    expect(quotePath(String.raw`C:\Bob's ’x`, "powershell")).toBe(String.raw`'C:\Bob''s ’’x'`);
+  });
+  test("POSIX 셸은 작은따옴표 — !가 풀리지 않고, 작은따옴표는 끊어 잇는다", () => {
+    expect(quotePath("/tmp/Done!.png", "zsh")).toBe("'/tmp/Done!.png'");
+    expect(quotePath("/tmp/it's", "bash")).toBe("'/tmp/it'\\''s'");
+  });
+  test("cmd와 에이전트 TUI(셸 모름)는 큰따옴표 그대로", () => {
+    expect(quotePath(String.raw`C:\a b\c.txt`, "cmd")).toBe(String.raw`"C:\a b\c.txt"`);
+    expect(quotePath(String.raw`C:\a b\c.txt`, undefined)).toBe(String.raw`"C:\a b\c.txt"`);
   });
 });

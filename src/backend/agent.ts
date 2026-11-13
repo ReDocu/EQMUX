@@ -8,8 +8,9 @@ import { isTauri } from "./pty";
 import { saveRoleFile } from "./roles";
 import { settings } from "./settings";
 import { beepWaiting } from "./sound";
-import type { AgentCliId, AgentStatus, Permissions, Session } from "../types";
-import { agentFlagsToString, cliOf, engineSwitched, sessionName, translatePermissions } from "../types";
+import { noteCost } from "./budget";
+import type { AgentCliId, AgentStatus, PendingTool, Permissions, RateLimit, Session, StateReason } from "../types";
+import { agentFlagsToString, cliOf, engineSwitched, runCliOf, sessionName, translatePermissions } from "../types";
 
 export interface AgentStateEvt {
   session: string;
@@ -26,6 +27,11 @@ export interface AgentStateEvt {
   degraded: boolean; // 관측 저하 (FR-D-62·63, M34) — 낮은 신뢰 표시 (FR-G-27)
   seq?: number; // 순번 (P-4) — 전역 단조 증가. 스냅숏·이벤트 순서 역전 가드
   completed?: boolean; // 턴 완료 (0.5 C1) — Rust가 30초+ 턴의 Stop → idle에만 싣는다
+  pendingTool?: PendingTool; // 기다리는 도구와 원문 (0.6 §13-4 · C2) — waiting일 때만
+  stalled?: boolean; // 멈춘 세션 (0.6 A5 · C2) — busy일 때만
+  contextPct?: number; // 컨텍스트 사용률 0–100 (0.6 토큰 #5 · W2) — 첫 응답 전에는 없다
+  rateLimit?: RateLimit; // 요금제 한도 (0.6 F1 · W2) — API 키 사용자는 없다
+  reason?: StateReason; // 상태 판정 근거 (0.6 §4 · W2)
 }
 
 const STATUSES: AgentStatus[] = ["starting", "busy", "waiting", "shell", "idle", "dead"];
@@ -77,11 +83,17 @@ function applyEvt(p: AgentStateEvt, fromSnapshot = false): void {
       beepWaiting();
     }
   }
+  noteCost(p.session, p.costUsd); // 하루 예산 (0.6 §13-6) — 스냅숏도 기준선으로 받는다(첫 값은 증분 0)
   backend.applyAgentState({
     session: p.session,
     agentSession: p.agentSession,
     status: STATUSES.includes(p.status as AgentStatus) ? (p.status as AgentStatus) : undefined,
     waitingFor: p.waitingFor ?? undefined,
+    pendingTool: p.pendingTool ?? undefined,
+    stalled: !!p.stalled,
+    contextPct: p.contextPct,
+    rateLimit: p.rateLimit,
+    stateReason: p.reason,
     activity: p.activity ?? undefined,
     subagents: p.subagents,
     costUsd: p.costUsd ?? undefined,
@@ -223,4 +235,49 @@ export async function restartAgent(
   const fresh = engineSwitched({ ...backend.listSessions().find((x) => x.id === sessionId), cli });
   backend.noteSpawnFlags(sessionId, agentFlagsToString(cli, f, cli === "codex" && fresh ? undefined : uuid), cli);
   return uuid;
+}
+
+// ── 승인함 응답 (0.6 §13-4 · C2 approval_respond — W2) ──
+// 사람이 누른 [허용] · [거부]를 전달만 한다. "항상 허용"은 없다(역할 파일 권한의 일).
+// 누르기 직전에 같은 도구로 아직 기다리는지 본다 — 그사이 페인에서 먼저 답했으면 아무것도 넣지 않는다.
+// Rust도 같은 확인을 한 번 더 한다(키를 넣는 순간 기준).
+
+/** 훅이 앱의 답을 기다려 주는 시간 — Rust APPROVAL_WAIT(570초)와 같은 값. 넘으면 훅이 손을 뗀다 (B212) */
+export const APPROVAL_WAIT_MS = 570_000;
+
+type Inline = Pick<Session, "status" | "pendingTool"> & { cli?: AgentCliId; spawnCli?: AgentCliId; sinceMs?: number };
+
+/** 훅 대기가 있는 도구 승인인가 — 엔진은 슬롯(cli)이 아니라 돌고 있는 프로세스(spawnCli)로 본다 (B267):
+ *  승인 대기 중 슬롯을 Codex로 바꾸면 버튼이 사라졌고, 반대면 버튼이 보이고 NO_HOOK이 났다 */
+const hookApproval = (s: Inline): boolean =>
+  s.status === "waiting" && s.pendingTool?.kind === "tool" && runCliOf(s) !== "codex";
+
+/** 승인함에서 바로 답할 수 있는가 — 질문 · 계획 승인은 답을 고르는 일이라 페인에서 한다.
+ *  Codex는 훅 대기를 만들지 않고, 시한이 지난 대기는 Rust가 이미 지웠다 (B212). 순수 함수 */
+export function canRespondInline(s: Inline): boolean {
+  return hookApproval(s) && (s.sinceMs ?? 0) < APPROVAL_WAIT_MS;
+}
+
+/** 도구 승인인데 앱이 기다리는 시간이 지났다 — 버튼 대신 '페인에서 답하세요'를 보인다 (B212). 순수 함수 */
+export const approvalExpired = (s: Inline): boolean => hookApproval(s) && (s.sinceMs ?? 0) >= APPROVAL_WAIT_MS;
+
+/** 누르기 직전 확인 — 화면에 보인 도구와 지금 기다리는 도구가 같은가. 순수 함수 */
+export function stillWaitingFor(s: Pick<Session, "status" | "pendingTool"> | undefined, seen: PendingTool): boolean {
+  return !!s && s.status === "waiting" && s.pendingTool?.tool === seen.tool && s.pendingTool.input === seen.input;
+}
+
+/** 응답 실패 이유 (C2 — W2가 코드로 준다). NOT_WAITING=이미 답함 · OTHER_TOOL=다른 도구를 기다림 · NO_HOOK=앱이 답할 길이 없다
+ *  ERROR=호출 자체가 실패했다 (B212 — 예전엔 NO_HOOK으로 바꿔 같은 문구가 나왔다) */
+export type ApprovalReason = "NOT_WAITING" | "OTHER_TOOL" | "NO_HOOK" | "ERROR";
+
+/** 답은 엔진의 권한 훅이 기다리다 받는다 (Q1 (b)) — 페인의 승인 창도 그대로 떠 있고, 먼저 온 답이 이긴다 */
+export async function approvalRespond(sessionId: string, seen: PendingTool, allow: boolean): Promise<{ ok: boolean; reason?: ApprovalReason }> {
+  const s = backend.listSessions().find((x) => x.id === sessionId);
+  if (!s || s.status !== "waiting") return { ok: false, reason: "NOT_WAITING" };
+  if (!stillWaitingFor(s, seen)) return { ok: false, reason: "OTHER_TOOL" };
+  if (!isTauri()) return { ok: false, reason: "NO_HOOK" };
+  return invoke<{ ok: boolean; reason?: ApprovalReason }>("approval_respond", { session: sessionId, allow }).catch(() => ({
+    ok: false,
+    reason: "ERROR" as const,
+  }));
 }

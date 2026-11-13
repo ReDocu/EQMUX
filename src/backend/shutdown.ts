@@ -6,7 +6,16 @@ import { flushLayoutNow } from "./layout";
 import { isTauri } from "./pty";
 import { flushTeamNow } from "./team";
 
+import type { Session } from "../types";
+
 export type ShutdownPhase = "flush" | "flush-late" | "closing";
+
+/** 끌 것이 있는 세션 (B292) — 살아 있는 PTY가 있는 것만. team.json으로 복원한 슬롯은 status가 'shell'이어도
+ *  이번 실행에서 그 페인을 열어 보지 않았으면 프로세스가 없다. alive가 없으면(브라우저 목 · 목록 실패) 상태로 센다 */
+export function liveSessions(list: readonly Session[], alive: readonly string[] | undefined): Session[] {
+  const up = alive && new Set(alive);
+  return list.filter((s) => s.status !== "dead" && (!up || up.has(s.id)));
+}
 
 /** flush 후 앱 종료. 브라우저 dev에서는 no-op. 반환되지 않는 것이 정상이다(앱이 꺼진다) —
  *  false로 돌아오면 app_exit가 실패한 것이다. 부른 쪽이 입력 차단을 풀어야 한다 (B110). */

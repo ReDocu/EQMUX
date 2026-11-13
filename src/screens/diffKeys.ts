@@ -23,3 +23,10 @@ export function diffKeyAction(
   }
   return undefined;
 }
+
+/** 목록을 (다시) 읽은 뒤 고를 파일 — 지금 고른 것이 남았으면 그대로, 아니면 진입점이 넘긴 파일(U192), 없으면 첫 파일 */
+export function pickFile(paths: string[], selected: string | undefined, want: string | undefined): string | undefined {
+  if (selected && paths.includes(selected)) return selected;
+  if (want && paths.includes(want)) return want;
+  return paths[0];
+}

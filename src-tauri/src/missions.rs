@@ -31,6 +31,12 @@ pub struct MissionInfo {
     /// 배정 시각 (B92) — 세션 id → epoch ms. frontmatter `assigned_at: <세션>=<ms> …`.
     /// 완료 보고를 배정 뒤 것으로 한정하는 데 쓴다 — 재시작 뒤에도 같은 판정
     pub assigned_at: HashMap<String, i64>,
+    /// 임무 시작점 (§13-2) — 첫 배정 · [브리프 전달] 때의 HEAD. frontmatter `base_commit`
+    pub base_commit: Option<String>,
+    /// base_commit 뒤 커밋 수 — 목록 때 git으로 센다. 끝난 임무·저장소 아님·base 없음이면 None
+    pub commits_since: Option<u32>,
+    /// 선행 임무 (0.6 §4) — frontmatter `depends_on: <id> <id>`. 없으면 빈 목록. 버스 연동은 2라운드
+    pub depends_on: Vec<String>,
 }
 
 fn missions_dir(ws_path: &str) -> PathBuf {
@@ -45,6 +51,9 @@ fn mission_path(ws_path: &str, id: &str) -> PathBuf {
 /// frontmatter id로 찾는다. list()가 id를 frontmatter에서 뽑으므로(파일명은 폴백),
 /// 조회·변경 경로도 같은 규칙이어야 rename 후 상태·배정이 무반응이 되지 않는다.
 fn find_path(ws_path: &str, id: &str) -> Option<PathBuf> {
+    if !valid_id(id) {
+        return None; // B279 — '../../README' · 절대 경로 id가 missions/ 밖 파일을 고쳐 쓰지 않게
+    }
     let direct = mission_path(ws_path, id);
     if direct.exists() {
         return Some(direct);
@@ -60,6 +69,12 @@ fn find_path(ws_path: &str, id: &str) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// 임무 id는 파일 이름 한 칸이다 (B279) — 경로 구분자 · 드라이브 콜론 · 제어 문자가 들면 쓰지 않는다.
+/// slug()가 만드는 id(영숫자 · - · _ · .)는 언제나 통과한다
+fn valid_id(id: &str) -> bool {
+    !id.is_empty() && !id.chars().any(|c| matches!(c, '/' | '\\' | ':') || c.is_control())
 }
 
 fn now_stamp() -> String {
@@ -90,15 +105,20 @@ fn slug(name: &str) -> String {
     }
 }
 
-fn split_frontmatter(text: &str) -> (Vec<String>, String) {
-    let normalized = text.replace("\r\n", "\n");
-    if let Some(rest) = normalized.strip_prefix("---\n") {
-        if let Some(end) = rest.find("\n---\n") {
-            let fm = rest[..end].lines().map(str::to_string).collect();
-            return (fm, rest[end + 5..].to_string());
-        }
+// 앞의 BOM을 걷는 roles::split_frontmatter를 쓴다 (B270) — 예전 사본은 BOM을 못 넘어 frontmatter가 본문으로
+// 밀렸고, 고쳐 쓰는 함수들이 새 frontmatter 뒤에 원래 파일 전체를 붙였다
+use roles::split_frontmatter;
+
+/// frontmatter를 고쳐 쓴다 — 본문은 그대로, 원래 파일이 BOM으로 시작했으면 BOM도 지킨다 (B270)
+fn write_fm(path: &Path, orig: &str, fm: &[String], body: &str) -> Result<(), String> {
+    let mut out = String::from(if orig.starts_with(roles::BOM) { "\u{feff}---\n" } else { "---\n" });
+    for l in fm {
+        out.push_str(l);
+        out.push('\n');
     }
-    (Vec::new(), normalized)
+    out.push_str("---\n");
+    out.push_str(body);
+    atomic_write(path, &out)
 }
 
 /// 산출물 한 줄 — `- [ ] 항목` / `- [x] 항목` / 체크 칸 없는 옛 `- 항목`(미체크)
@@ -144,7 +164,7 @@ fn parse_file(path: &Path) -> Option<(String, MissionInfo)> {
     let text = fs::read_to_string(path).ok()?;
     let stem = path.file_stem()?.to_string_lossy().into_owned();
     let (fm, body) = split_frontmatter(&text);
-    let id = roles::fm_value(&fm, "id").unwrap_or_else(|| stem.clone());
+    let id = roles::fm_value(&fm, "id").filter(|v| valid_id(v)).unwrap_or_else(|| stem.clone()); // B279 — 어긋나면 파일 이름
     let status = roles::fm_value(&fm, "status")
         .filter(|s| STATUSES.contains(&s.as_str()))
         .unwrap_or_else(|| "todo".into());
@@ -164,6 +184,11 @@ fn parse_file(path: &Path) -> Option<(String, MissionInfo)> {
             assigned: Vec::new(),
             is_default: roles::fm_value(&fm, "default").map(|v| v == "true").unwrap_or(false),
             assigned_at: parse_assigned_at(&fm).into_iter().collect(),
+            base_commit: roles::fm_value(&fm, "base_commit"),
+            commits_since: None,
+            depends_on: roles::fm_value(&fm, "depends_on")
+                .map(|v| v.split_whitespace().map(str::to_string).collect())
+                .unwrap_or_default(),
         },
     ))
 }
@@ -198,14 +223,105 @@ pub fn mark_assigned(ws_path: &str, id: &str, session: &str, at: Option<i64>) ->
         let v: Vec<String> = map.iter().map(|(s, t)| format!("{s}={t}")).collect();
         fm.push(format!("assigned_at: {}", v.join(" ")));
     }
-    let mut out = String::from("---\n");
-    for l in &fm {
-        out.push_str(l);
-        out.push('\n');
+    write_fm(&path, &text, &fm, &body)?;
+    if at.is_some() {
+        mark_base(ws_path, id, false)?; // 첫 배정이 시작점 (§13-2) — 두 번째 세션 배정은 덮지 않는다
     }
-    out.push_str("---\n");
-    out.push_str(&body);
-    atomic_write(&path, &out)
+    Ok(())
+}
+
+/// 임무 시작점 기록 (§13-2) — 지금 HEAD를 frontmatter `base_commit`에. 저장소가 아니거나 커밋이
+/// 없으면 조용히 건너뛴다. overwrite=false면 이미 있는 값을 지킨다(배정), true면 덮는다([브리프 전달])
+pub fn mark_base(ws_path: &str, id: &str, overwrite: bool) -> Result<(), String> {
+    let Ok(head) = crate::workspace::git(&["rev-parse", "HEAD"], ws_path) else {
+        return Ok(());
+    };
+    let path = find_path(ws_path, id).ok_or("임무 파일을 찾을 수 없습니다")?;
+    let text = fs::read_to_string(&path).map_err(|_| "임무 파일을 찾을 수 없습니다".to_string())?;
+    let (mut fm, body) = split_frontmatter(&text);
+    if let Some(old) = roles::fm_value(&fm, "base_commit") {
+        if !overwrite || old == head {
+            return Ok(());
+        }
+    }
+    fm.retain(|l| !l.starts_with("base_commit:"));
+    fm.push(format!("base_commit: {head}"));
+    write_fm(&path, &text, &fm, &body)
+}
+
+/// 선행 임무 지정 (P60) — frontmatter `depends_on`만 바꾸고 나머지는 보존한다. 자기 자신 · 빈 id는 뺀다. 비면 줄을 지운다
+pub fn set_depends(ws_path: &str, id: &str, deps: &[String]) -> Result<(), String> {
+    let path = find_path(ws_path, id).ok_or("임무 파일을 찾을 수 없습니다")?;
+    let text = fs::read_to_string(&path).map_err(|_| "임무 파일을 찾을 수 없습니다".to_string())?;
+    let (mut fm, body) = split_frontmatter(&text);
+    let mut deps: Vec<&str> = deps.iter().map(|d| d.trim()).filter(|d| !d.is_empty() && *d != id && !d.contains(char::is_whitespace)).collect();
+    deps.dedup();
+    fm.retain(|l| !l.starts_with("depends_on:"));
+    if !deps.is_empty() {
+        fm.push(format!("depends_on: {}", deps.join(" ")));
+    }
+    write_fm(&path, &text, &fm, &body)
+}
+
+#[tauri::command]
+pub fn mission_set_depends(ws_path: String, id: String, deps: Vec<String>) -> Result<(), String> {
+    set_depends(&ws_path, &id, &deps)
+}
+
+/// [브리프 전달] 커맨드 (§13-2) — 사람이 "지금부터"라고 누른 것이라 시작점을 덮는다
+#[tauri::command]
+pub fn mission_mark_base(ws_path: String, id: String) -> Result<(), String> {
+    mark_base(&ws_path, &id, true)
+}
+
+/// 편집 기록 경로 → 저장소 기준 상대 경로 (§13-3) — 훅의 file_path는 절대 경로일 수 있다.
+/// 슬래시로 맞추고 워크스페이스 접두를 걷는다(대소문자 무시 — Windows). 밖의 절대 경로는 버린다. 정렬·중복 제거
+pub fn touched_rel(ws_path: &str, paths: impl IntoIterator<Item = String>) -> Vec<String> {
+    let root = ws_path.replace('\\', "/").trim_end_matches('/').to_lowercase();
+    let mut out = std::collections::BTreeSet::new();
+    for p in paths {
+        let p = p.replace('\\', "/");
+        let abs = p.starts_with('/') || p.get(1..2) == Some(":");
+        let rel = if !abs {
+            Some(p.trim_start_matches("./").to_string())
+        } else if p.to_lowercase().starts_with(&format!("{root}/")) {
+            p.get(root.len() + 1..).map(str::to_string) // 경계가 안 맞으면(소문자 길이 차) 버린다
+        } else {
+            None
+        };
+        // 앱이 시킨 기억 · 노트 쓰기는 임무 변경이 아니다 (U113) — 워크트리 안 소스는 남긴다
+        if let Some(r) = rel.filter(|r| !r.is_empty() && !crate::owns::app_file(&crate::owns::repo_rel(ws_path, r))) {
+            out.insert(r);
+        }
+    }
+    out.into_iter().collect()
+}
+
+/// 임무 검토 필터 (§13-3) — 이 임무에 배정된(됐던) 세션들이 첫 배정 뒤에 편집 도구로 고친 파일.
+/// 세션은 지금 배정 + assigned_at에 남은 세션, 시작은 assigned_at 중 가장 이른 시각(없으면 처음부터)
+#[tauri::command]
+pub async fn mission_touched_files(
+    store_state: tauri::State<'_, crate::StoreState>,
+    ws_id: String,
+    ws_path: String,
+    id: String,
+) -> Result<Vec<String>, String> {
+    let root = store_state.0.root();
+    tauri::async_runtime::spawn_blocking(move || {
+        let m = list(&ws_path).into_iter().find(|m| m.id == id).ok_or("임무 파일을 찾을 수 없습니다")?;
+        let since = m.assigned_at.values().copied().min().unwrap_or(0);
+        let mut sessions: Vec<String> = m.assigned_at.keys().cloned().collect();
+        sessions.extend(m.assigned.iter().cloned());
+        sessions.sort();
+        sessions.dedup();
+        let paths = sessions
+            .iter()
+            .flat_map(|s| crate::store::touches_for(&root, &ws_id, s, since))
+            .map(|t| t.path);
+        Ok(touched_rel(&ws_path, paths))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// 배정 시각 커맨드 (B92) — 프런트가 배정 토글 뒤에 repo 루트 경로로 부른다
@@ -260,6 +376,14 @@ pub fn list(ws_path: &str) -> Vec<MissionInfo> {
         .filter_map(|e| parse_file(&e.path()).map(|(_, m)| m))
         .collect();
     out.sort_by(|a, b| a.name.cmp(&b.name));
+    // ponytail: 임무마다 git 한 번 — 끝나지 않은 임무만 센다. 느려지면 rev-list 결과를 캐시한다
+    for m in out.iter_mut().filter(|m| m.status != "done") {
+        if let Some(base) = &m.base_commit {
+            m.commits_since = crate::workspace::git(&["rev-list", "--count", &format!("{base}..HEAD")], ws_path)
+                .ok()
+                .and_then(|n| n.parse().ok());
+        }
+    }
     for (session, mission_id) in roles::scan_assignments(ws_path) {
         if let Some(m) = out.iter_mut().find(|m| m.id == mission_id) {
             m.assigned.push(session);
@@ -299,6 +423,9 @@ pub fn create(
         assigned: Vec::new(),
         is_default: false,
         assigned_at: HashMap::new(),
+        base_commit: None,
+        commits_since: None,
+        depends_on: Vec::new(),
     };
     atomic_write(&mission_path(ws_path, &id), &render(&m))?;
     Ok(m)
@@ -315,14 +442,7 @@ pub fn set_status(ws_path: &str, id: &str, status: &str) -> Result<(), String> {
     fm.retain(|l| !l.starts_with("status:") && !l.starts_with("updated:"));
     fm.push(format!("status: {status}"));
     fm.push(format!("updated: {}", now_stamp()));
-    let mut out = String::from("---\n");
-    for l in &fm {
-        out.push_str(l);
-        out.push('\n');
-    }
-    out.push_str("---\n");
-    out.push_str(&body);
-    atomic_write(&path, &out)
+    write_fm(&path, &text, &fm, &body)
 }
 
 /// 임무 이벤트 기록 (0.5 C1) — 생성·배정·상태 변경을 이벤트 피드에 남긴다. 원본은 여전히 파일이다.
@@ -348,6 +468,15 @@ pub fn get(ws_path: &str, id: &str) -> Option<MissionInfo> {
     parse_file(&find_path(ws_path, id)?).map(|(_, m)| m)
 }
 
+/// 배정 (B277) — 임무는 repo 루트에서 읽고, 블록은 세션 cwd의 역할 파일에 쓴다. 워크트리 세션의 cwd에는
+/// 커밋 전 임무가 없고, 커밋된 임무도 갈라진 때의 사본이다. 반환은 (블록 id, 임무 이름)
+pub fn assign(root: &str, cwd: &str, session: &str, id: &str) -> Result<(String, String), String> {
+    let m = get(root, id).ok_or("임무 파일을 찾을 수 없습니다")?;
+    let block = roles::MissionBlock { id: m.id, name: m.name, status: m.status, goal: m.goal, outputs: m.outputs, branch: m.branch };
+    roles::set_mission(cwd, session, Some(&block))?;
+    Ok((block.id, block.name))
+}
+
 /// frontmatter의 default 키만 고쳐 쓴다 — 본문·다른 키는 보존 (FR-E-74와 같은 원칙)
 fn write_default_flag(path: &Path, on: bool) -> Result<(), String> {
     let text = fs::read_to_string(path).map_err(|_| "임무 파일을 찾을 수 없습니다".to_string())?;
@@ -361,14 +490,7 @@ fn write_default_flag(path: &Path, on: bool) -> Result<(), String> {
         fm.push("default: true".into());
     }
     fm.push(format!("updated: {}", now_stamp()));
-    let mut out = String::from("---\n");
-    for l in &fm {
-        out.push_str(l);
-        out.push('\n');
-    }
-    out.push_str("---\n");
-    out.push_str(&body);
-    atomic_write(path, &out)
+    write_fm(path, &text, &fm, &body)
 }
 
 /// 워크스페이스 기본 임무 지정 (FR-E-56, M33) — 켜면 다른 임무의 default는 걷어낸다 (1개 규칙).
@@ -425,7 +547,9 @@ mod tests {
                 me: true,
                 persona_name: None,
                 title: None,
+                identity: None,
             }],
+            ..Default::default()
         }
     }
 
@@ -500,6 +624,130 @@ mod tests {
         let text = fs::read_to_string(mission_path(&ws, &m.id)).unwrap();
         assert!(!text.contains("assigned_at"));
         fs::remove_dir_all(&ws).ok();
+    }
+
+    /// 검토 필터 경로 (§13-3) — 절대 경로는 워크스페이스 기준으로, 밖은 버리고, 정렬·중복 제거
+    #[test]
+    fn touched_paths_become_repo_relative() {
+        let got = touched_rel(
+            "D:\\w\\repo\\",
+            [
+                "D:/W/Repo/src/x.ts".to_string(),
+                "src\\y.ts".into(),
+                "./src/x.ts".into(),
+                "C:/other/z.ts".into(),
+                "D:/w/repo2/q.ts".into(),
+                "D:/w/repo/.eqmux/memory/kai.md".into(),
+                ".eqmux/worktrees/kai@w/src/w.ts".into(),
+            ],
+        );
+        assert_eq!(got, vec![".eqmux/worktrees/kai@w/src/w.ts", "src/x.ts", "src/y.ts"]);
+    }
+
+    /// 선행 임무 (§4) — 공백으로 나눈 id 목록, 다른 쓰기(상태 변경)가 보존한다
+    #[test]
+    fn depends_on_parsed_and_preserved() {
+        let ws = temp_ws("depends");
+        let m = create(&ws, "후행", "목표", None, vec![]).unwrap();
+        assert!(m.depends_on.is_empty());
+        let path = mission_path(&ws, &m.id);
+        let text = fs::read_to_string(&path).unwrap().replacen("status: todo\n", "status: todo\ndepends_on: api  db-schema\n", 1);
+        fs::write(&path, text).unwrap();
+        set_status(&ws, &m.id, "in-progress").unwrap();
+        assert_eq!(get(&ws, &m.id).unwrap().depends_on, vec!["api", "db-schema"]);
+        // 화면에서 고친다 (P60) — 자기 자신 · 빈 값은 빼고, 다른 frontmatter는 남는다. 비우면 줄이 없어진다
+        set_depends(&ws, &m.id, &["db-schema".into(), m.id.clone(), " ".into()]).unwrap();
+        let got = get(&ws, &m.id).unwrap();
+        assert_eq!((got.depends_on, got.status.as_str()), (vec!["db-schema".to_string()], "in-progress"));
+        set_depends(&ws, &m.id, &[]).unwrap();
+        assert!(!fs::read_to_string(&path).unwrap().contains("depends_on"));
+        fs::remove_dir_all(&ws).ok();
+    }
+
+    /// B279 — 경로 같은 frontmatter id는 버리고 파일 이름을 쓴다. 그런 id로 고쳐 쓰면 Err, 밖의 파일은 그대로
+    #[test]
+    fn path_like_mission_id_stays_inside() {
+        let ws = temp_ws("id-escape");
+        let readme = std::path::Path::new(&ws).join("README.md");
+        fs::write(&readme, "# 원래\r\n").unwrap();
+        let abs = readme.with_extension("").to_string_lossy().into_owned();
+        fs::create_dir_all(missions_dir(&ws)).unwrap();
+        fs::write(missions_dir(&ws).join("a.md"), "---\nid: ../../README\nname: a\n---\n").unwrap();
+        fs::write(missions_dir(&ws).join("b.md"), format!("---\nid: {abs}\nname: b\n---\n")).unwrap();
+        let ids: Vec<String> = list(&ws).into_iter().map(|m| m.id).collect();
+        assert_eq!(ids, vec!["a", "b"]);
+        for bad in ["../../README", abs.as_str()] {
+            assert!(set_status(&ws, bad, "in-progress").is_err());
+            assert!(mark_assigned(&ws, bad, "kai@w", Some(1)).is_err());
+            assert!(set_depends(&ws, bad, &[]).is_err());
+        }
+        assert_eq!(fs::read_to_string(&readme).unwrap(), "# 원래\r\n");
+        set_status(&ws, "a", "done").unwrap(); // 파일 이름 id로는 그대로 고친다
+        assert_eq!(get(&ws, "a").unwrap().status, "done");
+        fs::remove_dir_all(&ws).ok();
+    }
+
+    /// B277 — 임무 파일은 루트에만 있고(커밋 전) 세션 cwd는 워크트리다. 블록은 워크트리 역할 파일에 생기고 루트 역할 파일은 없다
+    #[test]
+    fn assign_reads_root_writes_worktree_role() {
+        let root = temp_ws("assign-root");
+        let wt = std::path::Path::new(&root).join(".eqmux").join("worktrees").join("kai@w").to_string_lossy().into_owned();
+        fs::create_dir_all(&wt).unwrap();
+        let m = create(&root, "루트 임무", "목표", None, vec![]).unwrap();
+        assert!(assign(&wt, &wt, "kai@w", &m.id).is_err()); // 예전 길 — 워크트리에서 찾으면 없다
+        assert_eq!(assign(&root, &wt, "kai@w", &m.id).unwrap(), (m.id.clone(), "루트 임무".to_string()));
+        assert_eq!(roles::scan_assignments(&wt), vec![("kai@w".into(), m.id.clone())]);
+        assert!(!roles::role_path(&root, "kai@w").exists());
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// 메모장 'UTF-8(BOM)' 임무 파일 (B270) — 읽을 때 BOM을 넘어 frontmatter를 보고, 고쳐 써도 BOM 하나와 본문이 그대로다
+    #[test]
+    fn bom_mission_file_keeps_frontmatter() {
+        let ws = temp_ws("bom");
+        let m = create(&ws, "비오엠", "목표", None, vec![]).unwrap();
+        let path = mission_path(&ws, &m.id);
+        let text = fs::read_to_string(&path).unwrap().replacen("status: todo", "status: in-progress", 1);
+        fs::write(&path, format!("\u{feff}{}", text.replace('\n', "\r\n"))).unwrap();
+        set_depends(&ws, &m.id, &["api".into()]).unwrap();
+        mark_assigned(&ws, &m.id, "kai@w", Some(1)).unwrap();
+        let got = get(&ws, &m.id).unwrap();
+        assert_eq!((got.name.as_str(), got.status.as_str(), got.goal.as_str()), ("비오엠", "in-progress", "목표"));
+        assert_eq!(got.depends_on, vec!["api"]);
+        let after = fs::read_to_string(&path).unwrap();
+        assert!(after.starts_with("\u{feff}---\n") && after.matches('\u{feff}').count() == 1 && after.matches("## 목표").count() == 1, "{after}");
+        fs::remove_dir_all(&ws).ok();
+    }
+
+    /// 임무 시작점 (§13-2) — 첫 배정이 HEAD를 적고, 다음 배정은 덮지 않고, [브리프 전달]은 덮는다.
+    /// 목록이 그 뒤 커밋 수를 센다. 저장소가 아니면 배정은 되고 base_commit만 없다
+    #[test]
+    fn base_commit_on_assign_and_brief() {
+        let ws = temp_ws("base-commit");
+        let git = |args: &[&str]| crate::workspace::git(args, &ws).unwrap();
+        let commit = || git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "--allow-empty", "-m", "x"]);
+        git(&["init", "-q"]);
+        commit();
+        let first = git(&["rev-parse", "HEAD"]);
+        let m = create(&ws, "시작점", "목표", None, vec![]).unwrap();
+        mark_assigned(&ws, &m.id, "kai@w", Some(1)).unwrap();
+        assert_eq!(get(&ws, &m.id).unwrap().base_commit.as_deref(), Some(first.as_str()));
+        commit();
+        commit();
+        mark_assigned(&ws, &m.id, "hana@w", Some(2)).unwrap(); // 두 번째 배정은 시작점을 지킨다
+        let got = list(&ws).into_iter().next().unwrap();
+        assert_eq!(got.base_commit.as_deref(), Some(first.as_str()));
+        assert_eq!(got.commits_since, Some(2));
+        mark_base(&ws, &m.id, true).unwrap(); // [브리프 전달]
+        assert_eq!(list(&ws)[0].commits_since, Some(0));
+        assert_eq!(get(&ws, &m.id).unwrap().assigned_at.len(), 2); // 다른 키 보존
+        fs::remove_dir_all(&ws).ok();
+
+        let plain = temp_ws("base-none");
+        let m = create(&plain, "저장소 아님", "목표", None, vec![]).unwrap();
+        mark_assigned(&plain, &m.id, "kai@w", Some(1)).unwrap();
+        assert_eq!(get(&plain, &m.id).unwrap().base_commit, None);
+        fs::remove_dir_all(&plain).ok();
     }
 
     #[test]

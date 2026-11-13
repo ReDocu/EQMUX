@@ -52,11 +52,16 @@ fn eqmux_dir(ws_path: &str) -> PathBuf {
     Path::new(ws_path).join(".eqmux")
 }
 
-pub fn load(ws_path: &str) -> TeamFile {
-    fs::read_to_string(eqmux_dir(ws_path).join("team.json"))
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+/// 파일이 없으면 빈 팀, 있는데 해석하지 못하면 Err (B275) — 빈 팀으로 열면 다음 자동 저장이 원래 편성을 덮는다.
+/// 앞의 BOM은 떼고 읽는다 (B270과 같은 규칙 — PowerShell 5.1 · 옛 메모장이 붙인다)
+pub fn load(ws_path: &str) -> Result<TeamFile, String> {
+    let text = match fs::read_to_string(eqmux_dir(ws_path).join("team.json")) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(TeamFile::default()),
+        Err(e) => return Err(format!("team.json을 읽지 못했습니다 — {e}")),
+    };
+    serde_json::from_str(text.strip_prefix(crate::roles::BOM).unwrap_or(&text))
+        .map_err(|e| format!("team.json을 읽지 못했습니다 — {e}"))
 }
 
 /// team.json 원자적 쓰기 + team.md 파생 (FR-E-17 — 사람이 읽는 표).
@@ -65,7 +70,8 @@ pub fn save(ws_path: &str, slots: &[TeamSlot], persona_title: &dyn Fn(&str) -> O
     let dir = eqmux_dir(ws_path);
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     // 더 새 EQMUX가 쓴 편성은 덮어쓰지 않는다 — 모르는 필드를 지우고 버전을 낮추게 된다 (FR-E-75)
-    let on_disk = load(ws_path).version;
+    // 해석하지 못한 파일도 덮지 않는다 (B275) — 끝 쉼표 · 병합 충돌 표식은 한 글자만 고치면 살릴 편성이다
+    let on_disk = load(ws_path).map_err(|e| format!("{e} — 파일을 고치거나 지우기 전에는 덮어쓰지 않습니다"))?.version;
     if on_disk > SCHEMA_VERSION {
         return Err(format!(
             "team.json이 더 새 EQMUX(스키마 v{on_disk})로 저장되어 있어 덮어쓰지 않습니다 — EQMUX를 업데이트하세요"
@@ -90,7 +96,7 @@ fn render_md(slots: &[TeamSlot], persona_title: &dyn Fn(&str) -> Option<String>)
         "# 팀 편성\n\n| 슬롯 | 페르소나 | 직무 |\n|---|---|---|\n"
     });
     // 표 행 수 — 기본 4행, 슬롯 상한 옵션(6·8)으로 그 위 슬롯이 있으면 거기까지 (절대 상한 8)
-    let max_slot = slots.iter().map(|s| s.slot).max().unwrap_or(0).min(8).max(4);
+    let max_slot = slots.iter().map(|s| s.slot).max().unwrap_or(0).clamp(4, 8);
     for n in 1u8..=max_slot {
         match slots.iter().find(|s| s.slot == n) {
             Some(s) => {
@@ -147,14 +153,35 @@ mod tests {
         let w = ws.to_string_lossy().into_owned();
         let slot_json = r#"{"slot":1,"persona":"kai","personaName":"카이","job":"dev","jobName":"개발","title":"서버","future":1}"#;
         fs::write(dir.join("team.json"), format!(r#"{{"slots":[{slot_json}]}}"#)).unwrap();
-        let t = load(&w);
+        let t = load(&w).unwrap();
         assert_eq!((t.version, t.slots.len()), (0, 1)); // version 없음 — 팀이 비지 않는다
         assert_eq!(t.slots[0].title.as_deref(), Some("서버"));
         save(&w, &t.slots, &|_| None).unwrap();
-        assert_eq!(load(&w).version, SCHEMA_VERSION);
+        assert_eq!(load(&w).unwrap().version, SCHEMA_VERSION);
         fs::write(dir.join("team.json"), format!(r#"{{"version":2,"slots":[{slot_json}]}}"#)).unwrap();
         assert!(save(&w, &t.slots, &|_| None).is_err());
         assert!(fs::read_to_string(dir.join("team.json")).unwrap().contains("\"version\":2")); // 그대로
+        fs::remove_dir_all(&ws).ok();
+    }
+
+    /// B275 — 없는 파일은 빈 팀, BOM은 읽고, 끝 쉼표 · 충돌 표식은 Err이며 save가 바이트를 그대로 둔다
+    #[test]
+    fn unparsable_team_json_is_not_overwritten() {
+        let ws = std::env::temp_dir().join(format!("eqmux-team-bad-{}", crate::workspace::now_ms()));
+        let dir = ws.join(".eqmux");
+        fs::create_dir_all(&dir).unwrap();
+        let w = ws.to_string_lossy().into_owned();
+        assert_eq!(load(&w).unwrap().slots.len(), 0); // 파일 없음
+        let slot_json = r#"{"slot":1,"persona":"kai","personaName":"카이","job":"dev","jobName":"개발"}"#;
+        fs::write(dir.join("team.json"), format!("\u{feff}{{\"version\":1,\"slots\":[{slot_json}]}}")).unwrap();
+        assert_eq!(load(&w).unwrap().slots.len(), 1); // BOM
+        for bad in [format!(r#"{{"version":1,"slots":[{slot_json},]}}"#), format!("<<<<<<< HEAD\n{{\"slots\":[{slot_json}]}}")] {
+            fs::write(dir.join("team.json"), &bad).unwrap();
+            let err = load(&w).err().unwrap();
+            assert!(err.contains("line"), "{err}"); // serde 줄 · 칸이 문구에 남는다
+            assert!(save(&w, &[slot(2, None)], &|_| None).is_err());
+            assert_eq!(fs::read_to_string(dir.join("team.json")).unwrap(), bad);
+        }
         fs::remove_dir_all(&ws).ok();
     }
 

@@ -19,6 +19,12 @@ pub struct JobInfo {
     pub permissions: crate::roles::RolePermissions,
     pub responsibility: String,
     pub forbidden: String,
+    /// 직무별 모델 (0.6 §3 · 토큰 #8) — frontmatter `model:`. 빈 값 = 엔진 기본 (키 없음)
+    #[serde(default)]
+    pub model: String,
+    /// 직함별 담당 경로 (0.6 · W5 owns.rs) — frontmatter `owns: src/git/** docs/**`(공백으로 가른 glob). 빈 값 = 키 없음
+    #[serde(default)]
+    pub owns: String,
     /// 읽은 시점의 파일 mtime (P-7) — 저장 시 외부 변경 충돌 감지에 쓴다 (fsx와 같은 규칙)
     #[serde(default)]
     pub mtime_ms: i64,
@@ -35,6 +41,9 @@ pub struct PersonaProfile {
     pub tone: String,
     #[serde(default)]
     pub personality: String,
+    /// 대사 예시 (0.6 §15-5 · 중급 전용) — `상황 → 응답` 2~3줄. 비면 토큰 0
+    #[serde(default)]
+    pub examples: String,
 }
 
 /// 페르소나 — frontmatter(id·name·color·level) + 본문(단계별 프로필 섹션) (FR-E-23).
@@ -77,6 +86,18 @@ pub struct PersonaInfo {
     pub character_name: Option<String>,
     #[serde(default)]
     pub character_source: Option<String>,
+    /// 시트의 `## 정체성` 첫 줄 (0.6 §15-3) — 팀원 표 정체성 열에 쓴다
+    #[serde(default)]
+    pub character_identity: Option<String>,
+    /// 매 턴 캐릭터 상기 (0.6 §15-3) — frontmatter `remind: on`. 꺼짐이 기본이고 키도 없다
+    #[serde(default)]
+    pub remind: bool,
+    /// 모델 (0.6 §3) — 직무 모델보다 우선. 빈 값 = 직무 → 엔진 기본
+    #[serde(default)]
+    pub model: String,
+    /// 초상 이미지 (0.6 §15-4) — 같은 디렉터리의 <id>.png mtime. None = 초상 없음(이니셜)
+    #[serde(default)]
+    pub portrait_mtime_ms: Option<i64>,
     /// 읽은 시점의 파일 mtime (P-7) — 저장 시 외부 변경 충돌 감지에 쓴다
     #[serde(default)]
     pub mtime_ms: i64,
@@ -129,7 +150,8 @@ fn parse_bool_line(fm: &[String], key: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// 본문에서 "## 책임"·"## 금지" 문단을 뽑는다 — missions와 같은 관용 파싱
+/// 본문에서 "## 책임"·"## 금지" 문단을 뽑는다 — missions와 같은 관용 파싱.
+/// 줄은 그대로 잇는다 (B282) — 공백으로 붙이면 편집기에서 적은 목록이 다시 읽을 때 한 줄이 됐다. 섹션 앞뒤 빈 줄만 걷는다
 fn parse_job_body(body: &str) -> (String, String) {
     let mut responsibility = Vec::new();
     let mut forbidden = Vec::new();
@@ -145,16 +167,14 @@ fn parse_job_body(body: &str) -> (String, String) {
             };
             continue;
         }
-        if line.trim().is_empty() {
-            continue;
-        }
         match section {
-            "r" => responsibility.push(line.trim().to_string()),
-            "f" => forbidden.push(line.trim().to_string()),
+            "r" => responsibility.push(line.trim_end()),
+            "f" => forbidden.push(line.trim_end()),
             _ => {}
         }
     }
-    (responsibility.join(" "), forbidden.join(" "))
+    let text = |lines: &[&str]| lines.join("\n").trim_matches('\n').to_string();
+    (text(&responsibility), text(&forbidden))
 }
 
 fn file_mtime_ms(path: &Path) -> i64 {
@@ -181,6 +201,8 @@ fn parse_job(path: &Path) -> Option<JobInfo> {
         },
         responsibility,
         forbidden,
+        model: fm_value(&fm, "model").unwrap_or_default(),
+        owns: fm_value(&fm, "owns").unwrap_or_default(),
         mtime_ms: file_mtime_ms(path),
     })
 }
@@ -224,16 +246,28 @@ fn parse_persona_body(body: &str) -> (String, String, String) {
 
 /// 고급 캐릭터 시트 검출 — 페르소나 파일과 같은 디렉터리의 <id>.character.md.
 /// 존재가 곧 고급 단계다. frontmatter의 name·source는 역할 파일 캐릭터 블록의 정체성 줄에 쓴다.
-fn character_info(dir: Option<&Path>, id: &str) -> (Option<String>, Option<String>, Option<String>) {
-    let Some(dir) = dir else { return (None, None, None) };
+/// 반환: (경로, name, source, `## 정체성` 아래 첫 글줄)
+type CharInfo = (Option<String>, Option<String>, Option<String>, Option<String>);
+fn character_info(dir: Option<&Path>, id: &str) -> CharInfo {
+    let Some(dir) = dir else { return (None, None, None, None) };
     let path = dir.join(format!("{}.character.md", safe_id(id)));
-    let Ok(text) = fs::read_to_string(&path) else { return (None, None, None) };
-    let (fm, _) = split_frontmatter(&text);
+    let Ok(text) = fs::read_to_string(&path) else { return (None, None, None, None) };
+    let (fm, body) = split_frontmatter(&text);
     (
         Some(path.to_string_lossy().into_owned()),
         fm_value(&fm, "name"),
         fm_value(&fm, "source"),
+        sheet_identity(&body),
     )
+}
+
+/// 시트 본문의 `## 정체성` 섹션 첫 글줄 — 인용(`>`)·빈 줄은 건너뛰고, 다음 섹션이 나오면 없음
+fn sheet_identity(body: &str) -> Option<String> {
+    let mut lines = body.lines().skip_while(|l| !l.trim_start().starts_with("## 정체성")).skip(1);
+    lines
+        .find(|l| !l.trim().is_empty() && !l.trim_start().starts_with('>'))
+        .filter(|l| !l.starts_with("## "))
+        .map(|l| l.trim().to_string())
 }
 
 const LEVELS: [&str; 3] = ["basic", "mid", "adv"];
@@ -266,6 +300,8 @@ fn parse_profiles(body: &str) -> Option<[PersonaProfile; 3]> {
                 "t"
             } else if h.starts_with("성격") {
                 "p"
+            } else if h.starts_with("대사") {
+                "e"
             } else {
                 ""
             };
@@ -279,6 +315,7 @@ fn parse_profiles(body: &str) -> Option<[PersonaProfile; 3]> {
             "h" => &mut profiles[i].hint,
             "t" => &mut profiles[i].tone,
             "p" => &mut profiles[i].personality,
+            "e" => &mut profiles[i].examples,
             _ => continue,
         };
         if !target.is_empty() {
@@ -298,20 +335,19 @@ fn parse_persona(path: &Path) -> Option<PersonaInfo> {
         .unwrap_or_else(|| "blue".into());
     // 프로필 3벌 — 새 포맷이 원본. 구 포맷(단일 본문)은 세 프로필에 복사해 마이그레이션한다:
     // 어느 단계로 전환해도 기존 내용이 그대로 남는 것이 사용자 기대에 가깝다.
-    let [mut basic, mid, mut adv] = parse_profiles(&body).unwrap_or_else(|| {
+    let [mut basic, mid, _] = parse_profiles(&body).unwrap_or_else(|| {
         let (hint, tone, personality) = parse_persona_body(&body);
-        let p = PersonaProfile { hint, tone, personality };
+        let p = PersonaProfile { hint, tone, personality, ..Default::default() };
         [p.clone(), p.clone(), p]
     });
     // 단계별 구성 정규화 (단일 지점 — 표시·주입·재저장 전부에 적용):
     // 기본 = 판단 성향만 · 중급 = 성향+말투+성격 · 고급 = 캐릭터 시트가 전부 (텍스트 프로필 없음)
     basic.tone.clear();
     basic.personality.clear();
-    adv.hint.clear();
-    adv.tone.clear();
-    adv.personality.clear();
+    basic.examples.clear();
+    let adv = PersonaProfile::default();
     let id = fm_value(&fm, "id").unwrap_or(stem.clone());
-    let (character_path, character_name, character_source) = character_info(path.parent(), &id);
+    let (character_path, character_name, character_source, character_identity) = character_info(path.parent(), &id);
     // 단계 — frontmatter가 원본. 없거나 깨진 값이면 내용으로 유추한다 (구 파일 하위호환)
     let level = fm_value(&fm, "level")
         .filter(|l| LEVELS.contains(&l.as_str()))
@@ -331,6 +367,8 @@ fn parse_persona(path: &Path) -> Option<PersonaInfo> {
         _ => &basic,
     }
     .clone();
+    // 초상 (0.6 §15-4) — 페르소나 파일과 같은 디렉터리의 <id>.png
+    let portrait_mtime_ms = path.parent().map(|d| d.join(format!("{}.png", safe_id(&id)))).filter(|p| p.is_file()).map(|p| file_mtime_ms(&p));
     Some(PersonaInfo {
         id,
         name: fm_value(&fm, "name").unwrap_or(stem),
@@ -347,6 +385,10 @@ fn parse_persona(path: &Path) -> Option<PersonaInfo> {
         character_path,
         character_name,
         character_source,
+        character_identity,
+        portrait_mtime_ms,
+        remind: fm_value(&fm, "remind").as_deref() == Some("on"),
+        model: fm_value(&fm, "model").unwrap_or_default(),
         mtime_ms: file_mtime_ms(path),
     })
 }
@@ -445,13 +487,25 @@ fn atomic_write(path: &Path, content: &str) -> Result<(), String> {
 
 fn render_job(j: &JobInfo) -> String {
     format!(
-        "---\nid: {}\nname: {}\ndefault_permissions:\n  write: {}\n  commit: {}\n  push: {}\n---\n\n## 책임\n{}\n\n## 금지\n{}\n",
-        j.id, j.name, j.permissions.write, j.permissions.commit, j.permissions.push, j.responsibility, j.forbidden
+        "---\nid: {}\nname: {}\n{}{}default_permissions:\n  write: {}\n  commit: {}\n  push: {}\n---\n\n## 책임\n{}\n\n## 금지\n{}\n",
+        j.id, j.name, model_line(&j.model), owns_line(&j.owns), j.permissions.write, j.permissions.commit, j.permissions.push, j.responsibility, j.forbidden
     )
 }
 
+/// `model: <값>` 줄 — 공백은 걷는다(CLI 인자 한 개). 빈 값이면 키를 쓰지 않는다
+fn model_line(m: &str) -> String {
+    let m: String = m.split_whitespace().collect();
+    if m.is_empty() { String::new() } else { format!("model: {m}\n") }
+}
+
+/// `owns: <glob> <glob>` 줄 — glob 사이 공백은 하나로. 빈 값이면 키를 쓰지 않는다
+fn owns_line(o: &str) -> String {
+    let o = crate::roles::owns_value(o);
+    if o.is_empty() { String::new() } else { format!("owns: {o}\n") }
+}
+
 fn render_profile(out: &mut String, title: &str, p: &PersonaProfile) {
-    if p.hint.is_empty() && p.tone.is_empty() && p.personality.is_empty() {
+    if p.hint.is_empty() && p.tone.is_empty() && p.personality.is_empty() && p.examples.is_empty() {
         return; // 빈 프로필은 섹션을 만들지 않는다 — 그 단계는 아직 안 쓴 것
     }
     out.push_str(&format!("\n## {title}\n"));
@@ -464,6 +518,9 @@ fn render_profile(out: &mut String, title: &str, p: &PersonaProfile) {
     if !p.personality.is_empty() {
         out.push_str(&format!("### 성격\n{}\n", p.personality));
     }
+    if !p.examples.is_empty() {
+        out.push_str(&format!("### 대사 예시\n{}\n", p.examples));
+    }
 }
 
 fn render_persona(p: &PersonaInfo) -> String {
@@ -474,15 +531,16 @@ fn render_persona(p: &PersonaInfo) -> String {
     // 직함도 같은 규칙 — 한 줄로 접어 frontmatter를 깨지 않게 한다 (입력 단계에서 이미 막지만 한 번 더)
     let title = p.title.split_whitespace().collect::<Vec<_>>().join(" ");
     let title_line = if title.is_empty() { String::new() } else { format!("title: {title}\n") };
+    let remind_line = if p.remind { "remind: on\n" } else { "" };
     let mut s = format!(
-        "---\nid: {}\nname: {}\ncolor: {}\n{}{}{}---\n",
-        p.id, p.name, p.color, level_line, job_line, title_line
+        "---\nid: {}\nname: {}\ncolor: {}\n{}{}{}{}{}---\n",
+        p.id, p.name, p.color, level_line, job_line, title_line, remind_line, model_line(&p.model)
     );
     // 저장의 원본은 프로필 3벌 — 최상위 편의 필드(hint 등)는 쓰지 않는다.
     // 단, 구 호출 경로(프로필 없이 hint만 온 페이로드)는 세 프로필에 복사해 받아준다.
     // 고급 섹션은 쓰지 않는다 — 고급은 캐릭터 시트(<id>.character.md)가 전부다
     if p.basic.hint.is_empty() && p.mid.hint.is_empty() && !p.hint.is_empty() {
-        let legacy = PersonaProfile { hint: p.hint.clone(), tone: p.tone.clone(), personality: p.personality.clone() };
+        let legacy = PersonaProfile { hint: p.hint.clone(), tone: p.tone.clone(), personality: p.personality.clone(), ..Default::default() };
         // 기본은 판단 성향만 — 말투·성격은 중급부터
         render_profile(&mut s, "기본", &PersonaProfile { hint: legacy.hint.clone(), ..Default::default() });
         render_profile(&mut s, "중급", &legacy);
@@ -610,6 +668,69 @@ pub fn save_character(app_root: &Path, id: &str, content: &str, expected_mtime_m
     atomic_write(&path, content)
 }
 
+/// 초상 상한 — 아바타 한 칸에 쓰는 그림이라 이보다 크면 잘못 넣은 파일로 본다
+const MAX_PORTRAIT_BYTES: u64 = 4 * 1024 * 1024;
+
+/// 초상 읽기 (0.6 §15-4) — 전역 personas/<id>.png. id는 safe_id로 걸러 디렉터리 밖을 읽지 못한다
+pub fn read_portrait(app_root: &Path, id: &str) -> Result<Vec<u8>, String> {
+    let path = personas_dir(app_root).join(format!("{}.png", safe_id(id)));
+    let len = fs::metadata(&path).map_err(|_| "초상 없음".to_string())?.len();
+    if len > MAX_PORTRAIT_BYTES {
+        return Err("초상이 4MB를 넘습니다".into());
+    }
+    fs::read(&path).map_err(|e| e.to_string())
+}
+
+/// 초상 커맨드 — 바이트 그대로(ArrayBuffer) 돌려준다. JSON 숫자 배열로 부풀리지 않는다
+#[tauri::command]
+pub fn library_portrait(store_state: tauri::State<crate::StoreState>, id: String) -> Result<tauri::ipc::Response, String> {
+    read_portrait(&store_state.0.root(), &id).map(tauri::ipc::Response::new)
+}
+
+/// 초상 복사 (0.6 QA P66) — 고른 png를 전역 personas/<id>.png로. 크기 상한과 PNG 서명을 먼저 본다
+pub fn set_portrait(app_root: &Path, id: &str, src: &Path) -> Result<(), String> {
+    if fs::metadata(src).map_err(|e| e.to_string())?.len() > MAX_PORTRAIT_BYTES {
+        return Err("초상이 4MB를 넘습니다".into());
+    }
+    let bytes = fs::read(src).map_err(|e| e.to_string())?;
+    if !bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Err("PNG 파일이 아닙니다".into());
+    }
+    let dir = personas_dir(app_root);
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    fs::write(dir.join(format!("{}.png", safe_id(id))), bytes).map_err(|e| e.to_string())
+}
+
+/// 초상 지우기 (0.6 QA P66) — 없는 파일은 성공으로 친다 (멱등)
+pub fn delete_portrait(app_root: &Path, id: &str) -> Result<(), String> {
+    match fs::remove_file(personas_dir(app_root).join(format!("{}.png", safe_id(id)))) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
+        _ => Ok(()),
+    }
+}
+
+/// [초상 고르기…] (0.6 QA P66) — 동기 커맨드라 메인 스레드에서 선택 창을 연다(msg_export와 같다). 취소면 Ok(false)
+#[tauri::command]
+pub fn library_portrait_pick(store_state: tauri::State<crate::StoreState>, id: String) -> Result<bool, String> {
+    let Some(src) = rfd::FileDialog::new().set_title("초상 고르기").add_filter("PNG", &["png"]).pick_file() else {
+        return Ok(false);
+    };
+    set_portrait(&store_state.0.root(), &id, &src).map(|()| true)
+}
+
+#[tauri::command]
+pub fn library_portrait_clear(store_state: tauri::State<crate::StoreState>, id: String) -> Result<(), String> {
+    delete_portrait(&store_state.0.root(), &id)
+}
+
+/// 초상을 둘 폴더 열기 (0.6 QA P66) — 전역 personas/. 없으면 만든 뒤 탐색기로 연다
+#[tauri::command]
+pub fn library_reveal_personas(store_state: tauri::State<crate::StoreState>) -> Result<(), String> {
+    let dir = personas_dir(&store_state.0.root());
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    crate::fsx::reveal_path(dir.to_string_lossy().into_owned(), None)
+}
+
 /// 시트 삭제 (중간 이하로 강등) — 없는 파일은 성공으로 친다 (멱등)
 pub fn delete_character(app_root: &Path, id: &str) -> Result<(), String> {
     let path = character_path_of(app_root, id);
@@ -629,6 +750,8 @@ fn fixed_jobs() -> [JobInfo; 8] {
         permissions: p,
         responsibility: r.into(),
         forbidden: f.into(),
+        model: String::new(),
+        owns: String::new(),
         mtime_ms: 0,
     };
     [
@@ -742,6 +865,17 @@ mod tests {
         dir
     }
 
+    /// B282 — 여러 줄 책임 · 금지(가운데 빈 줄 포함)가 render_job → parse_job_body 왕복에서 그대로다
+    #[test]
+    fn multiline_job_sections_roundtrip() {
+        let mut j = fixed_jobs()[0].clone();
+        j.responsibility = "- 테스트를 먼저 쓴다\n- 커밋은 리드가 한다\n\n  들여쓴 문단".into();
+        j.forbidden = "- 원격 push\n- 강제 push".into();
+        let (_, body) = split_frontmatter(&render_job(&j));
+        assert_eq!(parse_job_body(&body), (j.responsibility.clone(), j.forbidden.clone()));
+        assert_eq!(parse_job_body("## 책임\n\n\n한 줄\n\n## 금지\n"), ("한 줄".to_string(), String::new()));
+    }
+
     #[test]
     fn seed_then_list_roundtrip() {
         let root = temp_root("seed");
@@ -786,6 +920,8 @@ mod tests {
             permissions: crate::roles::RolePermissions { write: true, commit: true, push: true },
             responsibility: "최종 판단".into(),
             forbidden: "독단 push".into(),
+            model: "opus".into(),
+            owns: String::new(),
             mtime_ms: 0,
         };
         save_job(&root, &lead2, None).unwrap();
@@ -879,6 +1015,99 @@ mod tests {
         save_persona(&root, &titled, None).unwrap();
         let again = list(&root, None).personas.into_iter().find(|p| p.id == "kai").unwrap();
         assert_eq!(again.title, "UI | C# 개발자");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// 대사 예시 (§15-5) — 중급 프로필에만 남고 왕복된다. 시트 정체성 (§15-3) — `## 정체성` 첫 글줄
+    #[test]
+    fn examples_roundtrip_and_sheet_identity() {
+        let root = temp_root("examples");
+        seed(&root);
+        let kai = list(&root, None).personas.into_iter().find(|p| p.id == "kai").unwrap();
+        let mut p = kai.clone();
+        p.mid.examples = "- 빌드 실패 → \"봅시다.\"".into();
+        p.basic.examples = "버려진다".into();
+        save_persona(&root, &p, None).unwrap();
+        let again = list(&root, None).personas.into_iter().find(|p| p.id == "kai").unwrap();
+        assert_eq!(again.mid.examples, "- 빌드 실패 → \"봅시다.\"");
+        assert!(again.basic.examples.is_empty());
+        let luca = list(&root, None).personas.into_iter().find(|p| p.id == "luca").unwrap();
+        assert_eq!(luca.character_identity.as_deref(), Some("사용자의 여정을 지도로 그리는 등대지기 — 따뜻하고 관찰력이 좋다"));
+        assert_eq!(sheet_identity("## 정체성 (필수 · 1줄)\n\n\n## 배경\n내용"), None); // 빈 템플릿
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// 직무별 모델 (0.6 §3 · C5) — 값이 있을 때만 `model:` 키, 공백은 걷는다, 다시 읽으면 그대로
+    #[test]
+    fn model_roundtrip() {
+        let root = temp_root("model");
+        seed(&root);
+        let lib = list(&root, None);
+        let kai = lib.personas.into_iter().find(|p| p.id == "kai").unwrap();
+        let dev = lib.jobs.into_iter().find(|j| j.id == "dev").unwrap();
+        assert!(kai.model.is_empty() && dev.model.is_empty());
+        assert!(!fs::read_to_string(root.join("jobs").join("dev.md")).unwrap().contains("model:"));
+        save_persona(&root, &PersonaInfo { model: " claude-sonnet-5-5 ".into(), ..kai }, None).unwrap();
+        save_job(&root, &JobInfo { model: "gpt 5".into(), ..dev }, None).unwrap();
+        let lib = list(&root, None);
+        assert_eq!(lib.personas.iter().find(|p| p.id == "kai").unwrap().model, "claude-sonnet-5-5");
+        assert_eq!(lib.jobs.iter().find(|j| j.id == "dev").unwrap().model, "gpt5");
+        // 담당 경로 (owns) — 같은 흐름, glob 사이 공백만 하나로
+        let dev = lib.jobs.into_iter().find(|j| j.id == "dev").unwrap();
+        save_job(&root, &JobInfo { owns: " src/git/**   docs/** ".into(), ..dev }, None).unwrap();
+        assert_eq!(list(&root, None).jobs.iter().find(|j| j.id == "dev").unwrap().owns, "src/git/** docs/**");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// 초상 (§15-4) — png가 있으면 mtime이 실리고 읽힌다. 없으면 None · 오류. id로 디렉터리 밖을 못 읽는다
+    #[test]
+    fn portrait_detect_and_read() {
+        let root = temp_root("portrait");
+        seed(&root);
+        let kai = || list(&root, None).personas.into_iter().find(|p| p.id == "kai").unwrap();
+        assert!(kai().portrait_mtime_ms.is_none());
+        fs::write(root.join("personas").join("kai.png"), b"png").unwrap();
+        assert!(kai().portrait_mtime_ms.is_some());
+        assert_eq!(read_portrait(&root, "kai").unwrap(), b"png");
+        assert!(read_portrait(&root, "luca").is_err());
+        fs::write(root.join("secret.png"), b"x").unwrap();
+        assert!(read_portrait(&root, "../secret").is_err()); // safe_id가 / 를 _로 바꾼다
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// [초상 고르기…] · [지우기] (0.6 QA P66) — PNG 서명만 받고, 지우기는 두 번 해도 성공
+    #[test]
+    fn portrait_set_and_delete() {
+        let root = temp_root("portrait-set");
+        let png = root.join("pick.png");
+        fs::write(&png, b"\x89PNG\r\n\x1a\nbody").unwrap();
+        let jpg = root.join("pick.jpg.png");
+        fs::write(&jpg, b"\xff\xd8\xffjpeg").unwrap();
+        assert!(set_portrait(&root, "kai", &jpg).is_err());
+        assert!(!root.join("personas").join("kai.png").exists());
+        set_portrait(&root, "kai", &png).unwrap(); // personas/가 없어도 만든다
+        assert_eq!(read_portrait(&root, "kai").unwrap(), b"\x89PNG\r\n\x1a\nbody");
+        set_portrait(&root, "../x", &png).unwrap(); // 밖으로 못 나간다
+        assert!(root.join("personas").join(".._x.png").is_file());
+        delete_portrait(&root, "kai").unwrap();
+        delete_portrait(&root, "kai").unwrap();
+        assert!(read_portrait(&root, "kai").is_err());
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// 매 턴 상기 (0.6 §15-3 · 검증 ①) — 꺼짐이 기본이고 키가 없다. 켜면 `remind: on`, 다시 읽으면 켜짐
+    #[test]
+    fn persona_remind_roundtrip() {
+        let root = temp_root("remind");
+        seed(&root);
+        let kai = list(&root, None).personas.into_iter().find(|p| p.id == "kai").unwrap();
+        assert!(!kai.remind);
+        let path = root.join("personas").join("kai.md");
+        save_persona(&root, &kai, None).unwrap();
+        assert!(!fs::read_to_string(&path).unwrap().contains("remind:"));
+        save_persona(&root, &PersonaInfo { remind: true, ..kai.clone() }, None).unwrap();
+        assert!(fs::read_to_string(&path).unwrap().contains("\nremind: on\n"));
+        assert!(list(&root, None).personas.into_iter().find(|p| p.id == "kai").unwrap().remind);
         fs::remove_dir_all(&root).ok();
     }
 

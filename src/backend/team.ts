@@ -5,7 +5,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { notify } from "../components/ui";
 import { t, tf } from "../i18n";
 import { castingChanges, sessionName } from "../types";
+import type { Permissions, Persona, Session } from "../types";
 import { applyAgentSnapshot } from "./agent";
+import { autoAssignDefault } from "./missions";
 import { backend, libraryRev } from "./mock";
 import { isServerTermId } from "./ports";
 import { isTauri, listAlivePty } from "./pty";
@@ -27,9 +29,14 @@ export interface TeamSlotInfo {
   worktreePath: string | null; // 이 머신에 워크트리가 실재할 때만 — 없으면 repo 루트 폴백
 }
 
-export async function loadTeam(workspaceId: string, wsPath: string): Promise<TeamSlotInfo[]> {
+/** report — 복원 경로만 켠다. team.json을 해석하지 못하면(B275) 빈 팀처럼 열되 이유를 알린다.
+ *  원래 편성을 덮는 일은 Rust team_save가 막는다 (사람이 파일을 고치거나 지울 때까지) */
+export async function loadTeam(workspaceId: string, wsPath: string, report = false): Promise<TeamSlotInfo[]> {
   if (!isTauri()) return [];
-  return invoke<TeamSlotInfo[]>("team_load", { workspaceId, wsPath }).catch(() => []);
+  return invoke<TeamSlotInfo[]>("team_load", { workspaceId, wsPath }).catch((e) => {
+    if (report) notify(tf("{ws} 팀 편성을 복원하지 않았습니다 — {err}", { ws: wsPath, err: String(e) }));
+    return [];
+  });
 }
 
 /** 세션 워크트리 보장 (FR-E-62) — 멱등. `.eqmux/worktrees/<세션>` + 브랜치 `eqmux/<세션>` */
@@ -138,7 +145,7 @@ export async function restoreTeams(): Promise<void> {
   const alive = new Set(await listAlivePty());
   for (const ws of backend.listWorkspaces()) {
     if (ws.pathMissing) continue;
-    const slots = await loadTeam(ws.id, ws.path);
+    const slots = await loadTeam(ws.id, ws.path, true);
     if (slots.length > 0) {
       lastSaved.set(ws.id, JSON.stringify(slots.map(({ slot, persona, personaName, job, jobName, name, worktree, permissions, cli, title }) => ({ slot, persona, personaName, job, jobName, name: name ?? null, worktree, permissions: permissions ?? null, cli: cli ?? null, title: title ?? null }))));
       backend.hydrateTeam(ws.id, slots, alive);
@@ -177,6 +184,68 @@ export function castingConfirmLines(wsId: string, wanted: readonly { personaId: 
     ...c.dropped.map((p) => tf("{name} 자리 없음 — 빠집니다", { name: persona(p)?.name ?? p })),
     ...(c.dropped.length ? [t("자리를 늘리려면 설정에서 슬롯 수를 올리거나 기본 터미널을 닫으세요")] : []),
   ];
+}
+
+/** 편성 적용 (0.6 QA B246) — 팀 캐스팅 [편성 저장]·[편성 선택 →]과 팀 편성 [기본 편성 채우기]가 같은 경로를 탄다.
+ *  어느 버튼으로 만들었든 기본 임무 자동 배정(FR-E-56)이 붙는다 (autoAssignDefault는 임무가 있으면 건너뛴다) */
+export function applyCastingWithDefaults(wsId: string, slots: readonly { personaId: string; jobId: string }[]): void {
+  backend.applyCasting(wsId, [...slots]);
+  for (const sl of slots) if (sl.personaId) void autoAssignDefault(wsId, `${sl.personaId}@${wsId}`);
+}
+
+/** 프리셋 채우기 (0.6 QA P78 · P79) — 프리셋은 직무 구성이다. 지금 팀원은 같은 직무 자리에 남기고,
+ *  빈 자리는 그 직무가 기본 직무인 페르소나 → 라이브러리 순서로 중복 없이 채운다. 사람이 모자라면 그 자리는 뺀다.
+ *  팀 캐스팅 프리셋 버튼과 팀 편성 [기본 편성 채우기]가 같이 쓴다 */
+export function presetSlots(
+  jobs: readonly string[],
+  current: readonly { personaId: string; jobId: string }[],
+  personas: readonly { id: string; job?: string }[],
+  max: number,
+): { personaId: string; jobId: string }[] {
+  const want = jobs.slice(0, max);
+  const picked: (string | undefined)[] = want.map(() => undefined);
+  const used = new Set<string>();
+  const take = (i: number, id: string | undefined) => {
+    if (picked[i] || !id) return;
+    picked[i] = id;
+    used.add(id);
+  };
+  want.forEach((jobId, i) => take(i, current.find((c) => c.personaId && c.jobId === jobId && !used.has(c.personaId))?.personaId));
+  want.forEach((jobId, i) => take(i, personas.find((p) => p.job === jobId && !used.has(p.id))?.id));
+  want.forEach((_, i) => take(i, personas.find((p) => !used.has(p.id))?.id));
+  return want.flatMap((jobId, i) => (picked[i] ? [{ personaId: picked[i]!, jobId }] : []));
+}
+
+/** 권한 한 줄 (0.6 QA U168) — 팀 캐스팅 카드와 팀 편성 표가 같은 말로 적는다 */
+export function permLabel(p: Permissions): string {
+  const mark = (b: boolean) => (b ? "✓" : "—");
+  return `${t("쓰기")} ${mark(p.write)} · ${t("커밋")} ${mark(p.commit)} · ${t("푸시")} ${mark(p.push)}`;
+}
+
+/** 저장소 편성에서 이 PC 라이브러리에 없는 페르소나 (D3) — 클론한 저장소의 team.json은 남의 라이브러리 id를 가리킬 수 있다 */
+export function missingPersonas(slots: readonly Pick<TeamSlotInfo, "persona" | "personaName">[], personas: readonly Pick<Persona, "id">[]): string[] {
+  return slots.filter((s) => !personas.some((p) => p.id === s.persona)).map((s) => s.personaName || s.persona);
+}
+
+/** "이 팀으로 시작" 안내 (0.6 §3 D3) — 저장소에 team.json 편성이 있으면 슬롯 수와 없는 페르소나 이름. 없으면 undefined */
+export async function savedTeam(wsId: string): Promise<{ slots: number; missing: string[] } | undefined> {
+  const ws = backend.listWorkspaces().find((w) => w.id === wsId);
+  if (!ws || ws.pathMissing) return undefined;
+  const slots = await loadTeam(wsId, ws.path);
+  if (slots.length === 0) return undefined;
+  return { slots: slots.length, missing: missingPersonas(slots, backend.listPersonas()) };
+}
+
+/** "이 팀으로 시작" (0.6 §3 D3) — team.json 편성을 슬롯에 올리고(이미 올라 있으면 그대로) 워크스페이스를 연다.
+ *  반환은 그 워크스페이스의 역할 세션 — 기동은 부르는 화면이 launchRoleAgents로 한다(빠른 시작과 같은 흐름).
+ *  라이브러리에 없는 페르소나의 슬롯은 셸로 남는다 (역할 파일을 만들 수 없다) */
+export async function castSavedTeam(wsId: string): Promise<Session[]> {
+  const ws = backend.listWorkspaces().find((w) => w.id === wsId);
+  if (!ws || ws.pathMissing) return [];
+  const slots = await loadTeam(wsId, ws.path);
+  if (slots.length > 0) backend.hydrateTeam(wsId, slots, new Set(await listAlivePty()));
+  backend.openWorkspace(wsId);
+  return backend.listSessions().filter((s) => s.workspaceId === wsId && s.personaId);
 }
 
 /** 페르소나 직함이 바뀌었다 — 슬롯 직렬화는 그대로라 디바운스 저장이 건너뛴다. team.md의 직함 열은

@@ -2,6 +2,8 @@
 // 브라우저에선 목 로그. 저장: 표시 중인 로그를 파일로 내보내고, 세션 로그 폴더를 연다.
 // Enter = 디스크 전문 검색 (FR-C-16 FTS) — 전체 스크롤백을 뒤지고, 히트 클릭 = 그 지점의
 // 앞뒤 기록을 디스크에서 조각 로드해 보여준다 (FR-C-13·14).
+// 비밀값 모양(토큰·KEY=값·URL 비밀번호)은 화면과 내보내기에서 가린다 (§2 · B150, backend/secrets.ts).
+// 디스크의 스크롤백·원시 로그 자체는 가리지 않는다 — 그 사실을 아래 세션 로그 카드에 적는다 (E4).
 import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { queryGlobalEvents } from "../backend/events";
 import type { FeedEvent } from "../backend/events";
@@ -10,6 +12,7 @@ import type { ServerLog } from "../backend/mock";
 import { pageScrollback, searchScrollback } from "../backend/panels";
 import type { ScrollbackHit } from "../backend/panels";
 import { isServerTermId } from "../backend/ports";
+import { maskSecrets } from "../backend/secrets";
 import { isTauri, openLogDir } from "../backend/pty";
 import { setPanelNote } from "../state";
 import { Icon } from "./icons";
@@ -21,14 +24,13 @@ const shortId = (id: string) => (isServerTermId(id) ? t("서버") : id.split("@"
 
 const LEVELS = ["전체", "INFO", "WARN", "ERROR"] as const;
 
-// 이벤트 → 로그 행 변환 — 레벨은 내용에서 추정한다 (waiting=warn · dead/비정상 종료=error)
+/** 분류 표시 이름 — 원값(store · agent)은 영문, 나머지는 한국어라 섞여 보였다 (P88). t()는 렌더에서 */
+const TYPE_LABEL: Record<string, string> = { store: "앱 기록", agent: "에이전트" };
+const typeLabel = (type: string) => TYPE_LABEL[type] ?? type;
+
+// 이벤트 → 로그 행 변환 — 레벨은 events.ts가 번역 전 원문으로 정한다 (B309 — 문구로 재면 '종료됨'이 INFO로 빠졌다)
 function toLog(e: FeedEvent): ServerLog {
-  const level: ServerLog["level"] =
-    e.message.startsWith("dead") || /exit [1-9]/.test(e.message)
-      ? "error"
-      : e.message.startsWith("waiting")
-        ? "warn"
-        : "info";
+  const level: ServerLog["level"] = e.level ?? "info";
   const type: ServerLog["type"] = e.kind === "state" ? "agent" : e.kind === "app" ? "세션" : "store";
   const who = e.sessionId ? `${shortId(e.sessionId)} · ` : "";
   return { time: e.time, type, message: `${who}${e.message}`, level };
@@ -51,20 +53,30 @@ export function LogsPanelTab() {
   const [searching, setSearching] = createSignal(false);
   const [ctx, setCtx] = createSignal<{ wsId: string; session: string; hitSeq: number; lines: ScrollbackHit[] } | null>(null);
 
+  // 읽지 못한 워크스페이스 이름 (B244) — 한 곳이 실패해도 나머지 결과는 보인다
+  const [searchFailed, setSearchFailed] = createSignal<string[]>([]);
   const runDiskSearch = async () => {
     const q = query().trim();
     if (!q || !isTauri()) return;
+    // 첫 검색부터 결과 화면으로 바꿔 '검색 중…'이 보이게 한다 (B244)
+    setHits([]);
+    setSearchFailed([]);
     setSearching(true);
     setCtx(null);
-    const wss = backend.listWorkspaces();
-    const all = await Promise.all(
-      wss.map(async (w) => (await searchScrollback(w.id, q)).map((h) => ({ ...h, wsId: w.id }))),
-    );
-    setHits(all.flat().sort((a, b) => b.ts - a.ts).slice(0, 100));
-    setSearching(false);
+    try {
+      const wss = backend.listWorkspaces();
+      const rs = await Promise.allSettled(
+        wss.map(async (w) => (await searchScrollback(w.id, q)).map((h) => ({ ...h, wsId: w.id }))),
+      );
+      setHits(rs.flatMap((r) => (r.status === "fulfilled" ? r.value : [])).sort((a, b) => b.ts - a.ts).slice(0, 100));
+      setSearchFailed(wss.filter((_, i) => rs[i].status === "rejected").map((w) => w.name));
+    } finally {
+      setSearching(false);
+    }
   };
 
-  // 히트 문맥 열람 (FR-C-13·14) — 그 지점 앞뒤 ~60줄을 디스크에서 조각 로드
+  // 히트 문맥 열람 (FR-C-13·14) — 그 지점 앞뒤 ~60줄을 디스크에서 조각 로드.
+  // pageScrollback은 실패를 빈 배열로 돌려준다 — 0줄이면 아래에서 '읽지 못했습니다'로 적는다
   const openContext = async (h: DiskHit) => {
     const lines = await pageScrollback(h.wsId, h.sessionId, h.seq + 31, 60);
     setCtx({ wsId: h.wsId, session: h.sessionId, hitSeq: h.seq, lines });
@@ -96,37 +108,39 @@ export function LogsPanelTab() {
     });
   });
   const source = () => (isTauri() ? realLogs() : SERVER_LOGS);
+  // 숫자는 지금 들고 있는 행(실앱은 최근 200개)에서 센다 (P88) — 목의 고정 숫자는 목록과 맞지 않았다
   const metrics = createMemo(() => {
-    if (!isTauri()) return LOG_METRICS;
     const all = source();
     const info = all.filter((l) => l.level === "info").length;
     const warn = all.filter((l) => l.level === "warn").length;
     const error = all.filter((l) => l.level === "error").length;
-    return { info, warn, error, total: all.length, rate: "event 테이블 실측" };
+    return { info, warn, error, total: all.length, rate: isTauri() ? "앱 기록" : LOG_METRICS.rate };
   });
+  const levelCount = (l: (typeof LEVELS)[number]) =>
+    l === "전체" ? metrics().total : metrics()[l.toLowerCase() as "info" | "warn" | "error"];
 
   const logs = createMemo(() =>
     source().filter((l) => {
       if (level() !== "전체" && l.level !== level().toLowerCase()) return false;
-      const q = query().trim();
-      if (q && !`${l.type} ${l.message}`.includes(q)) return false;
+      const q = query().trim().toLowerCase(); // 대소문자 무시 (P84 — 환경변수 검색과 같게)
+      if (q && !`${l.type} ${t(typeLabel(l.type))} ${l.message}`.toLowerCase().includes(q)) return false;
       return true;
     }),
   );
 
-  // 표시 중인 로그를 텍스트 파일로 내보내기 (필터 반영)
-  // 세그먼트 줄 오른쪽 요약 (0.5 시안) — `128 LINES`
-  createEffect(() => setPanelNote(`${metrics().total} LINES`));
+  // 세그먼트 줄 오른쪽 요약 — 최근 몇 개를 들고 있고 그중 몇 개가 보이는지 (P88)
+  createEffect(() => setPanelNote(tf("최근 {n}개 · 표시 {m}개", { n: metrics().total, m: logs().length })));
   onCleanup(() => setPanelNote(""));
 
+  // 표시 중인 로그를 텍스트 파일로 내보내기 (필터 반영) — 내용은 앱 이벤트다 (P88, 서버 탭 출력이 아니다)
   const exportLogs = () => {
     const text = logs()
-      .map((l) => `${l.time} [${l.level.toUpperCase()}] [${l.type}] ${l.message}`)
+      .map((l) => `${l.time} [${l.level.toUpperCase()}] [${l.type}] ${maskSecrets(l.message)}`)
       .join("\n");
     const url = URL.createObjectURL(new Blob([text + "\n"], { type: "text/plain" }));
     const a = document.createElement("a");
     a.href = url;
-    a.download = "eqmux-server-logs.txt";
+    a.download = `eqmux-app-events-${new Date().toISOString().slice(0, 10)}.txt`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -138,7 +152,7 @@ export function LogsPanelTab() {
         <For each={LEVELS}>
           {(l) => (
             <button class="logsp-chip mono" classList={{ on: level() === l }} aria-pressed={level() === l} onClick={() => setLevel(l)}>
-              {t(l)}
+              {t(l)} {levelCount(l)}
             </button>
           )}
         </For>
@@ -151,7 +165,7 @@ export function LogsPanelTab() {
 
       <input
         class="panel-search mono"
-        placeholder={t(isTauri() ? "필터 입력 · Enter = 디스크 전문 검색(FTS)" : "분류 · 세션 · 내용 검색")}
+        placeholder={t(isTauri() ? "필터 · Enter로 전체 스크롤백 검색" : "분류 · 세션 · 내용 검색")}
         value={query()}
         onInput={(e) => {
           setQuery(e.currentTarget.value);
@@ -163,27 +177,14 @@ export function LogsPanelTab() {
         onKeyDown={(e) => isSubmitEnter(e) && void runDiskSearch()}
       />
 
-      <div class="logsp-metrics">
-        <div class="logsp-metric">
-          <div class="logsp-metric-k mono">INFO</div>
-          <div class="logsp-metric-v mono">{metrics().info}</div>
-        </div>
-        <div class="logsp-metric warn">
-          <div class="logsp-metric-k mono">WARN</div>
-          <div class="logsp-metric-v mono">{metrics().warn}</div>
-        </div>
-        <div class="logsp-metric error">
-          <div class="logsp-metric-k mono">ERROR</div>
-          <div class="logsp-metric-v mono">{metrics().error}</div>
-        </div>
-      </div>
+      {/* 레벨 숫자는 위 칩에 합쳤다 (P88) — 눌리지 않는 숫자 카드가 칩과 같은 일을 두 번 보였다 */}
 
       <Show
         when={hits() === null}
         fallback={
           <div class="logsp-list">
             <div class="panel-head-row" style={{ padding: "4px 0" }}>
-              <span class="eyebrow">{tf("디스크 검색 · {n}건 (전체 스크롤백 FTS)", { n: hits()!.length })}</span>
+              <span class="eyebrow">{tf("스크롤백 검색 · {n}건", { n: hits()!.length })}</span>
               <button class="btn ghost" style={{ "margin-left": "auto", padding: "2px 7px" }} onClick={() => { setHits(null); setCtx(null); }}>
                 <Icon name="x" size={11} /> {t("결과 닫기")}
               </button>
@@ -194,22 +195,29 @@ export function LogsPanelTab() {
                   <div class="logsp-row" style={{ cursor: "pointer" }} onClick={() => void openContext(h)}>
                     <span class="mono muted logsp-time">{hhmmss(h.ts)}</span>
                     <span class="badge logsp-type">{shortId(h.sessionId)}</span>
-                    <span class="logsp-msg mono" style={{ "font-size": "10.5px" }}>{h.text}</span>
+                    <span class="logsp-msg mono" style={{ "font-size": "10.5px" }}>{maskSecrets(h.text)}</span>
                   </div>
                 )}
               </For>
-              <Show when={hits()!.length === 0}>
+              <Show when={hits()!.length === 0 && searchFailed().length === 0}>
                 <div class="muted" style={{ padding: "12px", "font-size": "11px" }}>
                   {t("디스크 스크롤백에서 찾지 못했습니다")}
                 </div>
               </Show>
+              <For each={searchFailed()}>
+                {(name) => (
+                  <div class="st-dead" style={{ padding: "4px 8px", "font-size": "11px" }}>
+                    {tf("{ws} 스크롤백을 읽지 못했습니다", { ws: name })}
+                  </div>
+                )}
+              </For>
             </Show>
             <Show when={ctx()}>
               {(c) => (
                 <div class="card inset" style={{ "margin-top": "6px", padding: "6px 8px" }}>
                   <div class="panel-head-row" style={{ padding: "0 0 4px" }}>
                     <span class="eyebrow">
-                      {c().session} · {tf("문맥 {n}줄 (디스크 페이징)", { n: c().lines.length })}
+                      {c().session} · {tf("앞뒤 {n}줄", { n: c().lines.length })}
                     </span>
                     <button class="btn ghost" aria-label={t("닫기")} style={{ "margin-left": "auto", padding: "1px 6px" }} onClick={() => setCtx(null)}>
                       <Icon name="x" size={11} />
@@ -219,10 +227,13 @@ export function LogsPanelTab() {
                     ▲ {t("더 이전 60줄")}
                   </button>
                   <div class="mono" style={{ "max-height": "180px", overflow: "auto", "font-size": "10.5px", "line-height": "1.5" }}>
+                    <Show when={c().lines.length === 0}>
+                      <div class="muted">{t("이 지점의 기록을 읽지 못했습니다")}</div>
+                    </Show>
                     <For each={c().lines}>
                       {(l) => (
                         <div style={l.seq === c().hitSeq ? { background: "rgba(110,158,255,.18)" } : undefined}>
-                          {l.text}
+                          {maskSecrets(l.text)}
                         </div>
                       )}
                     </For>
@@ -238,9 +249,9 @@ export function LogsPanelTab() {
             {(l) => (
               <div class="logsp-row" classList={{ error: l.level === "error", warn: l.level === "warn" }}>
                 <span class="mono muted logsp-time">{l.time}</span>
-                <span class="mono logsp-src">{t(l.type)}</span>
+                <span class="mono logsp-src">{t(typeLabel(l.type))}</span>
                 <span class={`logsp-lv mono ${l.level}`}>{l.level.toUpperCase()}</span>
-                <span class="logsp-msg">{l.message}</span>
+                <span class="logsp-msg">{maskSecrets(l.message)}</span>
                 <Show when={l.expandable}>
                   <span class="mono muted">›</span>
                 </Show>
@@ -249,7 +260,12 @@ export function LogsPanelTab() {
           </For>
           <Show when={logs().length === 0}>
             <div class="muted" style={{ padding: "12px", "font-size": "11px" }}>
-              {t("조건에 맞는 로그가 없습니다")}
+              <Show when={query().trim()} fallback={t("조건에 맞는 로그가 없습니다")}>
+                {tf("“{q}”에 맞는 항목이 없습니다", { q: query().trim() })}{" "}
+                <button class="btn ghost" style={{ padding: "1px 6px" }} onClick={() => setQuery("")}>
+                  {t("검색 지우기")}
+                </button>
+              </Show>
             </div>
           </Show>
         </div>
@@ -258,7 +274,7 @@ export function LogsPanelTab() {
       <div class="logsp-footer">
         <span class="logsp-live">
           <span class="logsp-live-dot" />
-          {t(isTauri() ? "event 테이블 스트림 연결됨" : "실시간 스트림 (목)")}
+          {t(isTauri() ? "실시간 연결됨" : "실시간 스트림 (목)")}
         </span>
         <span class="mono muted">{t(metrics().rate)}</span>
       </div>
@@ -268,7 +284,10 @@ export function LogsPanelTab() {
           <div>
             <div style={{ "font-weight": 700, "font-size": "11px" }}>{t("세션 로그 (PTY 원문)")}</div>
             <div class="mono muted" style={{ "font-size": "10px" }}>
-              {t("~/.eqmux/logs/<세션>.log · 실시간 append")}
+              {t("~/.eqmux/logs/<세션>.log · 실시간으로 덧붙임")}
+            </div>
+            <div class="muted" style={{ "font-size": "10px" }}>
+              {t("이 파일과 스크롤백에는 토큰·비밀번호가 평문으로 남을 수 있습니다 — 이 화면에서만 가립니다")}
             </div>
           </div>
           <button class="btn" onClick={openLogDir}>

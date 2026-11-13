@@ -1,12 +1,17 @@
 // 임무 배정 (화면 #8 · 0.5 시안 jc2Fm) — 임무 목록 · 생성 · 세션 배정. 임무 = 브랜치 + 목표 (E12 — 연결하되 강제 아님).
 // Tauri에서는 .eqmux/missions/*.md 실파일이 원본이다 (FR-E-51) — 화면은 브리지를 통해서만 쓴다.
-import { createSignal, For, onMount, Show } from "solid-js";
+import { createEffect, createSignal, For, onMount, Show } from "solid-js";
 import { backend } from "../backend/mock";
 import {
+  fmtUsd,
+  missionCostSignal,
   createMission,
   missionDoneReport,
+  missionStatusText,
+  openDeps,
   refreshMissions,
   setDefaultMission,
+  setMissionDepends,
   setMissionStatus,
   toggleAssign,
 } from "../backend/missions";
@@ -14,13 +19,19 @@ import { nameOf } from "../backend/conversation";
 import { isTauri, revealPath } from "../backend/pty";
 import { checkoutBranch } from "../backend/workspaces";
 import { t, tf } from "../i18n";
+import { revealLabel } from "../labels";
+import { Icon } from "../components/icons";
 import { setView, tick } from "../state";
 import { Chip, ConfirmDialog, Eyebrow, Identity, notify, Segmented } from "../components/ui";
-import { effectiveTitle, paneNo, sessionName } from "../types";
+import { effectiveTitle, paneNo, sessionName, statusText } from "../types";
 import type { Mission, MissionStatus } from "../types";
+
+/** 팝업을 열 때 고를 임무 (B221 — Jump 팔레트가 넣는다). 그 워크스페이스의 화면이 받으면 비운다 */
+export const [missionToOpen, setMissionToOpen] = createSignal<{ wsId: string; id: string } | undefined>(undefined);
 
 export function Missions(props: { wsId: string }) {
   onMount(() => void refreshMissions(props.wsId));
+  const costs = missionCostSignal(() => props.wsId); // §13-6
   const ws = () => backend.listWorkspaces().find((w) => w.id === props.wsId);
 
   // 임무-브랜치 체크아웃 (FR-E-52) — 공유 repo 전체(E1′ 공유 기본)에 영향이 있어 2단 확인.
@@ -65,10 +76,15 @@ export function Missions(props: { wsId: string }) {
   // 배정은 이동이다 (U55) — 다른 임무에 있던 세션이면 옮기기 전에 묻는다
   const otherMission = (sid: string) => missions().find((x) => x.id !== sel()?.id && x.assigned.includes(sid));
   const [move, setMove] = createSignal<{ sid: string; from: string; to: Mission } | undefined>(undefined);
-  const assign = (sid: string) => {
+  // 선행이 남은 임무에 배정하면 한 번 묻는다 (P60) — 막지는 않는다. 브리프에 선행 정보가 붙는다
+  const [depAsk, setDepAsk] = createSignal<{ sid: string; deps: string } | undefined>(undefined);
+  const assign = (sid: string, depsOk = false) => {
     const to = sel();
     if (!to) return;
-    const from = !to.assigned.includes(sid) ? otherMission(sid) : undefined;
+    const adding = !to.assigned.includes(sid);
+    const left = adding && !depsOk ? openDeps(to, missions()) : [];
+    if (left.length) return void setDepAsk({ sid, deps: left.map((x) => x.name).join(", ") });
+    const from = adding ? otherMission(sid) : undefined;
     if (from) setMove({ sid, from: from.name, to });
     else void toggleAssign(props.wsId, to.id, sid);
   };
@@ -93,6 +109,13 @@ export function Missions(props: { wsId: string }) {
   const [selId, setSelId] = createSignal<string | undefined>(undefined);
   const [creating, setCreating] = createSignal(false);
   const sel = () => missions().find((m) => m.id === selId()) ?? missions()[0];
+  createEffect(() => {
+    const want = missionToOpen();
+    if (!want || want.wsId !== props.wsId || !missions().some((m) => m.id === want.id)) return;
+    setSelId(want.id);
+    setCreating(false);
+    setMissionToOpen(undefined);
+  });
   const assigneeNames = (m: Mission) =>
     m.assigned.length === 0 ? t("배정 없음") : m.assigned.map((id) => nameOf(id)).join(", ");
   const statusTone = (st: MissionStatus) => (st === "in-progress" || st === "in-review" ? "blue" : "info");
@@ -102,12 +125,13 @@ export function Missions(props: { wsId: string }) {
       <div class="screen-head">
         <div>
           <h1>{t("임무 배정")} · {ws()?.name}</h1>
-          <div class="sub">{t(".eqmux/missions/*.md 가 원본 · 배정하면 역할 파일 임무 블록에 반영 · 세션 클릭 = 배정 토글")}</div>
+          <div class="sub">{t("임무 파일(.eqmux/missions/*.md)이 원본입니다. 세션을 누르면 배정하거나 빼고, 배정은 그 세션의 역할 파일에 적힙니다")}</div>
         </div>
         <div class="ma-head-r">
           <Chip text={t("자동 저장됨")} />
+          {/* 가는 곳은 워크스페이스 화면이다 (U137) — 관제 탭과 이름이 갈리지 않게 그 이름을 쓴다 */}
           <button class="btn ghost" onClick={() => setView({ kind: "workspace", id: props.wsId })}>
-            {t("← 컨트롤 센터")}
+            ← {ws()?.name ?? t("워크스페이스")}
           </button>
           <button class="btn primary" onClick={() => setCreating(true)}>
             {t("+ 새 임무")}
@@ -119,7 +143,7 @@ export function Missions(props: { wsId: string }) {
           <div class="ma-list-head">
             <span class="ma-list-t">{t("임무")}</span>
             <span class="ma-list-n mono">
-              {missions().length} · in-progress {missions().filter((m) => m.status === "in-progress").length}
+              {missions().length} · {tf("진행 중 {n}", { n: missions().filter((m) => m.status === "in-progress").length })}
             </span>
           </div>
           <For each={missions()}>
@@ -134,7 +158,7 @@ export function Missions(props: { wsId: string }) {
                     {m.isDefault ? "★ " : ""}
                     {m.name}
                   </span>
-                  <Chip tone={statusTone(m.status)} text={m.status.toUpperCase()} />
+                  <Chip tone={statusTone(m.status)} text={missionStatusText(m.status)} />
                 </span>
                 <span class="ma-item-meta">
                   {assigneeNames(m)}
@@ -179,7 +203,7 @@ export function Missions(props: { wsId: string }) {
                   </button>
                 </div>
                 <div class="ma-hint muted">
-                  {t("생성하면 .eqmux/missions/<id>.md 파일이 만들어지고 DB는 캐시로 따라갑니다. 불일치 시 파일이 이깁니다 (불변 규칙 4).")}
+                  {t("만들면 .eqmux/missions/<id>.md 파일이 생깁니다. 이 파일이 원본이고, 앱의 목록은 파일을 따라갑니다.")}
                 </div>
               </>
             }
@@ -206,7 +230,7 @@ export function Missions(props: { wsId: string }) {
                   <span class="ma-grow" />
                   <Segmented
                     label={t("임무 상태")}
-                    items={STATUS_ITEMS.map((v) => ({ value: v, label: v }))}
+                    items={STATUS_ITEMS.map((v) => ({ value: v, label: missionStatusText(v) }))}
                     value={m().status}
                     onChange={(v) => void setMissionStatus(props.wsId, m().id, v)}
                   />
@@ -230,6 +254,18 @@ export function Missions(props: { wsId: string }) {
                       </button>
                     </Show>
                   </div>
+                  {/* 임무 시작점 (§13-2) — 첫 배정 · [브리프 전달] 때의 HEAD */}
+                  <Show when={m().baseCommit}>
+                    <div class="ma-hint mono muted" title={m().baseCommit}>
+                      {m().commitsSince === undefined
+                        ? tf("시작 {sha}", { sha: m().baseCommit!.slice(0, 7) })
+                        : tf("시작 {sha} · 그 뒤 커밋 {n}개", { sha: m().baseCommit!.slice(0, 7), n: m().commitsSince! })}
+                    </div>
+                  </Show>
+                  {/* 임무별 비용 (§13-6) — 배정된 세션이 이 임무를 하는 동안 쓴 비용 */}
+                  <Show when={costs()[m().id]}>
+                    <div class="ma-hint mono muted">{tf("비용 {usd}", { usd: fmtUsd(costs()[m().id]) })}</div>
+                  </Show>
                   <Show when={coNote()?.id === m().id}>
                     <div class="ma-hint mono muted">{coNote()!.text}</div>
                   </Show>
@@ -253,12 +289,44 @@ export function Missions(props: { wsId: string }) {
                     </For>
                   </div>
                 </Show>
+                {/* 선행 임무 (0.6 §4 · P60) — frontmatter depends_on. 다른 임무를 눌러 걸거나 푼다. 끝난 선행은 ✓. 모르는 id는 그대로 보인다 */}
+                <Show when={missions().length > 1 || (m().dependsOn ?? []).length > 0}>
+                  <div class="ma-field">
+                    <div class="ma-label">
+                      {t("선행 임무")}
+                      <span class="muted"> — {t("누르면 걸거나 풉니다")}</span>
+                    </div>
+                    <div style={{ display: "flex", gap: "6px", "flex-wrap": "wrap" }}>
+                      <For each={[...new Set([...(m().dependsOn ?? []), ...missions().filter((x) => x.id !== m().id).map((x) => x.id)])]}>
+                        {(id) => {
+                          const dep = () => missions().find((x) => x.id === id);
+                          const on = () => (m().dependsOn ?? []).includes(id);
+                          const toggle = () =>
+                            void setMissionDepends(props.wsId, m().id, on() ? (m().dependsOn ?? []).filter((x) => x !== id) : [...(m().dependsOn ?? []), id]);
+                          return (
+                            <button
+                              class="badge"
+                              classList={{ green: on() && dep()?.status === "done", amber: on() && !!dep() && dep()!.status !== "done" }}
+                              style={{ cursor: "pointer", opacity: on() ? 1 : 0.6 }}
+                              aria-pressed={on()}
+                              title={dep() ? missionStatusText(dep()!.status) : t("없는 임무")}
+                              onClick={toggle}
+                            >
+                              {on() ? (dep()?.status === "done" ? "✓ " : "") : "+ "}
+                              {dep()?.name ?? id}
+                            </button>
+                          );
+                        }}
+                      </For>
+                    </div>
+                  </div>
+                </Show>
                 {/* 완료 보고 (작업 완료 신호) — 배정된 세션이 report --done을 보냈다. 상태는 사람이
                     눌러야 in-review가 된다. 앱이 스스로 임무 상태를 바꾸지 않는다 */}
                 <Show when={m().status === "in-progress" && doneReport(m())}>
                   {(d) => (
                     <div class="card inset mission-done">
-                      <span class="badge blue">✓</span>
+                      <span class="badge blue"><Icon name="check" size={12} /></span>
                       <span class="muted">
                         {t("완료 보고")} · {d().name}
                         <Show when={d().text}>: {d().text}</Show>
@@ -271,11 +339,20 @@ export function Missions(props: { wsId: string }) {
                     class="btn"
                     onClick={() => void revealPath(m().file, ws()?.path).then((ok) => ok || notify(t("파일을 열 수 없습니다")))}
                   >
-                    {t("탐색기에서 열기")}
+                    {revealLabel()}
                   </button>
                   <Show when={m().status === "in-progress" && doneReport(m())}>
                     <button class="btn primary" onClick={() => void setMissionStatus(props.wsId, m().id, "in-review")}>
                       {t("검토 중으로")}
+                    </button>
+                  </Show>
+                  {/* 임무 검토 (0.6 §13-3) — 완료 보고가 왔거나 검토 중인 임무 */}
+                  <Show when={m().status === "in-review" || (m().status === "in-progress" && doneReport(m()))}>
+                    <button
+                      class="btn"
+                      onClick={() => setView({ kind: "review", wsId: props.wsId, missionId: m().id, back: { kind: "missions", wsId: props.wsId } })}
+                    >
+                      {t("검토하기")}
                     </button>
                   </Show>
                 </div>
@@ -287,7 +364,7 @@ export function Missions(props: { wsId: string }) {
         <div class="ma-assign">
           <div class="ma-assign-t">{t("세션 배정")}</div>
           <div class="ma-hint muted">
-            {t("배정하면 역할 파일을 갱신하고 [EQ] 임무 배정 한 줄을 보냅니다. idle이면 바로, 작업 중이면 턴이 끝날 때. 세션의 임무는 하나라 배정하면 이전 임무에서 빠집니다.")}
+            {t("배정하면 역할 파일을 갱신하고 [EQ] 임무 배정 한 줄을 보냅니다. 유휴면 바로, 작업 중이면 턴이 끝날 때. 세션의 임무는 하나라 배정하면 이전 임무에서 빠집니다.")}
           </div>
           <Show when={sel() && !creating()}>
             <For each={sessions()}>
@@ -295,14 +372,14 @@ export function Missions(props: { wsId: string }) {
                 const on = () => !!sel()?.assigned.includes(s.id);
                 const p = () => persona(s.personaId);
                 return (
-                  <button class="ma-assignee" classList={{ on: on() }} onClick={() => assign(s.id)}>
+                  <button class="ma-assignee" classList={{ on: on() }} aria-pressed={on()} onClick={() => assign(s.id)}>
                     <Identity slot={s.slot} no={paneNo(s)} name={sessionName(s, p())} title={effectiveTitle(s, p())} />
                     <span class="ma-assignee-r">
                       <Show when={otherMission(s.id)}>
                         {(o) => <span class="muted ma-assignee-cur">{tf("현재: {name}", { name: o().name })}</span>}
                       </Show>
-                      <span class={`exit-state mono ${ST_CLASS[s.status] ?? "muted"}`}>{s.status.toUpperCase()}</span>
-                      <span class="ma-toggle">{on() ? "✓" : ""}</span>
+                      <span class={`exit-state mono ${ST_CLASS[s.status] ?? "muted"}`}>{statusText(s.status)}</span>
+                      <span class="ma-toggle">{on() && <Icon name="check" size={12} />}</span>
                     </span>
                   </button>
                 );
@@ -332,6 +409,21 @@ export function Missions(props: { wsId: string }) {
                 void toggleAssign(props.wsId, to.id, sid);
               }}
               onCancel={() => setMove(undefined)}
+            />
+          )}
+        </Show>
+        <Show when={depAsk()}>
+          {(d) => (
+            <ConfirmDialog
+              title={t("선행 임무가 끝나지 않았습니다")}
+              body={tf("선행 {deps}이(가) 아직 끝나지 않았습니다. 그래도 배정하면 브리프에 선행 정보가 붙고, 선행이 끝날 때 알림이 갑니다.", { deps: d().deps })}
+              confirmLabel={t("그래도 배정")}
+              onConfirm={() => {
+                const sid = d().sid;
+                setDepAsk(undefined);
+                assign(sid, true);
+              }}
+              onCancel={() => setDepAsk(undefined)}
             />
           )}
         </Show>

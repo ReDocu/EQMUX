@@ -6,7 +6,7 @@ export const dict: Record<string, string> = {
   "첫 세션을 어떻게 시작할까요?": "How should the first session start?",
   "기본 터미널 설정 →": "Default terminal setup →",
   "팀 캐스팅 →": "Team casting →",
-  "01 저장소 연결": "01 Connect repo",
+  "01 워크스페이스 열기": "01 Open workspace",
   "02 실행 방식": "02 Launch mode",
   "03 세션 구성": "03 Session setup",
   "04 시작": "04 Start",
@@ -114,8 +114,8 @@ export const dict: Record<string, string> = {
     "Fixed set of 8 — only copy & permissions editable; revived at boot if deleted",
   "권한 반영": "Permissions apply",
   "캐스팅 세션은 재시작 때": "To cast sessions on restart",
-  "오버라이드 항목 — 원본은 워크스페이스 .eqmux/jobs/{id}.md 파일입니다. 편집 커맨드는 전역에만 씁니다 — 파일을 직접 고치거나 탐색기에서 편집하세요":
-    "Override entry — the source is the workspace .eqmux/jobs/{id}.md file. Edit commands write only to the global library — edit the file directly or via the explorer",
+  "오버라이드 항목 — 원본은 워크스페이스 .eqmux/jobs/{id}.md 파일입니다. 편집 커맨드는 전역에만 씁니다 — 파일을 직접 고치거나 {fm}에서 편집하세요":
+    "Override entry — the source is the workspace .eqmux/jobs/{id}.md file. Edit commands write only to the global library — edit the file directly or in {fm}",
   "직무 또는 페르소나를 선택하면 편집합니다": "Select a job or persona to edit",
 
   // ── RoleLibrary — 페르소나 편집 ──
@@ -123,8 +123,8 @@ export const dict: Record<string, string> = {
   "단계 — 단계마다 독립 프로필(성향·말투·성격). 전환해 각각 편집하고, 활성 단계만 주입됩니다 (저장 시 적용)":
     "Level — each level keeps an independent profile (style · tone · personality). Switch to edit each; only the active level is injected (applied on save)",
   "이름 (세션 이름과 분리 가능)": "Name (can differ from the session name)",
-  "색 — 직무 팔레트와 정렬 (점 글자 = 직무 앞글자) · UI 표시 전용":
-    "Color — aligned with the job palette (dot letter = job initial) · display only",
+  "색 — 직무 팔레트와 정렬 (점 글자 = 직무) · UI 표시 전용":
+    "Color — aligned with the job palette (dot letter = job) · display only",
   색: "color",
   기획: "Planning",
   개발: "Dev",
@@ -171,13 +171,14 @@ export const dict: Record<string, string> = {
   "앱 데이터 personas/*.md": "App data personas/*.md",
   주입: "Injection",
   ".eqmux/roles/<세션>.md 합성 — 시트는 경로 포인터만": ".eqmux/roles/<session>.md synthesis — the sheet is only a path pointer",
-  "오버라이드 항목 — 원본은 워크스페이스 .eqmux/personas/{id}.md 파일입니다. 편집 커맨드는 전역에만 씁니다 — 파일을 직접 고치거나 탐색기에서 편집하세요":
-    "Override entry — the source is the workspace .eqmux/personas/{id}.md file. Edit commands write only to the global library — edit the file directly or via the explorer",
+  "오버라이드 항목 — 원본은 워크스페이스 .eqmux/personas/{id}.md 파일입니다. 편집 커맨드는 전역에만 씁니다 — 파일을 직접 고치거나 {fm}에서 편집하세요":
+    "Override entry — the source is the workspace .eqmux/personas/{id}.md file. Edit commands write only to the global library — edit the file directly or in {fm}",
   "오버라이드는 .eqmux 파일에서 지웁니다": "Overrides are deleted from the .eqmux file",
   "캐스팅된 페르소나는 삭제할 수 없습니다": "A cast persona cannot be deleted",
   "personas/<id>.md 파일 삭제": "Deletes the personas/<id>.md file",
   "(캐스팅 중)": "(in casting)",
   "팀 편성 저장 실패 — {err}": "Team save failed — {err}",
+  "{ws} 팀 편성을 복원하지 않았습니다 — {err}": "Did not restore the team for {ws} — {err}",
 
   // ── 0.5 W3 · 직함·추천 칩·캐스팅 직무 변경 ──
   "직함 — 직무 안에서 맡는 영역 (선택). 모든 워크스페이스의 이 페르소나에 쓰입니다": "Title — the area this persona covers within its job (optional). Used in every workspace",
@@ -205,54 +206,51 @@ export const dict: Record<string, string> = {
   "빌드 엔지니어": "Build engineer",
   // ── 0.5 W2 시안 적용 — LaunchMode (xfVq4) ──
   "→ 계속": "→ Continue",
-  "← 저장소 연결": "← Connect repository",
   "역할 팀": "Role team",
-  "셸만 연다. 에이전트는 필요할 때 사람이 직접 띄운다. 자동 이름은 프로젝트명XX(EQMUX01…)이고, 만들 때 직접 정할 수도 있다.":
-    "Opens a shell only. You launch an agent yourself when needed. Auto names are ProjectNN (EQMUX01…), or set one when creating.",
-  "세션 이름 · 번호가 헤더와 레일에 붙는다": "Session name · number shown in the header and rail",
-  "손으로 띄운 claude에는 기본으로 메시지를 쌓아 둔다 (넣기 칩) · 설정에서 idle 자동 넣기로 변경":
-    "Messages for a hand-launched claude are held by default (insert chip) · switch to auto-insert when idle in Settings",
-  "역할 팀은 나중에 팀 캐스팅으로 추가": "Add a role team later with team casting",
-  "다음 → 기본 터미널 구성 (셸 · 브랜치 · 이름)": "Next → default terminal setup (shell · branch · name)",
-  "페르소나·직무·직함을 슬롯에 배정해 Claude Code·Codex 세션을 띄운다. 역할 파일과 team.md가 합성되고 메시지 버스가 켜진다.":
-    "Assigns personas, jobs and titles to slots and launches Claude Code·Codex sessions. Role files and team.md are synthesized and the message bus turns on.",
-  "직함으로 맡는 영역을 나눈다 (클라이언트 · 서버 개발자)": "Titles split areas of ownership (client · server developer)",
-  "완료 신호 · 열린 handoff 회신 · 프로젝트 간 통신": "Done signals · replies to open handoffs · cross-project messages",
+  "셸만 엽니다. 에이전트는 필요할 때 직접 띄웁니다. 셸은 설정의 기본 셸이고, 이름은 워크스페이스명XX({name}01…)로 붙습니다 — 연 뒤 세션 상세에서 바꿀 수 있습니다.":
+    "Opens shells only. You start agents yourself when needed. The shell is the Default shell from Settings, and names are workspace-name + XX ({name}01…) — rename in session details after opening.",
+  "세션 이름 · 번호가 헤더와 레일에 붙습니다": "Session name · number shown in the header and rail",
+  "손으로 띄운 claude에는 메시지를 쌓아 둡니다 (넣기 칩) · 설정에서 '쉬면 자동으로 넣기'로 바꿀 수 있습니다": "Messages to a claude you started by hand are held (Insert chip) · switch to 'insert automatically when resting' in Settings",
+  "역할 팀은 나중에 팀 캐스팅으로 더할 수 있습니다": "Add a role team later with team casting",
+  "다음 → 기본 터미널 구성 (셸 · 브랜치 확인)": "Next → default terminal setup (check shell · branch)",
+  "역할을 맡긴 Claude Code 세션을 띄웁니다 — 서로 메시지를 주고받습니다.": "Starts Claude Code sessions with roles — they message each other.",
+  "직함으로 맡는 영역을 나눕니다 (클라이언트 · 서버 개발자)": "Titles split areas of ownership (client · server developer)",
+  "완료 신호 · 넘김 회신 · 워크스페이스 간 통신": "Done signals · handoff replies · messaging across workspaces",
   "프리셋: {list}": "Presets: {list}",
-  "다음 → 팀 캐스팅 → 팀 편성 → 관제": "Next → team casting → team composition → control",
+  "다음 → 팀 캐스팅 → 팀 편성 → 워크스페이스": "Next → team casting → team composition → workspace",
   "헤더 예": "Header",
   카이: "Kai",
   // ── 0.5 W2 시안 적용 — TeamCasting (cjWtF) ──
-  "페르소나를 {n}개 슬롯에 배정한다 · 다시 적용해도 남은 세션의 슬롯 번호는 그대로, 새 페르소나만 빈 슬롯에 들어간다":
-    "Assign personas to {n} slots · re-applying keeps the slot numbers of remaining sessions; only new personas take empty slots",
+  "페르소나를 {n}개 슬롯에 배정합니다. 다시 적용해도 남은 세션의 슬롯 번호는 그대로이고, 새 페르소나만 빈 슬롯에 들어갑니다":
+    "Assigns personas to {n} slots. Re-applying keeps the slot numbers of remaining sessions; only new personas take empty slots",
   "편성 저장 · .eqmux/team.json · team.md": "Save team · .eqmux/team.json · team.md",
   "저장됨 ✓ · .eqmux/team.json · team.md": "Saved ✓ · .eqmux/team.json · team.md",
   "유지 · {n} 그대로": "Kept · stays {n}",
   "새 슬롯": "New slot",
-  "직함 없음 — 역할 파일에 추가 토큰 0": "No title — adds 0 tokens to the role file",
+  "직함 없음 · 역할 파일 그대로": "No title · role file unchanged",
   "직무 (이 슬롯만)": "Job (this slot only)",
   "페르소나 변경": "Change persona",
   "페르소나 배정": "Assign persona",
   "기본 터미널 · {name}": "Default terminal · {name}",
-  "빈 슬롯 · 기본 터미널은 관제에서 만든다 (자동 이름 {name})": "Empty slot · create default terminals from Control (auto name {name})",
-  "편성은 저장하거나 편성 선택으로 넘어갈 때 .eqmux/team.json과 team.md에 적힌다. 직함은 페르소나 직함을 쓰고, 슬롯만 바꾸려면 세션 상세에서 덮어쓴다. roles/는 합성 후 gitignore · 사용자의 CLAUDE.md는 수정하지 않음.":
-    "The team is written to .eqmux/team.json and team.md when you save or move on to composition. Titles come from the persona; override one slot in Session details. roles/ is gitignored after synthesis · your CLAUDE.md is never modified.",
+  "빈 슬롯 · 기본 터미널은 관제에서 만듭니다 (자동 이름 {name})": "Empty slot · create default terminals from Control (auto name {name})",
+  "편성은 저장하거나 편성 선택으로 넘어갈 때 .eqmux/team.json과 team.md에 적힙니다. 직함은 페르소나 직함을 쓰고, 한 슬롯만 바꾸려면 세션 상세에서 덮어씁니다. roles/는 합성 뒤 gitignore에 들어가고, 사용자의 CLAUDE.md는 고치지 않습니다.":
+    "The team is written to .eqmux/team.json and team.md when you save or move on to composition. Titles come from the persona; override one slot in Session details. roles/ is gitignored after synthesis, and your CLAUDE.md is never modified.",
   // ── 0.5 W2 시안 적용 — RoleLibrary (dwiBK) ──
-  "직무 8종 고정 · 세분화는 직함으로 · 직함은 권한·책임·금지를 바꾸지 않는다":
-    "8 fixed jobs · refine with titles · titles never change permissions, duties or prohibitions",
+  "직무는 8종 고정입니다. 세분화는 직함으로 하고, 직함은 권한 · 책임 · 금지를 바꾸지 않습니다":
+    "There are 8 fixed jobs. Refine with titles — titles never change permissions, duties or prohibitions",
   "새 페르소나": "New persona",
   "추천 직함 {n}": "{n} suggested titles",
-  "8종 고정 — 문구·권한만 고친다": "8 fixed — edit wording and permissions only",
+  "8종 고정 — 문구 · 권한만 편집": "8 fixed — edit wording and permissions only",
   "추천 직함 — 직무 '{job}'": "Suggested titles — job '{job}'",
-  "모든 워크스페이스가 함께 쓴다": "shared by all workspaces",
-  "이 워크스페이스만 쓴다": "this workspace only",
+  "모든 워크스페이스 공용": "shared by all workspaces",
+  "이 워크스페이스 전용": "this workspace only",
   "기본 직무": "Default job",
   "역할 부여가 직무 선택 없이 이 값을 따릅니다 (미지정이면 부여 시 개발)":
     "Role assignment follows this when no job is chosen (dev if unset)",
-  "한 줄 · 24자까지 · 직무 '{job}'의 책임·금지·권한은 그대로, 맡는 영역만 정한다. 모든 워크스페이스의 이 페르소나에 쓰인다":
+  "한 줄 · 24자까지. 직무 '{job}'의 책임 · 금지 · 권한은 그대로 두고 맡는 영역만 정합니다. 모든 워크스페이스의 이 페르소나에 쓰입니다":
     "One line · up to 24 chars · job '{job}' duties, prohibitions and permissions stay; this only names the area. Used for this persona in every workspace",
-  "추천 직함 — 직무 '{job}' · 누른 말이 그대로 직함이 된다": "Suggested titles — job '{job}' · the chip text becomes the title as is",
-  "저장하면 {name}가 들어간 세션 {n}개의 역할 파일과 팀원 {m}명의 팀 관계 표를 다시 만들고 '[EQ] 역할 갱신 — .eqmux/roles/<세션>.md 다시 읽기' 한 줄을 보낸다. 재시작 배지는 뜨지 않는다.":
+  "추천 직함 — 직무 '{job}' · 누른 말이 그대로 직함이 됩니다": "Suggested titles — job '{job}' · the chip text becomes the title as is",
+  "저장하면 {name}이(가) 들어간 세션 {n}개의 역할 파일과 팀원 {m}명의 팀 관계 표를 다시 만들고 '[EQ] 역할 갱신 — .eqmux/roles/<세션>.md 다시 읽기' 한 줄을 보냅니다. 재시작 배지는 뜨지 않습니다.":
     "Saving rebuilds the role files of {n} session(s) with {name} and the team tables of {m} teammate(s), and sends one line '[EQ] 역할 갱신 — .eqmux/roles/<session>.md 다시 읽기'. No restart badge.",
   // ── 0.5.x QA eqmux-66: 캐스팅 확인창 · 자리 없음 · 리드 1명 (B69 · B70 · B101 · P35) ──
   "{name} 종료 — 세션과 PTY가 끝납니다": "{name} stops — the session and its PTY end",
@@ -265,7 +263,7 @@ export const dict: Record<string, string> = {
   "자리 없음 — 적용하면 빠집니다": "No slot — left out when applied",
   "리드는 1명": "one lead only",
   "지금 편성": "Current lineup",
-  "지금 돌고 있는 편성으로 되돌린다": "Go back to the lineup running now",
+  "지금 돌고 있는 편성으로 되돌립니다": "Goes back to the lineup running now",
   // ── 0.5.x QA eqmux-66: 역할 라이브러리 편집 보호 (B95 · B96 · B97 · U57) ──
   "이름을 입력하세요": "Enter a name",
   "이미 쓰는 이름입니다": "This name is already in use",
@@ -276,4 +274,45 @@ export const dict: Record<string, string> = {
   "저장하지 않은 편집이 있습니다": "You have unsaved edits",
   "이동하면 고친 내용이 사라집니다. 남기려면 취소하고 [저장]을 누르세요.": "Moving on discards your edits. To keep them, cancel and press [Save].",
   "버리고 이동": "Discard and move on",
+  // 0.6 §15-3 매 턴 캐릭터 상기
+  "매 턴 캐릭터 상기": "Remind character every turn",
+  // 0.6 §3 직무별 모델
+  "모델 — 비우면 직무 모델, 그것도 비면 엔진 기본. 다음 기동부터 적용":
+    "Model — empty uses the job model, then the engine default. Applies from the next launch",
+  "모델 — 이 직무 세션의 기본 모델. 페르소나 모델이 우선, 비우면 엔진 기본. 다음 기동부터 적용":
+    "Model — default for sessions with this job. A persona model wins; empty uses the engine default. Applies from the next launch",
+  "Codex 세션이면 Codex 모델 이름을 적습니다 (-m으로 넘어갑니다)": "For Codex sessions, enter a Codex model name (passed as -m)",
+  "담당 경로 — 이 직무가 맡는 파일. 밖을 고치면 알림이 뜹니다": "Owned paths — files this job is responsible for. Editing outside them raises a notice",
+  "워크스페이스 기준 glob을 공백으로 나눠 적습니다. 비우면 검사하지 않습니다": "Space-separated globs relative to the workspace. Leave empty to skip the check",
+  // 0.6 §15-4 캐릭터 기억
+  "캐릭터 기억 — 워크스페이스마다 따로. 세션이 스스로 덧붙이고 다음 세션 시작에 실립니다":
+    "Character memory — one per workspace. The session appends to it and it is loaded at the next session start",
+  "아직 기억이 없습니다 — {path}": "No memory yet — {path}",
+  "{n}줄": "{n} lines",
+  "기억 열기": "Open memory",
+  "기억을 비우지 못했습니다 — {err}": "Couldn't clear the memory — {err}",
+  비우기: "Clear",
+  "이 워크스페이스의 기억을 비울까요?": "Clear this workspace's memory?",
+  "기억 파일을 휴지통으로 보냅니다. 다음 세션부터 이 캐릭터는 이 프로젝트의 지난 일을 모릅니다.":
+    "The memory file goes to the trash. From the next session on, this character won't remember past work in this project.",
+  "대사 예시 (중급 프로필) — 상황 → 응답 2~3줄. 말투 재현에 가장 효과가 큽니다":
+    "Sample lines (Mid profile) — 2–3 lines of situation → reply. The most effective way to keep the voice",
+  '예: - 빌드 실패 보고 → "어디가 막혔는지 같이 봅시다."': 'e.g. - Build failure report → "Where did it get stuck? Let us look together."',
+  "프롬프트마다 캐릭터 한 줄을 다시 싣습니다 — 턴당 수십 토큰. Claude Code만 (Codex는 나가지 않음)":
+    "Re-adds one character line on every prompt — a few dozen tokens per turn. Claude Code only (not sent to Codex)",
+  // ── 0.6 QA eqmux-88 ──
+  수정됨: "edited",
+  "{ws}에서 활동 중": "Active in {ws}",
+  쓰기: "Write",
+  커밋: "Commit",
+  푸시: "Push",
+  "워크스페이스로 →": "To workspace →",
+  초상: "Portrait",
+  "앱 데이터 personas 폴더에 {id}.png를 두면 이름 첫 글자 대신 그 그림을 씁니다 (4MB까지)":
+    "Put {id}.png in the app-data personas folder to use it instead of the name initial (up to 4 MB)",
+  // [초상 고르기…] · [지우기] (0.6 QA P66) — 뒤 둘은 Rust 오류
+  "초상 고르기…": "Choose portrait…",
+  지우기: "Remove",
+  "PNG 파일이 아닙니다": "Not a PNG file",
+  "초상이 4MB를 넘습니다": "The portrait is larger than 4 MB",
 };

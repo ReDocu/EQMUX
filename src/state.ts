@@ -2,7 +2,8 @@
 // 상태를 바꾸는 것은 언제나 사용자 버튼이며, 자동 실행 경로는 없다.
 import { invoke } from "@tauri-apps/api/core";
 import { createSignal } from "solid-js";
-import { backend } from "./backend/mock";
+import { backend, MAX_OPEN_WORKSPACES } from "./backend/mock";
+import { tf } from "./i18n";
 import { isTauri } from "./backend/pty";
 import { IS_MAC } from "./platform";
 import { settings } from "./backend/settings";
@@ -14,12 +15,18 @@ export type View =
   | { kind: "workspace"; id: string } // 워크스페이스 탭 = 컨트롤 센터 (bi8Au)
   | { kind: "launch"; wsId: string } // 레인 01 — 실행 방식 선택 (ChIvy)
   | { kind: "terminalSetup"; wsId: string } // 레인 01 — 기본 터미널 구성 (S9u2S)
-  | { kind: "casting"; wsId: string } // 레인 01 — 팀 캐스팅
-  | { kind: "composition"; wsId: string } // 레인 01 — 팀 편성
+  // 레인 01 — 팀 캐스팅 · 팀 편성. wizard: 첫 세션 마법사로 왔다 — 단계 표시와 [← 실행 방식]을 보인다 (P49).
+  // 관제·대시보드 메뉴로 온 재캐스팅에는 마법사 단계가 없다
+  | { kind: "casting"; wsId: string; wizard?: boolean }
+  | { kind: "composition"; wsId: string; wizard?: boolean }
   | { kind: "missions"; wsId: string } // 임무 배정 (화면 #8)
   // Git Diff (AXXhV) — wsId 없으면 활성 워크스페이스, ✕/Esc는 back으로 복귀 (U11).
   // commit이 있으면 부모 커밋 ↔ 이 커밋 비교(UI 리파인 §git), 없으면 HEAD ↔ 워크트리
-  | { kind: "gitdiff"; wsId?: string; back?: View; commit?: { hash: string; message: string } };
+  | { kind: "gitdiff"; wsId?: string; back?: View; commit?: { hash: string; message: string; file?: string } } // file — 이 파일로 연다 (U192)
+  // git 화면 (§17 W5) — 그래프 · 브랜치 사이드바 · 상세 · 작업 트리. file이 있으면 그 파일의 히스토리 · blame으로 연다
+  | { kind: "git"; wsId?: string; back?: View; file?: string }
+  | { kind: "history"; wsId?: string; back?: View } // 과거 세션 검색 (§4 W3) — ✕/Esc는 back으로
+  | { kind: "review"; wsId: string; missionId: string; back?: View }; // 임무 검토 (§13-3 W4)
 // 워크스페이스 연결·역할 라이브러리·설정은 View가 아니라 팝업(OverlayKind)이다 — 아래 overlay 참조
 
 /** 전체 화면 팝업 (M25 확장) — NAV 도구 4종(임무·워크스페이스·역할·설정)이 전부 팝업이다.
@@ -27,10 +34,11 @@ export type View =
 export type OverlayKind = "explorer" | "connect" | "roles" | "settings";
 const [overlay, setOverlayRaw] = createSignal<OverlayKind | undefined>(undefined);
 export { overlay };
-/** 지금 팝업이 닫히기를 거부하는가 — 임무 탐색기의 미저장 편집. 막을 때 안내는 건 쪽(ScreenOverlay)이 띄운다 */
-let overlayGuard: (() => boolean) | undefined;
+/** 지금 팝업이 닫히기를 거부하는가 — 역할 라이브러리의 미저장 편집(B225). 막을 때 묻는 창은 건 쪽이 띄운다.
+ *  next는 가려던 팝업(닫기면 undefined) — 확인 뒤 그리로 다시 가게 */
+let overlayGuard: ((next: OverlayKind | undefined) => boolean) | undefined;
 /** 팝업 닫기 거부 조건을 건다 — 돌려준 함수로 푼다(그사이 다른 팝업이 바꿔 걸었으면 그대로 둔다) */
-export function guardOverlay(g: () => boolean): () => void {
+export function guardOverlay(g: (next: OverlayKind | undefined) => boolean): () => void {
   overlayGuard = g;
   return () => {
     if (overlayGuard === g) overlayGuard = undefined;
@@ -40,7 +48,7 @@ export function guardOverlay(g: () => boolean): () => void {
  *  닫히기를 거부하면(미저장 편집) 그대로 두고 false — 예전엔 ESC만 막고 이동·✕는 편집을 버렸다 */
 export function setOverlay(k: OverlayKind | undefined): boolean {
   if (overlay() === k) return true;
-  if (overlay() && overlayGuard?.()) return false;
+  if (overlay() && overlayGuard?.(k)) return false;
   setOverlayRaw(k);
   return true;
 }
@@ -119,28 +127,32 @@ if (typeof window !== "undefined") {
   });
 }
 
-/** 임무 탐색기 팝업의 안쪽 전환 (0.3.7) — 탐색기 ↔ 임무를 팝업을 닫지 않고 오간다.
- *  임무는 원래 View(화면 #8)라 팝업에서 나가야만 볼 수 있었다. 팝업이 두 화면을 다 품고,
- *  이 신호가 어느 쪽을 그릴지 정한다. 팝업을 열 때마다 탐색기로 되돌린다 (App.tsx) —
- *  "로컬 폴더"를 눌렀는데 임무 목록이 뜨는 일이 없게. */
-export type ExplorerTab = "explorer" | "missions";
-export const [explorerTab, setExplorerTab] = createSignal<ExplorerTab>("explorer");
-
-/** 임무 탐색기 팝업을 지정한 자리에서 연다 (0.3.7) — 입구가 이름대로 열리게 한다:
- *  앱 바 "임무"는 임무로, 컨트롤 센터 "로컬 폴더"는 탐색기로. 이미 그 자리를 보고 있으면
- *  토글로 닫고, 다른 자리를 보고 있으면 닫지 않고 그 자리로 옮긴다.
- *  임무는 워크스페이스 문맥이 있어야 성립하므로, 없으면 탐색기로 착지한다 (첫 실행 관제). */
-export function toggleExplorer(tab: ExplorerTab): void {
-  const target: ExplorerTab = tab === "missions" && !scopeWorkspace() ? "explorer" : tab;
-  if (overlay() === "explorer" && explorerTab() === target) {
-    setOverlay(undefined);
+/** 임무 팝업 · 파일 탐색기 입구 (0.3.7 → 0.6 결정 21) — 탐색기는 사이드 패널 코드 그룹(files)으로 갔고,
+ *  팝업("explorer" 오버레이)은 임무만 그린다. 입구가 이름대로 열린다: 앱 바 "임무"는 팝업,
+ *  컨트롤 센터 "로컬 폴더"는 패널 files. 이미 그 자리를 보고 있으면 토글로 닫는다.
+ *  임무는 워크스페이스 문맥이 있어야 성립하므로, 없으면 파일 패널로 착지한다 (첫 실행 관제). */
+export function toggleExplorer(tab: "explorer" | "missions"): void {
+  if (tab === "explorer" || !scopeWorkspace()) {
+    if (panelOpen() && panelTab() === "files") setPanelOpen(false);
+    else openPanel("files");
     return;
   }
-  setExplorerTab(target);
-  setOverlay("explorer");
+  setOverlay(overlay() === "explorer" ? undefined : "explorer");
 }
 
-export type PanelTab = "conversation" | "git" | "ports" | "server" | "logs" | "browser" | "mdview" | "env";
+export type PanelTab =
+  | "conversation"
+  | "git"
+  | "ports"
+  | "server"
+  | "logs"
+  | "browser"
+  | "mdview"
+  | "env"
+  | "files" // 코드 그룹 [git | 파일 | 문서] (결정 21 · W6)
+  | "mcp" // 확장 그룹 [MCP | 플러그인 | 스킬]
+  | "plugins"
+  | "skills";
 
 const [viewSig, setViewRaw] = createSignal<View>({ kind: "control" });
 export const view = viewSig;
@@ -180,7 +192,26 @@ export function scopeWorkspace(): Workspace | undefined {
 }
 
 /** 사이드 패널 (M1 — 대화는 패널 탭이며 메인 화면이 아니다) */
-export const [panelOpen, setPanelOpen] = createSignal(false);
+const [panelOpenRaw, setPanelOpenRaw] = createSignal(false);
+export const panelOpen = panelOpenRaw;
+/** 사이드 패널 닫기 가드 (W6 · 결정 21) — 파일 탭 편집기의 미저장 편집. 닫는 길이 여럿이라 한 곳에서 막는다.
+ *  참이면 닫지 않고 panelCloseAsk를 세운다 — SidePanel이 확인창을 띄우고 [버리고 닫기]가 force로 닫는다.
+ *  ponytail: 전체 화면 터미널이 패널을 가리는 것은 닫기가 아니라 막지 않는다 */
+let panelGuard: (() => boolean) | undefined;
+export function setPanelGuard(g: () => boolean): () => void {
+  panelGuard = g;
+  return () => {
+    if (panelGuard === g) panelGuard = undefined;
+  };
+}
+export const [panelCloseAsk, setPanelCloseAsk] = createSignal(false);
+export function setPanelOpen(v: boolean, force = false): void {
+  if (!v && !force && panelOpenRaw() && panelGuard?.()) {
+    setPanelCloseAsk(true);
+    return;
+  }
+  setPanelOpenRaw(v);
+}
 /** 관제 화면 왼쪽 레일(슬롯 · 로컬 폴더 · 워크트리) 펼침 — 접으면 번호 띠만 남는다. layout.json에 남는다 */
 export const [railOpen, setRailOpen] = createSignal(true);
 export const [panelTab, setPanelTab] = createSignal<PanelTab>("conversation");
@@ -256,6 +287,24 @@ export function defaultRatios(layout: PaneLayout): PaneRatio {
       return { rows: [2 / 3, 1 / 3] };
   }
 }
+/** 배치 창 축소 그림의 트랙 (0.6 QA U151) — 실제 그리드(screens.css .terminal-grid.layout-*)처럼 슬롯 상한만큼
+ *  칸을 둔다. 앞 칸부터 지금 세션 수만큼 채우고 나머지는 빈 슬롯('+ 세션 추가' 자리)으로 그린다 */
+export function previewTracks(layout: PaneLayout, max: number): { cols: string; rows: string } {
+  const rep = (n: number) => `repeat(${n}, 1fr)`;
+  switch (layout) {
+    case "grid-col":
+    case "grid-row":
+      return { cols: rep(max / 2), rows: rep(2) };
+    case "stack-v":
+      return { cols: rep(1), rows: rep(max) };
+    case "row-h":
+      return { cols: rep(max), rows: rep(1) };
+    case "main-right":
+      return { cols: "2fr 1fr", rows: rep(max - 1) };
+    case "main-bottom":
+      return { cols: rep(max - 1), rows: "2fr 1fr" };
+  }
+}
 /** 비율은 배치별이면서 워크스페이스별이다 (B21) — '어떤 배치를 쓰는가'가 워크스페이스별인데
  *  (U7) 비율만 배치 키 하나로 두면, 한 팀에서 분할선을 끌 때 같은 배치를 쓰는 다른 팀의
  *  비율까지 함께 바뀐다. 워크스페이스마다 세션 수·용도가 다르다는 U7의 근거가 비율에도 같다. */
@@ -307,6 +356,9 @@ const MAC_SHELLS: ShellChoice[] = [
 /** 셸 목록 — 배열은 그대로 두고 내용만 채운다 (layout 복원·설정 화면이 같은 참조를 읽는다) */
 export const SHELLS: ShellChoice[] = [...(IS_MAC ? MAC_SHELLS : WINDOWS_SHELLS)];
 export const [defaultShell, setDefaultShell] = createSignal<ShellChoice>(SHELLS[0]);
+/** Session.shell(라벨) → pty_spawn에 넘길 실행 파일 (B253). 라벨을 그대로 넘기면 'git-bash'는 pwsh로 물러나고
+ *  mac 'login'은 /usr/bin/login이 뜬다. 모르는 라벨 · cmd 없는 셸(로그인 셸)은 undefined → Rust가 기본 셸 */
+export const shellCmdOf = (label: string | undefined): string | undefined => SHELLS.find((s) => s.label === label)?.cmd;
 
 /** 세션별로 실제로 뜬 셸 이름 (B114) — pty_spawn이 돌려준 값. 페인 머리가 '셸' 대신 'zsh'·'bash'를 보인다 */
 export const [ptyShells, setPtyShells] = createSignal<Record<string, string>>({});
@@ -314,20 +366,24 @@ export const notePtyShell = (id: string, label: string | undefined): void => {
   if (label) setPtyShells((m) => (m[id] === label ? m : { ...m, [id]: label }));
 };
 
-/** macOS — Rust(list_shells)가 /etc/shells에서 실제로 찾은 셸로 목록을 채운다 (B114).
+/** Rust(list_shells)가 실제로 찾은 셸로 목록을 채운다 — macOS는 /etc/shells (B114), Windows는 설치 여부 (B291).
  *  커맨드가 없거나 실패하면 위 정적 목록으로 남는다. 고른 셸이 목록에 남아 있으면 그 선택을 지킨다 */
 export async function loadShells(): Promise<void> {
-  if (!IS_MAC || !isTauri()) return;
+  if (!isTauri()) return;
   let found: { default: string; shells: { label: string; path: string }[] };
   try {
     found = await invoke("list_shells");
   } catch {
     return;
   }
-  const next: ShellChoice[] = [
-    { ...MAC_SHELLS[0], note: found.default || MAC_SHELLS[0].note },
-    ...found.shells.map((s) => ({ label: s.label, name: s.label, cmd: s.path })),
-  ];
+  // Windows — 설치된 셸만 남긴다 (B291). PowerShell 7은 기본 설치에 없어, 고르면 5.1이 떴다. 이름 · 순서는 정적 목록 그대로
+  const next: ShellChoice[] = IS_MAC
+    ? [
+        { ...MAC_SHELLS[0], note: found.default || MAC_SHELLS[0].note },
+        ...found.shells.map((s) => ({ label: s.label, name: s.label, cmd: s.path })),
+      ]
+    : WINDOWS_SHELLS.filter((s) => found.shells.some((f) => f.path === s.cmd));
+  if (next.length === 0) return;
   const keep = defaultShell().label;
   SHELLS.splice(0, SHELLS.length, ...next);
   setDefaultShell(SHELLS.find((s) => s.label === keep) ?? SHELLS[0]);
@@ -345,12 +401,25 @@ backend.subscribe(() => setTick((t) => t + 1));
  *  닫힌 팀의 세션을 가리킬 수 있다. 그대로 화면만 바꾸면 앱 바에 대응 탭이 없어 활성 탭이
  *  없는 자리에 서게 되므로, 데려가기 전에 그 워크스페이스를 먼저 연다 (B18).
  *  사용자가 누른 점프의 일부이므로 자동 실행이 아니다 — 상한·경로 소실은 openWorkspace가 거른다. */
+/** 닫힌 워크스페이스로 데려가기 전에 연다. 동시 열기 상한이면 openWorkspace는 열지 않고 돌아간다 —
+ *  탭 없는 화면으로 데려가지 않고 이유를 알린 뒤 false (B238). 밖에서 워크스페이스로 데려가는 입구는
+ *  모두 이 판정을 탄다 (B284 — 동시 편집 경고의 [알리기]가 따로 열다 빠졌다). 경로 소실은 지금처럼 둔다.
+ *  notify는 ui.tsx(이 파일을 가져다 쓴다)에 있어 순환을 피하려고 늦게 가져온다 */
+function openOrExplain(workspaceId: string): boolean {
+  backend.openWorkspace(workspaceId);
+  const ws = backend.listWorkspaces().find((w) => w.id === workspaceId);
+  if (!ws || ws.open || ws.pathMissing) return true;
+  const msg = tf("동시에 열 수 있는 워크스페이스는 {n}개입니다 — 하나를 닫고 다시 시도하세요", { n: MAX_OPEN_WORKSPACES });
+  void import("./components/ui").then((m) => m.notify(msg)).catch(() => {});
+  return false;
+}
+
 export function jumpToSession(workspaceId: string, sessionId: string): boolean {
   // 팝업이 미저장 편집으로 닫히기를 거부하면 데려가지 않는다 — 뒤에서만 이동하고 '본 것'만 찍히지 않게 (B72)
   if (!setOverlay(undefined)) return false;
+  if (!openOrExplain(workspaceId)) return false;
   setSelectedSession(sessionId);
   backend.markSeen(sessionId);
-  backend.openWorkspace(workspaceId);
   setView({ kind: "workspace", id: workspaceId });
   return true;
 }
@@ -358,7 +427,21 @@ export function jumpToSession(workspaceId: string, sessionId: string): boolean {
 /** 포커스로 잡기 요청 — 줌과 키보드 포커스는 컨트롤 센터의 몫이라(줌은 그 화면의 지역 상태다)
  *  여기서는 "이 세션을 잡아라"는 요청만 남기고 화면이 이펙트로 받는다. 같은 세션을 다시
  *  잡을 수 있어야 하므로 값이 아니라 매번 새 객체다. */
-export const [focusRequest, setFocusRequest] = createSignal<{ session: string } | undefined>(undefined);
+/** full = Focus(전체 화면 + 줌)로 들어간다. 없으면 선택·키보드만 (B234) */
+export const [focusRequest, setFocusRequest] = createSignal<{ session: string; full?: boolean } | undefined>(undefined);
+
+/** 대화 초안 요청 (0.6 §13-1) — 밖(동시 편집 경고)에서 '이 세션에게 ask'를 채워 대화 탭을 연다.
+ *  보내지는 않는다 — 사람이 고치고 Enter를 누른다. 받은 대화 탭이 비운다 */
+export const [draftRequest, setDraftRequest] = createSignal<
+  { session: string; type: "ask" | "handoff" | "report" | "review" | "escalate"; text: string } | undefined
+>(undefined);
+export function openDraft(workspaceId: string, session: string, text: string): void {
+  if (!setOverlay(undefined)) return;
+  if (!openOrExplain(workspaceId)) return;
+  setView({ kind: "workspace", id: workspaceId });
+  setDraftRequest({ session, type: "ask", text });
+  openPanel("conversation");
+}
 
 /** 세션 상세 열기 요청 (U63) — 상세 팝업의 열림은 컨트롤 센터의 지역 상태라, 밖(복구 창)에서는
  *  요청만 남기고 그 탭이 이펙트로 받는다. focusRequest와 같은 꼴 — 받은 쪽이 비운다 */
@@ -375,5 +458,5 @@ export function openSessionDetail(workspaceId: string, sessionId: string): boole
 export function focusSession(workspaceId: string, sessionId: string) {
   if (!jumpToSession(workspaceId, sessionId)) return;
   setTerminalFull(true);
-  setFocusRequest({ session: sessionId });
+  setFocusRequest({ session: sessionId, full: true });
 }

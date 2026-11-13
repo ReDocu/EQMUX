@@ -1,17 +1,19 @@
 // 임무 · 파일 탐색기 패널 (ehpqx) — 워크스페이스 파일 트리 + 미리보기 + 파일 CRUD (M24).
 // Tauri에서는 실제 FS를 읽고 쓴다 (깊이·개수 상한 · .git 불가침 · 삭제는 휴지통).
 // 파일이 원본이라는 계약 그대로: 임무 파일은 backend의 실측 임무 데이터로, 그 외 텍스트는 원문으로.
-import { createEffect, createSignal, For, lazy, on, onMount, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, lazy, on, onCleanup, onMount, Show } from "solid-js";
+import { Portal } from "solid-js/web";
 import { backend } from "../backend/mock";
-import { fsCreate, fsDelete, fsPreview, fsRead, fsRename, fsTree, fsWrite } from "../backend/panels";
+import { fsCreate, fsDelete, fsPreview, fsRead, fsRename, fsTree, fsWrite, isStaleWrite } from "../backend/panels";
 import type { FsNode, FsTree } from "../backend/panels";
-import { refreshMissions } from "../backend/missions";
+import { markMissionBase, refreshMissions } from "../backend/missions";
 import { sendConversation } from "../backend/conversation";
-import { isTauri, revealPath } from "../backend/pty";
+import { clipWriteText, isTauri, revealPath } from "../backend/pty";
 import { t, tf } from "../i18n";
-import { openPanel, scopeWorkspace, selectedSession, setExplorerTab, setOverlay, tick } from "../state";
+import { jobName, revealLabel } from "../labels";
+import { openPanel, panelTab, scopeWorkspace, selectedSession, setOverlay, setView, tick, toggleExplorer, view } from "../state";
 import { Icon } from "./icons";
-import { ContextMenu, notify } from "./ui";
+import { ConfirmDialog, ContextMenu, notify } from "./ui";
 import { isSubmitEnter } from "../platform"; // 한글 조합 중 Enter는 제출이 아니다 (B130)
 
 // 브라우저 dev 폴백 트리 (기존 목)
@@ -32,6 +34,8 @@ const CodeEditor = lazy(() => import("./CodeEditor").then((m) => ({ default: m.C
 
 // 미저장 이탈 보호 — 오버레이(ESC 닫기)가 편집 중 여부를 알아야 한다
 export const [editorGuard, setEditorGuard] = createSignal(false);
+/** 다른 패널이 이 탭에서 파일 하나를 골라 열게 한다 (B242 — 문서 탭의 .md 아닌 상대 링크). 받으면 비운다 */
+export const [explorerPick, setExplorerPick] = createSignal<string | undefined>(undefined);
 
 export function MissionExplorerTab() {
   const [sel, setSel] = createSignal<FsNode | undefined>(undefined);
@@ -60,16 +64,56 @@ export function MissionExplorerTab() {
   const persona = () => backend.listPersonas().find((p) => p.id === session()?.personaId);
   const job = () => backend.listJobs().find((j) => j.id === session()?.jobId);
 
+  // 늦게 온 이전 응답이 지금 트리를 덮지 않게 요청 번호를 대조한다 (B215 — GitPanelTab loadReq와 같은 방식).
+  // fsTree는 Tauri에서 실패를 undefined로 돌려준다 — 빈 트리와 다른 문구를 보인다
+  let treeReq = 0;
+  const [treeFailed, setTreeFailed] = createSignal(false);
   const loadTree = async () => {
     const target = ws();
-    if (!isTauri() || !target) return;
-    setFsResult(await fsTree(target.path));
+    const req = ++treeReq;
+    if (!isTauri()) return;
+    if (!target) {
+      setFsResult(undefined);
+      setTreeFailed(false);
+      return;
+    }
+    const r = await fsTree(target.path);
+    if (req !== treeReq) return;
+    setFsResult(r);
+    setTreeFailed(r === undefined);
   };
   onMount(() => {
     createEffect(
-      on(() => ws()?.id, () => {
+      // 메모 — on()은 같은 값에도 돌아, 방송(tick)마다 폴더가 다 접히고 트리를 다시 읽었다 (B249 계열)
+      on(createMemo(() => ws()?.id), () => {
         setCollapsed(new Set<string>()); // 워크스페이스가 바뀌면 접기 상태도 새로 — 다른 트리다
         void loadTree();
+        // 선택·미리보기·편집도 이전 워크스페이스의 것이다 (B200) — 남겨 두면 [삭제]·[이름]이 새 워크스페이스의
+        // 같은 경로에 닿았다. 미저장 편집이면 먼저 묻고, [계속 편집]이면 그 편집은 원래 워크스페이스(selWs)에 남는다
+        if (selWs() && selWs()!.id === ws()?.id) return; // [계속 편집] 뒤 원래 워크스페이스로 돌아왔다
+        if (editing() !== undefined && dirty()) setAskDrop(() => clearSel);
+        else clearSel();
+      }),
+    );
+    // 탭이 다시 보일 때 새로 읽는다 (S28) — 탭은 숨겨도 살아 있어, 에이전트가 만든 파일이 ⟳ 전까지 안 보였다.
+    // 미리보기도 같이 — 편집 중이면 편집기를 건드리지 않는다
+    createEffect(
+      on(
+        () => panelTab() === "files",
+        (shown) => {
+          if (!shown) return;
+          void loadTree();
+          const s = sel();
+          if (s && !s.dir && editing() === undefined) void loadPreview(s.rel, true);
+        },
+        { defer: true },
+      ),
+    );
+    createEffect(
+      on(explorerPick, (rel) => {
+        if (!rel) return;
+        setExplorerPick(undefined);
+        pick({ name: rel.split("/").pop() ?? rel, rel, depth: 0, dir: false });
       }),
     );
   });
@@ -114,15 +158,19 @@ export function MissionExplorerTab() {
 
   const tree = () => {
     const list = isTauri() ? (fsResult()?.nodes ?? []) : mockTree();
-    const q = query().trim();
-    if (q) return list.filter((n) => n.name.includes(q)); // 검색 = 평면 — 접기 무시
+    const q = query().trim().toLowerCase();
+    if (q) return list.filter((n) => n.name.toLowerCase().includes(q)); // 검색 = 평면 — 접기 무시 · 대소문자 무시 (P84)
     return list.filter((n) => !hiddenByFold(n.rel));
   };
 
-  const loadPreview = async (rel: string) => {
-    setPreview(undefined);
-    const target = ws();
-    if (isTauri() && target) setPreview(await fsPreview(target.path, rel));
+  /** keep — 다시 읽는 동안 지금 미리보기를 둔다 (S28 새로 읽기). 비우면 잠깐 '불러올 수 없습니다'가 깜박인다 */
+  const loadPreview = async (rel: string, keep = false) => {
+    if (!keep) setPreview(undefined);
+    const target = opWs();
+    if (!isTauri() || !target) return;
+    const p = await fsPreview(target.path, rel);
+    // 그새 다른 파일을 골랐으면 버린다 (B215) — 앞 파일 내용이 뒤 파일 이름 아래 남았다
+    if (sel()?.rel === rel && opWs()?.id === target.id) setPreview(p);
   };
 
   const pick = (n: FsNode) => {
@@ -134,6 +182,7 @@ export function MissionExplorerTab() {
     }
     setPendingSwitch(undefined);
     setSel(n);
+    setSelWs(ws());
     setFsErr(undefined);
     setConfirmDel(false);
     setNameMode(undefined);
@@ -154,6 +203,29 @@ export function MissionExplorerTab() {
   const [pendingSwitch, setPendingSwitch] = createSignal<string | undefined>(undefined);
   // 오버레이 ESC 가드 — 편집 중 + 미저장일 때만 닫기를 막는다
   createEffect(() => setEditorGuard(editing() !== undefined && dirty()));
+  // 패널을 [버리고 닫기]로 내리면 표식도 끈다 — 남으면 다시 연 패널(파일 탭 미방문)의 닫기가 헛되이 물었다
+  onCleanup(() => setEditorGuard(false));
+  // 선택이 만들어진 워크스페이스 (B200) — 파일 조작은 지금 탭(ws)이 아니라 이 워크스페이스에 한다
+  const [selWs, setSelWs] = createSignal<ReturnType<typeof ws>>(undefined);
+  const opWs = () => (sel() ? selWs() : ws());
+  const clearSel = () => {
+    setSel(undefined);
+    setSelWs(undefined);
+    setPreview(undefined);
+    setEditing(undefined);
+    setDirty(false);
+    setConfirmDel(false);
+    setNameMode(undefined);
+    setFsErr(undefined);
+    setPendingSwitch(undefined);
+  };
+  // 미저장 편집 버리기 확인 (P77 · B200) — 확인하면 돌릴 동작을 담는다
+  const [askDrop, setAskDrop] = createSignal<(() => void) | undefined>(undefined);
+  const cancelEdit = () => {
+    const drop = () => (setEditing(undefined), setDirty(false));
+    if (dirty()) setAskDrop(() => drop);
+    else drop();
+  };
 
   // 생성 대상 폴더 — 폴더 선택 시 그 안, 파일 선택 시 그 옆, 없으면 루트
   const createDir = () => {
@@ -171,7 +243,7 @@ export function MissionExplorerTab() {
   const isMissionFile = (rel: string) => rel.startsWith(".eqmux/missions/");
 
   const submitName = async () => {
-    const target = ws();
+    const target = opWs();
     const kind = nameMode();
     const name = nameVal().trim();
     if (!target || !kind || !name) return;
@@ -188,6 +260,7 @@ export function MissionExplorerTab() {
         const rel = await fsCreate(target.path, createDir(), name, kind === "dir");
         if (kind === "file") {
           setSel({ name, rel, depth: 0, dir: false });
+          setSelWs(target);
           setPreview("");
         }
       }
@@ -199,7 +272,7 @@ export function MissionExplorerTab() {
   };
 
   const doDelete = async () => {
-    const target = ws();
+    const target = opWs();
     const s = sel();
     if (!target || !s) return;
     if (!confirmDel()) {
@@ -221,7 +294,7 @@ export function MissionExplorerTab() {
   };
 
   const startEdit = async () => {
-    const target = ws();
+    const target = opWs();
     const s = sel();
     if (!target || !s || s.dir) return;
     setFsErr(undefined);
@@ -231,28 +304,42 @@ export function MissionExplorerTab() {
       setEditing(fc.text);
       setEditMtime(fc.mtimeMs);
       setDirty(false);
+      setStale(false);
     } catch (err) {
       setFsErr(String(err));
     }
   };
 
-  const saveEdit = async () => {
-    const target = ws();
+  // 밖에서 바뀌어 저장이 거부된 편집 (U189) — [취소]만 남으면 고친 내용을 손으로 옮겨야 했다.
+  // [덮어쓰기](확인창) · [내 편집 복사]를 더한다. 새 편집을 열거나 다시 저장하면 끈다
+  const [stale, setStale] = createSignal(false);
+  const [askOverwrite, setAskOverwrite] = createSignal(false);
+  const saveEdit = async (force = false) => {
+    const target = opWs();
     const s = sel();
     const content = editing();
     if (!target || !s || content === undefined) return;
     setFsErr(undefined);
+    setStale(false);
     try {
-      // 충돌 감지 — 편집 시작 후 파일이 밖에서(에이전트 등) 바뀌었으면 거부된다
-      const next = await fsWrite(target.path, s.rel, content, editMtime());
+      // 충돌 감지 — 편집 시작 후 파일이 밖에서(에이전트 등) 바뀌었으면 거부된다. [덮어쓰기]만 기준 mtime 없이 쓴다
+      const next = await fsWrite(target.path, s.rel, content, force ? undefined : editMtime());
       setEditMtime(next);
       setEditing(undefined);
       setDirty(false);
       void loadPreview(s.rel);
       if (isMissionFile(s.rel)) void refreshMissions(target.id); // 임무는 파일이 원본 (FR-E-74)
     } catch (err) {
-      setFsErr(String(err));
+      const isStale = isStaleWrite(err);
+      setStale(isStale);
+      setFsErr(isStale ? t("파일이 밖에서 바뀌었습니다 — [덮어쓰기]로 내 편집을 저장하거나, [내 편집 복사] 뒤 [취소]하고 다시 여세요") : String(err));
     }
+  };
+  const copyEdit = async () => {
+    const text = editing();
+    if (text === undefined) return;
+    if (await clipWriteText(text)) notify(t("내 편집을 복사했습니다"), "ok");
+    else notify(t("복사하지 못했습니다"));
   };
 
   // 임무 파일이면 실측 임무 데이터로 구조화 미리보기 (파일이 원본 — 목록도 파일 실측이다)
@@ -266,13 +353,22 @@ export function MissionExplorerTab() {
     return backend.listPersonas().find((p) => p.id === s?.personaId)?.name ?? sid.split("@")[0];
   };
 
-  const sendBrief = () => {
+  // 브리프는 고른 임무 파일 하나를 넘긴다 (B220) — 워크스페이스와 임무 파일이 있어야 켠다
+  const briefFile = () => {
+    const s = sel();
+    return ws() && s && !s.dir && isMissionFile(s.rel) ? s.rel : undefined;
+  };
+  const sendBrief = async () => {
     // 원장 경로(msg_send)로 보낸다 — backend.sendMessage 직접 호출은 Tauri에서 DB·PTY 전달 없이
     // workspaceId undefined인 유령 메시지가 됐다가 다음 hydrate에서 사라진다
     const wsId = ws()?.id;
-    if (wsId) {
-      void sendConversation(wsId, "@all", "handoff", `브리프 전달 · ${sel()?.rel ?? ".eqmux/missions/"}`);
-    }
+    const file = briefFile();
+    if (!wsId || !file) return;
+    // 발신 실패(상한 등)면 보낸 것처럼 패널을 열지 않는다 (B220)
+    const err = await sendConversation(wsId, "@all", "handoff", tf("브리프 전달 · {file}", { file }));
+    if (err) return notify(err);
+    const m = missionOf(file);
+    if (m) void markMissionBase(wsId, m.id); // 임무 시작점 = 지금 HEAD (§13-2)
     // 전체 화면 팝업(M25)에서 부르므로 — 팝업을 접고 대화 패널을 연다
     setOverlay(undefined);
     openPanel("conversation");
@@ -281,11 +377,11 @@ export function MissionExplorerTab() {
   return (
     <div class="msnp">
       {/* 머리 줄 (0.5 시안 uOK9M) — 왼쪽은 브리프를 받을 세션, 오른쪽은 저장소 경로와 탐색기 열기.
-          팝업 제목이 이미 "임무 · 파일 탐색기"라 패널 제목 줄은 두지 않는다 */}
+          사이드 패널 코드 그룹 [git | 파일 | 문서]의 "파일" 탭에 들어가 그 탭 이름이 제목이라 제목 줄은 두지 않는다 (0.6 결정 21) */}
       <div class="msnp-bar">
         <span class="msnp-status-dot" />
         <span class="msnp-target">
-          {persona()?.name ?? t("세션 없음")} · {job()?.name ?? "—"}
+          {persona()?.name ?? t("세션 없음")} · {jobName(job())}
         </span>
         <span class="badge blue mono">⎇ {ws()?.branch ?? "—"}</span>
         <span class="msnp-path mono muted" title={ws()?.path}>
@@ -294,7 +390,7 @@ export function MissionExplorerTab() {
         {/* 워크스페이스 경로 → Windows 탐색기 (앱 안 트리는 아래에 이미 있으므로 여기는 OS로 나간다) */}
         <button class="btn" disabled={!isTauri() || !ws()} onClick={() => void revealPath(ws()!.path)}>
           <Icon name="folder-open" size={12} />
-          {t("탐색기에서 열기")}
+          {revealLabel()}
         </button>
       </div>
 
@@ -363,13 +459,24 @@ export function MissionExplorerTab() {
                 groups={[
                   [
                     {
-                      label: t("탐색기에서 열기"),
+                      label: revealLabel(),
                       action: () =>
                         void revealPath(m().rel, ws()?.path).then(
                           (ok) => ok || notify(t("폴더를 열 수 없습니다 — 경로가 없어졌습니다")),
                         ),
                     },
                   ],
+                  // §17 W5 — 파일이면 git 화면의 파일 히스토리 · blame으로 연다 (팝업은 setView가 닫는다)
+                  ...(tree().find((n) => n.rel === m().rel)?.dir
+                    ? []
+                    : [
+                        [
+                          {
+                            label: t("파일 히스토리 · blame"),
+                            action: () => setView({ kind: "git", wsId: ws()?.id, file: m().rel.replace(/\\/g, "/"), back: view() }),
+                          },
+                        ],
+                      ]),
                 ]}
               />
             )}
@@ -409,7 +516,22 @@ export function MissionExplorerTab() {
             </For>
             <Show when={tree().length === 0}>
               <div class="muted" style={{ padding: "8px", "font-size": "11px" }}>
-                {t(isTauri() ? "파일이 없거나 워크스페이스가 없습니다" : "검색 결과 없음")}
+                {/* 읽기 실패 · 검색어 때문에 빔 · 원래 없음을 가른다 (B215 · P84) */}
+                <Show
+                  when={query().trim()}
+                  fallback={t(
+                    treeFailed()
+                      ? "파일 트리를 읽지 못했습니다 — ⟳로 다시 시도하세요"
+                      : isTauri()
+                        ? "파일이 없거나 워크스페이스가 없습니다"
+                        : "검색 결과 없음",
+                  )}
+                >
+                  {tf("“{q}”에 맞는 항목이 없습니다", { q: query().trim() })}{" "}
+                  <button class="btn ghost" style={{ padding: "1px 6px" }} onClick={() => setQuery("")}>
+                    {t("검색 지우기")}
+                  </button>
+                </Show>
               </div>
             </Show>
             {/* 목록의 끝이 폴더의 끝이 아닐 수 있다 (B15) — 상한을 숨기지 않는다 */}
@@ -439,7 +561,15 @@ export function MissionExplorerTab() {
                 <button class="btn primary" style={{ padding: "2px 8px" }} onClick={() => void saveEdit()}>
                   {t("저장")}
                 </button>
-                <button class="btn ghost" style={{ padding: "2px 6px" }} onClick={() => setEditing(undefined)}>
+                <Show when={stale()}>
+                  <button class="btn ghost danger" style={{ padding: "2px 6px" }} onClick={() => setAskOverwrite(true)}>
+                    {t("덮어쓰기")}
+                  </button>
+                  <button class="btn ghost" style={{ padding: "2px 6px" }} onClick={() => void copyEdit()}>
+                    {t("내 편집 복사")}
+                  </button>
+                </Show>
+                <button class="btn ghost" style={{ padding: "2px 6px" }} onClick={cancelEdit}>
                   {t("취소")}
                 </button>
               </Show>
@@ -487,18 +617,18 @@ export function MissionExplorerTab() {
               >
                 {(m) => (
                   <div class="msnp-doc">
-                    <div class="msnp-source-notice mono">✓ FILE SOURCE OF TRUTH</div>
+                    <div class="msnp-source-notice mono">✓ {t("파일이 원본입니다")}</div>
                     <div class="msnp-frontmatter mono">
                       <div class="kv">
-                        <span class="k">status</span>
+                        <span class="k">{t("상태")}</span>
                         <span class="v st-waiting">{m().status}</span>
                       </div>
                       <div class="kv">
-                        <span class="k">branch</span>
+                        <span class="k">{t("브랜치")}</span>
                         <span class="v">{m().branch ?? "—"}</span>
                       </div>
                       <div class="kv">
-                        <span class="k">assigned</span>
+                        <span class="k">{t("배정")}</span>
                         <span class="v">{m().assigned.length > 0 ? m().assigned.map(personaName).join(", ") : "—"}</span>
                       </div>
                     </div>
@@ -546,23 +676,65 @@ export function MissionExplorerTab() {
       <div class="msnp-footer">
         <div>
           <div class="mono" style={{ "font-size": "10px", color: "var(--eq-green)" }}>
-            {t(isTauri() ? "실측 · 열 때 새로 읽음" : "WATCHING · .eqmux/ (목)")}
+            {t(isTauri() ? "실측 · 탭을 볼 때와 ⟳로 새로 읽음" : "WATCHING · .eqmux/ (목)")}
           </div>
           <div class="muted" style={{ "font-size": "10px" }}>
             {t("파일 우선 · 삭제는 휴지통 · .git 불가침")}
           </div>
         </div>
         <div style={{ display: "flex", gap: "6px" }}>
-          {/* 임무로 전환 — 팝업을 닫지 않는다 (헤더 세그먼트의 "임무"와 같은 자리).
-              활성 조건도 세그먼트와 같다: 팝업이 임무를 그릴 수 있는 워크스페이스 문맥일 때만 */}
-          <button class="btn" disabled={!scopeWorkspace()} onClick={() => setExplorerTab("missions")}>
+          {/* 임무 팝업 열기 — 팝업은 이제 임무만 그린다 (0.6 결정 21).
+              워크스페이스 문맥이 있을 때만 — 없으면 toggleExplorer가 파일 패널로 착지한다 */}
+          <button class="btn" disabled={!scopeWorkspace()} onClick={() => toggleExplorer("missions")}>
             {t("임무 관리")}
           </button>
-          <button class="btn primary" onClick={sendBrief}>
+          <button
+            class="btn primary"
+            disabled={!briefFile()}
+            title={briefFile() ? undefined : t("임무 파일(.eqmux/missions/*.md)을 고르면 전달할 수 있습니다")}
+            onClick={() => void sendBrief()}
+          >
             {t("브리프 전달")}
           </button>
         </div>
       </div>
+      {/* body로 띄운다 — 다른 탭을 보는 중이면 이 탭은 display:none이라 확인창도 함께 숨는다 (워크스페이스 전환) */}
+      <Show when={askDrop()}>
+        {(go) => (
+          <Portal>
+            <ConfirmDialog
+              danger
+              title={t("저장하지 않은 편집이 있습니다")}
+              body={t("버리면 고친 내용이 사라집니다. 남기려면 [계속 편집]을 누르고 [저장]하세요.")}
+              info={[sel()?.rel ?? ""]}
+              confirmLabel={t("변경 버리기")}
+              cancelLabel={t("계속 편집")}
+              onConfirm={() => {
+                const g = go();
+                setAskDrop(undefined);
+                g();
+              }}
+              onCancel={() => setAskDrop(undefined)}
+            />
+          </Portal>
+        )}
+      </Show>
+      <Show when={askOverwrite()}>
+        <Portal>
+          <ConfirmDialog
+            danger
+            title={t("밖에서 바뀐 파일 덮어쓰기")}
+            body={t("디스크의 지금 내용을 내 편집으로 바꿉니다. 밖에서 고친 내용은 사라집니다.")}
+            info={[sel()?.rel ?? ""]}
+            confirmLabel={t("덮어쓰기")}
+            onConfirm={() => {
+              setAskOverwrite(false);
+              void saveEdit(true);
+            }}
+            onCancel={() => setAskOverwrite(false)}
+          />
+        </Portal>
+      </Show>
     </div>
   );
 }

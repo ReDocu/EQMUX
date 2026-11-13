@@ -17,14 +17,19 @@ import {
   projectLabels,
   sendConversation,
   senderLabel,
+  titlePrefix,
+  touchesMission,
 } from "../backend/conversation";
 import { backend } from "../backend/mock";
+import { canRespondInline } from "../backend/agent";
 import { isTauri, revealPath } from "../backend/pty";
 import { t, tf } from "../i18n";
-import { focusSession, jumpToSession, scopeWorkspace, tick } from "../state";
+import { draftRequest, focusSession, jumpToSession, pushLayer, scopeWorkspace, setDraftRequest, setView, tick, view } from "../state";
 import { ContextMenu, Eyebrow, notify } from "./ui";
+import { SessionPortrait } from "./PersonaAvatar";
 import { effectiveTitle, sessionName as sessionNameOf } from "../types";
 import type { ConversationMessage, Session } from "../types";
+import { jobName, revealLabel } from "../labels";
 
 /** 화면 지우기 (표시 전용) — 워크스페이스별로 "지운 시점에 화면에 있던 메시지 id"를 담아 둔다.
  *  원장(message 테이블)은 건드리지 않는다: 저장(⤓)은 여전히 전량을 내보내고, "다시 보기"로 되돌아온다.
@@ -125,10 +130,25 @@ export function ConversationTab() {
   const [draft, setDraft] = createSignal("");
   let draftEl: HTMLInputElement | undefined;
   const [error, setError] = createSignal<string | null>(null);
+  // 밖에서 온 초안 (0.6 §13-1 [○○에게 알리기]) — 채우고 입력칸에 커서만 둔다. 보내기는 사람의 Enter
+  createEffect(() => {
+    const r = draftRequest();
+    if (!r) return;
+    setDraftRequest(undefined);
+    setDraft(`@${label(r.session)} ${r.text}`);
+    setSelType(r.type);
+    queueMicrotask(() => draftEl?.focus());
+  });
 
+  // 임무 필터 (§4) — 이 워크스페이스 임무만. 고른 임무가 사라지면 전체로 본다
+  const [missionId, setMissionId] = createSignal("");
+  const wsMissions = () => backend.listMissions().filter((x) => x.workspaceId === ws()?.id);
+  const mission = () => wsMissions().find((x) => x.id === missionId());
   const shown = createMemo(() => {
     tick();
-    const v = allProjects() ? visible() : visible().filter((m) => !otherProject(m));
+    let v = allProjects() ? visible() : visible().filter((m) => !otherProject(m));
+    const mi = mission();
+    if (mi) v = v.filter((m) => touchesMission(m, mi.assigned));
     return filter() === "미확인" ? v.filter((m) => m.unread) : v;
   });
 
@@ -145,7 +165,18 @@ export function ConversationTab() {
   // 이름에 공백이 있을 수 있으므로("H[역사강사] 힐데") 공백 없는 토큰으로 끊지 않고, 실제 후보
   // 이름들에 대한 최장 일치로 끊는다 — 토큰으로 끊으면 그런 팀원에게는 어떤 방법으로도 1:1
   // 메시지를 보낼 수 없다. 이름 없는 기본 터미널 여럿이면 첫 번째가 잡힌다 (구분은 FR-E-36).
-  const mentionMatch = (rest: string): { id: string; len: number } | undefined =>
+  // 이름이 먼저, 없으면 직함 (U121 — CLI resolve_in과 같은 순서). 같은 직함이 둘이면 ambiguous로 고르게 한다
+  const mentionMatch = (rest: string): { id: string; len: number } | { ambiguous: string } | undefined => {
+    const byName = nameMatch(rest);
+    if (byName) return byName;
+    const hits = wsSessions()
+      .map((s) => ({ id: s.id, len: titlePrefix(rest, effectiveTitle(s, personaOf(s))) }))
+      .filter((h) => h.len > 0)
+      .sort((a, b) => b.len - a.len);
+    if (hits.length > 1 && hits[1].len === hits[0].len) return { ambiguous: rest.slice(0, hits[0].len) };
+    return hits[0];
+  };
+  const nameMatch = (rest: string): { id: string; len: number } | undefined =>
     [
       ...wsSessions().flatMap((s) => [
         { key: nameOf(s), id: s.id },
@@ -184,7 +215,7 @@ export function ConversationTab() {
       const names: Record<string, string> = { 나: t("나") };
       for (const s of wsSessions()) names[s.id] = nameOf(s);
       const r = await exportConversation(w.id, w.name, names);
-      if (r) setNote({ ws: w.id, text: tf("{n}건 저장됨 — {path}", { n: r.count, path: r.path }) });
+      if (r) setNote({ ws: w.id, text: tf("{n}건을 저장했습니다 — {path}", { n: r.count, path: r.path }) });
     } catch (e) {
       setNote({ ws: w.id, text: `${t("저장 실패 — 로그 패널을 확인하세요")} (${String(e)})`, bad: true });
     } finally {
@@ -202,7 +233,7 @@ export function ConversationTab() {
     if (!here) return [];
     const labels = projectLabels();
     const hint = (s: Session) =>
-      [effectiveTitle(s, personaOf(s)), backend.listJobs().find((j) => j.id === s.jobId)?.name].filter(Boolean).join(" · ");
+      [effectiveTitle(s, personaOf(s)), jobName(backend.listJobs().find((j) => j.id === s.jobId), "")].filter(Boolean).join(" · ");
     return [
       ...wsSessions().map((s) => ({ key: nameOf(s), hint: hint(s), project: labels.get(here.id) ?? here.name })),
       ...backend
@@ -261,7 +292,11 @@ export function ConversationTab() {
         const hit = mentionMatch(rest);
         if (!hit) {
           // 어디까지가 이름인지 모르므로 첫 토큰만 보여준다 — 이름에 공백이 있으면 그 조각이다
-          setError(tf("수신자 없음: @{name} — 이 워크스페이스의 페르소나·세션 이름으로", { name: rest.split(/\s/)[0] }));
+          setError(tf("수신자 없음: @{name} — 이 워크스페이스의 페르소나·세션 이름으로 지정하세요", { name: rest.split(/\s/)[0] }));
+          return;
+        }
+        if ("ambiguous" in hit) {
+          setError(tf("@{title} 직함인 팀원이 여럿입니다 — 이름으로 지정하세요", { title: hit.ambiguous }));
           return;
         }
         to = hit.id;
@@ -270,12 +305,12 @@ export function ConversationTab() {
     }
     if (!text) {
       // 멘션만 치고 끝낸 경우 — 조용히 삼키면 "보내기가 안 먹는다"로 읽힌다
-      setError(t("본문이 없습니다 — 받는 사람 뒤에 보낼 내용을 적어주세요"));
+      setError(t("본문이 없습니다 — 받는 사람 뒤에 보낼 내용을 적어 주세요"));
       return;
     }
     // 다른 프로젝트 세션이면 그 프로젝트 원장으로 보낸다 — 받는 쪽 대화 탭에 프로젝트 배지와 함께 남는다
     const target = to === "@all" ? w.id : (sessionOf(to)?.workspaceId ?? w.id);
-    setError(await sendConversation(target, to, selType(), text));
+    setError(await sendConversation(target, to, selType(), text, w.id));
     if (!error()) setDraft("");
   };
 
@@ -295,10 +330,21 @@ export function ConversationTab() {
           </For>
           {/* 라디오(전체·미확인)와 독립 토글은 모양을 달리한다 (U54) */}
           <span class="conv-sep" />
-          <label class="conv-toggle" title={t("끄면 다른 프로젝트와 오간 메시지를 숨깁니다")}>
+          <label class="conv-toggle" title={t("끄면 다른 워크스페이스와 오간 메시지를 숨깁니다")}>
             <input type="checkbox" checked={allProjects()} onChange={(e) => setAllProjects(e.currentTarget.checked)} />
-            {t("다른 프로젝트 포함")}
+            {t("다른 워크스페이스 포함")}
           </label>
+          <Show when={wsMissions().length > 0}>
+            <select
+              class="conv-mission"
+              title={t("그 임무 담당 세션이 보냈거나 받은 메시지만")}
+              value={mission()?.id ?? ""}
+              onChange={(e) => setMissionId(e.currentTarget.value)}
+            >
+              <option value="">{t("모든 임무")}</option>
+              <For each={wsMissions()}>{(x) => <option value={x.id}>{x.name}</option>}</For>
+            </select>
+          </Show>
           <span class="conv-head-gap" />
           <button class="btn ghost conv-act" onClick={() => markConversationRead(ws()?.id)}>
             {t("모두 읽음")}
@@ -345,6 +391,12 @@ export function ConversationTab() {
       <Show when={waitingNow().length > 0}>
         <div class="card inset conv-waiting">
           <span class="muted">{t("응답 대기 — 대화로는 답할 수 없습니다. 페인에서 직접 입력하세요")}</span>
+          {/* 도구 승인은 관제 승인함이 [허용]·[거부]로 받는다 (U158) — 질문 · 계획은 페인에서만 */}
+          <Show when={waitingNow().some(canRespondInline)}>
+            <button class="btn ghost btn-sm" onClick={() => setView({ kind: "control" })}>
+              {t("도구 승인은 관제 승인함에서도 답할 수 있습니다 →")}
+            </button>
+          </Show>
           <div class="conv-waiting-row">
             <For each={waitingNow()}>
               {(s) => (
@@ -406,10 +458,10 @@ export function ConversationTab() {
               {t(
                 hiddenCount() > 0
                   ? "화면을 지웠습니다 — 새 메시지부터 여기에 표시됩니다"
-                  : "아직 메시지가 없습니다 — 아래에서 타입을 골라 팀에 보내보세요.",
+                  : "아직 메시지가 없습니다 — 아래에서 타입을 골라 팀에 보내 보세요",
               )}
               <div class="mono" style={{ "font-size": "10px", "margin-top": "6px" }}>
-                {t("idle 세션에는 즉시, 작업 중이면 턴 종료 시 전달됩니다")}
+                {t("쉬는 세션에는 바로, 작업 중이면 턴이 끝날 때 전달됩니다")}
               </div>
             </div>
           }
@@ -426,23 +478,46 @@ export function ConversationTab() {
               >
                 <div class="conv-msg-top">
                   <span class="conv-author">
+                    <SessionPortrait sessionId={m.from} />
                     <span title={titleTip(m.from)}>{label(m.from)}</span> → {label(m.to)}
                   </span>
                   <span class={`conv-type mono t-${TYPE_COLOR[m.type]}`}>{m.type.toUpperCase()}</span>
+                  <Show when={m.type === "escalate" && m.severity === "high"}>
+                    <span class="conv-urgent">{t("긴급")}</span>
+                  </Show>
                   <Show when={otherProject(m)}>{(p) => <span class="conv-proj mono">{p()}</span>}</Show>
                   <Show when={m.done}>
                     <span class="conv-done" title={t("완료 보고 — 에이전트가 맡은 일을 끝냈다고 밝혔습니다")}>
                       ✓
                     </span>
+                    {/* 보낸 세션이 맡은 임무가 있으면 검토 화면으로 (§13-3) */}
+                    <Show when={backend.listSessions().find((x) => x.id === m.from)?.missionId}>
+                      {(mid) => (
+                        <button
+                          class="btn btn-sm conv-review"
+                          onClick={() => setView({ kind: "review", wsId: m.workspaceId ?? scopeWorkspace()?.id ?? "", missionId: mid(), back: view() })}
+                        >
+                          {t("검토 →")}
+                        </button>
+                      )}
+                    </Show>
                   </Show>
                   <Show when={m.from === "나" && deliveryOf(m.id)}>
                     {(d) => (
                       <span
                         class="mono conv-delivery"
-                        classList={{ queued: d() === "queued" }}
-                        title={d() === "queued" ? t("받을 사람 인박스에 남아 있습니다 — 사유는 위 인박스 대기 줄에") : undefined}
+                        classList={{ queued: d() === "queued" || d() === "sending", dropped: d() === "dropped" }}
+                        title={
+                          d() === "queued"
+                            ? t("받을 사람 인박스에 남아 있습니다 — 사유는 위 인박스 대기 줄에")
+                            : d() === "dropped"
+                              ? t("받는 세션의 대기가 50건을 넘어 오래된 것부터 버렸습니다 — 원문은 대화 기록에 남아 있습니다")
+                              : d() === "sending"
+                                ? t("입력란에 넣었습니다 — 에이전트가 이 메시지로 턴을 시작하면 전달됨으로 바뀝니다")
+                                : undefined
+                        }
                       >
-                        {d() === "queued" ? t("대기 중") : t("전달됨")}
+                        {d() === "queued" ? t("대기 중") : d() === "dropped" ? t("버려짐") : d() === "sending" ? t("보내는 중") : t("전달됨")}
                       </span>
                     )}
                   </Show>
@@ -469,7 +544,7 @@ export function ConversationTab() {
                 </Show>
                 <Show when={m.file}>
                   {(f) => (
-                    <button class="btn ghost mono conv-file" title={t("탐색기에서 열기")} onClick={() => void openFile(m)}>
+                    <button class="btn ghost mono conv-file" title={revealLabel()} onClick={() => void openFile(m)}>
                       📎 {relPath(f().path, ws()?.path)} · {fmtSize(f().size)}
                     </button>
                   )}
@@ -563,7 +638,7 @@ export function ConversationTab() {
                     },
                   },
                   {
-                    label: t("다른 프로젝트로 전달…"),
+                    label: t("다른 워크스페이스로 전달…"),
                     disabled: projectLabels().size < 2,
                     action: () => setForwarding(m),
                   },
@@ -578,7 +653,7 @@ export function ConversationTab() {
                     label: t("본문 복사"),
                     action: () =>
                       void (navigator.clipboard?.writeText(m.body) ?? Promise.reject()).then(
-                        () => notify(t("복사됨")),
+                        () => notify(t("복사됨"), "ok"),
                         () => notify(t("복사하지 못했습니다")),
                       ),
                   },
@@ -613,22 +688,39 @@ function ForwardDialog(props: { m: ConversationMessage; from?: string; onClose: 
   const [err, setErr] = createSignal<string | null>(null);
   const body = () => `[${t("전달")} · ${senderLabel(props.m.from, wsId())}] ${props.m.body}`;
   const send = async () => {
-    const e = await sendConversation(wsId(), to(), props.m.type, body());
+    const e = await sendConversation(wsId(), to(), props.m.type, body(), props.from);
     if (e) setErr(e);
     else props.onClose();
   };
-  // 모달로 띄우고 Esc로 닫는다 (U53) — 예전에는 탭 맨 아래 composer 밑에 붙었다
+  // 모달로 띄운다 (U53) — 예전에는 탭 맨 아래 composer 밑에 붙었다. 레이어 스택에 올려야 Esc가 맨 위 하나만
+  // 닫고, Tab이 창 안에서 돌고, 화면을 옮기는 단축키가 막힌다 (U185 — B205와 같은 빈틈). 열면 첫 칸에 포커스
+  let box!: HTMLDivElement;
+  let first!: HTMLSelectElement;
   onMount(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && props.onClose();
-    window.addEventListener("keydown", onKey);
-    onCleanup(() => window.removeEventListener("keydown", onKey));
+    onCleanup(pushLayer(props.onClose, () => box));
+    first.focus();
   });
   return (
     <div class="overlay" onClick={props.onClose}>
-      <div class="dialog card conv-forward" role="dialog" aria-label={t("다른 프로젝트로 전달")} onClick={(e) => e.stopPropagation()}>
-        <div class="eyebrow">{t("다른 프로젝트로 전달")}</div>
+      <div
+        ref={box}
+        class="dialog card conv-forward"
+        role="dialog"
+        aria-modal="true"
+        aria-label={t("다른 워크스페이스로 전달")}
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => {
+          // 칸(select)의 Esc는 원래 칸 빠져나오기라(state.ts) 두 번 눌러야 닫혔다 — Jump 팔레트처럼 바로 닫는다
+          if (e.key !== "Escape") return;
+          e.preventDefault();
+          e.stopPropagation();
+          props.onClose();
+        }}
+      >
+        <div class="eyebrow">{t("다른 워크스페이스로 전달")}</div>
         <div style={{ display: "flex", gap: "6px" }}>
           <select
+            ref={first}
             value={wsId()}
             onChange={(e) => {
               setWsId(e.currentTarget.value);

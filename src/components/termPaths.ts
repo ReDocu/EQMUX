@@ -60,3 +60,14 @@ export function findPathLinks(text: string): { text: string; begin: number }[] {
   }
   return out;
 }
+
+/** 끌어다 놓은 · 붙여넣은 경로를 셸이 글자 그대로 받게 감싼다 (B293). 큰따옴표 안에서 PowerShell은 $ · `를,
+ *  대화형 zsh · bash는 !를 풀어 '~$보고서.docx' · 'Done!.png'가 다른 경로가 됐다.
+ *  shell은 셸 라벨(pwsh · powershell · cmd · git-bash · zsh · bash …). PowerShell은 작은따옴표를 겹쳐 쓰고(굽은 따옴표도
+ *  작은따옴표로 친다), POSIX 셸은 '\''로 끊는다. cmd와 에이전트 TUI(shell 없음)는 지금처럼 큰따옴표 — cmd는
+ *  작은따옴표를 모르고, 경로에 큰따옴표는 올 수 없다 */
+export function quotePath(path: string, shell: string | undefined): string {
+  if (shell === "pwsh" || shell === "powershell") return `'${path.replace(/['\u2018\u2019\u201a\u201b]/g, "$&$&")}'`;
+  if (!shell || shell === "cmd") return `"${path}"`;
+  return `'${path.replace(/'/g, "'\\''")}'`;
+}

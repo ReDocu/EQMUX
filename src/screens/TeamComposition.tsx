@@ -6,9 +6,12 @@ import { listPresets } from "../backend/library";
 import type { CastingPreset } from "../backend/library";
 import { backend } from "../backend/mock";
 import { maxSlots } from "../backend/settings";
-import { castingConfirmLines } from "../backend/team";
+import { applyCastingWithDefaults, castingConfirmLines, permLabel, presetSlots } from "../backend/team";
 import { t, tf } from "../i18n";
-import { setView, tick } from "../state";
+import { jobName } from "../labels";
+import { setFocusRequest, setSelectedSession, setView, tick, view } from "../state";
+import { launchRoleAgents } from "../components/TerminalPane";
+import { WizardSteps } from "./LaunchMode";
 import { Icon } from "../components/icons";
 import { ConfirmDialog } from "../components/ui";
 import { AGENT_CLI_LABEL, cliOf, effectiveTitle, nameBesideNo, sessionName, slotNo, translatePermissions } from "../types";
@@ -39,12 +42,10 @@ export function TeamComposition(props: { wsId: string }) {
   const lead = () => roleMembers().find((m) => m.jobId === "lead") ?? roleMembers()[0];
 
   const permsOf = (s: Session) => s.permOverride ?? job(s.jobId)?.permissions;
+  // 팀 캐스팅 카드와 같은 말 (U168)
   const permText = (s: Session) => {
     const p = permsOf(s);
-    if (!s.personaId || !p) return "—";
-    return [p.write ? "write" : "read", p.commit ? "commit" : undefined, p.push ? "push" : "no-push"]
-      .filter(Boolean)
-      .join(" · ");
+    return !s.personaId || !p ? "—" : permLabel(p);
   };
   const permTip = (s: Session) => {
     const p = permsOf(s);
@@ -86,26 +87,42 @@ export function TeamComposition(props: { wsId: string }) {
       if (!n.has(j)) order.push(j);
       n.set(j, (n.get(j) ?? 0) + 1);
     }
-    return order.map((j) => `${job(j)?.name ?? j}${n.get(j)! > 1 ? ` ${n.get(j)}` : ""}`).join(" · ");
+    return order.map((j) => `${jobName(job(j), j)}${n.get(j)! > 1 ? ` ${n.get(j)}` : ""}`).join(" · ");
   };
 
-  // 기본 편성 = 첫 프리셋(presets/*.json 실측)의 직무 구성 + 라이브러리 페르소나 순서대로 중복 없이.
-  // 팀 캐스팅의 프리셋 채우기와 같은 규칙이다. 프리셋이 없으면(브라우저 dev) 표준 구성을 쓴다
+  // 기본 편성 = 첫 프리셋(presets/*.json 실측)의 직무 구성 — 팀 캐스팅의 프리셋 채우기와 같은 규칙(presetSlots)이다.
+  // 지금 팀원은 같은 직무 자리에 남는다. 프리셋이 없으면(브라우저 dev) 표준 구성을 쓴다
   const fillDefault = async () => {
     const jobs = (await listPresets())[0]?.jobs ?? FALLBACK_PRESET.jobs;
     const known = new Set(backend.listJobs().map((j) => j.id));
-    const personas = backend.listPersonas();
-    const slots = jobs
-      .filter((j) => known.has(j))
-      .slice(0, Math.min(maxSlots(), personas.length))
-      .map((jobId, i) => ({ personaId: personas[i].id, jobId }));
+    const current = roleMembers().map((m) => ({ personaId: m.personaId, jobId: m.jobId }));
+    const slots = presetSlots(jobs.filter((j) => known.has(j)), current, backend.listPersonas(), maxSlots());
     if (slots.length === 0) return;
     // 돌고 있는 세션을 끝내거나 직무를 바꾸면 먼저 묻는다 (P35 · B69와 같은 확인창)
     const lines = castingConfirmLines(props.wsId, slots);
-    if (lines.length === 0) backend.applyCasting(props.wsId, slots);
+    if (lines.length === 0) applyCastingWithDefaults(props.wsId, slots);
     else setConfirm({ lines, slots });
   };
   const [confirm, setConfirm] = createSignal<{ lines: string[]; slots: { personaId: string; jobId: string }[] } | undefined>(undefined);
+
+  // 첫 세션 마법사로 왔는가 (P49) — 단계 표시는 그때만
+  const wizard = () => {
+    const v = view();
+    return v.kind === "composition" && !!v.wizard;
+  };
+  // 아직 셸뿐인 역할 세션 (P50) — 도착한 페인이 전부 '에이전트 없음'이라 [기동]을 네 번 눌러야 했다
+  const idle = () => roleMembers().filter((m) => m.status === "shell" && !m.agent);
+  // 마지막 버튼 = 워크스페이스로 간다. launch면 셸이 뜨는 대로 에이전트를 띄우고 리드에게 키보드를 준다
+  const openWorkspace = (launch: boolean) => {
+    if (launch) launchRoleAgents(idle());
+    backend.openWorkspace(props.wsId);
+    setView({ kind: "workspace", id: props.wsId });
+    const l = lead();
+    if (launch && l) {
+      setSelectedSession(l.id);
+      setFocusRequest({ session: l.id });
+    }
+  };
 
   return (
     <div class="screen tcmp">
@@ -123,10 +140,27 @@ export function TeamComposition(props: { wsId: string }) {
             <Icon name="terminal" size={12} />
             {tf("기본 편성 채우기 ({name} 프리셋)", { name: presets()?.[0]?.name ?? FALLBACK_PRESET.name })}
           </button>
-          <button class="btn primary" onClick={() => setView({ kind: "workspace", id: props.wsId })}>
-            <Icon name="arrow-right" size={12} />
-            {t("관제 화면으로")}
+          <button class="btn" onClick={() => setView({ kind: "casting", wsId: props.wsId, wizard: wizard() || undefined })}>
+            {t("← 팀 캐스팅")}
           </button>
+          {/* '관제'는 앱 바 대시보드의 이름이다 — 이 버튼은 워크스페이스로 간다 (P50) */}
+          <Show
+            when={idle().length > 0}
+            fallback={
+              <button class="btn primary" onClick={() => openWorkspace(false)}>
+                {/* '워크스페이스 열기'는 연결 화면을 떠올리게 한다(단계 01은 '워크스페이스 연결') — 이 버튼은 워크스페이스 탭으로 들어간다 (U129) */}
+                {t("워크스페이스로 →")}
+              </button>
+            }
+          >
+            <button class="btn" onClick={() => openWorkspace(false)}>
+              {t("기동 없이 열기")}
+            </button>
+            <button class="btn primary" onClick={() => openWorkspace(true)}>
+              <Icon name="arrow-right" size={12} />
+              {tf("{n}개 모두 기동 → 워크스페이스", { n: idle().length })}
+            </button>
+          </Show>
         </div>
       </div>
 
@@ -141,13 +175,18 @@ export function TeamComposition(props: { wsId: string }) {
             onConfirm={() => {
               const slots = c().slots;
               setConfirm(undefined);
-              backend.applyCasting(props.wsId, slots);
+              applyCastingWithDefaults(props.wsId, slots); // B246 — 팀 캐스팅과 같은 경로 (기본 임무 배정)
             }}
             onCancel={() => setConfirm(undefined)}
           />
         )}
       </Show>
 
+      <Show when={wizard()}>
+        <div class="tcmp-steps">
+          <WizardSteps path="team" at={3} />
+        </div>
+      </Show>
       <div class="screen-body tcmp-main">
         <div class="card tcmp-board">
           <div class="tcmp-title">{t("팀 관계 표 (team.md 그대로)")}</div>
@@ -170,7 +209,7 @@ export function TeamComposition(props: { wsId: string }) {
                     </span>
                     <span title={nameOf(m)}>{nameBesideNo(m.slot, nameOf(m))}</span>
                     <span>{effectiveTitle(m, persona(m.personaId)) ?? "—"}</span>
-                    <span>{m.personaId ? (job(m.jobId)?.name ?? m.jobId) : t("기본 터미널")}</span>
+                    <span>{m.personaId ? jobName(job(m.jobId), m.jobId) : t("기본 터미널")}</span>
                     <span class="muted" title={permTip(m)}>
                       {permText(m)}
                     </span>

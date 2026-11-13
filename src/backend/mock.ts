@@ -68,17 +68,20 @@ export interface Backend {
   /** 기본 터미널 열기 — 죽어 있던 세션을 되살린 경우 그 세션을 돌려준다.
    *  호출부가 PTY를 다시 스폰해야 한다 (B58): 상태만 shell로 되돌리면 프로세스 없이
    *  '실행 중'으로 남아 입력이 전부 증발한다 */
-  startDefaultTerminal(wsId: string): Session | undefined;
+  startDefaultTerminal(wsId: string, shell?: string): Session | undefined;
+  /** 종료된 역할 없는 셸 세션을 같은 슬롯 · 같은 이름으로 되살린다 (S25) — 되살렸으면 그 세션.
+   *  startDefaultTerminal과 같이 호출부가 PTY를 다시 스폰한다 (B58) */
+  reviveTerminal(id: string, shell?: string): Session | undefined;
   /** 슬롯에 터미널 추가 — 페르소나·직무 없이 빈 슬롯 하나를 셸 세션으로 채운다.
    *  cwd를 주면 그 경로에서 시작한다 (M36 — git 패널의 워크트리 셸 열기) */
-  addTerminal(wsId: string, shell?: string, cwd?: string, name?: string): Session | undefined;
+  addTerminal(wsId: string, shell?: string, cwd?: string, name?: string, slot?: number): Session | undefined;
   /** 슬롯에 역할 세션 추가 — 스폰 시점에 권한 플래그가 결정되므로 재시작이 필요 없다.
    *  만들어진 세션을 돌려준다 — 부르는 쪽이 셸이 뜬 뒤의 행동(에이전트 기동)을 걸 수 있게 */
   addRoleSession(
     wsId: string,
     personaId: string,
     jobId: string,
-    opts?: { cwd?: string; worktree?: boolean; cli?: AgentCliId; name?: string },
+    opts?: { cwd?: string; worktree?: boolean; cli?: AgentCliId; name?: string; slot?: number },
   ): Session | undefined;
   /** 세션 이름 (0.5) — 이 워크스페이스에서 이미 쓰는 이름(세션·페르소나, 소문자). exceptId는 자기 자신 */
   takenNames(wsId: string, exceptId?: string): Set<string>;
@@ -131,6 +134,8 @@ export interface Backend {
   openWorkspace(id: string): void;
   closeWorkspace(id: string): void;
   repairWorkspace(id: string): void;
+  /** 표시 이름 바꾸기 (S23) — 레지스트리 저장은 workspaces.ts가 먼저 한다. 여기서는 화면 목록만 */
+  renameWorkspace(id: string, name: string): void;
   /** 실물 레지스트리(workspaces.json)로 목록을 교체 — Tauri 부트스트랩 (PRD E) */
   hydrateWorkspaces(list: Workspace[]): void;
   /** 라이브러리 실파일(jobs/·personas/)로 목 배열을 교체 (FR-E-20~23) — Tauri에서만 */
@@ -304,7 +309,7 @@ const s = (
   // sl.resumable · applyAgentState의 evt.resumable)에서만 올린다. 기본값을 참으로 두면
   // 에이전트를 한 번도 안 띄운 맨 셸까지 종료 확인창이 "재개 가능"이라고 말한다.
   resumable: false,
-  resumeReason: "transcript 없음",
+  resumeReason: "대화 기록 없음",
   degraded: false,
   restartNeeded: false,
   sinceMs: 3 * 60000,
@@ -316,9 +321,11 @@ const s = (
 /** 기기별 기본 터미널 이름 (0.5) — layout.json에서 받은 것. team.json은 역할 슬롯만 담는 커밋 대상이다 */
 let SAVED_TERM_NAMES: Record<string, string> = {};
 
-/** 워크스페이스의 첫 빈 슬롯 — 상한은 설정 maxSlots (기본 4 · 옵션 6·8). 없으면 undefined */
-function freeSlot(wsId: string): number | undefined {
+/** 워크스페이스의 첫 빈 슬롯 — 상한은 설정 maxSlots (기본 4 · 옵션 6·8). 없으면 undefined.
+ *  want가 비어 있으면 그 번호 — 사람이 누른 빈 슬롯에 만든다 (B208) */
+function freeSlot(wsId: string, want?: number): number | undefined {
   const used = new Set(SESSIONS.filter((x) => x.workspaceId === wsId).map((x) => x.slot));
+  if (want && want <= maxSlots() && !used.has(want)) return want;
   for (let n = 1; n <= maxSlots(); n++) if (!used.has(n)) return n;
   return undefined;
 }
@@ -341,6 +348,7 @@ const SESSIONS: Session[] = createMutable<Session[]>([
   s("noel@academy", "academy", 2, "noel", "dev", {
     status: "waiting",
     waitingFor: "Bash(npm publish)",
+    pendingTool: { tool: "Bash", input: "npm publish", kind: "tool" }, // 승인함 목 (0.6 §13-4)
     unseen: true,
     missionId: "auth-refactor",
     agentSessionId: "8d19c2aa",
@@ -765,7 +773,9 @@ export class MockBackend implements Backend {
       sess.sinceTs = Date.now();
       sess.waitingFor = undefined;
       sess.lastOutput = `프로세스 종료 · exit ${code ?? "?"}`;
-      this.logEvent("state", `프로세스 종료 · exit ${code ?? "?"}`, id);
+      // 실행 모드에서는 Rust가 session-exit 줄을 이미 적는다 — 같은 종료를 또 적지 않고 피드만 깨운다 (U175)
+      if (isTauri()) eventLogged();
+      else this.logEvent("state", `세션 종료 · ${code == null ? "종료 코드 없음" : `exit ${code}`}`, id);
     }
     this.broadcast();
   }
@@ -860,29 +870,32 @@ export class MockBackend implements Backend {
     );
   }
 
-  startDefaultTerminal(wsId: string): Session | undefined {
+  startDefaultTerminal(wsId: string, shell?: string): Session | undefined {
     const existing = SESSIONS.find((x) => x.workspaceId === wsId && x.personaId === "");
-    if (existing) {
-      if (existing.status === "dead") {
-        existing.status = "shell";
-        existing.exitCode = undefined;
-        existing.sinceMs = 0;
-        existing.sinceTs = Date.now();
-        existing.lastOutput = "기본 터미널 · 재시작";
-        this.logEvent("state", "기본 터미널 재시작", existing.id);
-        this.broadcast();
-        return existing; // 호출부가 PTY를 다시 스폰한다 (B58)
-      }
-      return undefined;
-    }
-    this.addTerminal(wsId);
+    // 마법사 카드에 보인 셸로 다시 띄운다 (0.6 QA B202). 호출부가 PTY를 다시 스폰한다 (B58)
+    if (existing) return this.reviveTerminal(existing.id, shell);
+    this.addTerminal(wsId, shell);
     return undefined;
   }
 
-  addTerminal(wsId: string, shell?: string, cwd?: string, name?: string): Session | undefined {
+  reviveTerminal(id: string, shell?: string): Session | undefined {
+    const existing = SESSIONS.find((x) => x.id === id);
+    if (!existing || existing.personaId || existing.status !== "dead") return undefined;
+    if (shell) existing.shell = shell;
+    existing.status = "shell";
+    existing.exitCode = undefined;
+    existing.sinceMs = 0;
+    existing.sinceTs = Date.now();
+    existing.lastOutput = "기본 터미널 · 재시작";
+    this.logEvent("state", "기본 터미널 재시작", existing.id);
+    this.broadcast();
+    return existing;
+  }
+
+  addTerminal(wsId: string, shell?: string, cwd?: string, name?: string, want?: number): Session | undefined {
     const ws = WORKSPACES.find((x) => x.id === wsId);
     if (!ws) return undefined;
-    const slot = freeSlot(wsId);
+    const slot = freeSlot(wsId, want);
     if (!slot) {
       this.logEvent("app", `세션 슬롯 가득 참 (${maxSlots()}/${maxSlots()}) · ${ws.name}`);
       this.broadcast();
@@ -898,7 +911,7 @@ export class MockBackend implements Backend {
       cwd: cwd ?? ws.path, // 워크트리 셸 열기 (M36) — 지정 경로에서 시작
       sinceMs: 0,
       sinceTs: Date.now(),
-      resumeReason: "일반 셸 · cwd 유지",
+      resumeReason: "일반 셸 · 작업 폴더 유지",
       lastOutput: cwd ? "워크트리 셸" : "기본 터미널",
     });
     SESSIONS.push(created);
@@ -940,11 +953,11 @@ export class MockBackend implements Backend {
     wsId: string,
     personaId: string,
     jobId: string,
-    opts?: { cwd?: string; worktree?: boolean; cli?: AgentCliId; name?: string },
+    opts?: { cwd?: string; worktree?: boolean; cli?: AgentCliId; name?: string; slot?: number },
   ): Session | undefined {
     const ws = WORKSPACES.find((x) => x.id === wsId);
     if (!ws) return undefined;
-    const slot = freeSlot(wsId);
+    const slot = freeSlot(wsId, opts?.slot);
     if (!slot) {
       this.logEvent("app", `세션 슬롯 가득 참 (${maxSlots()}/${maxSlots()}) · ${ws.name}`);
       this.broadcast();
@@ -1006,7 +1019,7 @@ export class MockBackend implements Backend {
           restored: !alive,
           revived: alive,
           resumable: sl.resumable,
-          resumeReason: sl.resumable ? "transcript + cwd 일치" : "transcript 없음",
+          resumeReason: sl.resumable ? "대화 기록과 작업 폴더가 맞습니다" : "대화 기록 없음",
           agentSessionId: sl.agentSessionId?.slice(0, 8),
           lastOutput: alive
             ? "웹뷰 재시작 · 세션 이어짐"
@@ -1051,7 +1064,7 @@ export class MockBackend implements Backend {
         sinceMs: 0,
         sinceTs: Date.now(),
         revived: true,
-        resumeReason: "일반 셸 · cwd 유지",
+        resumeReason: "일반 셸 · 작업 폴더 유지",
         lastOutput: "웹뷰 재시작 · 세션 이어짐",
       }),
     );
@@ -1174,12 +1187,17 @@ export class MockBackend implements Backend {
     sess.agentSessionId = evt.agentSession.slice(0, 8);
     if (evt.status) sess.status = evt.status;
     sess.waitingFor = evt.waitingFor;
+    sess.pendingTool = evt.pendingTool; // 승인함 (0.6 §13-4) — waiting이 아니면 Rust가 싣지 않아 지워진다
+    sess.stalled = evt.stalled; // 멈춤 배지 (0.6 A5)
     sess.activity = evt.activity; // 훅 2차 소스 (FR-D-15) — 도구명, 없으면 지운다
     if (evt.subagents !== undefined) sess.subagents = evt.subagents; // FR-D-18
     if (evt.costUsd !== undefined) sess.costUsd = evt.costUsd; // statusLine (FR-D-19)
+    if (evt.contextPct !== undefined) sess.contextPct = evt.contextPct; // 컨텍스트 배지 (0.6 토큰 #5)
+    if (evt.rateLimit !== undefined) sess.rateLimit = evt.rateLimit; // 한도 (0.6 F1)
+    sess.stateReason = evt.stateReason; // 판정 근거 (0.6 §4) — 지금 상태의 것이라 없으면 지운다
     if (evt.degraded !== undefined) sess.degraded = evt.degraded; // 낮은 신뢰 (FR-G-27)
     sess.resumable = evt.resumable;
-    sess.resumeReason = evt.resumable ? "transcript + cwd 일치" : "transcript 없음";
+    sess.resumeReason = evt.resumable ? "대화 기록과 작업 폴더가 맞습니다" : "대화 기록 없음";
     if (evt.version) sess.agentVersion = evt.version;
     sess.exitCode = evt.exitCode;
     if (evt.status && prev !== evt.status) {
@@ -1375,6 +1393,16 @@ export class MockBackend implements Backend {
     ws.branch = "main";
     ws.branchNote = "main · 경로 재지정됨";
     this.logEvent("app", `경로 재지정 · ${ws.name}`, undefined, ws.id);
+    this.broadcast();
+  }
+
+  renameWorkspace(id: string, name: string) {
+    const i = WORKSPACES.findIndex((x) => x.id === id);
+    const ws = WORKSPACES[i];
+    if (!ws || ws.name === name) return;
+    this.logEvent("app", `워크스페이스 이름 변경 · ${ws.name} → ${name}`, undefined, ws.id);
+    // 새 객체로 바꾼다 — 탭 · 행 · 카드의 For는 같은 객체면 다시 그리지 않아 옛 이름이 남는다 (hydrateWorkspaces와 같다)
+    WORKSPACES[i] = { ...ws, name };
     this.broadcast();
   }
 

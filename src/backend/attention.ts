@@ -2,18 +2,21 @@
 // 순위는 기획서 §UX 기반 › 주의 신호 표 하나를 따른다: 행동(waiting · dead) → 확인(메시지 대기 ·
 // 보고 전 · 완료 보고 · 턴 완료). 벨 목록·대시보드 정렬·`응답 대기` 칩·Ctrl+Shift+U가 모두 이 순서다.
 // 앱은 이동만 한다 — 세션에 아무것도 입력하지 않고 상태도 바꾸지 않는다(본 것 표시는 jumpToSession이 한다).
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { createSignal } from "solid-js";
 import { pendingCount, unmanagedAgent } from "./conversation";
 import { backend } from "./mock";
 import { isTauri } from "./pty";
 import { jumpToSession, modalOpen, setFocusRequest } from "../state";
-import { t, tf } from "../i18n";
-import type { Session } from "../types";
+import { t, tErr, tf } from "../i18n";
+import type { ConversationMessage, Session } from "../types";
+import { sessionName } from "../types";
 
 /** 주의 순위 — 작을수록 급하다. 0은 봐야 할 것이 없다.
- *  1 waiting · 2 dead(본 적 없음) · 3 메시지 대기 · 4 보고 전 · 5 완료 보고 · 6 턴 완료 */
-export function attentionRank(s: Session, pending = 0): number {
+ *  0.5 긴급 에스컬레이션(안 읽음) · 1 waiting · 2 dead(본 적 없음) · 3 메시지 대기 · 4 보고 전 · 5 완료 보고 · 6 턴 완료 */
+export function attentionRank(s: Session, pending = 0, urgent = false): number {
+  if (urgent) return 0.5; // escalate --severity high (W3 §4) — 무엇보다 위
   if (s.status === "waiting") return 1;
   if (s.status === "dead" && s.unseen) return 2;
   if (pending > 0) return 3;
@@ -28,9 +31,13 @@ export function attentionRank(s: Session, pending = 0): number {
 export const inboxWaiting = (s: Session): number => (unmanagedAgent(s) ? pendingCount(s.id) : 0);
 
 /** 순위 순, 같은 순위면 오래 기다린 순(sinceMs가 큰 쪽). 순수 함수 — 테스트가 여기를 겨눈다 */
-export function attentionOrder(sessions: readonly Session[], pending: (s: Session) => number = () => 0): Session[] {
+export function attentionOrder(
+  sessions: readonly Session[],
+  pending: (s: Session) => number = () => 0,
+  urgent: (s: Session) => boolean = () => false,
+): Session[] {
   return sessions
-    .map((s) => ({ s, r: attentionRank(s, pending(s)) }))
+    .map((s) => ({ s, r: attentionRank(s, pending(s), urgent(s)) }))
     .filter((x) => x.r > 0)
     .sort((a, b) => a.r - b.r || b.s.sinceMs - a.s.sinceMs)
     .map((x) => x.s);
@@ -40,7 +47,13 @@ export function attentionOrder(sessions: readonly Session[], pending: (s: Sessio
  *  닫은 워크스페이스(탭만 접기 — 세션은 돈다)도 넣는다. 예전엔 여기만 열린 것으로 걸러서 벨은
  *  1인데 `다음 미확인으로`는 무반응이었다 (B74). 데려갈 때 jumpToSession이 그 탭을 다시 연다 (B18) */
 export function attentionSessions(): Session[] {
-  return attentionOrder(backend.listSessions(), inboxWaiting);
+  const u = urgentSenders(backend.listMessages());
+  return attentionOrder(backend.listSessions(), inboxWaiting, (s) => u.has(s.id));
+}
+
+/** 안 읽은 긴급 에스컬레이션을 보낸 세션 (W3 §4) — 주의 맨 위. 순수 함수 */
+export function urgentSenders(msgs: readonly ConversationMessage[]): Set<string> {
+  return new Set(msgs.filter((m) => m.type === "escalate" && m.severity === "high" && m.unread).map((m) => m.from));
 }
 
 /** 직전에 데려간 세션 — waiting처럼 보기만 해서는 안 지워지는 신호가 있어, 누를 때마다
@@ -73,7 +86,8 @@ export interface NotifyItem {
   id: string;
   session: string;
   workspace: string;
-  kind: "waiting" | "dead" | "report" | "turn" | "message";
+  /** app = 세션이 아닌 앱 알림(다른 도구 전역 지시 등) · conflict = 같은 파일 동시 편집 (0.6 W7) */
+  kind: "waiting" | "dead" | "report" | "turn" | "message" | "app" | "conflict" | "cli-version" | "escalate"; // cli-version = 엔진 CLI가 최소 버전보다 낮다 (W2)
   title: string;
   body: string;
   ts: number;
@@ -81,6 +95,8 @@ export interface NotifyItem {
   os: boolean;
   /** 같은 세션 연속 알림을 묶은 수 (프런트가 센다) */
   count: number;
+  /** 누르면 할 일 — 있으면 세션 점프 대신 이것. 앱 알림은 session이 앱 키(`app:…`)라 점프할 곳이 없다 */
+  open?: () => void;
 }
 
 export const NOTIFY_MAX = 50;
@@ -120,6 +136,15 @@ export function startNotifyFeed(): void {
   if (feedStarted || !isTauri()) return;
   feedStarted = true;
   void listen<Omit<NotifyItem, "count">>("notify-item", (e) => setNotifyItems((l) => pushNotify(l, e.payload)));
+  // 앱 알림 큐 (P65) — DB 손상 복구 · 등록 복구는 OS 토스트뿐이었다. Rust가 쌓아 둔 줄을 지금 한 번,
+  // 그 뒤엔 'app-notice' 신호마다 가져간다(가져가면 비워져 두 번 안 남는다)
+  const takeNotices = () =>
+    void invoke<string[]>("app_notices_take").then(
+      (l) => l.forEach((m) => notifyLocal({ session: "app:recovered", workspace: "", kind: "app", title: t("데이터 복구"), body: tErr(m) })),
+      () => {},
+    );
+  void listen("app-notice", takeNotices);
+  takeNotices();
   // OS 토스트 클릭 (P2 A2) — Rust가 창을 앞으로 올린 뒤 보낸다. 알림 센터 항목을 누른 것과 같은 길로 간다
   void listen<{ session: string }>("notify-activate", (e) => {
     const s = backend.listSessions().find((x) => x.id === e.payload.session);
@@ -162,4 +187,110 @@ export function fmtAgo(ms: number): string {
   if (m < 60) return tf("{m}분 전", { m });
   if (m < 1440) return tf("{h}시간 전", { h: Math.floor(m / 60) });
   return tf("{d}일 전", { d: Math.floor(m / 1440) });
+}
+
+// ── 같은 파일 동시 편집 (0.6 §13-1 · C1 edit-conflict — W2 agent.rs) ──
+// 에이전트를 막거나 메시지를 자동으로 보내지 않는다. 페인 머리 · 대시보드 · 알림 센터에 보이기만 하고,
+// [○○에게 알리기]는 사람이 고칠 수 있는 ask 초안을 연다. Bash로 고친 파일과 Codex는 잡지 못한다.
+
+/** C1 payload — path는 워크스페이스 안이면 상대 경로(`/`), 밖이면 절대 경로. sessions는 정렬된 앱 세션 id */
+export interface EditConflict {
+  workspace: string;
+  path: string;
+  sessions: string[];
+  ts: number;
+}
+/** 경고 창 (결정 Q3) — Rust 판정과 같은 10분. 그 뒤로는 화면에서도 걷는다 */
+export const CONFLICT_WINDOW_MS = 10 * 60_000;
+
+/** 새 이벤트를 목록에 합친다 — 같은 파일이면 세션을 합치고 시각을 새로. 창이 지난 것은 뺀다. 순수 함수 */
+export function mergeConflict(list: readonly EditConflict[], c: EditConflict): EditConflict[] {
+  const live = list.filter((x) => x.ts > c.ts - CONFLICT_WINDOW_MS);
+  const same = live.find((x) => x.workspace === c.workspace && x.path === c.path);
+  if (!same) return [c, ...live];
+  const merged = { ...c, sessions: [...new Set([...same.sessions, ...c.sessions])].sort() };
+  return [merged, ...live.filter((x) => x !== same)];
+}
+
+const [conflictList, setConflictList] = createSignal<EditConflict[]>([]);
+/** 걷기용 시계 — 경고가 있을 때만 의미가 있어 1분 간격이면 충분하다 */
+const [conflictClock, setConflictClock] = createSignal(Date.now());
+
+/** 지금 살아 있는 동시 편집 — 최신 순 */
+export function activeConflicts(): EditConflict[] {
+  const now = conflictClock();
+  return conflictList().filter((c) => c.ts > now - CONFLICT_WINDOW_MS);
+}
+/** 이 세션이 걸린 동시 편집 — 페인 머리가 본다 */
+export const conflictsOf = (sessionId: string): EditConflict[] =>
+  activeConflicts().filter((c) => c.sessions.includes(sessionId));
+/** 사람이 [닫기]를 눌렀다 — 같은 파일에 새 이벤트가 오면 다시 뜬다 */
+export function dismissConflict(c: EditConflict): void {
+  setConflictList((l) => l.filter((x) => !(x.workspace === c.workspace && x.path === c.path)));
+}
+/** 이벤트 하나를 받는다 — 목록에 합치고 알림 센터에 한 건 (Rust가 새로 끼어든 세션마다 한 번만 낸다) */
+export function receiveConflict(c: EditConflict, open?: () => void): void {
+  setConflictList((l) => mergeConflict(l, c));
+  setConflictClock(Date.now());
+  const names = c.sessions.map(conflictName).join(" · ");
+  notifyLocal({
+    session: `app:conflict:${c.workspace}:${c.path}`,
+    workspace: c.workspace,
+    kind: "conflict",
+    title: tf("{names}이(가) {path}을(를) 동시에 편집 중", { names, path: c.path }),
+    body: t("편집 도구로 고친 것만 잡습니다 (Bash · Codex 제외)"),
+    open,
+  });
+}
+/** 세션 이름 — 없어진 세션이면 id 앞부분 */
+export function conflictName(id: string): string {
+  const s = backend.listSessions().find((x) => x.id === id);
+  return s ? sessionName(s, backend.listPersonas().find((p) => p.id === s.personaId)) : id.split("@")[0];
+}
+
+let conflictFeed = false;
+/** 앱 셸이 1회 켠다 — open은 알림 항목을 눌렀을 때 갈 곳(첫 세션 페인) */
+export function startConflictFeed(): void {
+  if (conflictFeed || !isTauri()) return;
+  conflictFeed = true;
+  setInterval(() => (conflictList().length > 0 || outsideList().length > 0) && setConflictClock(Date.now()), 60_000);
+  void listen<EditConflict>("edit-conflict", (e) => {
+    const c = e.payload;
+    receiveConflict(c, () => {
+      const first = c.sessions[0];
+      if (first && !modalOpen() && jumpToSession(c.workspace, first)) setFocusRequest({ session: first });
+    });
+  });
+  // 담당 밖 편집 (W5 · 역할 owns:) — 막지 않고 알리기만. Rust가 (세션, 파일)마다 10분에 한 번으로 줄인다
+  void listen<OutsideOwns>("edit-outside-owns", (e) => receiveOutsideOwns(e.payload));
+}
+
+export interface OutsideOwns {
+  workspace: string;
+  session: string;
+  path: string; // 저장소 상대 · "/"
+  owns: string[];
+  ts: number;
+}
+/** 담당 밖 편집 목록에 합친다 (U120) — 세션마다 최신 하나, 창(10분)이 지난 것은 뺀다. 순수 함수 */
+export function mergeOutside(list: readonly OutsideOwns[], o: OutsideOwns): OutsideOwns[] {
+  return [o, ...list.filter((x) => x.session !== o.session && x.ts > o.ts - CONFLICT_WINDOW_MS)];
+}
+const [outsideList, setOutsideList] = createSignal<OutsideOwns[]>([]);
+/** 이 세션의 살아 있는 담당 밖 편집 — 페인 머리 칩이 본다 (§13-1 '동시 편집과 같은 자리') */
+export const outsideOf = (sessionId: string): OutsideOwns | undefined =>
+  outsideList().find((o) => o.session === sessionId && o.ts > conflictClock() - CONFLICT_WINDOW_MS);
+export function receiveOutsideOwns(o: OutsideOwns): void {
+  setOutsideList((l) => mergeOutside(l, o));
+  setConflictClock(Date.now());
+  notifyLocal({
+    session: `app:owns:${o.session}:${o.path}`,
+    workspace: o.workspace,
+    kind: "conflict",
+    title: tf("{name}이(가) 담당 밖 {path}을(를) 편집", { name: conflictName(o.session), path: o.path }),
+    body: tf("담당: {owns}", { owns: o.owns.join(" ") }),
+    open: () => {
+      if (!modalOpen() && jumpToSession(o.workspace, o.session)) setFocusRequest({ session: o.session });
+    },
+  });
 }

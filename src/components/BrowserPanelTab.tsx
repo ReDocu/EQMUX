@@ -25,6 +25,15 @@ import { Icon } from "./icons";
 import { isSubmitEnter } from "../platform"; // 한글 조합 중 Enter는 제출이 아니다 (B130)
 
 const LOCAL_RE = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/i;
+// 다이얼로그·전체 화면 팝업 — 자식 웹뷰가 이들을 가리므로 떠 있는 동안 숨긴다. 벨 팝업 · 컨텍스트 메뉴도 패널 자리와 겹친다 (B224)
+const COVER = ".overlay, .explorer-fullscreen, .bell-pop, .cmenu";
+/** 웹뷰를 보이되 덮개가 이미 떠 있으면 숨긴다 (B306) — 덮개 감시는 붙거나 떨어지는 순간만 판정하므로,
+ *  덮개가 먼저 떠 있는 동안의 열기 · 재마운트는 여기서 막는다. 덮개가 닫히면 감시가 다시 보인다 */
+const showUnlessCovered = () => {
+  const covered = document.querySelector(COVER) !== null;
+  void browserVisible(!covered);
+  return !covered;
+};
 
 // 웹뷰는 컴포넌트보다 오래 산다 — 다른 탭에 다녀와도 페이지·주소가 유지되게 모듈 스코프
 const [addr, setAddr] = createSignal("");
@@ -81,8 +90,10 @@ export function BrowserPanelTab() {
       .then(() => {
         setAddr(full);
         setActive(true);
-        reportBrowserRect(b);
-        diagNote(`BROWSER-OPEN ${full} rect=${b.x},${b.y} ${b.w}x${b.h}`);
+        // browser_open은 웹뷰를 늘 보인다 — 확인창 · 설정이 떠 있는 동안 에이전트가 열면 바로 다시 숨긴다 (B306)
+        const shown = showUnlessCovered();
+        reportBrowserRect(shown ? b : undefined);
+        diagNote(`BROWSER-OPEN ${full} rect=${b.x},${b.y} ${b.w}x${b.h}${shown ? "" : " (덮개 — 숨김)"}`);
       })
       .catch((e) => setError(String(e)));
   };
@@ -110,7 +121,7 @@ export function BrowserPanelTab() {
     });
     if (!isTauri()) return;
     if (active()) {
-      void browserVisible(true);
+      showUnlessCovered(); // 덮개가 떠 있는 동안 패널이 다시 열려도 (에이전트 open → openPanel) 가리지 않게 (B306)
       syncSoon();
     }
     const unNav = onBrowserNav(setAddr);
@@ -127,6 +138,7 @@ export function BrowserPanelTab() {
       // 교대 마운트가 끝난 다음 틱에 판정 — 정말 패널을 떠났을 때만 숨긴다
       setTimeout(() => {
         if (mountCount !== 0) return;
+        delete document.body.dataset.browserSide;
         void browserVisible(false);
         reportBrowserRect(undefined);
         diagNote("BROWSER-HIDE (패널 이탈)");
@@ -138,6 +150,11 @@ export function BrowserPanelTab() {
   createEffect(() => {
     panelSide();
     syncSoon();
+  });
+  // 토스트(#eq-toasts)는 잠깐 뜨는 것이라 웹뷰를 숨기지 않고, 웹뷰 반대편으로 옮긴다 (B224 · screens.css 끝 블록)
+  createEffect(() => {
+    if (isTauri() && active()) document.body.dataset.browserSide = panelSide();
+    else delete document.body.dataset.browserSide;
   });
 
   // 포트 패널의 "열기" 요청 (M31) — 그 클릭이 이 패널을 방금 마운트시켰을 수 있어서,
@@ -160,7 +177,7 @@ export function BrowserPanelTab() {
   // 다이얼로그·전체 화면 팝업 감시 — 자식 웹뷰가 이들을 가리므로 떠 있는 동안 숨긴다.
   // 덮개가 붙거나 떨어진 레코드에서만 판정을 예약한다 (최적화 C7) — 터미널 DOM 행 교체처럼
   // 덮개와 무관한 변경 폭주는 레코드를 훑기만 하고 문서 전체 querySelector를 돌리지 않는다
-  const COVER = ".overlay, .explorer-fullscreen";
+  // 덮개 선택자 COVER는 모듈 위에 있다
   const touchesCover = (nodes: NodeList) => {
     for (const n of nodes) {
       if (n instanceof Element && (n.matches(COVER) || n.querySelector(COVER))) return true;
@@ -222,7 +239,10 @@ export function BrowserPanelTab() {
       <div class="card inset browserp-url mono">
         <input
           style={{ flex: 1, "min-width": 0, background: "transparent", border: "none", color: "inherit" }}
-          placeholder={t("주소 입력 — Enter로 열기 (127.0.0.1:5173 · https://…)")}
+          // 좁은 패널에서 잘리지 않게 자리표시는 예시만, 설명은 title · 이름으로 (U112)
+          placeholder="127.0.0.1:5173 · https://…"
+          title={t("주소를 입력하고 Enter를 누르면 엽니다")}
+          aria-label={t("주소를 입력하고 Enter를 누르면 엽니다")}
           value={addr()}
           onInput={(e) => setAddr(e.currentTarget.value)}
           onKeyDown={(e) => isSubmitEnter(e) && open(addr())}
@@ -273,7 +293,7 @@ export function BrowserPanelTab() {
                     ? "위 포트 칩을 누르거나 주소를 입력하세요"
                     : isTauri()
                       ? "세션이 LISTENING 포트를 열면 칩이 나타납니다"
-                      : "Tauri에서 실행하면 실측 포트가 연결됩니다",
+                      : "앱에서 실행하면 실제 포트가 이어집니다",
                 )}
               </div>
             </div>

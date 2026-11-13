@@ -11,8 +11,8 @@ export const dict: Record<string, string> = {
     "Degraded — registry unreachable · maintained via hooks + process liveness",
   미배정: "Unassigned",
   서브에이전트: "Subagents",
-  "활동 (훅 2차)": "Activity (hook, secondary)",
-  "비용 (statusLine)": "Cost (statusLine)",
+  활동: "Activity",
+  비용: "Cost",
   누적: "cumulative",
   "— (보고 전)": "— (not yet reported)",
   메모리: "Memory",
@@ -47,7 +47,7 @@ export const dict: Record<string, string> = {
     "If the effective permissions change, a restart is required",
   "권한 변경 감지 · 재시작 필요": "Permission change detected · restart needed",
   "권한 변경 감지 · 다음 기동 때 적용됩니다": "Permission change detected · applies at the next start",
-  "재개 기반 재시작 — 대화를 잃지 않는다":
+  "이어서 다시 시작 — 대화를 잃지 않습니다":
     "Resume-based restart — the conversation is preserved",
   "대화 유지 재시작": "Restart, keep conversation",
   "역할 부여": "Assign role",
@@ -73,22 +73,17 @@ export const dict: Record<string, string> = {
   "페인으로 점프": "Jump to pane",
 
   // 세션 데이터의 고정 문구 (mock.ts resumeReason) — 렌더 지점 t()가 푼다
-  "transcript + cwd 일치": "transcript + cwd match",
-  "transcript 없음": "no transcript",
-  "일반 셸 · cwd 유지": "plain shell · cwd kept",
+  "대화 기록과 작업 폴더가 맞습니다": "conversation log and work folder match",
+  "대화 기록 없음": "no conversation log",
+  "일반 셸 · 작업 폴더 유지": "plain shell · work folder kept",
 
   // ── 종료 다이얼로그 (ExitDialog) ──
-  "저장소 flush 중…": "Flushing store…",
-  "flush가 2초를 넘겼습니다 — 계속 진행합니다": "Flush exceeded 2 seconds — continuing anyway",
-  "정상 종료 신호 → 유예 후 프로세스 트리 종료…": "Graceful shutdown signal → grace period, then process tree termination…",
+  "대화·로그 저장 중…": "Saving conversations and logs…",
+  "저장이 늦어지고 있습니다 — 그대로 종료를 계속합니다": "Saving is taking a while — continuing to quit",
+  "세션을 차례로 끄는 중…": "Shutting down sessions…",
   "EQMUX를 종료할까요?": "Quit EQMUX?",
   "실행 중인 세션 {n}개가 종료됩니다. 자동 재개하지 않습니다.":
     "{n} running session(s) will be terminated. They will not auto-resume.",
-  "입력 차단 → 저장소 flush → 정상 종료 신호 → 유예 후 트리 종료 (Job Object)":
-    "Block input → flush store → graceful shutdown signal → grace period, then tree termination (Job Object)",
-  "실행 중인 세션이 없습니다 — 바로 종료합니다.": "No sessions running — quitting immediately.",
-  "실행 중 {n} — 에이전트 {a} · 기본 터미널 {d} · 서버 {s}. 자동 재개하지 않습니다.":
-    "{n} running — {a} agent(s) · {d} default terminal(s) · {s} server(s). Nothing auto-resumes.",
   "승인 대기 — 종료하면 거부로 끝남": "awaiting approval — quitting denies it",
   "모두 종료": "Quit all",
   "종료 중…": "Quitting…",
@@ -109,7 +104,7 @@ export const dict: Record<string, string> = {
   "이전 일치 (Shift+Enter)": "Previous match (Shift+Enter)",
   "다음 일치 (Enter)": "Next match (Enter)",
   "닫기 (ESC)": "Close (ESC)",
-  "▲ 디스크 기록 보기 — 링버퍼 위 기록": "▲ View disk history — lines above the ring buffer",
+  "▲ 이전 기록 더 보기 (저장된 기록)": "▲ Load earlier lines (saved history)",
   "트랜스크립트 없음": "no transcript",
   "이전 에이전트 세션 발견 — 재개 대기": "Previous agent session found — awaiting resume",
   "같은 대화를 --resume으로 이어갑니다. 자동 실행하지 않습니다.":
@@ -131,12 +126,16 @@ export const dict: Record<string, string> = {
   "{n}줄을 붙여넣어 실행합니다": "Pasting {n} lines — they will run",
   "직무 권한을 찾을 수 없습니다 — 역할을 다시 지정하세요":
     "No job permissions found — assign the role again",
-  "이미지 붙여넣기 → 파일 저장 후 경로 삽입": "Paste image → saved to file, path inserted",
+  "이미지만 있으면 붙여넣기 → 파일 저장 후 경로 삽입": "Paste with only an image on the clipboard → saved to file, path inserted",
+  // 0.6.2 QA eqmux-75 (B294 · B295 · B291)
+  "이미지로 붙여넣기": "Paste as image",
+  "클립보드에 이미지가 없습니다": "There is no image on the clipboard",
+  "작업 폴더가 없어 홈 폴더에서 열었습니다: {cwd} — 경로 재지정이 필요합니다":
+    "The working folder is missing, so the shell opened in your home folder: {cwd} — re-point the path",
+  "고른 셸 없음": "chosen shell not found",
+  "셸 다시 열기 → {cwd}": "Shell reopened → {cwd}",
   "탐색기에서 열기": "Reveal in File Explorer",
   더블클릭: "Double-click",
-  "탐색기에서 열 수 없습니다 — 실재하는 경로가 아닙니다": "Can't open File Explorer — no such path",
-  "경로 더블클릭 → 탐색기에서 열기 (실재하는 경로만)":
-    "Double-click a path → reveal in File Explorer (existing paths only)",
 
   // ── 0.5 W3 · 직함 덮어쓰기·엔진 ──
   "직함": "Title",
@@ -152,9 +151,9 @@ export const dict: Record<string, string> = {
   // ── 0.5 W3 · 시안 적용 — 세션 상세 ──
   "기동됨": "running",
   "직함 (이 워크스페이스만)": "Title (this workspace only)",
-  "비어 있으면 페르소나 직함을 물려받는다 · 덮어쓰면 team.json 슬롯 title에만 남는다": "Empty inherits the persona title · an override is kept only in the team.json slot title",
-  "비우면 페르소나 이름({name})으로 돌아간다 · 공백·@·줄바꿈 불가 · claude --name과 @멘션에 쓴다": "Empty returns to the persona name ({name}) · no spaces, @ or line breaks · used for claude --name and @mentions",
-  "비우면 자동 이름({name})으로 돌아간다 · 공백·@·줄바꿈 불가 · @멘션에 쓴다": "Empty returns to the automatic name ({name}) · no spaces, @ or line breaks · used for @mentions",
+  "비어 있으면 페르소나 직함을 물려받습니다 · 덮어쓰면 이 슬롯에만 남습니다": "Empty inherits the persona title · an override is kept only in the team.json slot title",
+  "비우면 페르소나 이름({name})으로 돌아갑니다 · 공백·@·줄바꿈 불가 · claude --name과 @멘션에 씁니다": "Empty returns to the persona name ({name}) · no spaces, @ or line breaks · used for claude --name and @mentions",
+  "비우면 자동 이름({name})으로 돌아갑니다 · 공백·@·줄바꿈 불가 · @멘션에 씁니다": "Empty returns to the automatic name ({name}) · no spaces, @ or line breaks · used for @mentions",
   "권한·엔진 변경 감지 · 다음 기동 때 적용됩니다": "Permission or engine change detected · applies at next start",
   "권한·엔진 변경 감지 · 재시작 필요": "Permission or engine change detected · restart needed",
   "새로 시작": "Start fresh",
@@ -168,8 +167,7 @@ export const dict: Record<string, string> = {
   "세션으로 가기": "Go to session",
   "알 수 없는 워크스페이스": "Unknown workspace",
   "종료하지 못했습니다 — 다시 시도하세요": "Couldn't quit — try again",
-  "입력 차단 → 저장소 flush → 정상 종료 신호 → 유예 후 하위 프로세스까지 정리":
-    "Block input → flush store → graceful shutdown signal → grace period, then clean up child processes too",
+  "입력을 막고, 저장하고, 세션을 차례로 끈 뒤 닫습니다": "Blocks input, saves, shuts sessions down in order, then closes",
   "작업 중": "Working",
   대기: "Idle",
   "기동 중": "Starting",
