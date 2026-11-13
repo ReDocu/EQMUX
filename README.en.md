@@ -1,8 +1,19 @@
-# EQMUX
+<p align="center">
+  <img src="src-tauri/icons/128x128@2x.png" width="112" height="112" alt="EQMUX icon">
+</p>
 
-*[한국어](README.md) · English*
+<h1 align="center">EQMUX</h1>
 
-**A desktop app where a team of AI agents works one git repo together, and a human runs the control tower.**
+<p align="center">
+  <b>A desktop app where a team of AI agents works one git repo together, and a human runs the control tower.</b>
+</p>
+
+<p align="center">
+  <a href="https://github.com/ReDocu/EQMUX/releases/latest">Download (Windows · macOS)</a> ·
+  <a href="https://eqmux-web-site.vercel.app/">Website</a> ·
+  <a href="docs/site/docs.md">User guide (Korean)</a> ·
+  <a href="README.md">한국어</a> · English
+</p>
 
 > **Beta.** Pre-1.0: screens and file formats may change.
 >
@@ -59,7 +70,7 @@ Auxiliary panes (editor, diff, browser) do not consume session slots.
 - **Teams · roles · missions** — casting presets, job/persona library (global + per-workspace override), role-file frontmatter decides execution permissions
 - **Session persistence** — SQLite (WAL) scrollback storage, replays the last 500 lines on restart (SGR colors preserved) with explicit resume, FTS full-text search, child process tree cleanup via Job Objects, survives webview crashes
 - **Message bus** — typed inter-agent messages (ask / handoff / report / review / escalate), state-aware delivery (immediate when idle, at end of turn when busy), humans join with `@session` and `@all`, deliver by name to sessions in other open projects, save the whole ledger to a Markdown file
-- **Dev tool panels** — four groups: conversation · code (git · docs) · run (server · ports) · browser. git (status · branches · staging · commits), explorer (file CRUD), extensions (skills · plugins), env files, logs, diff viewer, and a browser panel that opens any http/https address
+- **Dev tool panels** — five groups: conversation · code (git · files · docs) · run (server · ports · env) · browser · extensions (MCP · plugins · skills). git (status · branches · staging · commits), explorer (file CRUD), extensions (skills · plugins), env files, logs, diff viewer, and a browser panel that opens any http/https address
 - **Transcript view** — read Claude Code JSONL logs turn by turn (reference only), collapsible tool calls, scrollback fallback
 - **External interface** — `eqmux send · report · who · browser · ping` CLI over a named pipe, statusLine cost collection. Claude Code and Codex agents talk to each other over the same bus
 - **Browser control** — agents drive the browser panel with `eqmux browser open · snapshot · click · type · get-text · eval`. Not a hidden window — **the panel the human is watching** is the one that moves
@@ -93,9 +104,9 @@ Auxiliary panes (editor, diff, browser) do not consume session slots.
 
 > Screenshots render the current UI with demo data.
 
-**Workspace** — the terminal split is where work happens (the screenshot shows the default four-way). Sessions and missions on the left; the
-inspector on the right shows the selected session's state, launch flags, memory, and whether it can resume,
-and lets you adjust slot permissions.
+**Workspace** — the terminal split is where work happens (the screenshot shows the default four-way). The left rail lists slots, the
+local folder, branches, and worktrees; each pane header shows state, pending approvals, and done reports. Session detail shows launch flags,
+memory, and whether the session can resume, and lets you adjust slot permissions.
 
 ![Workspace](docs/screenshots/readme/workspace.png)
 
@@ -105,10 +116,19 @@ even in terminal fullscreen.
 
 ![Conversation panel](docs/screenshots/readme/conversation.png)
 
-**Git diff & editor** — review agent-authored changes, split between committed state and the worktree.
-Stage, commit, and push from the git screen; risky actions ask first.
+**Git screen** — browse the branch graph and commit details, stage by file or hunk, then commit and push.
+Each commit carries a badge for the session that made the edits; hard-to-undo actions ask first.
+
+![Git screen](docs/screenshots/features/35-git-screen.png)
+
+**Git diff & editor** — review agent-authored changes side by side, split between committed state and the worktree.
 
 ![Git diff & editor](docs/screenshots/readme/gitdiff.png)
+
+**Mission review** — when a done report arrives, see the goal, deliverables, files the assigned sessions edited, and the diff
+since the start point on one screen, then `Approve` or `Send back`.
+
+![Mission review](docs/screenshots/features/36-mission-review.png)
 
 **Team casting** — assign a job + persona to each slot using a preset (standard / dev-heavy /
 product / quality). Each slot carries a preview of its execution permissions (write / commit / push).

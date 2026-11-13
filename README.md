@@ -1,8 +1,19 @@
-# EQMUX
+<p align="center">
+  <img src="src-tauri/icons/128x128@2x.png" width="112" height="112" alt="EQMUX 아이콘">
+</p>
 
-*한국어 · [English](README.en.md)*
+<h1 align="center">EQMUX</h1>
 
-**하나의 git 저장소를 AI 에이전트 팀이 함께 작업하고, 사람이 그것을 관제하는 데스크톱 앱.**
+<p align="center">
+  <b>하나의 git 저장소를 AI 에이전트 팀이 함께 작업하고, 사람이 그것을 관제하는 데스크톱 앱.</b>
+</p>
+
+<p align="center">
+  <a href="https://github.com/ReDocu/EQMUX/releases/latest">다운로드 (Windows · macOS)</a> ·
+  <a href="https://eqmux-web-site.vercel.app/ko/">웹사이트</a> ·
+  <a href="docs/site/docs.md">사용 설명서</a> ·
+  한국어 · <a href="README.en.md">English</a>
+</p>
 
 > **베타입니다.** 1.0 전이라 화면과 파일 형식이 바뀔 수 있습니다.
 >
@@ -58,7 +69,7 @@ EQMUX는 터미널 멀티플렉서(MUX)에 에이전트 팀 관제를 얹은 Win
 - **팀·역할·임무** — 편성 프리셋, 직무/페르소나 라이브러리(전역 + 워크스페이스 오버라이드), 역할 파일 frontmatter가 실행 권한을 결정
 - **세션 영속성** — SQLite(WAL) 스크롤백 저장, 재시작 시 마지막 500줄 재생(SGR 색 보존) + 명시적 재개, FTS 전문 검색, Job Object로 자식 프로세스 트리 정리, 웹뷰 크래시 생존
 - **메시지 버스** — 에이전트 간 강제 타입 메시지(ask / handoff / report / review / escalate), 상태 기반 전달(유휴면 즉시, 작업 중이면 턴 종료 시), 사람도 `@세션`·`@all`로 참여, 열린 다른 프로젝트의 세션에도 이름으로 전달, 대화 원장 전체를 Markdown 파일로 저장
-- **개발 도구 패널** — 대화·코드(git·문서)·실행(서버·포트)·브라우저 4그룹. git(상태·브랜치·스테이징·커밋)·탐색기(파일 CRUD)·확장(스킬·플러그인)·환경변수·로그·diff 뷰어, 임의 http/https 주소를 여는 브라우저 패널
+- **개발 도구 패널** — 대화·코드(git·파일·문서)·실행(서버·포트·환경변수)·브라우저·확장(MCP·플러그인·스킬) 5그룹. git(상태·브랜치·스테이징·커밋)·탐색기(파일 CRUD)·확장(스킬·플러그인)·환경변수·로그·diff 뷰어, 임의 http/https 주소를 여는 브라우저 패널
 - **트랜스크립트 뷰** — Claude Code JSONL 로그를 턴 단위로 열람(참조만), 도구 호출 접기, 스크롤백 폴백
 - **외부 인터페이스** — `eqmux send · report · who · browser · ping` CLI + 명명 파이프, statusLine 비용 수집. Claude Code와 Codex가 같은 버스로 서로 대화한다
 - **브라우저 조종** — 에이전트가 `eqmux browser open · snapshot · click · type · get-text · eval`로 브라우저 패널을 몬다. 보이지 않는 창이 아니라 **사람이 보고 있는 그 패널**이 움직인다
@@ -92,8 +103,8 @@ EQMUX는 터미널 멀티플렉서(MUX)에 에이전트 팀 관제를 얹은 Win
 
 > 스크린샷은 현재 UI를 데모 데이터로 렌더링한 것입니다.
 
-**워크스페이스** — 터미널 분할이 작업 공간입니다(스크린샷은 기본 4분할). 왼쪽에 세션·임무 목록, 오른쪽 인스펙터에서
-선택 세션의 상태·실행 플래그·메모리·재개 가능 여부를 확인하고 슬롯 권한을 조정합니다.
+**워크스페이스** — 터미널 분할이 작업 공간입니다(스크린샷은 기본 4분할). 왼쪽 레일에 슬롯 목록 · 로컬 폴더 · 브랜치 · 워크트리가 있고,
+페인 머리에 상태와 승인 대기 · 완료 보고가 뜹니다. 세션 상세에서 실행 플래그 · 메모리 · 재개 가능 여부를 확인하고 슬롯 권한을 조정합니다.
 
 ![워크스페이스](docs/screenshots/readme/workspace.png)
 
@@ -102,10 +113,19 @@ EQMUX는 터미널 멀티플렉서(MUX)에 에이전트 팀 관제를 얹은 Win
 
 ![대화 패널](docs/screenshots/readme/conversation.png)
 
-**Git Diff & 에디터** — 에이전트가 만든 변경을 커밋 시점과 워크트리로 나눠 검토합니다.
-git 화면에서 스테이지 · 커밋 · push까지 하고, 위험한 작업은 확인창을 거칩니다.
+**git 화면** — 브랜치 그래프와 커밋 상세를 보고, 파일 · 덩어리 단위로 스테이지해 커밋 · push까지 합니다.
+커밋마다 고친 세션 배지가 붙고, 되돌리기 어려운 작업은 확인창을 거칩니다.
+
+![git 화면](docs/screenshots/features/35-git-screen.png)
+
+**Git Diff & 에디터** — 에이전트가 만든 변경을 커밋 시점과 워크트리로 나눠 나란히 검토합니다.
 
 ![Git Diff & 에디터](docs/screenshots/readme/gitdiff.png)
+
+**임무 검토** — 완료 보고가 오면 목표 · 산출물 · 담당 세션이 고친 파일 · 시작점부터의 diff를 한 화면에서 보고
+`승인` · `되돌려 보내기`를 누릅니다.
+
+![임무 검토](docs/screenshots/features/36-mission-review.png)
 
 **팀 캐스팅** — 프리셋(표준 / 집중개발 / 제품기획 / 품질)으로 각 슬롯에 직무 + 페르소나를
 배정합니다. 슬롯마다 실행 권한(write / commit / push) 미리보기가 붙습니다.
@@ -178,6 +198,10 @@ npm run tauri build -- --no-bundle   # src-tauri/target/release/eqmux.exe (설�
 | `missions/*.md` | 임무 정의 (브랜치 + 목표) |
 
 사용자의 `CLAUDE.md`는 수정하지 않습니다 — 역할은 세션 시작 안내문(Claude Code는 `--append-system-prompt`, Codex는 `developer_instructions`)의 역할 파일 포인터와 SessionStart 훅으로만 전달됩니다.
+
+## 다른 도구와 같이 쓰기
+
+wmux · cmux 같은 다른 멀티플렉서나 에이전트 도구가 Claude Code · Codex 전역 설정에 써 넣은 지시와 훅은 EQMUX 세션에도 따라옵니다. EQMUX는 엔진 설정을 고치지 않습니다. 세션 시작 안내문에 `eqmux` 명령을 쓰라는 규칙을 싣고, 전역 설정을 읽기만 해서 다른 도구의 흔적을 알림 센터에 알립니다. 충돌을 줄이는 방법은 [사용 설명서 › 다른 도구와 같이 쓰기](docs/site/docs.md#다른-도구와-같이-쓰기)에 있습니다.
 
 ## 문의 · 피드백
 
