@@ -182,7 +182,8 @@ export function tabLabels(list: readonly Pick<Workspace, "id" | "name" | "path">
   for (const w of list) count.set(w.name, (count.get(w.name) ?? 0) + 1);
   return new Map(
     list.map((w) => {
-      const parent = w.path.split(/[\\/]/).filter(Boolean).at(-2);
+      const segs = w.path.split(/[\\/]/).filter(Boolean);
+      const parent = segs[segs.length - 2]; // .at(-2)은 Safari 15.4 미만에 없다 (B329)
       if (count.get(w.name)! < 2 || !parent) return [w.id, w.name];
       return [w.id, `${w.name} · ${parent.length > 10 ? `${parent.slice(0, 8)}…` : parent}`];
     }),

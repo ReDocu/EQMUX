@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { chunkPaths, guardWorsened, hunkPatch, hunkRange, pushArgs, pushRemote, refNameProblem, splitHunks, workGuard } from "./gitWrite";
+import { chunkPaths, guardWorsened, hunkPatch, hunkRange, pushArgs, pushRemote, refNameProblem, splitHunks, splitLines, workGuard } from "./gitWrite";
 
 test("§4-1 작업 중 경고 — busy > waiting > 없음, 다른 워크스페이스 · 자기 워크트리 세션은 뺀다", () => {
   const s = (workspaceId: string, status: "busy" | "waiting" | "idle" | "starting" | "shell", wt = false, missing = false) => ({
@@ -132,4 +132,11 @@ test("stash 순번은 실행 직전 목록에서 해시로 다시 찾는다 (B29
   expect(stashRefOf(after, "aaa")).toBe("stash@{1}"); // 밀린 순번 — 옛 stash@{0}은 남의 것이다
   expect(stashRefOf(after, "ccc")).toBeUndefined();
   expect(stashRefOf(undefined, "aaa")).toBeUndefined();
+});
+
+test("B329 splitLines — 뒤돌아보기 split(/(?<=\\n)/)와 같은 결과", () => {
+  const lookbehind = new RegExp("(?<=\\n)"); // 시험은 node에서만 돈다 — 번들에는 들어가지 않는다
+  for (const s of ["", "a", "a\n", "a\nb", "\n", "\n\n", "a\r\nb\r\n", "<<<<<<< ours\nx\n=======\ny\n>>>>>>> theirs", "끝 줄바꿈 없음\n둘째"]) {
+    expect(splitLines(s)).toEqual(s.split(lookbehind));
+  }
 });

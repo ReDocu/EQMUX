@@ -195,16 +195,15 @@ export function missionDoneReport(
   const heads = m.name === undefined ? [] : [SEND_BACK_HEAD, missionsDict[SEND_BACK_HEAD]].map((h) => h.replaceAll("{name}", m.name!));
   const backAt = (sid: string) =>
     Math.max(0, ...msgs.filter((x) => x.from === "나" && x.type === "review" && x.to === sid && heads.some((h) => x.body.startsWith(h))).map((x) => x.ts ?? 0));
-  return msgs
-    .filter(
-      (x) =>
-        x.done &&
-        x.workspaceId === m.workspaceId &&
-        m.assigned.includes(x.from) &&
-        (x.ts ?? 0) >= (since(x.from) ?? 0) &&
-        (x.ts ?? 0) > backAt(x.from),
-    )
-    .at(-1);
+  const done = msgs.filter(
+    (x) =>
+      x.done &&
+      x.workspaceId === m.workspaceId &&
+      m.assigned.includes(x.from) &&
+      (x.ts ?? 0) >= (since(x.from) ?? 0) &&
+      (x.ts ?? 0) > backAt(x.from),
+  );
+  return done[done.length - 1]; // .at(-1)은 Safari 15.4 미만에 없다 (B329)
 }
 
 /** [되돌려 보내기] 의견의 머리 — missionDoneReport가 이것으로 되돌린 시각을 찾는다. 화면 언어를 따른다 (U123) */
