@@ -463,3 +463,7 @@ npm test 135개가 통과했고 `tsc --noEmit` 오류는 0이다. release 빌드
   - CD: `9ae1482a…/cd-r5.csv`
   - UX: `4b40343e…/ux-r5.csv`
   - 리드: `528cf953…/shots/d1-dmg-window.png`
+
+## 6라운드 — 0.6.3 병합본
+
+6라운드(0.6.3 병합 뒤 universal 번들, B329–B337 · U210–U219 · P104–P106 · S43–S46 · T101–T119)는 [qa-0.6.3-macos-usability.md](qa-0.6.3-macos-usability.md)에 있다.
