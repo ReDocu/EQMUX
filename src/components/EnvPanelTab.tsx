@@ -25,6 +25,7 @@ import type { EnvFile, EnvVar } from "../backend/env";
 import { setEnvDirty } from "../backend/panels";
 import { clipWriteText } from "../backend/pty";
 import { t, tErr, tf } from "../i18n";
+import { isSubmitEnter } from "../platform"; // 한글 조합 중 Enter는 제출이 아니다 (B130)
 import { Icon } from "./icons";
 import { Chip, ConfirmDialog, notify } from "./ui";
 
@@ -189,7 +190,7 @@ export function EnvPanelTab(props: { files: EnvFile[]; loading?: boolean; wsPath
       class="env-edit"
       onKeyDown={(e) => {
         if (!(e.target instanceof HTMLInputElement)) return; // 버튼 위 Enter는 click이 맡는다
-        if (e.key === "Enter") void saveVar();
+        if (isSubmitEnter(e)) void saveVar();
         else if (e.key === "Escape") setEdit(undefined);
       }}
     >
