@@ -12,6 +12,7 @@ import { sessionTermSize } from "../components/TerminalPane";
 import { notify } from "../components/ui";
 import { t, tErr, tf } from "../i18n";
 import { defaultShell, jumpToSession, scopeWorkspace, setView, tick, view } from "../state";
+import { isSubmitEnter } from "../platform"; // 한글 조합 중 Enter는 제출이 아니다 (B130)
 import type { View } from "../state";
 import type { Session } from "../types";
 import { cliOf, sessionDisplayName, sessionName } from "../types";
@@ -118,7 +119,7 @@ export function HistorySearch(props: { wsId?: string }) {
           ref={input}
           onInput={(e) => setQuery(e.currentTarget.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.isComposing) void submit();
+            if (isSubmitEnter(e)) void submit();
             else if (e.key === "Escape") query() ? setQuery("") : close();
           }}
         />

@@ -47,6 +47,7 @@ import { cliOf, effectivePermissions, sessionName } from "../types";
 import { Icon } from "./icons";
 import { IS_MAC, isImeEnter, keyLabel } from "../platform";
 import { findPathLinks, pathChunkAt, quotePath } from "./termPaths";
+import { attachHangulReplace } from "./termIme";
 import { fileManagerName, revealLabel } from "../labels";
 
 /** 터미널 색 — styles.css의 --eq-term-* 토큰이 원본이다 (설정 · 색 팔레트가 이 토큰을 고른다).
@@ -995,6 +996,9 @@ export function TerminalPane(props: {
       if (!e.opened) {
         e.term.open(host);
         e.opened = true;
+        // macOS 2벌식은 조합 단계를 바꿔 끼우기로 보내고 xterm은 그것을 버린다 — '한글'이 'ㅎㄱ'으로 갔다.
+        // 바꿔 끼운 만큼 DEL + 새 글자를 사람 입력으로 보낸다. 요소는 리마운트에도 같은 것이라 한 번만 단다
+        if (IS_MAC && e.term.textarea) attachHangulReplace(e.term.textarea, (d) => e.term.input(d, true));
         // macOS ⌘V는 메뉴(Edit › Paste)가 keydown을 먼저 가져가 웹뷰에는 paste 이벤트만 온다 (GRF-11) —
         // 그대로 두면 xterm이 텍스트만 받아 이미지 경로도, 여러 줄 확인(B45)도 빠진다. 캡처 단계에서 끊고
         // 앱 붙여넣기 흐름으로 보낸다. 요소는 리마운트에도 같은 것이 옮겨 다니므로 한 번만 단다

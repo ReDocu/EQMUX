@@ -41,6 +41,7 @@ import { fsRead, fsWrite } from "../backend/panels";
 import { maskDotenvLine } from "../backend/secrets";
 import { t, tErr, tf } from "../i18n";
 import { openPanel, pushLayer, scopeWorkspace, setView, tick, view } from "../state";
+import { isSubmitEnter } from "../platform"; // 한글 조합 중 Enter는 제출이 아니다 (B130)
 import type { View } from "../state";
 import { sessionDisplayName } from "../types";
 import { Icon } from "../components/icons";
@@ -127,7 +128,7 @@ function NamePrompt(props: {
               class="mono"
               value={name()}
               onInput={(e) => setName(e.currentTarget.value)}
-              onKeyDown={(e) => e.key === "Enter" && !e.isComposing && submit()}
+              onKeyDown={(e) => isSubmitEnter(e) && submit()}
             />
           </label>
           <Show when={props.withMessage}>

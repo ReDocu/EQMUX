@@ -37,9 +37,15 @@ export interface FilePatch {
   hunks: string[]; // `@@`로 시작하는 덩어리, 끝 줄바꿈 포함
 }
 
+/** 줄바꿈(\n)을 줄 끝에 남기고 자른다. 빈 글은 [""]다.
+ *  정규식 뒤돌아보기를 쓰지 않는다 — Safari 16.4 미만 WebKit은 그 리터럴을 파싱에서 던져 번들 전체가 죽는다 (B329) */
+export function splitLines(s: string): string[] {
+  return s.match(/[^\n]*\n|[^\n]+$/g) ?? [s];
+}
+
 /** 한 파일의 `git diff` 원문 → 머리 + 덩어리. 바이너리 · 빈 diff는 덩어리가 없다 */
 export function splitHunks(diff: string): FilePatch {
-  const lines = diff.split(/(?<=\n)/); // 줄바꿈을 줄에 남긴다 — apply가 그대로 받게
+  const lines = splitLines(diff); // 줄바꿈을 줄에 남긴다 — apply가 그대로 받게
   const first = lines.findIndex((l) => l.startsWith("@@"));
   if (first < 0) return { header: diff, hunks: [] };
   const hunks: string[] = [];
@@ -85,7 +91,7 @@ export type ConflictPart = { kind: "text"; text: string } | { kind: "conflict"; 
 
 export function conflictParts(text: string): ConflictPart[] {
   const parts: ConflictPart[] = [];
-  const lines = text.split(/(?<=\n)/);
+  const lines = splitLines(text);
   let plain = "";
   let i = 0;
   while (i < lines.length) {

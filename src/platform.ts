@@ -17,7 +17,9 @@ export function modDown(e: { ctrlKey: boolean; metaKey: boolean }, mac = IS_MAC)
 }
 
 /** 한글·일본어 입력기 조합 중의 Enter인가 (B98·B130) — 조합을 끝내는 Enter라 제출하면 마지막 글자가 빠진다.
- *  WKWebView는 조합 확정 keydown에 isComposing을 싣고, WebView2·구형 엔진은 keyCode 229로 온다 */
+ *  WebView2는 조합 중 keydown에 isComposing · keyCode 229를 싣는다. macOS 15 WKWebView의 2벌식은
+ *  조합 이벤트 없이 글자를 바꿔 끼우고(insertReplacementText), Enter는 글자를 확정한 뒤 keyCode 13으로 와서
+ *  여기서는 제출이 맞다 (2026-11-20 실측) */
 export function isImeEnter(e: { isComposing?: boolean; keyCode?: number }): boolean {
   return !!e.isComposing || e.keyCode === 229;
 }

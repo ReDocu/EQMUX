@@ -70,7 +70,7 @@ export function tf(ko: string, vars: Record<string, string | number>): string {
 export function tErr(e: unknown, dict: Record<string, string> | undefined = settings().language === "en" ? EN : undefined): string {
   const raw = String(e);
   if (!dict) return raw;
-  if (Object.hasOwn(dict, raw)) return dict[raw];
+  if (Object.prototype.hasOwnProperty.call(dict, raw)) return dict[raw]; // Object.hasOwn은 Safari 15.4 미만에 없다 (B329)
   const lit = (k: string) => k.replace(/\{\w+\}/g, "").length;
   const keys = Object.keys(dict).filter((k) => /\{\w+\}/.test(k) && /[가-힣]/.test(k.replace(/\{\w+\}/g, "")));
   for (const k of keys.sort((a, b) => lit(b) - lit(a))) {

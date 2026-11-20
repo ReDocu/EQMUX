@@ -24,7 +24,7 @@ const ANSI = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
 export function findExitCode(buf: string, tag: string, emptyIsZero = false): number | undefined {
   const text = buf.replace(ANSI, "");
   const all = [...text.matchAll(new RegExp(`${MARK}${tag}:(-?\\d*)\\s*$`, "gm"))];
-  const last = all.at(-1);
+  const last = all[all.length - 1]; // .at(-1)은 Safari 15.4 미만에 없다 (B329)
   if (!last) return undefined;
   if (last[1] === "") return emptyIsZero ? 0 : undefined;
   return Number(last[1]);

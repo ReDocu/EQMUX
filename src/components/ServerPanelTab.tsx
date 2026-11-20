@@ -24,6 +24,7 @@ import { fsCreate, fsRead, fsWrite } from "../backend/panels";
 import { maskSecrets } from "../backend/secrets";
 import { isTauri, listAlivePty, revealPath, spawnPty } from "../backend/pty";
 import { defaultShell, notePtyShell, scopeWorkspace, setPanelNote } from "../state";
+import { isSubmitEnter } from "../platform"; // 한글 조합 중 Enter는 제출이 아니다 (B130)
 import { t, tf } from "../i18n";
 import { fileManagerName } from "../labels"; // mac은 Finder (U76)
 import { sessionTermSize, TerminalPane } from "./TerminalPane";
@@ -238,7 +239,7 @@ function ServerTerm(props: { wsId: string }) {
             ref={(el) => queueMicrotask(() => el.focus())}
             onInput={(e) => setNaming(e.currentTarget.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && (naming() ?? "").trim()) guardSecret(() => void addSaved());
+              if (isSubmitEnter(e) && (naming() ?? "").trim()) guardSecret(() => void addSaved());
               if (e.key === "Escape") setNaming(null);
             }}
           />
