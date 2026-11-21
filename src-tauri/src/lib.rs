@@ -512,6 +512,24 @@ fn list_shells() -> ShellList {
     }
 }
 
+/// PTY에 IUTF8을 켠다 (macOS) — 줄 단위 입력에서 DEL이 한글 한 글자를 통째로 지우게.
+/// macOS 2벌식은 조합 단계를 'DEL + 새 글자'로 PTY에 보낸다 (termIme.ts). 셸 · vim · TUI는 DEL을 글자로
+/// 지우지만 줄 단위 입력(sh read · 파이썬 스크립트 input() · cat)은 커널이 지운다. IUTF8이 꺼져 있으면
+/// 1바이트만 지워 '한글'이 깨진 바이트(e3 85 ed 95 …)로 갔다 (2026-11-20 실측). Terminal.app · iTerm2 ·
+/// node-pty도 UTF-8 PTY에는 켠다. 셸이 뜨기 전에 켠다 — 셸은 시작할 때의 설정을 명령마다 되돌린다
+#[cfg(target_os = "macos")]
+fn enable_iutf8(fd: std::os::unix::io::RawFd) -> bool {
+    // SAFETY: fd는 막 연 PTY 마스터이고, termios는 tcgetattr가 채운 값을 고쳐 되돌린다
+    unsafe {
+        let mut t: libc::termios = std::mem::zeroed();
+        if libc::tcgetattr(fd, &mut t) != 0 {
+            return false;
+        }
+        t.c_iflag |= libc::IUTF8;
+        libc::tcsetattr(fd, libc::TCSANOW, &t) == 0
+    }
+}
+
 /// PTY 자식 환경 위생 — 모든 스폰(셸·에이전트)의 단일 관문에서 적용한다.
 /// ① 색 계약: xterm.js 프런트는 truecolor를 그린다. 앱이 Claude Code 세션 안에서
 ///    실행되면(개발 중 `npm run tauri dev`) TERM=dumb이 상속돼 CLI가 무채색으로 떨어진다.
@@ -576,6 +594,10 @@ fn spawn_pty_session(
             pixel_height: 0,
         })
         .map_err(|e| e.to_string())?;
+    #[cfg(target_os = "macos")]
+    if !pair.master.as_raw_fd().is_some_and(enable_iutf8) {
+        diag::write(&format!("IUTF8 켜기 실패 {id} — 줄 단위 입력에서 한글 지우기가 깨질 수 있다"));
+    }
 
     let mut child = None;
     let mut last_err = String::new();
@@ -3395,6 +3417,30 @@ mod tests {
         instance_lock, open_session_log, prune_session_logs, resize_is_current, restart_cli, session_prompt,
         pick_shells, take_complete_utf8, window_theme, workspace,
     };
+
+    /// 줄 단위 입력의 한글 지우기 — 새 PTY는 IUTF8이 꺼져 있고, 마스터에서 켜면 셸이 받는 쪽(슬레이브)에서도 켜진다
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn pty_iutf8_is_on() {
+        use portable_pty::{native_pty_system, PtySize};
+        use std::os::unix::io::AsRawFd;
+        let pair = native_pty_system()
+            .openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
+            .unwrap();
+        let slave = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(pair.master.tty_name().unwrap())
+            .unwrap();
+        let iflag = |fd| unsafe {
+            let mut t: libc::termios = std::mem::zeroed();
+            assert_eq!(libc::tcgetattr(fd, &mut t), 0);
+            t.c_iflag
+        };
+        assert_eq!(iflag(slave.as_raw_fd()) & libc::IUTF8, 0, "macOS 기본값이 바뀌었다 — 이 시험의 전제를 다시 볼 것");
+        assert!(super::enable_iutf8(pair.master.as_raw_fd().unwrap()));
+        assert_ne!(iflag(slave.as_raw_fd()) & libc::IUTF8, 0);
+    }
 
     /// B287 · B288 — 같은 id가 다른 세대로 이미 떠 있을 때만 옛 종료를 삼킨다. 없으면(정상 종료 · 재기동 실패) 낸다
     #[test]

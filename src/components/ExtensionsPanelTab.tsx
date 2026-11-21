@@ -28,6 +28,7 @@ import { fsDelete, fsRead, fsWrite, setSkillDirty, skillDirty } from "../backend
 import { serverExited, serverTermId } from "../backend/ports";
 import { isTauri, listAlivePty, onPtyOutput, revealPath, writePty } from "../backend/pty";
 import { defaultShell, scopeWorkspace, setPanelTab } from "../state";
+import { isSubmitEnter } from "../platform"; // 한글 조합 중 Enter는 제출이 아니다 (B130)
 import { agentAttached, runCliOf, sessionName } from "../types";
 import type { Session } from "../types";
 import { t, tErr, tf } from "../i18n";
@@ -402,7 +403,7 @@ export function SkillsPanelTab() {
                 aria-describedby="extp-skill-rule"
                 value={newName()}
                 onInput={(e) => setNewName(e.currentTarget.value)}
-                onKeyDown={(e) => e.key === "Enter" && create()}
+                onKeyDown={(e) => isSubmitEnter(e) && create()}
               />
               <button class="btn" disabled={!newName().trim()} onClick={create}>
                 {t("＋ 새 스킬")}

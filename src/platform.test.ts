@@ -33,6 +33,22 @@ describe("IME 조합 Enter (B130)", () => {
     expect(isSubmitEnter({ key: "Enter", isComposing: false, keyCode: 13 })).toBe(true);
     expect(isSubmitEnter({ key: "a", isComposing: false })).toBe(false);
   });
+  test("isComposing이 false여도 keyCode 229면 조합 키로 보고 제출하지 않는다", () => {
+    expect(isSubmitEnter({ key: "Enter", isComposing: false, keyCode: 229 })).toBe(false);
+  });
+  // isComposing만 보면 keyCode 229로만 오는 조합 키를 놓친다 — 판정은 이 파일의 헬퍼로만
+  test("앱 코드는 isComposing을 직접 보지 않는다", () => {
+    const sources = import.meta.glob(["./**/*.{ts,tsx}", "!./**/*.test.{ts,tsx}", "!./platform.ts"], {
+      query: "?raw",
+      import: "default",
+      eager: true,
+    }) as Record<string, string>;
+    expect(Object.keys(sources).length).toBeGreaterThan(50); // 글롭이 비어 시험이 헛도는 것을 막는다
+    const hits = Object.entries(sources).flatMap(([file, text]) =>
+      text.split("\n").flatMap((l, i) => (/\.isComposing\b/.test(l) ? [`${file}:${i + 1}`] : [])),
+    );
+    expect(hits).toEqual([]);
+  });
 });
 
 describe("단축키 표기 (U67)", () => {

@@ -30,6 +30,7 @@ import { SessionPortrait } from "./PersonaAvatar";
 import { effectiveTitle, sessionName as sessionNameOf } from "../types";
 import type { ConversationMessage, Session } from "../types";
 import { jobName, revealLabel } from "../labels";
+import { isImeEnter } from "../platform";
 
 /** 화면 지우기 (표시 전용) — 워크스페이스별로 "지운 시점에 화면에 있던 메시지 id"를 담아 둔다.
  *  원장(message 테이블)은 건드리지 않는다: 저장(⤓)은 여전히 전량을 내보내고, "다시 보기"로 되돌아온다.
@@ -257,7 +258,7 @@ export function ConversationTab() {
   };
   const onDraftKey = (e: KeyboardEvent) => {
     // 한글 조합 중 Enter는 조합 확정이다 — 보내기·멘션 선택이 아니다 (B98)
-    if (e.isComposing || e.keyCode === 229) return;
+    if (isImeEnter(e)) return;
     const list = mentions();
     if (list.length > 0) {
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
