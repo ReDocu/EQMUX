@@ -8,6 +8,7 @@ import {
   BUDGET_OPTIONS,
   DEFAULT_SETTINGS,
   PALETTES,
+  PANE_GAPS,
   settings,
   settingsSaveError,
   SLOT_OPTIONS,
@@ -130,6 +131,13 @@ const SECTIONS: Section[] = [
         labels: ["WebGL (기본)", "DOM"],
         current: (s = settings()) => pick(RENDERERS, s.termRenderer),
         apply: (i) => updateSettings({ termRenderer: RENDERERS[i] }),
+      },
+      {
+        k: "페인 간격",
+        d: "터미널 페인 사이 경계선 폭 · 분할선 드래그 자리도 같이 옮겨집니다",
+        labels: PANE_GAPS.map((g) => (g === DEFAULT_SETTINGS.paneGap ? `${g}px (기본)` : `${g}px`)),
+        current: (s = settings()) => pick(PANE_GAPS as readonly number[] as number[], s.paneGap),
+        apply: (i) => updateSettings({ paneGap: PANE_GAPS[i] }),
       },
       {
         k: "시작 화면",
@@ -337,6 +345,7 @@ const SECTIONS: Section[] = [
       ? [
           { k: "⌘⇧U", label: "다음 미확인으로 (= ⛶ 응답 대기 칩)" },
           { k: "⌘1~8", label: "N번 슬롯 페인에 키보드 포커스" },
+          { k: "⌘⇧←↑↓→", label: "옆 페인으로 키보드 포커스 (터미널 안에서)" },
           { k: "⌘⇧L", label: "페인 배치" },
           { k: "⌘⇧D", label: "관제 토글" },
           { k: "⌘⇧B", label: "사이드 패널 토글 (마지막 탭)" },
@@ -357,6 +366,7 @@ const SECTIONS: Section[] = [
       : [
           { k: "Ctrl+Shift+U", label: "다음 미확인으로 (= ⛶ 응답 대기 칩)" },
           { k: "Ctrl+Alt+1~8", label: "N번 슬롯 페인에 키보드 포커스" },
+          { k: "Ctrl+Shift+←↑↓→", label: "옆 페인으로 키보드 포커스 (터미널 안에서)" },
           { k: "Ctrl+Shift+L", label: "페인 배치" },
           { k: "Ctrl+Shift+D", label: "관제 토글" },
           { k: "Ctrl+Shift+B", label: "사이드 패널 토글 (마지막 탭)" },

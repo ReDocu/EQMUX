@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { blocksNavKey, segKeyIndex, stepIndex } from "./keynav";
+import { blocksNavKey, neighborPane, segKeyIndex, stepIndex } from "./keynav";
 
 describe("키보드 이동 (U37)", () => {
   test("Tab 가두기 — 끝에서 처음으로, 처음에서 Shift+Tab은 끝으로, 밖에 있으면 안으로", () => {
@@ -41,5 +41,33 @@ describe("모달 중 이동 단축키 (B72)", () => {
     const cmd = { ctrlKey: false, metaKey: true, shiftKey: true, altKey: false, key: "u" };
     expect(blocksNavKey(cmd, true, false, true)).toBe(true);
     expect(blocksNavKey(k("u"), true, false, true)).toBe(false);
+  });
+});
+
+describe("neighborPane — Ctrl+Shift+화살표 페인 이동", () => {
+  const box = (left: number, top: number, w: number, h: number) => ({ left, top, right: left + w, bottom: top + h });
+  // 2×2: 0 1 / 2 3, 간격 8
+  const grid = [box(0, 0, 100, 100), box(108, 0, 100, 100), box(0, 108, 100, 100), box(108, 108, 100, 100)];
+  test("2×2 네 방향", () => {
+    expect(neighborPane(grid, 0, "ArrowRight")).toBe(1);
+    expect(neighborPane(grid, 0, "ArrowDown")).toBe(2);
+    expect(neighborPane(grid, 3, "ArrowLeft")).toBe(2);
+    expect(neighborPane(grid, 3, "ArrowUp")).toBe(1);
+  });
+  test("그쪽에 없으면 -1 · 화살표가 아니면 -1", () => {
+    expect(neighborPane(grid, 0, "ArrowLeft")).toBe(-1);
+    expect(neighborPane(grid, 0, "ArrowUp")).toBe(-1);
+    expect(neighborPane(grid, 0, "Enter")).toBe(-1);
+  });
+  test("간격 0 — 맞닿은 변도 이웃", () => {
+    const g0 = [box(0, 0, 100, 100), box(100, 0, 100, 100)];
+    expect(neighborPane(g0, 0, "ArrowRight")).toBe(1);
+    expect(neighborPane(g0, 1, "ArrowLeft")).toBe(0);
+  });
+  test("왼쪽 큰 페인 + 오른쪽 세로 셋 — 가운데 줄에 걸린 페인으로", () => {
+    const main = [box(0, 0, 200, 300), box(208, 0, 100, 96), box(208, 104, 100, 96), box(208, 208, 100, 92)];
+    expect(neighborPane(main, 0, "ArrowRight")).toBe(2);
+    expect(neighborPane(main, 3, "ArrowLeft")).toBe(0);
+    expect(neighborPane(main, 1, "ArrowDown")).toBe(2);
   });
 });

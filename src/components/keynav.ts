@@ -41,3 +41,38 @@ export function blocksNavKey(
   const k = e.key.toLowerCase();
   return NAV_KEYS.has(k) && !(k === "l" && pickerOpen);
 }
+
+/** 화면 위 사각형 — DOMRect에서 쓰는 네 변만 */
+export type Box = { left: number; top: number; right: number; bottom: number };
+
+/** Ctrl+Shift+화살표 페인 이동 — from 페인에서 화살표 쪽 이웃 페인의 자리. 그쪽에 없으면 -1.
+ *  배치 6종·분할 비율을 따로 계산하지 않고 그려진 사각형만 본다: 그 방향으로 완전히 넘어간 페인 중
+ *  가까운 것, 같은 거리면 지금 페인의 가운데 줄과 겹치는 것 */
+export function neighborPane(boxes: Box[], from: number, key: string): number {
+  const c = boxes[from];
+  if (!c) return -1;
+  const horiz = key === "ArrowLeft" || key === "ArrowRight";
+  if (!horiz && key !== "ArrowUp" && key !== "ArrowDown") return -1;
+  const cx = (c.left + c.right) / 2;
+  const cy = (c.top + c.bottom) / 2;
+  const EPS = 2; // 반올림 픽셀 — 간격 0일 때 이웃 변이 1px 겹쳐 잡힐 수 있다
+  let best = -1;
+  let bestScore = Infinity;
+  boxes.forEach((b, i) => {
+    if (i === from) return;
+    const ahead =
+      key === "ArrowRight" ? b.left - c.right
+      : key === "ArrowLeft" ? c.left - b.right
+      : key === "ArrowDown" ? b.top - c.bottom
+      : c.top - b.bottom;
+    if (ahead < -EPS) return;
+    // 가운데 줄에서 그 페인 범위까지의 거리 — 줄이 페인을 지나면 0
+    const off = horiz ? Math.max(0, b.top - cy, cy - b.bottom) : Math.max(0, b.left - cx, cx - b.right);
+    const score = Math.max(0, ahead) + off * 2;
+    if (score < bestScore) {
+      bestScore = score;
+      best = i;
+    }
+  });
+  return best;
+}

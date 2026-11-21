@@ -56,7 +56,12 @@ export interface AppSettings {
   /** 스크롤백 · 세션 로그를 디스크에 쓴다 (0.6 E4 · W6) — 토큰·비밀번호가 평문으로 남을 수 있어 끌 수 있게 한다.
    *  끄면 Rust(W1 store.rs · lib.rs)가 쓰지 않는다. 기본 켬 */
   scrollbackPersist: boolean;
+  /** 터미널 페인 사이 간격 px — .terminal-grid gap과 분할선(PaneDividers) 위치가 같이 읽는다. 기본 8 */
+  paneGap: number;
 }
+
+/** 페인 간격 옵션 — 설정 화면·검증이 공유한다 */
+export const PANE_GAPS = [0, 2, 4, 8, 16] as const;
 
 /** 하루 예산 옵션 — 설정 화면 · 검증이 공유한다. 0 = 꺼짐 */
 export const BUDGET_OPTIONS = [0, 5, 10, 20, 50] as const;
@@ -94,6 +99,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   trayAskOff: false,
   dailyBudgetUsd: 0, // 기본 꺼짐 — 구독 요금제에는 금액보다 한도(F1)가 뜻이 있다
   scrollbackPersist: true, // 재시작 뒤 이전 출력을 다시 그린다 (FR-C-31)
+  paneGap: 8,
 };
 
 const [settings, setSettings] = createSignal<AppSettings>(DEFAULT_SETTINGS);
@@ -132,6 +138,7 @@ export function sanitize(raw: unknown): AppSettings {
     firstRunSeen: v.firstRunSeen === true,
     trayAskOff: v.trayAskOff === true,
     scrollbackPersist: v.scrollbackPersist !== false,
+    paneGap: (PANE_GAPS as readonly number[]).includes(v.paneGap as number) ? (v.paneGap as number) : 8,
     dailyBudgetUsd: (BUDGET_OPTIONS as readonly number[]).includes(v.dailyBudgetUsd as number) ? (v.dailyBudgetUsd as number) : 0,
     statusLine: (STATUSLINE_MODES as readonly string[]).includes(v.statusLine as string)
       ? (v.statusLine as AppSettings["statusLine"])

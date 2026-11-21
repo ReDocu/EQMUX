@@ -983,7 +983,7 @@
   /* minmax(0,1fr) — xterm의 고정 픽셀 폭이 컬럼 최소폭을 부풀리지 못하게 한다 */
   grid-template-columns: repeat(2, minmax(0, 1fr));
   grid-auto-rows: minmax(0, 1fr);
-  gap: 8px;
+  gap: var(--pane-gap, 8px); /* 설정 › 페인 간격 — PaneDividers가 인라인으로 준다 */
   flex: 1;
   min-height: 0;
   min-width: 0;

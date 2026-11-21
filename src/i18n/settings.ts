@@ -186,6 +186,11 @@ export const dict: Record<string, string> = {
     "Changes background lightness and warmth only — accent colors are shared",
   "WebGL이 빠릅니다 · 잔상이 보일 때만 DOM으로 바꿉니다": "WebGL is faster · switch to DOM only if you see ghosting",
   "WebGL (기본)": "WebGL (default)",
+  "페인 간격": "Pane gap",
+  "터미널 페인 사이 경계선 폭 · 분할선 드래그 자리도 같이 옮겨집니다":
+    "Width of the border between terminal panes · the drag handles move with it",
+  "8px (기본)": "8px (default)",
+  "옆 페인으로 키보드 포커스 (터미널 안에서)": "Keyboard focus to the neighboring pane (from a terminal)",
   "자동 실행 없이 화면 상태만 복원합니다": "Restores screen state only, nothing runs automatically",
   "앱을 다시 켰을 때 페인에 다시 그리는 줄 수": "Lines redrawn in each pane when the app restarts",
   "워크스페이스당 세션 수의 상한 · 줄여도 이미 열린 세션은 닫지 않습니다":

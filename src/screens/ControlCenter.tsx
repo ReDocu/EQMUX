@@ -73,6 +73,7 @@ import { AGENT_CLI_LABEL, agentAttached, cliOf, statusText, effectiveTitle, limi
 import { CTX_WARN, limitText, resetAt } from "../backend/usage";
 import { Icon } from "../components/icons";
 import { IS_MAC, keyLabel } from "../platform";
+import { isNavChord, neighborPane } from "../components/keynav";
 import { jobName as jobLabel } from "../labels";
 
 /** 셸에 에이전트 명령을 쳐 넣는다 — claude 말고는 EQMUX가 관리하는 스폰 경로가 없다
@@ -437,6 +438,36 @@ export function ControlCenter(props: { workspace: Workspace }) {
     };
     window.addEventListener("keydown", onSlotKey, true);
     onCleanup(() => window.removeEventListener("keydown", onSlotKey, true));
+  });
+
+  // Ctrl+Shift+화살표(macOS ⌘⇧화살표) — 터미널에 치다가 그 방향 이웃 페인으로 키보드 포커스를 옮긴다.
+  // 터미널 페인 안(또는 아무 데도 포커스가 없을 때)에서만 — 입력칸의 단어 선택은 뺏지 않는다.
+  // 캡처 단계라 xterm이 셸로 보내기(\e[1;6C 등) 전에 받는다
+  onMount(() => {
+    const onArrow = (e: KeyboardEvent) => {
+      if (!e.key.startsWith("Arrow") || !isNavChord(e) || modalOpen()) return;
+      const act = document.activeElement;
+      const fromEl =
+        act?.closest<HTMLElement>(".terminal-pane[data-session]") ??
+        (act === document.body || !act
+          ? document.querySelector<HTMLElement>(`.terminal-pane[data-session="${CSS.escape(selected()?.id ?? "")}"]`)
+          : null);
+      const grid = fromEl?.closest(".terminal-grid");
+      if (!fromEl || !grid) return;
+      const panes = [...grid.querySelectorAll<HTMLElement>(":scope > .terminal-pane[data-session]")].filter(
+        (el) => el.offsetWidth > 0, // 줌 중에 숨은 페인은 건너뛴다
+      );
+      const i = neighborPane(panes.map((el) => el.getBoundingClientRect()), panes.indexOf(fromEl), e.key);
+      e.preventDefault();
+      e.stopPropagation(); // 끝 페인에서도 셸로 흘리지 않는다 — 누를 때마다 다른 일이 생기지 않게
+      const id = panes[i]?.dataset.session;
+      if (!id) return;
+      setSelectedSession(id);
+      backend.markSeen(id);
+      requestAnimationFrame(() => focusSessionTerminal(id));
+    };
+    window.addEventListener("keydown", onArrow, true);
+    onCleanup(() => window.removeEventListener("keydown", onArrow, true));
   });
 
   // 턴 완료 칩의 '본 것' (§주의 신호) — 창이 포커스인 채 그 페인이 3초 보이면 내린다.
@@ -955,6 +986,7 @@ export function ControlCenter(props: { workspace: Workspace }) {
         ) : ((s: Session) => (
           <div
             class="terminal-pane"
+            data-session={s.id}
             classList={{ "pane-waiting": s.status === "waiting", "pane-dead": s.status === "dead", "pane-selected": selected()?.id === s.id }}
             onClick={() => {
               // 페인을 직접 누르는 것이 가장 자연스러운 '봤다'다 (B64) — 레일 행 클릭에만 걸어

@@ -5,18 +5,22 @@
 import { For } from "solid-js";
 import { t } from "../i18n";
 import { defaultRatios, paneLayout, ratioFor, setRatioAxis } from "../state";
+import { settings } from "../backend/settings";
 import type { PaneLayout } from "../state";
 
-const GAP = 8; // .terminal-grid gap과 일치해야 한다
+/** 페인 간격 — 설정(paneGap). .terminal-grid의 --pane-gap과 같은 값이다 */
+const gap = (): number => settings().paneGap;
+const HANDLE = 8; // 핸들 폭 — 간격이 0이어도 잡을 자리가 남게 경계 가운데에 8px로 앉힌다
 const MIN = 0.08; // 트랙 최소 비율 — 페인이 0으로 접히지 않게
 
 type Axis = "cols" | "rows";
 
-/** 축의 k번째 경계(트랙 k와 k+1 사이) 위치 — gap의 시작점. calc로 반환한다 */
+/** 축의 k번째 경계(트랙 k와 k+1 사이) 핸들 위치 — gap 가운데에 HANDLE 폭으로. calc로 반환한다 */
 function edgePos(fractions: number[], k: number): string {
-  const totalGap = (fractions.length - 1) * GAP;
+  const g = gap();
+  const totalGap = (fractions.length - 1) * g;
   const cum = fractions.slice(0, k + 1).reduce((a, b) => a + b, 0);
-  return `calc((100% - ${totalGap}px) * ${cum} + ${k * GAP}px)`;
+  return `calc((100% - ${totalGap}px) * ${cum} + ${k * g + (g - HANDLE) / 2}px)`;
 }
 
 function startDrag(ev: PointerEvent, layout: PaneLayout, axis: Axis, k: number): void {
@@ -26,7 +30,8 @@ function startDrag(ev: PointerEvent, layout: PaneLayout, axis: Axis, k: number):
   const rect = grid.getBoundingClientRect();
   const fr = (ratioFor(layout)[axis] ?? []).slice();
   if (fr.length < 2) return;
-  const totalGap = (fr.length - 1) * GAP;
+  const g = gap();
+  const totalGap = (fr.length - 1) * g;
   const avail = (axis === "cols" ? rect.width : rect.height) - totalGap;
   if (avail <= 0) return;
   const before = fr.slice(0, k).reduce((a, b) => a + b, 0);
@@ -34,7 +39,7 @@ function startDrag(ev: PointerEvent, layout: PaneLayout, axis: Axis, k: number):
   const move = (e: PointerEvent) => {
     const pos = axis === "cols" ? e.clientX - rect.left : e.clientY - rect.top;
     // 경계 앞 gap들을 빼고 비율로 환산 — 이웃 두 트랙 안에서만 움직인다
-    let cum = (pos - k * GAP) / avail;
+    let cum = (pos - k * g - g / 2) / avail;
     cum = Math.max(before + MIN, Math.min(before + pair - MIN, cum));
     const next = fr.slice();
     next[k] = cum - before;
@@ -54,7 +59,7 @@ export function gridTemplateStyle(layout: PaneLayout): Record<string, string> {
   const d = defaultRatios(layout);
   const r = ratioFor(layout);
   const tpl = (f: number[]) => f.map((x) => `minmax(0, ${x.toFixed(4)}fr)`).join(" ");
-  const st: Record<string, string> = {};
+  const st: Record<string, string> = { "--pane-gap": `${gap()}px` };
   if (d.cols && r.cols) st["grid-template-columns"] = tpl(r.cols);
   if (d.rows && r.rows) st["grid-template-rows"] = tpl(r.rows);
   return st;
