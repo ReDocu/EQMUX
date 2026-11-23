@@ -699,11 +699,15 @@ fn prompt_context(role_path: &str, agent: &str) -> Option<String> {
     )
 }
 
-/// 저장소 경계 (사용자 결정 2026-11-03) — `eqmux _guard`는 파일 도구의 PreToolUse 훅이다.
-/// 배정된 저장소(EQMUX_REPO) 밖 경로면 거부 결정을 낸다. 앱을 거치지 않으므로 앱이 바쁘거나(BUSY)
-/// 꺼져 있어도 판정이 같다. 엔진 자기 작업 폴더(큰 출력 파일·계획·스크래치)는 열어 둔다 —
-/// 막으면 Claude Code가 자기 출력을 못 읽는다.
-// ponytail: Bash·PowerShell 명령 속 경로는 못 본다 — 안내문 규칙이 맡는다. 심볼릭 링크도 따라가지 않는다
+/// 저장소 경계 (사용자 결정 2026-11-03, 읽기 허용 2026-11-21) — `eqmux _guard`는 쓰기 도구의 PreToolUse 훅이다.
+/// 배정된 저장소(EQMUX_REPO) 밖은 읽기만 된다 — Read·Grep·Glob은 어디든 통과하고, 밖을 고치는
+/// Edit·Write는 거부한다. 앱을 거치지 않으므로 앱이 바쁘거나(BUSY) 꺼져 있어도 판정이 같다.
+/// 엔진 자기 작업 폴더(큰 출력 파일·계획·스크래치)는 쓰기도 열어 둔다 — 막으면 Claude Code가 제 일을 못 한다.
+/// Bash·PowerShell은 명령 문자열을 훑는다 (scan_cmd). 밖 경로가 나오면(또는 작업 폴더가 밖이면) 모든
+/// 단계가 읽기 명령이고 리다이렉트가 밖을 향하지 않을 때만 통과다. 도구가 사는 시스템 폴더·홈의 점
+/// 폴더·임시 폴더는 명령에서 밖으로 치지 않는다 — `& "C:\Program Files\nodejs\node.exe"` 같은 호출까지 막지 않게.
+// ponytail: 명령 검사는 낱말 휴리스틱이다 — 조각을 이어 붙인 경로("D:\" + "x")·스크립트 파일 속 쓰기
+// (`node x.js`)는 못 본다. 심볼릭 링크도 따라가지 않는다. 더 막아야 하면 OS 샌드박스로
 fn guard_main() -> i32 {
     let Some(root) = std::env::var("EQMUX_REPO").ok().filter(|r| !r.is_empty()) else { return 0 };
     let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).unwrap_or_default();
@@ -713,38 +717,266 @@ fn guard_main() -> i32 {
         format!("{claude}/plans"),
         std::env::temp_dir().join("claude").to_string_lossy().into_owned(),
     ];
-    if let Some(out) = repo_guard(&root, &home, &engine, &read_stdin_json(), english()) {
+    let mut sys: Vec<String> = if cfg!(windows) {
+        ["SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "ProgramData", "LOCALAPPDATA", "APPDATA"]
+            .iter()
+            .filter_map(|k| std::env::var(k).ok())
+            .collect()
+    } else {
+        ["/usr", "/bin", "/sbin", "/etc", "/opt", "/dev", "/proc", "/sys", "/var", "/tmp", "/private", "/Library", "/System", "/Applications", "/nix"]
+            .iter()
+            .map(|s| s.to_string())
+            .chain([format!("{home}/Library")])
+            .collect()
+    };
+    sys.push(std::env::temp_dir().to_string_lossy().into_owned());
+    sys.extend(std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.to_string_lossy().into_owned())));
+    let exists = |p: &str| std::path::Path::new(p).exists();
+    if let Some(out) = repo_guard(&root, &home, &engine, &sys, &exists, &read_stdin_json(), english()) {
         println!("{out}");
     }
     0
 }
 
-/// 판정 본체 (순수 함수). 걸리면 PreToolUse 거부 JSON
-fn repo_guard(root: &str, home: &str, engine: &[String], payload: &serde_json::Value, en: bool) -> Option<String> {
-    let tool = payload["tool_name"].as_str()?;
-    let keys: &[&str] = match tool {
-        "Read" | "Edit" | "Write" | "MultiEdit" => &["file_path"],
-        "NotebookEdit" => &["notebook_path"],
-        "Grep" => &["path"],
-        "Glob" => &["path", "pattern"], // 절대 경로 패턴으로도 밖을 훑을 수 있다
-        _ => return None,
+/// 명령 한 줄을 훑은 결과 — 단계(파이프·`;`·`&&`·괄호·중괄호로 끊은 낱말 묶음)와 리다이렉트 대상
+#[derive(Default)]
+struct Scan {
+    segs: Vec<Vec<String>>,
+    redirects: Vec<String>,
+    word: String,
+    seg: Vec<String>,
+    redirect: bool,
+}
+
+impl Scan {
+    fn word(&mut self) {
+        if self.word.is_empty() {
+            return;
+        }
+        let w = std::mem::take(&mut self.word);
+        if std::mem::take(&mut self.redirect) { self.redirects.push(w) } else { self.seg.push(w) }
+    }
+    fn seg(&mut self) {
+        self.word();
+        if !self.seg.is_empty() {
+            self.segs.push(std::mem::take(&mut self.seg));
+        }
+    }
+    /// 경로 후보 낱말 — 낱말 자체와, 경로로 시작하지 않는 낱말의 조각
+    /// (`--path=D:/x`, `bash -c "cat D:/x"`, `open('D:/x','w')`). `"C:\Program Files\x"`는 쪼개지 않는다
+    fn tokens(&self) -> Vec<&str> {
+        let mut out = Vec::new();
+        for w in self.segs.iter().flatten().chain(&self.redirects) {
+            out.push(w.as_str());
+            if !path_start(w) {
+                out.extend(w.split(|c: char| c.is_whitespace() || "'\"(),;=[]".contains(c)).filter(|t| !t.is_empty()));
+            }
+        }
+        out
+    }
+}
+
+fn path_start(t: &str) -> bool {
+    t.starts_with(['/', '\\', '~']) || t.get(1..2) == Some(":")
+}
+
+/// 셸 문법을 대강 따른다 — 따옴표는 낱말을 묶고, `>`·`>>`·`2>` 뒤 낱말은 리다이렉트 대상이다.
+/// 낱말에 바로 붙은 `(`는 호출 표시로 남긴다(`.Delete(`) — `.Length` 같은 속성 읽기와 가르려고
+fn scan_cmd(cmd: &str) -> Scan {
+    let mut s = Scan::default();
+    let mut q: Option<char> = None;
+    for c in cmd.chars() {
+        match q {
+            Some(qc) if c == qc => q = None,
+            Some(_) => s.word.push(c),
+            None if c == '"' || c == '\'' => q = Some(c),
+            None if c == '(' && !s.word.is_empty() => {
+                s.word.push('(');
+                s.seg();
+            }
+            None if c == '&' && s.redirect && s.word.is_empty() => s.redirect = false, // `2>&1` — 대상이 아니라 fd 복제
+            None if c == '&' => {
+                // PowerShell 호출 연산자(`& $cmd`)를 가리려고 표식을 남긴다 — `&&`·끝의 `&`는 빈 표식 단계가 된다
+                s.seg();
+                s.seg.push("&".into());
+            }
+            None if "|;(){}`\n\r".contains(c) => s.seg(),
+            None if c == '>' => {
+                s.word();
+                s.redirect = true;
+            }
+            None if c.is_whitespace() || c == '<' => s.word(),
+            None => s.word.push(c),
+        }
+    }
+    s.seg();
+    s
+}
+
+/// 읽기만 하는 명령 (소문자, 확장자 뗀 이름). 쓰는 옵션이 있는 것(sort -o, sed -i, find -delete,
+/// tree -o)은 seg_read_only가 따로 본다. uniq·xxd는 두 번째 인자에 쓰므로 뺐다
+const READ_VERBS: &[&str] = &[
+    // 유닉스·Git Bash
+    "cat", "head", "tail", "less", "more", "ls", "dir", "grep", "egrep", "fgrep", "rg", "ag", "fd", "wc", "file",
+    "stat", "du", "df", "diff", "cmp", "cut", "nl", "od", "hexdump", "strings", "realpath", "readlink", "basename",
+    "dirname", "pwd", "echo", "printf", "test", "[", "true", "false", "which", "type", "where", "whereis", "jq",
+    "column", "tr", "md5sum", "sha1sum", "sha256sum", "cd", "pushd", "popd",
+    // PowerShell (별칭 포함)
+    "get-content", "gc", "get-childitem", "gci", "select-string", "sls", "test-path", "get-item", "gi",
+    "get-itemproperty", "gp", "resolve-path", "rvpa", "measure-object", "measure", "select-object", "select",
+    "where-object", "?", "format-table", "ft", "format-list", "fl", "format-wide", "out-string", "out-host",
+    "write-output", "write-host", "get-filehash", "split-path", "join-path", "convertfrom-json", "convertto-json",
+    "get-location", "gl", "set-location", "sl", "push-location", "pop-location", "compare-object", "group-object",
+    "group", "get-unique", "get-command", "gcm", "get-date", "get-acl",
+    // cmd
+    "findstr", "fc",
+];
+
+/// 이 단계는 읽기만 하는가. 앞의 환경 변수 대입(`X=1`, `$x =`)·`env`·`command`·`time`은 건너뛴다.
+/// `$`로 시작하는 단계: PowerShell에서는 식(`$_.Length -gt 0`)이라 읽기, bash에서는 변수에 든 명령을
+/// 실행하므로(`$cmd x`) 막는다. `& $cmd`(PowerShell 호출 연산자 + 변수)도 막는다
+fn seg_read_only(seg: &[String], ps: bool) -> bool {
+    let seg = match seg.split_first() {
+        Some((a, rest)) if a == "&" => {
+            if rest.first().is_some_and(|w| w.starts_with('$')) {
+                return false;
+            }
+            rest
+        }
+        _ => seg,
     };
+    let mut i = 0;
+    while let Some(w) = seg.get(i) {
+        let env = w.split_once('=').is_some_and(|(k, _)| !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'));
+        if w.starts_with('$') && matches!(seg.get(i + 1).map(String::as_str), Some("=" | "+=")) {
+            i += 2;
+        } else if env || matches!(w.as_str(), "env" | "command" | "time") {
+            i += 1;
+        } else {
+            break;
+        }
+    }
+    let Some(v) = seg.get(i) else { return true }; // `$x = (…)` — 괄호 안은 다음 단계가 본다
+    let args = &seg[i + 1..];
+    let name = v.rsplit(['/', '\\']).next().unwrap_or(v).to_lowercase();
+    let name = [".exe", ".cmd", ".bat", ".com"].iter().find_map(|x| name.strip_suffix(x)).unwrap_or(&name);
+    let has = |f: &[&str]| args.iter().any(|a| f.iter().any(|x| a == x || a.starts_with(&format!("{x}="))));
+    match name {
+        "git" => git_read_only(args),
+        "sed" => !args.iter().any(|a| a.starts_with("--in-place") || (a.starts_with('-') && !a.starts_with("--") && a.contains('i'))),
+        "find" => !has(&["-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"]),
+        "sort" => !has(&["-o", "--output"]),
+        "tree" => !has(&["-o"]),
+        // `% { … }`의 블록은 다음 단계로 따로 검사된다. `% Delete`(이름으로 메서드 호출)는 막는다
+        "foreach-object" | "%" => args.is_empty(),
+        // `(…).Length` 같은 속성 읽기. 메서드 호출은 `(`가 붙어 여기 오지 않는다
+        n if n.starts_with('.') && !n.ends_with('(') => args.is_empty(),
+        _ if v.starts_with('$') => ps && !v.ends_with('('),
+        n => READ_VERBS.contains(&n),
+    }
+}
+
+/// git 읽기 하위 명령만. `-c`는 설정으로 명령을 돌릴 수 있어(core.fsmonitor 등) 통째로 막는다
+fn git_read_only(args: &[String]) -> bool {
+    let mut it = args.iter().map(String::as_str);
+    while let Some(a) = it.next() {
+        match a {
+            "-c" => return false,
+            "-C" | "--git-dir" | "--work-tree" | "--namespace" => {
+                it.next();
+            }
+            a if a.starts_with('-') => {}
+            sub => {
+                return matches!(
+                    sub,
+                    "status" | "log" | "show" | "diff" | "blame" | "grep" | "ls-files" | "ls-tree" | "rev-parse"
+                        | "describe" | "shortlog" | "cat-file" | "rev-list" | "show-ref" | "for-each-ref"
+                        | "merge-base" | "name-rev" | "whatchanged"
+                )
+            }
+        }
+    }
+    true
+}
+
+/// 정규화된 절대 경로의 맨 윗 폴더 (`d:/a/b` → `d:/a`, `/a/b` → `/a`). 루트 자체면 None
+fn top_dir(p: &str) -> Option<String> {
+    let mut segs = p.split('/');
+    let (a, b) = (segs.next()?, segs.next().filter(|s| !s.is_empty())?);
+    Some(format!("{a}/{b}"))
+}
+
+/// 판정 본체. 걸리면 PreToolUse 거부 JSON. `exists`는 명령 낱말이 실제 경로인지 가리는 데만 쓴다
+/// (`'/api/'` 같은 정규식·URL 조각이 막히지 않게 — 맨 윗 폴더가 있어야 경로로 본다)
+fn repo_guard(
+    root: &str,
+    home: &str,
+    engine: &[String],
+    sys: &[String],
+    exists: &dyn Fn(&str) -> bool,
+    payload: &serde_json::Value,
+    en: bool,
+) -> Option<String> {
+    let tool = payload["tool_name"].as_str()?;
     let base = payload["cwd"].as_str().filter(|c| !c.is_empty()).unwrap_or(root);
     let inside = |p: &str, dir: &str| {
         let d = norm_path(dir, dir, home);
         p == d || p.starts_with(&format!("{}/", d.trim_end_matches('/')))
     };
-    let raw = keys
-        .iter()
-        .filter_map(|k| payload["tool_input"][k].as_str().filter(|s| !s.is_empty()))
-        .find(|raw| {
-            let p = norm_path(base, raw, home);
-            !inside(&p, root) && !engine.iter().any(|e| inside(&p, e))
-        })?;
+    let allowed = |p: &str| inside(p, root) || engine.iter().any(|e| inside(p, e));
+    let raw: String = match tool {
+        "Bash" | "PowerShell" => {
+            let home_n = norm_path(home, home, home);
+            let dot = |p: &str| {
+                !home.is_empty() && p.strip_prefix(&format!("{home_n}/")).is_some_and(|r| r.starts_with('.'))
+            };
+            // 밖을 가리키는 경로 낱말인가 — 시스템·점 폴더·임시 폴더는 밖으로 치지 않는다
+            let outside = |t: &str| {
+                let abs = path_start(t);
+                // 상대 경로는 `..`로 위로 나갈 때만 밖일 수 있다
+                if !abs && !t.replace('\\', "/").split('/').any(|s| s == "..") {
+                    return false;
+                }
+                let p = norm_path(base, t, home);
+                let Some(top) = top_dir(&p) else { return false };
+                !allowed(&p) && !dot(&p) && !sys.iter().any(|s| inside(&p, s)) && (!abs || t.starts_with('~') || exists(&top))
+            };
+            let scan = scan_cmd(payload["tool_input"]["command"].as_str()?);
+            // 작업 폴더가 이미 밖이면 상대 경로가 모두 밖이다
+            let cwd_out = !allowed(&norm_path(base, base, home));
+            let hit = scan.tokens().into_iter().find(|t| outside(t)).map(str::to_string);
+            let hit = hit.or_else(|| cwd_out.then(|| base.to_string()))?;
+            // 밖이 걸렸다 — 모든 단계가 읽기이고 밖으로 가는 리다이렉트가 없으면 읽기로 통과
+            let to_out = scan.redirects.iter().find(|r| outside(r) || (cwd_out && !path_start(r) && *r != "$null"));
+            if to_out.is_none() && scan.segs.iter().all(|s| seg_read_only(s, tool == "PowerShell")) {
+                return None;
+            }
+            to_out.cloned().unwrap_or(hit)
+        }
+        _ => {
+            // 읽기 도구(Read·Grep·Glob)는 어디든 통과한다 — 쓰기 도구만 본다
+            let key = match tool {
+                "Edit" | "Write" | "MultiEdit" => "file_path",
+                "NotebookEdit" => "notebook_path",
+                _ => return None,
+            };
+            let raw = payload["tool_input"][key].as_str().filter(|s| !s.is_empty())?;
+            if allowed(&norm_path(base, raw, home)) {
+                return None;
+            }
+            raw.to_string()
+        }
+    };
     let reason = if en {
-        format!("Blocked: {raw} is outside the assigned repository ({root}). Work only inside this repository.")
+        format!(
+            "Blocked: {raw} is outside the assigned repository ({root}). Outside it you may only read \
+             (Read/Grep/Glob, cat, Get-Content, rg, git log …) — make changes only inside this repository."
+        )
     } else {
-        format!("막음: {raw} 는 배정된 저장소({root}) 밖이다. 이 저장소 안에서만 작업한다.")
+        format!(
+            "막음: {raw} 는 배정된 저장소({root}) 밖이다. 밖은 읽기만 된다(Read·Grep·Glob, cat·Get-Content·rg·git log 등) \
+             — 고치는 일은 이 저장소 안에서만 한다."
+        )
     };
     Some(
         serde_json::json!({
@@ -1109,32 +1341,108 @@ mod tests {
         assert_eq!(console_cp(0, Some("65001")), None);
     }
 
-    /// 저장소 경계 — 저장소 안·엔진 작업 폴더는 통과, 밖·`..` 탈출·`~`·Glob 절대 패턴은 거부
+    /// 저장소 경계 — 밖은 읽기만. 쓰기 도구·쓰는 명령이 밖(`..` 탈출·`~` 포함)을 잡으면 거부
     #[test]
     fn repo_guard_blocks_paths_outside_repo() {
         let engine = ["C:/Users/u/.claude/projects".to_string()];
+        let sys = ["/usr".to_string(), "/dev".to_string(), "C:/Program Files".to_string()];
+        let yes = |_: &str| true;
         let call = |tool: &str, input: serde_json::Value| {
             let p = serde_json::json!({ "tool_name": tool, "tool_input": input, "cwd": "/w/app/src" });
-            repo_guard("/w/app", "/home/u", &engine, &p, false)
+            repo_guard("/w/app", "/home/u", &engine, &sys, &yes, &p, false)
         };
         let fp = |p: &str| serde_json::json!({ "file_path": p });
         assert_eq!(call("Read", fp("/w/app/src/x.ts")), None);
         assert_eq!(call("Edit", fp("x.ts")), None, "상대 경로는 cwd 기준 — 안이다");
         assert_eq!(call("Write", fp("/w/app")), None);
-        assert_eq!(call("Read", fp("C:/Users/u/.claude/projects/p/tool-results/1.txt")), None, "엔진 작업 폴더");
-        assert_eq!(call("Bash", serde_json::json!({ "command": "cat /etc/passwd" })), None, "Bash는 이 훅 밖");
-        for bad in ["/w/other/x.ts", "/w/apple/x.ts", "../../etc/passwd", "/w/app/../other", "~/.ssh/id_rsa"] {
-            let out = call("Read", fp(bad)).unwrap_or_else(|| panic!("{bad}가 통과했다"));
-            assert!(out.contains(r#""permissionDecision":"deny""#) && out.contains("배정된 저장소"), "{out}");
+        assert_eq!(call("Write", fp("C:/Users/u/.claude/projects/p/memory/x.md")), None, "엔진 작업 폴더");
+        // 읽기 도구는 어디든 통과한다 (2026-11-21)
+        assert_eq!(call("Read", fp("/w/other/x.ts")), None);
+        assert_eq!(call("Grep", serde_json::json!({ "pattern": "x", "path": "/w" })), None);
+        assert_eq!(call("Glob", serde_json::json!({ "pattern": "/w/other/**" })), None);
+        // 쓰기 도구는 밖이면 막는다
+        for bad in ["/w/other/x.ts", "/w/apple/x.ts", "../../etc/passwd", "/w/app/../other", "~/.ssh/id_rsa", "/usr/lib/x"] {
+            let out = call("Edit", fp(bad)).unwrap_or_else(|| panic!("{bad}가 통과했다"));
+            assert!(out.contains(r#""permissionDecision":"deny""#) && out.contains("읽기만 된다"), "{out}");
         }
-        assert!(call("Glob", serde_json::json!({ "pattern": "/w/other/**" })).is_some());
-        assert!(call("Grep", serde_json::json!({ "pattern": "x", "path": "/w" })).is_some());
-        assert_eq!(call("Glob", serde_json::json!({ "pattern": "**/*.ts" })), None);
+        assert!(call("NotebookEdit", serde_json::json!({ "notebook_path": "/w/other/a.ipynb" })).is_some());
+        // Bash·PowerShell — 밖을 건드리지 않는 명령은 무엇이든, 밖을 건드리면 읽기 명령만
+        let sh = |cmd: &str| call("PowerShell", serde_json::json!({ "command": cmd }));
+        for ok in [
+            "cat src/x.ts && git status",
+            "rm -rf build && npm run build", // 밖 경로가 없으면 검사하지 않는다
+            "cat /w/app/README.md 2>/dev/null",
+            r#"& "C:\Program Files\nodejs\node.exe" x.js"#,
+            "/usr/bin/env node x.js",
+            "cat ~/.claude/settings.json",
+            "curl https://example.com/a/../b",
+            "grep -E '^/api/' src -r",
+            r"$s -replace '/', '\'",
+            // 밖 읽기
+            "cat /w/other/x.ts",
+            "cat ../../other/x | head -5 2>&1",
+            r#"Get-Content "D:\My Repo\x.txt" -TotalCount 3"#,
+            "git -C /w/apple log --oneline -5",
+            "git --no-pager -C /w/apple diff HEAD~1",
+            "rg x /w/other > notes.md", // 밖을 읽어 안에 적는다
+            "ls ~/Desktop/other",
+            "cd /w/other && ls && sed -n '1,20p' a.txt",
+            "find /w/other -name '*.rs'",
+            r"Get-ChildItem /w/other | Where-Object { $_.Length -gt 0 } | Select-Object -First 3",
+            r"(Get-Content /w/other/a.json).Length",
+            r"$x = Get-Content /w/other/a; $x | Measure-Object",
+            "FOO=1 cat /w/other/a",
+        ] {
+            assert_eq!(sh(ok), None, "{ok}");
+        }
+        for bad in [
+            "rm -rf /w/other",
+            "echo hi > /w/other/x",
+            "cat a >> ../../other/log",
+            "cp src/x.ts /w/other/",
+            "cd /w/other && rm x",
+            "cd /w/other; git commit -am x",
+            "git -C /w/apple push",
+            "git -c core.fsmonitor=x -C /w/apple status",
+            "sed -i 's/a/b/' /w/other/x",
+            "sed -ni 's/a/b/p' /w/other/x",
+            "find /w/other -delete",
+            "sort -o /w/other/x a",
+            r#"Remove-Item "D:\My Repo\x.txt""#,
+            r#"$d = "/w/other"; Remove-Item "$d/x""#,
+            r#"python -c "open('/w/other/x','w').write('')""#,
+            r"Get-ChildItem /w/other | ForEach-Object { Remove-Item $_ }",
+            r"Get-ChildItem /w/other | % Delete",
+            r"(Get-Item /w/other/x).Delete()",
+            "Get-Content a | Set-Content /w/other/b",
+            "cat /w/other/a | tee b",
+        ] {
+            let out = sh(bad).unwrap_or_else(|| panic!("{bad}가 통과했다"));
+            assert!(out.contains(r#""permissionDecision":"deny""#), "{out}");
+        }
+        // 변수에 든 명령 실행 — PowerShell `& $c`, bash `$c`
+        assert!(sh(r#"$c = "Remove-Item"; & $c /w/other/x"#).is_some());
+        let bash = |cmd: &str| call("Bash", serde_json::json!({ "command": cmd }));
+        assert!(bash("c=rm; $c /w/other/x").is_some());
+        assert_eq!(bash("cat /w/other/x && git status"), None);
+        // 작업 폴더가 이미 밖이면 상대 경로 쓰기도 막는다
+        let at = |cwd: &str, cmd: &str| {
+            let p = serde_json::json!({ "tool_name": "Bash", "tool_input": { "command": cmd }, "cwd": cwd });
+            repo_guard("/w/app", "/home/u", &engine, &sys, &yes, &p, false)
+        };
+        assert_eq!(at("/w/other", "ls && cat a.txt"), None);
+        assert!(at("/w/other", "rm a.txt").is_some());
+        assert!(at("/w/other", "echo x > a.txt").is_some());
+        let no = |_: &str| false;
+        let p = serde_json::json!({ "tool_name": "Bash", "tool_input": { "command": "rm /w/other/x" }, "cwd": "/w/app" });
+        assert_eq!(repo_guard("/w/app", "", &[], &[], &no, &p, false), None, "없는 맨 윗 폴더 = 경로가 아닌 낱말");
         if cfg!(windows) {
-            let p = serde_json::json!({ "tool_name": "Read", "tool_input": fp(r"d:\W\App\src\x.ts") });
-            assert_eq!(repo_guard("D:/w/app", "", &[], &p, false), None, "대소문자·구분자 무시");
-            let p = serde_json::json!({ "tool_name": "Read", "tool_input": fp("/d/w/other.ts") });
-            assert!(repo_guard("D:/w/app", "", &[], &p, false).is_some(), "Git Bash 꼴도 드라이브로");
+            let p = serde_json::json!({ "tool_name": "Write", "tool_input": fp(r"d:\W\App\src\x.ts") });
+            assert_eq!(repo_guard("D:/w/app", "", &[], &[], &yes, &p, false), None, "대소문자·구분자 무시");
+            let p = serde_json::json!({ "tool_name": "Write", "tool_input": fp("/d/w/other.ts") });
+            assert!(repo_guard("D:/w/app", "", &[], &[], &yes, &p, false).is_some(), "Git Bash 꼴도 드라이브로");
+            let p = serde_json::json!({ "tool_name": "PowerShell", "tool_input": { "command": r"Get-Content D:\w\App\x; del D:\W\other\y" } });
+            assert!(repo_guard("D:/w/app", "", &[], &[], &yes, &p, false).unwrap().contains(r"D:\\W\\other\\y")); // JSON 이스케이프
         }
         assert_eq!(crate::agent::repo_root(r"D:\w\app\.eqmux\worktrees\kai@w"), "D:/w/app");
         assert_eq!(crate::agent::repo_root("D:/w/app/"), "D:/w/app");
