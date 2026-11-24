@@ -8,7 +8,7 @@
 |---|---|---|
 | Windows 10·11 (x64) | `EQMUX_0.6.5_x64_portable.zip` | 압축을 풀어 `EQMUX\eqmux.exe` 실행 |
 
-이번 판은 Windows만 냅니다. macOS는 [0.6.4](https://github.com/ReDocu/EQMUX/releases/tag/v0.6.4)의 dmg를 그대로 쓰세요. 1.0 전에는 설치 파일을 내지 않습니다. 아직 코드 서명이 없습니다. Windows는 SmartScreen에서 [추가 정보] → [실행]을 누릅니다. 받은 파일은 릴리스에 붙은 `SHA256SUMS.txt`와 `Get-FileHash`로 대조할 수 있습니다.
+이번 판은 Windows만 냅니다. macOS 판은 [EQMUX 0.6.5 for macOS](https://github.com/ReDocu/EQMUX/releases/tag/v0.6.5-macos)로 따로 냈습니다(macOS에서 찾은 저장소 경계 문제를 더 고친 판). 1.0 전에는 설치 파일을 내지 않습니다. 아직 코드 서명이 없습니다. Windows는 SmartScreen에서 [추가 정보] → [실행]을 누릅니다. 받은 파일은 릴리스에 붙은 `SHA256SUMS.txt`와 `Get-FileHash`로 대조할 수 있습니다.
 
 ## 새로 생긴 것
 
