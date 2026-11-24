@@ -10,17 +10,19 @@ import type { PaneLayout } from "../state";
 
 /** 페인 간격 — 설정(paneGap). .terminal-grid의 --pane-gap과 같은 값이다 */
 const gap = (): number => settings().paneGap;
-const HANDLE = 8; // 핸들 폭 — 간격이 0이어도 잡을 자리가 남게 경계 가운데에 8px로 앉힌다
+const HANDLE = 8; // 핸들 최소 폭 — 간격이 0이어도 잡을 자리가 남게 경계 가운데에 8px로 앉힌다
+/** 핸들 폭 — 간격이 8px보다 넓으면 간격 전체를 덮는다. 덮지 않은 간격을 누르면 드래그 대신 글자가 선택됐다 (U222) */
+const handle = (): number => Math.max(HANDLE, gap());
 const MIN = 0.08; // 트랙 최소 비율 — 페인이 0으로 접히지 않게
 
 type Axis = "cols" | "rows";
 
-/** 축의 k번째 경계(트랙 k와 k+1 사이) 핸들 위치 — gap 가운데에 HANDLE 폭으로. calc로 반환한다 */
+/** 축의 k번째 경계(트랙 k와 k+1 사이) 핸들 위치 — gap 가운데에 handle() 폭으로. calc로 반환한다 */
 function edgePos(fractions: number[], k: number): string {
   const g = gap();
   const totalGap = (fractions.length - 1) * g;
   const cum = fractions.slice(0, k + 1).reduce((a, b) => a + b, 0);
-  return `calc((100% - ${totalGap}px) * ${cum} + ${k * g + (g - HANDLE) / 2}px)`;
+  return `calc((100% - ${totalGap}px) * ${cum} + ${k * g + (g - handle()) / 2}px)`;
 }
 
 function startDrag(ev: PointerEvent, layout: PaneLayout, axis: Axis, k: number): void {
@@ -79,7 +81,7 @@ export function PaneDividers() {
         {(d) => (
           <div
             class="pane-divider v"
-            style={{ left: edgePos(d.fr, d.k) }}
+            style={{ left: edgePos(d.fr, d.k), width: `${handle()}px` }}
             title={t("드래그 — 페인 폭 조정 · 더블클릭 — 초기화")}
             onPointerDown={(ev) => startDrag(ev, d.layout, "cols", d.k)}
             onDblClick={() => setRatioAxis(d.layout, "cols", defaultRatios(d.layout).cols!)}
@@ -90,7 +92,7 @@ export function PaneDividers() {
         {(d) => (
           <div
             class="pane-divider h"
-            style={{ top: edgePos(d.fr, d.k) }}
+            style={{ top: edgePos(d.fr, d.k), height: `${handle()}px` }}
             title={t("드래그 — 페인 높이 조정 · 더블클릭 — 초기화")}
             onPointerDown={(ev) => startDrag(ev, d.layout, "rows", d.k)}
             onDblClick={() => setRatioAxis(d.layout, "rows", defaultRatios(d.layout).rows!)}
