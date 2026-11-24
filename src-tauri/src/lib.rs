@@ -923,13 +923,22 @@ async fn pty_spawn(
         // 홈에서 연 페인(작업 폴더 없음)은 배정이 없다. shim이 claude에 경계 훅을 싣는다 (write_claude_shim)
         let repo = (Path::new(&dir) != home_dir()).then(|| agent::repo_root(&dir));
         let shim = app.path().app_data_dir().ok().map(|r| r.join("shim")).filter(|d| d.is_dir() && repo.is_some());
+        // 셸 시작 파일 (B343) — shim이 걸린 페인만. 로그인 셸의 path_helper가 shim을 뒤로 밀어도 되찾는다
+        #[cfg(not(windows))]
+        let init = shim.as_ref().and_then(|s| s.parent().map(|r| r.join("shell")));
         let builders = shell_candidates(shell)
             .into_iter()
             .map(|c| {
                 let mut b = CommandBuilder::new(&c);
-                // macOS 터미널 관례 — 로그인 셸로 띄워 .zprofile까지 읽힌다
+                // macOS 터미널 관례 — 로그인 셸로 띄워 .zprofile까지 읽힌다 (bash 시작 파일은 로그인 셸을 흉내 낸다)
                 #[cfg(not(windows))]
-                b.arg("-l");
+                {
+                    let (args, envs) = shell_launch(&c, init.as_deref(), std::env::var("ZDOTDIR").ok());
+                    b.args(&args);
+                    for (k, v) in envs {
+                        b.env(k, v);
+                    }
+                }
                 b.cwd(&dir);
                 // 일반 셸에서도 `eqmux ping` 같은 CLI(PRD I)가 잡히게 PATH 앞에 앱 폴더를 붙인다
                 let mut path = std::env::var("PATH").unwrap_or_default();
@@ -3021,17 +3030,108 @@ fn write_claude_shim(root: &Path, guard: &serde_json::Value) {
         "@echo off\r\nsetlocal\r\nset \"SELF=%~dp0\"\r\nset \"SELF=%SELF:~0,-1%\"\r\n\
          call set \"PATH=%%PATH:%SELF%;=%%\"\r\nclaude --settings \"%~dp0..\\guard-settings.json\" %*\r\n",
     );
+    // 페인을 연 저장소 밖으로 cd해서 띄웠으면 지금 선 git 저장소가 경계다 — 그 저장소에서 일하려고 띄운 것이다.
+    // 페인 저장소 안(하위 폴더·서브모듈 포함)이면 그대로 둔다 (U221)
     let sh = dir.join("claude");
     let _ = std::fs::write(
         &sh,
         "#!/bin/sh\nself=$(cd \"$(dirname \"$0\")\" && pwd)\n\
          PATH=$(printf '%s' \"$PATH\" | tr ':' '\\n' | grep -vxF \"$self\" | paste -sd: -)\n\
+         case \"$PWD/\" in\n\
+         \"${EQMUX_REPO%/}\"/*) ;;\n\
+         *) top=$(git rev-parse --show-toplevel 2>/dev/null) && [ -n \"$top\" ] && EQMUX_REPO=$top && export EQMUX_REPO ;;\n\
+         esac\n\
          exec claude --settings \"$self/../guard-settings.json\" \"$@\"\n",
     );
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&sh, std::fs::Permissions::from_mode(0o755));
+    }
+    #[cfg(unix)]
+    write_shell_init(root);
+}
+
+/// 셸 페인 시작 파일 (B343) — macOS 로그인 셸은 /etc/zprofile·/etc/profile의 path_helper가 PATH를 다시 짜서
+/// shim을 시스템 폴더(/usr/local/bin 등) 뒤로 민다. 그 뒤 사용자 설정이 claude가 든 폴더를 앞에 붙이거나
+/// claude가 /usr/local/bin·/opt/homebrew/bin에 있으면 진짜 claude가 잡혀 경계 훅이 빠진다.
+/// zsh는 ZDOTDIR을, bash는 --init-file을 여기로 돌려 사용자 설정을 그대로 읽게 한 뒤 shim을 맨 앞에 되돌린다
+/// (VS Code·Ghostty 셸 통합과 같은 방식). 프롬프트마다 다시 맞춰 `nvm use` 같은 뒤늦은 PATH 변경도 이긴다.
+/// 사용자 파일을 읽는 동안 ZDOTDIR은 사용자 값이다 — `${ZDOTDIR:-$HOME}`을 쓰는 설정이 많다.
+/// 사용자 파일은 함수 밖에서 읽는다 — 함수 안에서 읽으면 그 안의 `typeset`이 지역 변수가 된다.
+/// 파일 안에는 절대 경로가 없다 — shim 위치는 자기 위치(ZDOTDIR · BASH_SOURCE) 기준으로 찾는다.
+// ponytail: zsh·bash만 — fish·sh 등은 평소처럼 `-l`로 뜬다. 사람이 `command claude`·전체 경로·`exec zsh -l`로
+// 부르면 경계가 빠진다. 셸 페인은 사람의 셸이라 막지 않고, 실수로 빠지는 길만 닫는다
+#[cfg(unix)]
+fn write_shell_init(root: &Path) {
+    // 사용자 파일 하나를 사용자 ZDOTDIR로 읽고 우리 ZDOTDIR로 돌아온다
+    let user = |file: &str| {
+        format!(
+            "_eqmux_zd=$ZDOTDIR\nZDOTDIR=${{EQMUX_USER_ZDOTDIR:-$HOME}}\n\
+             [[ $ZDOTDIR != \"$_eqmux_zd\" && -f $ZDOTDIR/{file} ]] && builtin source \"$ZDOTDIR/{file}\"\n\
+             EQMUX_USER_ZDOTDIR=$ZDOTDIR\nZDOTDIR=$_eqmux_zd\n"
+        )
+    };
+    const HEAD: &str = "# EQMUX 셸 페인 시작 파일 — 앱이 기동할 때마다 다시 쓴다. 고치지 마세요.\n\
+                        # 사용자 zsh 설정을 그대로 읽고, 끝에 claude 대리인(shim)을 PATH 맨 앞에 둔다.\n";
+    // macOS /etc/zshrc가 HISTFILE을 ${ZDOTDIR:-$HOME}/.zsh_history로 잡는다 — 이 폴더가 아니라 사용자 쪽으로
+    let hist = "[[ $HISTFILE == \"$ZDOTDIR/.zsh_history\" ]] && HISTFILE=${EQMUX_USER_ZDOTDIR:-$HOME}/.zsh_history\n";
+    let done = "# 사용자 설정을 다 읽었다 — ZDOTDIR을 사용자 값으로 되돌리고(이 셸에서 띄우는 zsh는 평소대로),\n\
+                # claude 대리인을 PATH 맨 앞에 둔다. 프롬프트마다 다시 맞춘다\n\
+                typeset -g _eqmux_shim=${_eqmux_zd:h:h}/shim\n\
+                if [[ $EQMUX_USER_ZDOTDIR == \"$HOME\" ]]; then unset ZDOTDIR; else export ZDOTDIR=\"$EQMUX_USER_ZDOTDIR\"; fi\n\
+                unset EQMUX_USER_ZDOTDIR _eqmux_zd\n\
+                _eqmux_shim_first() {\n  emulate -L zsh\n  [[ $PATH == \"$_eqmux_shim\" || $PATH == \"$_eqmux_shim\":* || ! -d $_eqmux_shim ]] && return 0\n  \
+                path=(\"$_eqmux_shim\" \"${(@)path:#${(b)_eqmux_shim}}\")\n}\n\
+                typeset -ga precmd_functions\nprecmd_functions+=(_eqmux_shim_first)\n_eqmux_shim_first\n";
+    let zsh = root.join("shell").join("zsh");
+    let _ = std::fs::create_dir_all(&zsh);
+    for (name, body) in [
+        (".zshenv", format!("{HEAD}{}", user(".zshenv"))),
+        (".zprofile", format!("{HEAD}{}", user(".zprofile"))),
+        (".zshrc", format!("{HEAD}{hist}{}[[ -o login ]] || builtin source \"$_eqmux_zd/eqmux-done.zsh\"\n", user(".zshrc"))),
+        (".zlogin", format!("{HEAD}{}builtin source \"$_eqmux_zd/eqmux-done.zsh\"\n", user(".zlogin"))),
+        ("eqmux-done.zsh", format!("{HEAD}{done}")),
+    ] {
+        let _ = std::fs::write(zsh.join(name), body);
+    }
+    let bash = root.join("shell").join("bash");
+    let _ = std::fs::create_dir_all(&bash);
+    let _ = std::fs::write(
+        bash.join("init.bash"),
+        "# EQMUX 셸 페인 시작 파일 (bash --init-file) — 앱이 기동할 때마다 다시 쓴다. 고치지 마세요.\n\
+         # 로그인 셸처럼 /etc/profile과 ~/.bash_profile · ~/.bash_login · ~/.profile 중 첫 것을 읽고,\n\
+         # claude 대리인(shim)을 PATH 맨 앞에 둔다. 프롬프트마다 다시 맞춘다\n\
+         _eqmux_shim=$(builtin cd \"${BASH_SOURCE[0]%/*}/../../shim\" 2>/dev/null && builtin pwd)\n\
+         [ -r /etc/profile ] && . /etc/profile\n\
+         for _eqmux_f in ~/.bash_profile ~/.bash_login ~/.profile; do\n  \
+         if [ -r \"$_eqmux_f\" ]; then . \"$_eqmux_f\"; break; fi\ndone\nunset _eqmux_f\n\
+         _eqmux_shim_first() {\n  [ -n \"$_eqmux_shim\" ] || return 0\n  \
+         case \"$PATH\" in \"$_eqmux_shim\"|\"$_eqmux_shim\":*) return 0 ;; esac\n  \
+         local p=\":$PATH:\"\n  p=${p//\":$_eqmux_shim:\"/:}\n  p=${p#:}\n  p=${p%:}\n  \
+         PATH=\"$_eqmux_shim${p:+:$p}\"\n}\n\
+         PROMPT_COMMAND=\"_eqmux_shim_first${PROMPT_COMMAND:+;$PROMPT_COMMAND}\"\n_eqmux_shim_first\n",
+    );
+}
+
+/// 셸 페인을 띄울 인자·환경 (B343) — shim이 걸린 zsh·bash는 write_shell_init의 시작 파일로 띄운다.
+/// 시작 파일이 없으면(쓰기 실패) 평소처럼 로그인 셸(`-l`)이다. `user_zdotdir`는 앱이 물려받은 ZDOTDIR
+#[cfg(not(windows))]
+fn shell_launch(shell: &str, init: Option<&Path>, user_zdotdir: Option<String>) -> (Vec<String>, Vec<(String, String)>) {
+    let name = Path::new(shell).file_name().and_then(|n| n.to_str()).unwrap_or("");
+    let login = (vec!["-l".to_string()], Vec::new());
+    let Some(init) = init else { return login };
+    match name {
+        "zsh" if init.join("zsh").join(".zshenv").is_file() => {
+            let mut env = vec![("ZDOTDIR".to_string(), init.join("zsh").to_string_lossy().into_owned())];
+            env.extend(user_zdotdir.filter(|z| !z.is_empty()).map(|z| ("EQMUX_USER_ZDOTDIR".to_string(), z)));
+            (vec!["-l".to_string()], env)
+        }
+        "bash" if init.join("bash").join("init.bash").is_file() => {
+            let file = init.join("bash").join("init.bash").to_string_lossy().into_owned();
+            (vec!["--init-file".to_string(), file, "-i".to_string()], Vec::new())
+        }
+        _ => login,
     }
 }
 
@@ -3469,6 +3569,8 @@ mod tests {
         instance_lock, open_session_log, prune_session_logs, resize_is_current, restart_cli, session_prompt,
         pick_shells, take_complete_utf8, window_theme, workspace,
     };
+    #[cfg(unix)]
+    use super::shell_launch;
 
     /// 줄 단위 입력의 한글 지우기 — 새 PTY는 IUTF8이 꺼져 있고, 마스터에서 켜면 셸이 받는 쪽(슬레이브)에서도 켜진다
     #[cfg(target_os = "macos")]
@@ -3705,6 +3807,36 @@ mod tests {
         let root_s = root.to_string_lossy().into_owned();
         let sh = std::fs::read_to_string(root.join("shim").join("claude")).unwrap();
         assert!(sh.contains("$self/../guard-settings.json") && !sh.contains(&root_s), "{sh}");
+        assert!(sh.contains("git rev-parse --show-toplevel") && sh.contains("${EQMUX_REPO%/}"), "U221 — cd한 저장소를 따른다: {sh}");
+        // 셸 시작 파일 (B343) — 사용자 파일을 읽고 끝에 shim을 맨 앞으로. 절대 경로 없음
+        #[cfg(unix)]
+        {
+            let zsh = root.join("shell").join("zsh");
+            for (f, needle) in [
+                (".zshenv", "builtin source \"$ZDOTDIR/.zshenv\""),
+                (".zprofile", "builtin source \"$ZDOTDIR/.zprofile\""),
+                (".zshrc", "HISTFILE="),
+                (".zlogin", "eqmux-done.zsh"),
+                ("eqmux-done.zsh", "precmd_functions+=(_eqmux_shim_first)"),
+            ] {
+                let body = std::fs::read_to_string(zsh.join(f)).unwrap();
+                assert!(body.contains(needle) && !body.contains(&root_s), "{f}: {body}");
+            }
+            let bash = std::fs::read_to_string(root.join("shell").join("bash").join("init.bash")).unwrap();
+            assert!(bash.contains(". /etc/profile") && bash.contains("PROMPT_COMMAND") && !bash.contains(&root_s), "{bash}");
+            let init = root.join("shell");
+            let (args, env) = shell_launch("/bin/zsh", Some(&init), None);
+            assert_eq!(args, ["-l"]);
+            assert_eq!(env, [("ZDOTDIR".to_string(), zsh.to_string_lossy().into_owned())]);
+            let (_, env) = shell_launch("zsh", Some(&init), Some("/u/.config/zsh".into()));
+            assert!(env.contains(&("EQMUX_USER_ZDOTDIR".to_string(), "/u/.config/zsh".to_string())), "{env:?}");
+            let (args, env) = shell_launch("/opt/homebrew/bin/bash", Some(&init), None);
+            assert_eq!((args[0].as_str(), args[2].as_str(), env.len()), ("--init-file", "-i", 0));
+            assert!(args[1].ends_with("init.bash"));
+            // shim이 없는 페인(홈)·다른 셸은 평소처럼 로그인 셸
+            assert_eq!(shell_launch("/bin/zsh", None, None), (vec!["-l".to_string()], vec![]));
+            assert_eq!(shell_launch("/opt/homebrew/bin/fish", Some(&init), None), (vec!["-l".to_string()], vec![]));
+        }
         #[cfg(windows)]
         {
             let cmd = std::fs::read_to_string(root.join("shim").join("claude.cmd")).unwrap();
